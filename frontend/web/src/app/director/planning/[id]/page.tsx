@@ -136,6 +136,47 @@ export default function PlanningPage() {
     return { bg, border, text };
   }
 
+  // Couleurs par תפקיד (rôle) – mapping stable basé sur la config du site et les rôles des employés
+  const roleColorMap = useMemo(() => {
+    const set = new Set<string>();
+    // depuis config des stations
+    for (const st of (site?.config?.stations || [])) {
+      for (const r of (st?.roles || [])) {
+        const nm = (r?.name || "").trim();
+        if (nm) set.add(nm);
+      }
+      for (const sh of (st?.shifts || [])) {
+        for (const r of (sh?.roles || [])) {
+          const nm = (r?.name || "").trim();
+          if (nm) set.add(nm);
+        }
+      }
+    }
+    // depuis les employés
+    for (const w of workers) {
+      for (const nm of (w.roles || [])) {
+        const v = (nm || "").trim();
+        if (v) set.add(v);
+      }
+    }
+    const roles = Array.from(set).sort((a, b) => a.localeCompare(b));
+    const GOLDEN = 137.508;
+    const map = new Map<string, { border: string; text: string }>();
+    roles.forEach((nm, i) => {
+      let h = (i * GOLDEN) % 360;
+      // éviter zones trop proches du vert des statuts
+      if (h >= 100 && h <= 150) h = (h + 40) % 360;
+      const border = `hsl(${h} 70% 40%)`;
+      const text = `hsl(${h} 60% 30%)`;
+      map.set(nm, { border, text });
+    });
+    return map;
+  }, [site, workers]);
+
+  function colorForRole(roleName: string): { border: string; text: string } {
+    return roleColorMap.get(roleName) || { border: "#64748b", text: "#334155" };
+  }
+
   function addDays(base: Date, days: number): Date {
     const d = new Date(base);
     d.setDate(d.getDate() + days);
@@ -860,6 +901,66 @@ export default function PlanningPage() {
                   const base = (station.shifts || []).find((x: any) => x?.name === shiftName);
                   return fmt(base?.start, base?.end);
                 }
+                function roleRequirements(st: any, shiftName: string, dayKey: string): Record<string, number> {
+                  const out: Record<string, number> = {};
+                  if (!st) return out;
+                  const pushRole = (name?: string, count?: number, enabled?: boolean) => {
+                    const rn = (name || "").trim();
+                    const c = Number(count || 0);
+                    if (!rn || !enabled || c <= 0) return;
+                    out[rn] = (out[rn] || 0) + c;
+                  };
+                  if (st.perDayCustom) {
+                    const dayCfg = st.dayOverrides?.[dayKey];
+                    if (!dayCfg || dayCfg.active === false) return out;
+                    if (st.uniformRoles) {
+                      for (const r of (st.roles || [])) pushRole(r?.name, r?.count, r?.enabled);
+                    } else {
+                      const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                      for (const r of ((sh?.roles as any[]) || [])) pushRole(r?.name, r?.count, r?.enabled);
+                    }
+                    return out;
+                  }
+                  // global mode
+                  if (st.uniformRoles) {
+                    for (const r of (st.roles || [])) pushRole(r?.name, r?.count, r?.enabled);
+                  } else {
+                    const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                    for (const r of ((sh?.roles as any[]) || [])) pushRole(r?.name, r?.count, r?.enabled);
+                  }
+                  return out;
+                }
+                // Normalisation robuste des libellés de rôle pour éviter les mismatches (casse/espaces/forme)
+                function normRole(n: string): string {
+                  return (n || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+                }
+                function nameHasRole(name: string, roleName: string): boolean {
+                  const w = workers.find((x) => (x.name || "").trim() === (name || "").trim());
+                  if (!w) return false;
+                  const target = normRole(roleName);
+                  return (w.roles || []).some((r) => normRole(String(r)) === target);
+                }
+                function assignRoles(assignedNames: string[], st: any, shiftName: string, dayKey: string): Map<string, string | null> {
+                  const req = roleRequirements(st, shiftName, dayKey);
+                  const res = new Map<string, string | null>();
+                  const used = new Set<number>();
+                  // prefill null
+                  assignedNames.forEach((nm) => res.set(nm, null));
+                  // greedy fill per role
+                  for (const [rName, rCount] of Object.entries(req)) {
+                    let left = rCount;
+                    if (left <= 0) continue;
+                    for (let i = 0; i < assignedNames.length && left > 0; i++) {
+                      if (used.has(i)) continue;
+                      const nm = assignedNames[i];
+                      if (!nameHasRole(nm, rName)) continue;
+                      res.set(nm, rName);
+                      used.add(i);
+                      left--;
+                    }
+                  }
+                  return res;
+                }
                 return (
                   <div className="space-y-6">
                     {(site?.config?.stations || []).map((st: any, idx: number) => (
@@ -908,6 +1009,7 @@ export default function PlanningPage() {
                                         if (!cell) return [];
                                         return cell;
                                       })();
+                                      const roleMap = assignRoles(assignedNames, st, sn, d.key);
                                       const activeDay = isDayActive(st, d.key);
                                       return (
                                         <td
@@ -923,26 +1025,64 @@ export default function PlanningPage() {
                                               {aiPlan && required > 0 ? (
                                                 <div className="mb-1 flex flex-col items-center gap-1">
                                                   {(() => {
-                                                    const numEmpty = Math.max(0, required - assignedNames.length);
+                                                    const reqRoles = roleRequirements(st, sn, d.key);
+                                                    // Compter les assignations par rôle déjà présentes
+                                                    const assignedPerRole = new Map<string, number>();
+                                                    roleMap.forEach((rName) => {
+                                                      if (!rName) return;
+                                                      assignedPerRole.set(rName, (assignedPerRole.get(rName) || 0) + 1);
+                                                    });
+                                                    // Placeholders par déficit de rôle uniquement
+                                                    const rolePlaceholders: JSX.Element[] = [];
+                                                    let totalRoleDeficits = 0;
+                                                    Object.entries(reqRoles).forEach(([rName, rCount]) => {
+                                                      const have = assignedPerRole.get(rName) || 0;
+                                                      const deficit = Math.max(0, (rCount || 0) - have);
+                                                      totalRoleDeficits += deficit;
+                                                      if (deficit <= 0) return;
+                                                      const c = colorForRole(rName);
+                                                      for (let i = 0; i < deficit; i++) {
+                    rolePlaceholders.push(
+                      <span
+                        key={`roleph-${rName}-${i}`}
+                        className="inline-flex h-7 min-w-[2.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-[10px] bg-white dark:bg-zinc-900"
+                        style={{ borderColor: c.border, color: c.text }}
+                      >
+                        {rName}
+                      </span>
+                    );
+                  }
+                                                    });
+                                                    const already = assignedNames.length;
+                                                    const remainingMissing = Math.max(0, required - already - totalRoleDeficits);
+                                                    const neutralEmpty = Array.from({ length: remainingMissing }).map((_, i) => (
+                                                      <span
+                                                        key={"empty-" + i}
+                                                        className="inline-flex h-7 min-w-[2.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                                                      >
+                                                        —
+                                                      </span>
+                                                    ));
                                                     return (
                                                       <>
-                                                        {Array.from({ length: numEmpty }).map((_, i) => (
-                                                          <span
-                                                            key={"empty-" + i}
-                                                            className="inline-flex h-7 min-w-[2.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
-                                                          >
-                                                            —
-                                                          </span>
-                                                        ))}
+                                                        {rolePlaceholders}
+                                                        {neutralEmpty}
                                                         {assignedNames.map((nm, i) => {
                                                           const c = colorForName(nm);
+                                                          const rn = roleMap.get(nm);
+                                                          const rc = rn ? colorForRole(rn) : null;
                                                           return (
                                                             <span
                                                               key={"nm-" + i}
-                                                              className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm"
-                                                              style={{ backgroundColor: c.bg, borderColor: c.border, color: c.text }}
+                                                              className="inline-flex items-center rounded-full border px-3 py-1 shadow-sm"
+                                                              style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                             >
-                                                              {nm}
+                                                              <span className="flex flex-col items-center leading-tight">
+                                                                {rn ? (
+                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 max-w-[6rem] truncate mb-0.5">{rn}</span>
+                                                                ) : null}
+                                                                <span className="text-sm">{nm}</span>
+                                                              </span>
                                                             </span>
                                                           );
                                                         })}
@@ -1038,6 +1178,105 @@ export default function PlanningPage() {
                             })}
                           </tbody>
                         </table>
+                        {(() => {
+                          // Récap par תפקיד
+                          const roleTotals = new Map<string, number>();
+                          const stationsCfg: any[] = (site?.config?.stations || []) as any[];
+                          const getStationCfg = (tIdx: number) => stationsCfg[tIdx] || null;
+                          const dayKeys = Object.keys(aiPlan.assignments || {});
+                          function roleRequirementsLocal(st: any, shiftName: string, dayKey: string): Record<string, number> {
+                            const out: Record<string, number> = {};
+                            const push = (name?: string, count?: number, enabled?: boolean) => {
+                              const rn = (name || "").trim();
+                              const c = Number(count || 0);
+                              if (!rn || !enabled || c <= 0) return; out[rn] = (out[rn] || 0) + c;
+                            };
+                            if (!st) return out;
+                            if (st.perDayCustom) {
+                              const dayCfg = st.dayOverrides?.[dayKey];
+                              if (!dayCfg || dayCfg.active === false) return out;
+                              if (st.uniformRoles) {
+                                for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled);
+                              } else {
+                                const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                                for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+                              }
+                              return out;
+                            }
+                            if (st.uniformRoles) {
+                              for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled);
+                            } else {
+                              const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                              for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+                            }
+                            return out;
+                          }
+                          function assignRolesLocal(assignedNames: string[], st: any, shiftName: string, dayKey: string): Map<string, string | null> {
+                            const req = roleRequirementsLocal(st, shiftName, dayKey);
+                            const res = new Map<string, string | null>();
+                            const used = new Set<number>();
+                            assignedNames.forEach((nm) => res.set(nm, null));
+                            for (const [rName, rCount] of Object.entries(req)) {
+                              let left = rCount;
+                              if (left <= 0) continue;
+                              for (let i = 0; i < assignedNames.length && left > 0; i++) {
+                                if (used.has(i)) continue;
+                                const nm = assignedNames[i];
+                                const w = workers.find((x) => (x.name || "").trim() === (nm || "").trim());
+                                const has = !!w && (w.roles || []).includes(rName);
+                                if (!has) continue;
+                                res.set(nm, rName);
+                                used.add(i);
+                                left--;
+                              }
+                            }
+                            return res;
+                          }
+                          // parcours des cellules
+                          dayKeys.forEach((dKey) => {
+                            const shiftsMap = (aiPlan.assignments as any)[dKey] || {};
+                            for (const sn of Object.keys(shiftsMap)) {
+                              const perStation: string[][] = shiftsMap[sn] || [];
+                              perStation.forEach((namesHere, tIdx) => {
+                                const stCfg = getStationCfg(tIdx);
+                                const m = assignRolesLocal(namesHere || [], stCfg, sn, dKey);
+                                m.forEach((rName) => {
+                                  if (!rName) return;
+                                  roleTotals.set(rName, (roleTotals.get(rName) || 0) + 1);
+                                });
+                              });
+                            }
+                          });
+                          if (roleTotals.size === 0) return null;
+                          const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                          return (
+                            <div className="mt-4 overflow-x-auto">
+                              <table className="w-full border-collapse text-sm">
+                                <thead>
+                                  <tr className="border-b dark:border-zinc-800">
+                                    <th className="px-2 py-2 text-right">תפקיד</th>
+                                    <th className="px-2 py-2 text-right">סה"כ שיבוצים</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {rows.map(([rName, cnt]) => {
+                                    const rc = colorForRole(rName);
+                                    return (
+                                      <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
+                                        <td className="px-2 py-2">
+                                          <span className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-sm shadow-sm" style={{ borderColor: rc.border, color: rc.text }}>
+                                            {rName}
+                                          </span>
+                                        </td>
+                                        <td className="px-2 py-2">{cnt}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })()}

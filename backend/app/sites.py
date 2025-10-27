@@ -24,6 +24,58 @@ logger = logging.getLogger("ai_solver")
 router = APIRouter(prefix="/director/sites", tags=["sites"])
 
 
+def validate_site_config(config: dict):
+    stations = (config or {}).get("stations", []) or []
+    for st in stations:
+        uniform_roles = bool(st.get("uniformRoles"))
+        station_workers = int(st.get("workers") or 0)
+        # Uniform: sum roles <= station workers
+        if uniform_roles:
+            total_roles = 0
+            for r in (st.get("roles") or []):
+                try:
+                    if r and r.get("enabled"):
+                        total_roles += int(r.get("count") or 0)
+                except Exception:
+                    pass
+            if total_roles > station_workers:
+                raise HTTPException(status_code=400, detail="סך התפקידים חייב להיות קטן או שווה למספר העובדים לעמדה")
+        # Global shifts (non-uniform): sum roles per shift <= shift workers
+        if not uniform_roles:
+            for sh in (st.get("shifts") or []):
+                if not sh or not sh.get("enabled"):
+                    continue
+                sh_workers = int(sh.get("workers") or 0)
+                total_roles = 0
+                for r in (sh.get("roles") or []):
+                    try:
+                        if r and r.get("enabled"):
+                            total_roles += int(r.get("count") or 0)
+                    except Exception:
+                        pass
+                if total_roles > sh_workers:
+                    raise HTTPException(status_code=400, detail="סך התפקידים למשמרת חייב להיות קטן או שווה למספר העובדים למשמרת")
+        # Per-day overrides: same rule per active day and shift when non-uniform
+        if st.get("perDayCustom"):
+            day_overrides = st.get("dayOverrides") or {}
+            for day_key, ov in (day_overrides or {}).items():
+                if not ov or not ov.get("active"):
+                    continue
+                if not uniform_roles:
+                    for sh in (ov.get("shifts") or []):
+                        if not sh or not sh.get("enabled"):
+                            continue
+                        sh_workers = int(sh.get("workers") or 0)
+                        total_roles = 0
+                        for r in (sh.get("roles") or []):
+                            try:
+                                if r and r.get("enabled"):
+                                    total_roles += int(r.get("count") or 0)
+                            except Exception:
+                                pass
+                        if total_roles > sh_workers:
+                            raise HTTPException(status_code=400, detail="סך התפקידים למשמרת חייב להיות קטן או שווה למספר העובדים למשמרת")
+
 @router.get("/", response_model=list[SiteOut])
 def list_sites(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     rows = (
@@ -73,6 +125,13 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
     if payload.name is not None:
         site.name = payload.name
     if payload.config is not None:
+        # validation logique: total rôles <= travailleurs
+        try:
+            validate_site_config(payload.config)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
         site.config = payload.config
     db.commit()
     db.refresh(site)
@@ -172,6 +231,7 @@ def ai_generate_planning(
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
+            "roles": r.roles or [],
             "availability": r.availability or {},
         }
         for r in rows
@@ -223,7 +283,7 @@ def ai_generate_stream(
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
     workers = [
-        {"id": r.id, "name": r.name, "max_shifts": r.max_shifts, "availability": r.availability or {}}
+        {"id": r.id, "name": r.name, "max_shifts": r.max_shifts, "roles": r.roles or [], "availability": r.availability or {}}
         for r in rows
     ]
 

@@ -32,10 +32,13 @@ def next_day(day: DayKey) -> DayKey | None:
 
 
 def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], List[ShiftName], List[Dict[str, Any]]]:
-    """Return (days, shifts, stations) where stations[i] has name and per-day per-shift capacity.
+    """Return (days, shifts, stations) where stations[i] has name, per-day per-shift capacity
+    and per-role capacities.
+
     stations[i] = {
         "name": str,
-        "capacity": {day: {shift: int}}
+        "capacity": {day: {shift: int}},  # total required (sum of role counts)
+        "capacity_roles": {day: {shift: {role_name: count}}},
     }
     """
     stations_cfg = (config or {}).get("stations", []) or []
@@ -44,12 +47,21 @@ def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], 
     all_shifts: set[ShiftName] = set()
     stations: List[Dict[str, Any]] = []
 
+    def norm_role(name: Any) -> str:
+        s = str(name or "").strip()
+        # caractères invisibles fréquents (RTL marks, NBSP)
+        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+        # normalisation simple guillemets/quotes
+        s = s.replace('"', "'")
+        return s
+
     for st in stations_cfg:
         name = st.get("name") or "Station"
         per_day_custom = bool(st.get("perDayCustom"))
         uniform_roles = bool(st.get("uniformRoles"))
         station_workers = int(st.get("workers") or 0)
         cap: Dict[DayKey, Dict[ShiftName, int]] = {}
+        cap_roles: Dict[DayKey, Dict[ShiftName, Dict[str, int]]] = {}
 
         if per_day_custom:
             day_overrides = st.get("dayOverrides") or {}
@@ -63,11 +75,31 @@ def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], 
                     if not sh or not sh.get("enabled"):
                         continue
                     sh_name = sh.get("name")
-                    required = int(station_workers if uniform_roles else (sh.get("workers") or 0))
-                    if required <= 0:
+                    # roles per shift (if uniform_roles -> from station roles, else from shift roles)
+                    role_counts: Dict[str, int] = {}
+                    if uniform_roles:
+                        for r in (st.get("roles") or []):
+                            if r and r.get("enabled"):
+                                cnt = int(r.get("count") or 0)
+                                if cnt > 0:
+                                    role_counts[norm_role(r.get("name"))] = cnt
+                    else:
+                        for r in (sh.get("roles") or []):
+                            if r and r.get("enabled"):
+                                cnt = int(r.get("count") or 0)
+                                if cnt > 0:
+                                    role_counts[norm_role(r.get("name"))] = cnt
+                    # Total requis: priorité au paramètre "workers" (ou station_workers en mode uniforme),
+                    # sinon somme des rôles actifs
+                    required_total = int(station_workers if uniform_roles else (sh.get("workers") or 0))
+                    if required_total <= 0:
+                        required_total = sum(role_counts.values())
+                    if required_total <= 0:
                         continue
                     all_shifts.add(sh_name)
-                    cap.setdefault(day, {})[sh_name] = required
+                    cap.setdefault(day, {})[sh_name] = required_total
+                    if role_counts:
+                        cap_roles.setdefault(day, {}).setdefault(sh_name, {}).update(role_counts)
         else:
             # global days and shifts
             days_map = st.get("days") or {}
@@ -80,13 +112,30 @@ def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], 
                     if not sh or not sh.get("enabled"):
                         continue
                     sh_name = sh.get("name")
-                    required = int(station_workers if uniform_roles else (sh.get("workers") or 0))
-                    if required <= 0:
+                    role_counts: Dict[str, int] = {}
+                    if uniform_roles:
+                        for r in (st.get("roles") or []):
+                            if r and r.get("enabled"):
+                                cnt = int(r.get("count") or 0)
+                                if cnt > 0:
+                                    role_counts[norm_role(r.get("name"))] = cnt
+                    else:
+                        for r in (sh.get("roles") or []):
+                            if r and r.get("enabled"):
+                                cnt = int(r.get("count") or 0)
+                                if cnt > 0:
+                                    role_counts[norm_role(r.get("name"))] = cnt
+                    required_total = int(station_workers if uniform_roles else (sh.get("workers") or 0))
+                    if required_total <= 0:
+                        required_total = sum(role_counts.values())
+                    if required_total <= 0:
                         continue
                     all_shifts.add(sh_name)
-                    cap.setdefault(day, {})[sh_name] = required
+                    cap.setdefault(day, {})[sh_name] = required_total
+                    if role_counts:
+                        cap_roles.setdefault(day, {}).setdefault(sh_name, {}).update(role_counts)
 
-        stations.append({"name": name, "capacity": cap})
+        stations.append({"name": name, "capacity": cap, "capacity_roles": cap_roles})
 
     days = order_days(list(all_days)) or ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
     shifts = order_shifts(list(all_shifts)) or ["06-14", "14-22", "22-06"]
@@ -115,6 +164,17 @@ def solve_schedule(
     S = list(range(len(shifts)))
     T = list(range(len(stations)))
 
+    # Normalisation des libellés de rôle pour aligner config et profils employés
+    def _norm_role_local(name: Any) -> str:
+        s = str(name or "").strip()
+        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+        s = s.replace('"', "'")
+        return s
+    worker_roles_norm: List[set[str]] = [
+        { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
+        for w in W
+    ]
+
     # Decision variables: x[w,d,s,t] in {0,1} worker w works shift s at station t on day d
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
     for w in W:
@@ -134,6 +194,7 @@ def solve_schedule(
     # Capacity per station/day/shift
     for t, st in enumerate(stations):
         cap = st.get("capacity", {})
+        cap_roles = st.get("capacity_roles", {}) or {}
         for d, day_key in enumerate(days):
             day_caps = cap.get(day_key, {})
             for s, sh_name in enumerate(shifts):
@@ -143,7 +204,31 @@ def solve_schedule(
                     for w in W:
                         model.Add(x[(w, d, s, t)] == 0)
                     continue
-                model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
+                # Réservation stricte des rôles avec pénalité de pénurie: les non-rôles ne comblent jamais un manque de rôle
+                # Construire la map des rôles demandés (normalisés)
+                role_map_raw: Dict[str, int] = (cap_roles.get(day_key, {}) or {}).get(sh_name, {}) or {}
+                role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
+                # Borne supérieure par défaut (on ajustera avec la pénurie de rôles)
+                if role_map_norm:
+                    # Variables de pénurie par rôle (shortfall)
+                    shortfalls: List[cp_model.IntVar] = []
+                    for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
+                        cap_int = max(0, int(r_cap))
+                        short = model.NewIntVar(0, cap_int, f"short_t{t}_d{d}_s{s}_r{idx_r}")
+                        shortfalls.append(short)
+                        # Compte des porteurs du rôle
+                        role_count = sum(x[(w, d, s, t)] for w in W if r_name in worker_roles_norm[w])
+                        # Rôle rempli + pénurie == capacité de rôle
+                        model.Add(role_count + short == cap_int)
+                    # Total pénurie toutes catégories
+                    short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"short_total_t{t}_d{d}_s{s}")
+                    if len(shortfalls) > 1:
+                        model.Add(short_total == sum(shortfalls))
+                    # Empêcher qu'un non-rôle comble la pénurie: limiter la couverture totale
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required - short_total)
+                else:
+                    # Pas de rôles requis: simple borne supérieure sur la cellule
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
     # At most one shift per day per worker (across all stations and shifts)
     for w in W:
@@ -278,6 +363,14 @@ def solve_schedule(
                         break
                 assignments[day_key][sh_name][t] = unique
     logger.info("Base plan: cells=%d required_total=%d", non_empty_cells, total_required)
+    def _count_assigned(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+        total = 0
+        for dk, sm in a.items():
+            for sn, per_st in sm.items():
+                for lst in per_st:
+                    total += len(lst or [])
+        return total
+    base_total_assigned = _count_assigned(assignments)
 
     # Enumerate alternative full solutions by re-solving with a nogood to change global distribution
     # This produces alternatives that can change per-worker totals (not only swaps)
@@ -334,6 +427,9 @@ def solve_schedule(
         # Switch main solver reference to new solution for extraction convenience
         solver = solver2
         cand_assign = build_assignments_from_solver()
+        # Garder uniquement les alternatives avec couverture maximale égale à la base
+        if _count_assigned(cand_assign) != base_total_assigned:
+            continue
         signature = sig_from_assign(cand_assign)
         if signature in seen_signatures:
             continue
@@ -355,6 +451,12 @@ def solve_schedule(
             (dk, tuple((sn, tuple(tuple(lst) for lst in (a.get(dk, {}).get(sn, []) or []))) for sn in shifts)) for dk in days
         )
     seen.add(sig(assignments))
+    # Enforce availability when proposing alternatives
+    name_to_avail: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+    def is_allowed(nm: str, dkey: str, sname: str) -> bool:
+        av = name_to_avail.get(nm) or {}
+        lst = av.get(dkey) or []
+        return sname in lst
     def name_present_same_day(a, dkey, nm) -> bool:
         for sname in shifts:
             # across all stations
@@ -440,6 +542,11 @@ def solve_schedule(
                         for nm2 in names2:
                             if nm1 == nm2:
                                 continue
+                            # respect availability for destinations
+                            if not is_allowed(nm1, dkey, s2):
+                                continue
+                            if not is_allowed(nm2, dkey, s1):
+                                continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # remove nm1 from s1, nm2 from s2
                             _write_cell(cand, dkey, s1, t_idx, [n for n in names1 if n != nm1] + [nm2])
@@ -451,6 +558,8 @@ def solve_schedule(
                             if has_adjacent_in_candidate(cand, nm2, dkey, s1):
                                 continue
                             if has_adjacent_in_candidate(cand, nm1, dkey, s2):
+                                continue
+                            if _count_assigned(cand) != base_total_assigned:
                                 continue
                             seen.add(sg)
                             alternatives.append(cand)
@@ -482,6 +591,9 @@ def solve_schedule(
                             continue
                         if len(names_to) >= cap_to:
                             continue
+                        # respect availability for destination shift
+                        if not is_allowed(nm, dkey, s_to):
+                            continue
                         # ensure nm not assigned elsewhere same day in other station/shift
                         # Temporarily remove nm from s_from and test presence
                         cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
@@ -495,6 +607,8 @@ def solve_schedule(
                         if sg in seen:
                             continue
                         if has_adjacent_in_candidate(cand, nm, dkey, s_to):
+                            continue
+                        if _count_assigned(cand) != base_total_assigned:
                             continue
                         seen.add(sg)
                         alternatives.append(cand)
@@ -533,6 +647,11 @@ def solve_schedule(
                         for nm2 in names2:
                             if nm1 == nm2:
                                 continue
+                        # respect availability when swapping days
+                        if not is_allowed(nm1, d2, sname):
+                            continue
+                        if not is_allowed(nm2, d1, sname):
+                            continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # swap dans sname @ t_idx entre d1 et d2
                             _write_cell(cand, d1, sname, t_idx, [n for n in names1 if n != nm1] + [nm2])
@@ -544,6 +663,8 @@ def solve_schedule(
                                 continue
                             sg = sig(cand)
                             if sg in seen:
+                                continue
+                            if _count_assigned(cand) != base_total_assigned:
                                 continue
                             seen.add(sg)
                             alternatives.append(cand)
@@ -593,6 +714,17 @@ def solve_schedule_stream(
     T = list(range(len(stations)))
 
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
+
+    # Normalisation locale des rôles et cache par employé
+    def _norm_role_local(name: Any) -> str:
+        s = str(name or "").strip()
+        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+        s = s.replace('"', "'")
+        return s
+    worker_roles_norm: List[set[str]] = [
+        { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
+        for w in W
+    ]
     for w in W:
         for d in D:
             for s in S:
@@ -609,6 +741,7 @@ def solve_schedule_stream(
     # capacity
     for t, st in enumerate(stations):
         cap = st.get("capacity", {})
+        cap_roles = st.get("capacity_roles", {}) or {}
         for d, day_key in enumerate(days):
             day_caps = cap.get(day_key, {})
             for s, sh_name in enumerate(shifts):
@@ -617,7 +750,23 @@ def solve_schedule_stream(
                     for w in W:
                         model.Add(x[(w, d, s, t)] == 0)
                     continue
-                model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
+                # Réservation stricte des rôles (comme solve_schedule):
+                role_map_raw: Dict[str, int] = (cap_roles.get(day_key, {}) or {}).get(sh_name, {}) or {}
+                role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
+                if role_map_norm:
+                    shortfalls: List[cp_model.IntVar] = []
+                    for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
+                        cap_int = max(0, int(r_cap))
+                        short = model.NewIntVar(0, cap_int, f"s_short_t{t}_d{d}_s{s}_r{idx_r}")
+                        shortfalls.append(short)
+                        role_count = sum(x[(w, d, s, t)] for w in W if r_name in worker_roles_norm[w])
+                        model.Add(role_count + short == cap_int)
+                    short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"s_short_total_t{t}_d{d}_s{s}")
+                    if len(shortfalls) > 1:
+                        model.Add(short_total == sum(shortfalls))
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required - short_total)
+                else:
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
     # one shift per day per worker
     for w in W:
@@ -696,6 +845,22 @@ def solve_schedule_stream(
                         if len(candidates) >= required:
                             break
                 base[day_key][sh_name][t] = candidates
+                # Logs de diagnostic par cellule: rôles requis vs placés
+                try:
+                    rmap_raw = (stations[t].get("capacity_roles", {}) or {}).get(day_key, {}) or {}
+                    rmap = rmap_raw.get(sh_name, {}) or {}
+                    if rmap:
+                        logger.info(
+                            "[STREAM][CELL] day=%s shift=%s station=%s required=%d role_caps=%s placed=%s",
+                            day_key,
+                            sh_name,
+                            stations[t].get("name"),
+                            required,
+                            rmap,
+                            candidates,
+                        )
+                except Exception:
+                    pass
 
     try:
         total_required = 0
@@ -769,6 +934,29 @@ def solve_schedule_stream(
         return tuple((dk, tuple((sn, tuple(tuple(lst) for lst in (a.get(dk, {}).get(sn, []) or []))) for sn in shifts)) for dk in days)
     seen.add(sig(assignments))
 
+    # Role helpers for alternatives feasibility
+    name_to_roles: Dict[str, List[str]] = { (w.get("name") or ""): [str(r) for r in (w.get("roles") or [])] for w in workers }
+    def role_map_for(t_idx: int, dkey: str, sname: str) -> Dict[str, int]:
+        cap_roles_all = (stations[t_idx].get("capacity_roles", {}) or {})
+        return (cap_roles_all.get(dkey, {}) or {}).get(sname, {}) or {}
+    def can_assign_with_roles(current_names: List[str], nm: str, role_caps: Dict[str, int]) -> bool:
+        if not role_caps:
+            return True
+        caps = dict(role_caps)
+        def fit_one(name: str) -> bool:
+            roles = name_to_roles.get(name) or []
+            for r in roles:
+                if r in caps and caps[r] > 0:
+                    caps[r] -= 1
+                    return True
+            return False
+        # assign existing
+        for name in current_names:
+            if not fit_one(name):
+                return False
+        # then candidate
+        return fit_one(nm)
+
     budget = int(num_alternatives or 20)
     produced = 0
     tried = 0
@@ -801,6 +989,11 @@ def solve_schedule_stream(
                         _write_cell(cand, dkey, s_from, t_idx, [n for n in names_from if n != nm])
                         if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                             skipped_adjacency += 1
+                            continue
+                        # role feasibility for destination cell
+                        role_caps = role_map_for(t_idx, dkey, s_to)
+                        if role_caps and not can_assign_with_roles(list(names_to), nm, role_caps):
+                            skipped_capacity += 1
                             continue
                         _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
                         signature = sig(cand)
@@ -847,8 +1040,15 @@ def solve_schedule_stream(
                             if nm1 == nm2:
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
-                            _write_cell(cand, d1, sname, t_idx, [n for n in n1 if n != nm1] + [nm2])
-                            _write_cell(cand, d2, sname, t_idx, [n for n in n2 if n != nm2] + [nm1])
+                            newd1 = [n for n in n1 if n != nm1] + [nm2]
+                            newd2 = [n for n in n2 if n != nm2] + [nm1]
+                            # role feasibility for both cells after swap
+                            rm1 = role_map_for(t_idx, d1, sname)
+                            rm2 = role_map_for(t_idx, d2, sname)
+                            if (rm1 and not can_assign_with_roles([x for x in newd1 if x != nm2], nm2, rm1)) or (rm2 and not can_assign_with_roles([x for x in newd2 if x != nm1], nm1, rm2)):
+                                continue
+                            _write_cell(cand, d1, sname, t_idx, newd1)
+                            _write_cell(cand, d2, sname, t_idx, newd2)
                             if has_adjacent_in_candidate(cand, nm2, d1, sname) or has_adjacent_in_candidate(cand, nm1, d2, sname):
                                 skipped_adjacency += 1
                                 continue

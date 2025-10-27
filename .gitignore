@@ -1,0 +1,5 @@
+# Ignore virtualenvs and caches
+backend/.venv/
+**/__pycache__/
+backend/dev.db
+Sidour_Avoda_V2/
