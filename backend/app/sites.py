@@ -252,7 +252,7 @@ def ai_generate_planning(
     result = solve_schedule(
         site.config or {},
         workers,
-        time_limit_seconds=int(payload.time_limit_seconds or 10),
+        time_limit_seconds=int(payload.time_limit_seconds or 25),
         max_nights_per_worker=int(payload.max_nights_per_worker or 3),
         num_alternatives=int(payload.num_alternatives or 20),
     )
@@ -294,16 +294,33 @@ def ai_generate_stream(
     logger.info("[SSE] start site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%s", site_id, eff_time, eff_max_nights, eff_num_alts, [w["name"] for w in workers])
 
     async def event_stream():
-        try:
-            gen = solve_schedule_stream(
-                site.config or {},
-                workers,
-                time_limit_seconds=eff_time,
-                max_nights_per_worker=eff_max_nights,
-                num_alternatives=eff_num_alts,
-            )
-            import json
-            for item in gen:
+        """Non-bloquant: exécute le solveur dans un thread et stream via une queue."""
+        import threading, queue, json, asyncio as _asyncio
+        q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
+
+        def _producer():
+            try:
+                gen = solve_schedule_stream(
+                    site.config or {},
+                    workers,
+                    time_limit_seconds=eff_time,
+                    max_nights_per_worker=eff_max_nights,
+                    num_alternatives=eff_num_alts,
+                )
+                for item in gen:
+                    q.put(item)
+            except Exception as e:  # met l'erreur dans le flux
+                q.put({"type": "status", "status": "ERROR", "detail": str(e)})
+            finally:
+                q.put(None)
+
+        threading.Thread(target=_producer, daemon=True).start()
+
+        while True:
+            item = await _asyncio.to_thread(q.get)
+            if item is None:
+                break
+            try:
                 if item.get("type") == "alternative":
                     logger.debug("[SSE] push alternative index=%s", item.get("index"))
                 elif item.get("type") == "base":
@@ -314,11 +331,8 @@ def ai_generate_stream(
                     logger.warning("[SSE] status=%s", item.get("status"))
                 chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
                 yield chunk
-                await asyncio.sleep(0)  # hint scheduler to flush
-        except Exception as e:
-            import json
-            err = {"type": "status", "status": "ERROR", "detail": str(e)}
-            yield "data: " + json.dumps(err, ensure_ascii=False) + "\n\n"
+            finally:
+                await asyncio.sleep(0)
 
     headers = {
         "Cache-Control": "no-cache",

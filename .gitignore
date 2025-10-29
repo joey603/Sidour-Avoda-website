@@ -3,3 +3,13 @@ backend/.venv/
 **/__pycache__/
 backend/dev.db
 Sidour_Avoda_V2/
+frontend/web/node_modules/
+frontend/web/.next/
+frontend/web/.turbo/
+frontend/web/.vercel/
+frontend/web/.env.local
+frontend/web/.env
+backend/.env
+**/.DS_Store
+**/.pytest_cache/
+**/coverage/

@@ -62,6 +62,32 @@ export default function PlanningPage() {
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [altIndex, setAltIndex] = useState<number>(0);
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
+  const prevAltCountRef = useRef<number>(0);
+
+  // Logs de debug pour l'état du bouton
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log("[BTN] aiLoading:", aiLoading);
+  }, [aiLoading]);
+
+  // Log centralisé: chaque fois que le nombre de חלופות change
+  useEffect(() => {
+    const count = aiPlan?.alternatives?.length || 0;
+    if (count !== prevAltCountRef.current) {
+      // eslint-disable-next-line no-console
+      console.log("[ALT][OBS] alternatives updated", { count, status: aiPlan?.status, aiLoading });
+      prevAltCountRef.current = count;
+    }
+  }, [aiPlan?.alternatives?.length, aiPlan?.status, aiLoading]);
+
+  // Log quand le statut passe à DONE (fin de diffusion)
+  useEffect(() => {
+    if (aiPlan?.status === "DONE") {
+      const count = aiPlan?.alternatives?.length || 0;
+      // eslint-disable-next-line no-console
+      console.log("[ALT][OBS] DONE broadcast", { count, status: aiPlan?.status });
+    }
+  }, [aiPlan?.status]);
 
   // Construire un mapping nom -> couleur distincte (éviter rouge/vert), stable et réparti (golden angle)
   const nameToColor = useMemo(() => {
@@ -1045,10 +1071,11 @@ export default function PlanningPage() {
                     rolePlaceholders.push(
                       <span
                         key={`roleph-${rName}-${i}`}
-                        className="inline-flex h-7 min-w-[2.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-[10px] bg-white dark:bg-zinc-900"
-                        style={{ borderColor: c.border, color: c.text }}
+                        className="inline-flex h-9 min-w-[2.5rem] flex-col items-center justify-center rounded-full border px-2 py-0.5 bg-white dark:bg-zinc-900"
+                        style={{ borderColor: c.border }}
                       >
-                        {rName}
+                        <span className="text-[10px] font-medium" style={{ color: c.text }}>{rName}</span>
+                        <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
                     );
                   }
@@ -1139,27 +1166,63 @@ export default function PlanningPage() {
                         }
                       }
                     }
+                  // Totaux globaux: נדרש (required) et שיבוצים (assignés)
+                  const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
+                  function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
+                    if (!st) return 0;
+                    if (st.perDayCustom) {
+                      const dayCfg = st.dayOverrides?.[dayKey];
+                      if (!dayCfg || dayCfg.active === false) return 0;
+                      if (st.uniformRoles) return Number(st.workers || 0);
+                      const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                      if (!sh || !sh.enabled) return 0;
+                      return Number(sh.workers || 0);
+                    }
+                    if (st.days && st.days[dayKey] === false) return 0;
+                    if (st.uniformRoles) return Number(st.workers || 0);
+                    const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                    if (!sh || !sh.enabled) return 0;
+                    return Number(sh.workers || 0);
+                  }
+                  let totalRequired = 0;
+                  for (const dKey of days) {
+                    const shiftsMap = (aiPlan.assignments as any)[dKey] || {};
+                    for (const sn of Object.keys(shiftsMap)) {
+                      for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
+                        totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
+                      }
+                    }
+                  }
+                  const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+                    // Compléter avec tous les travailleurs (compte 0 si non assigné)
+                    workers.forEach((w) => {
+                      if (!counts.has(w.name)) counts.set(w.name, 0);
+                    });
                     // Ordre stable: suivre l'ordre d'apparition dans la liste 'workers'
                     const order = new Map<string, number>();
                     workers.forEach((w, i) => order.set(w.name, i));
                     const items = Array.from(counts.entries())
-                      .filter(([, c]) => c > 0)
                       .sort((a, b) => {
                         const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
                         const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
                         if (ia !== ib) return ia - ib;
                         return a[0].localeCompare(b[0]);
                       });
-                    if (items.length === 0) {
+                    if (workers.length === 0) {
                       return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
                     }
                     return (
-                      <div className="overflow-x-auto">
-                        <table className="w-full border-collapse text-sm">
+                      <>
+                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                          <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
+                          <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
+                        </div>
+                        <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-sm table-fixed">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-2 py-2 text-right">עובד</th>
-                              <th className="px-2 py-2 text-right">מס' משמרות</th>
+                              <th className="px-2 py-2 text-right w-64">עובד</th>
+                              <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1167,12 +1230,12 @@ export default function PlanningPage() {
                               const col = colorForName(nm);
                               return (
                                 <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                  <td className="px-2 py-2">
+                                  <td className="px-2 py-2 w-64">
                                     <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
                                       {nm}
                                     </span>
                                   </td>
-                                  <td className="px-2 py-2">{c}</td>
+                                  <td className="px-2 py-2 w-28">{c}</td>
                                 </tr>
                               );
                             })}
@@ -1247,15 +1310,20 @@ export default function PlanningPage() {
                               });
                             }
                           });
-                          if (roleTotals.size === 0) return null;
+                          // Compléter avec tous les rôles connus (même si 0 assignation)
+                          for (const rName of Array.from(roleColorMap.keys())) {
+                            if (!roleTotals.has(rName)) roleTotals.set(rName, 0);
+                          }
+                          // S'il n'y a aucun rôle défini globalement, ne rien afficher
+                          if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
                           const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
                           return (
                             <div className="mt-4 overflow-x-auto">
-                              <table className="w-full border-collapse text-sm">
+                              <table className="w-full border-collapse text-sm table-fixed">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-2 py-2 text-right">תפקיד</th>
-                                    <th className="px-2 py-2 text-right">סה"כ שיבוצים</th>
+                                    <th className="px-2 py-2 text-right w-64">תפקיד</th>
+                                    <th className="px-2 py-2 text-right w-28">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -1263,12 +1331,12 @@ export default function PlanningPage() {
                                     const rc = colorForRole(rName);
                                     return (
                                       <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-2 py-2">
+                                        <td className="px-2 py-2 w-64">
                                           <span className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-sm shadow-sm" style={{ borderColor: rc.border, color: rc.text }}>
                                             {rName}
                                           </span>
                                         </td>
-                                        <td className="px-2 py-2">{cnt}</td>
+                                        <td className="px-2 py-2 w-28">{cnt}</td>
                                       </tr>
                                     );
                                   })}
@@ -1278,6 +1346,7 @@ export default function PlanningPage() {
                           );
                         })()}
                       </div>
+                      </>
                     );
                   })()}
                 </div>
@@ -1286,11 +1355,34 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={async () => {
+                    let stopped = false;
                     try {
+                      // eslint-disable-next-line no-console
+                      console.log("[BTN] click start");
                       setAiLoading(true);
                       setAiPlan(null);
                       baseAssignmentsRef.current = null;
                       setAltIndex(0);
+                      const controller = new AbortController();
+                      const timeoutId = setTimeout(() => {
+                        try { controller.abort(); } catch {}
+                        setAiLoading(false);
+                      }, 120000);
+                      // Inactivité: si aucune frame reçue pendant X ms, terminer proprement
+                      let idleId: any = 0;
+                      const armIdle = () => {
+                        if (idleId) clearTimeout(idleId);
+                        idleId = setTimeout(async () => {
+                          // eslint-disable-next-line no-console
+                          console.log("[AI][SSE] idle timeout → finalize");
+                          setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
+                          setAiLoading(false);
+                          try { await reader.cancel?.(); } catch {}
+                          try { controller.abort(); } catch {}
+                          stopped = true;
+                          toast.success("התכנון הושלם");
+                        }, 3000); // 3s d'inactivité
+                      };
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
@@ -1299,8 +1391,11 @@ export default function PlanningPage() {
                           "Content-Type": "application/json",
                         },
                         body: JSON.stringify({ num_alternatives: 500 }),
+                        signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {
+                        // eslint-disable-next-line no-console
+                        console.log("[BTN] bad response", resp.status);
                         throw new Error(`HTTP ${resp.status}`);
                       }
                       const reader = resp.body.getReader();
@@ -1331,7 +1426,9 @@ export default function PlanningPage() {
                               } as any);
                               baseAssignmentsRef.current = evt.assignments;
                               toast.success("תכנון בסיסי מוכן");
+                              armIdle();
                             } else if (evt?.type === "alternative") {
+                              armIdle();
                               setAiPlan((prev) => {
                                 if (!prev) return prev;
                                 const alts = Array.isArray(prev.alternatives) ? prev.alternatives : [];
@@ -1343,19 +1440,45 @@ export default function PlanningPage() {
                             } else if (evt?.type === "status") {
                               // eslint-disable-next-line no-console
                               console.log("[AI][SSE] status", evt);
+                              setAiLoading(false);
+                              try { await reader.cancel(); } catch {}
+                              clearTimeout(timeoutId);
+                              stopped = true;
+                              break;
                             } else if (evt?.type === "done") {
                               // eslint-disable-next-line no-console
                               console.log("[AI][SSE] done");
+                              try { await reader.cancel(); } catch {}
+                              clearTimeout(timeoutId);
+                              stopped = true;
+                              setAiLoading(false);
+                              setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
+                              toast.success("התכנון הושלם");
+                              break;
                             }
                           } catch (e) {
                             // eslint-disable-next-line no-console
                             console.log("[AI][SSE] parse error", e);
                           }
                         }
+                        if (stopped) break;
                       }
+                      clearTimeout(timeoutId);
+                      if (idleId) clearTimeout(idleId);
                     } catch (e: any) {
-                      toast.error("יצירת תכנון נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                      // eslint-disable-next-line no-console
+                      console.log("[BTN] error", e);
+                      const msg = String(e?.message || e || "");
+                      // Ne pas alerter si on a volontairement stoppé/annulé (AbortError)
+                      if (stopped || e?.name === "AbortError" || /aborted/i.test(msg)) {
+                        // eslint-disable-next-line no-console
+                        console.log("[BTN] fetch aborted/ended gracefully, no toast");
+                      } else {
+                        toast.error("יצירת תכנון נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
+                      }
                     } finally {
+                      // eslint-disable-next-line no-console
+                      console.log("[BTN] finally set loading false");
                       setAiLoading(false);
                     }
                   }}

@@ -372,6 +372,233 @@ def solve_schedule(
         return total
     base_total_assigned = _count_assigned(assignments)
 
+    # Greedy post-processing: try to fill remaining holes without violating constraints
+    try:
+        # Helpers for checks
+        shift_index = {nm: i for i, nm in enumerate(shifts)}
+        day_index = {dk: i for i, dk in enumerate(days)}
+        def name_present_same_day(a, dkey, nm) -> bool:
+            for sname in shifts:
+                per_station = a.get(dkey, {}).get(sname, []) or []
+                for lst in per_station:
+                    if nm in (lst or []):
+                        return True
+            return False
+        def has_adjacent_in_assign(a, nm: str, dkey: str, sname: str) -> bool:
+            di = day_index.get(dkey, -1)
+            si = shift_index.get(sname, -1)
+            if di < 0 or si < 0:
+                return False
+            if si - 1 >= 0:
+                prev = []
+                for lst in (a.get(dkey, {}).get(shifts[si - 1], []) or []):
+                    prev.extend(lst or [])
+                if nm in prev:
+                    return True
+            if si + 1 < len(shifts):
+                nxt = []
+                for lst in (a.get(dkey, {}).get(shifts[si + 1], []) or []):
+                    nxt.extend(lst or [])
+                if nm in nxt:
+                    return True
+            if si == 0 and di - 1 >= 0:
+                prev_day = days[di - 1]
+                last_shift = shifts[-1]
+                prev = []
+                for lst in (a.get(prev_day, {}).get(last_shift, []) or []):
+                    prev.extend(lst or [])
+                if nm in prev:
+                    return True
+            if si == len(shifts) - 1 and di + 1 < len(days):
+                next_day = days[di + 1]
+                first = shifts[0]
+                nxt = []
+                for lst in (a.get(next_day, {}).get(first, []) or []):
+                    nxt.extend(lst or [])
+                if nm in nxt:
+                    return True
+            return False
+        def is_night(name: str) -> bool:
+            s = (name or "").strip().lower()
+            return s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("\u05dc\u05d9\u05dc\u05d4" in name)
+        # Precompute worker maps
+        name_to_max = { (w.get("name") or ""): int(w.get("max_shifts") or 5) for w in workers }
+        name_to_roles_norm = { (w.get("name") or ""): { _norm_role_local(r) for r in (w.get("roles") or []) } for w in workers }
+        name_to_avail = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+        # Assigned counts and night counts
+        assigned_per_name: Dict[str, int] = {}
+        night_count_per_name: Dict[str, int] = {}
+        for dk, sm in assignments.items():
+            for sn, perst in sm.items():
+                for lst in perst:
+                    for nm in (lst or []):
+                        assigned_per_name[nm] = assigned_per_name.get(nm, 0) + 1
+                        if is_night(sn):
+                            night_count_per_name[nm] = night_count_per_name.get(nm, 0) + 1
+        added = 0
+        for t, st in enumerate(stations):
+            cap = st.get("capacity", {})
+            cap_roles_all = (st.get("capacity_roles", {}) or {})
+            for d, day_key in enumerate(days):
+                for s, sh_name in enumerate(shifts):
+                    required = int(cap.get(day_key, {}).get(sh_name, 0))
+                    if required <= 0:
+                        continue
+                    cell = assignments.get(day_key, {}).get(sh_name, [])[t]
+                    if cell is None:
+                        continue
+                    current = list(cell)
+                    if len(current) >= required:
+                        continue
+                    # Role deficits if any
+                    role_caps = (cap_roles_all.get(day_key, {}) or {}).get(sh_name, {}) or {}
+                    role_caps_norm = { _norm_role_local(k): int(v) for k, v in role_caps.items() }
+                    def count_role_in(names: List[str], role_name: str) -> int:
+                        c = 0
+                        for nm in names:
+                            if role_name in (name_to_roles_norm.get(nm) or set()):
+                                c += 1
+                        return c
+                    # Candidate order: fewest assigned first
+                    all_names = [w.get("name") or "" for w in workers]
+                    all_names = [nm for nm in all_names if nm and nm not in current]
+                    all_names.sort(key=lambda nm: (assigned_per_name.get(nm, 0), nm))
+                    while len(current) < required:
+                        picked = None
+                        # compute deficits
+                        deficits = { rn: max(0, int(rc) - count_role_in(current, rn)) for rn, rc in role_caps_norm.items() }
+                        must_fill_role = sum(deficits.values()) > 0
+                        for nm in all_names:
+                            # availability
+                            if sh_name not in (name_to_avail.get(nm, {}).get(day_key) or []):
+                                continue
+                            # same day / adjacency
+                            if name_present_same_day(assignments, day_key, nm):
+                                continue
+                            if has_adjacent_in_assign(assignments, nm, day_key, sh_name):
+                                continue
+                            # weekly quota
+                            if assigned_per_name.get(nm, 0) >= name_to_max.get(nm, 5):
+                                continue
+                            # nights quota
+                            if is_night(sh_name) and night_count_per_name.get(nm, 0) >= max_nights_per_worker:
+                                continue
+                            # role rule
+                            roles_nm = name_to_roles_norm.get(nm) or set()
+                            if must_fill_role:
+                                # accept only if worker carries a remaining deficit role
+                                if not any((r in deficits and deficits[r] > 0) for r in roles_nm):
+                                    continue
+                            # ok, pick
+                            picked = nm
+                            break
+                        if not picked:
+                            break
+                        current.append(picked)
+                        assignments[day_key][sh_name][t] = current
+                        assigned_per_name[picked] = assigned_per_name.get(picked, 0) + 1
+                        if is_night(sh_name):
+                            night_count_per_name[picked] = night_count_per_name.get(picked, 0) + 1
+                        added += 1
+        if added:
+            logger.info("[GREEDY] trous comblés=%d (post-process)", added)
+    except Exception:
+        pass
+    # Diagnostic: trous (holes) par cellule et candidats potentiels simples
+    try:
+        # index utilitaires
+        shift_index = {nm: i for i, nm in enumerate(shifts)}
+        day_index = {dk: i for i, dk in enumerate(days)}
+        def name_present_same_day(a, dkey, nm) -> bool:
+            for sname in shifts:
+                per_station = a.get(dkey, {}).get(sname, []) or []
+                for lst in per_station:
+                    if nm in (lst or []):
+                        return True
+            return False
+        def has_adjacent_in_assign(a, nm: str, dkey: str, sname: str) -> bool:
+            di = day_index.get(dkey, -1)
+            si = shift_index.get(sname, -1)
+            if di < 0 or si < 0:
+                return False
+            # précédent même jour
+            if si - 1 >= 0:
+                prev = []
+                for lst in (a.get(dkey, {}).get(shifts[si - 1], []) or []):
+                    prev.extend(lst or [])
+                if nm in prev:
+                    return True
+            # suivant même jour
+            if si + 1 < len(shifts):
+                nxt = []
+                for lst in (a.get(dkey, {}).get(shifts[si + 1], []) or []):
+                    nxt.extend(lst or [])
+                if nm in nxt:
+                    return True
+            # bordure jour
+            if si == 0 and di - 1 >= 0:
+                prev_day = days[di - 1]
+                last_shift = shifts[-1]
+                prev = []
+                for lst in (a.get(prev_day, {}).get(last_shift, []) or []):
+                    prev.extend(lst or [])
+                if nm in prev:
+                    return True
+            if si == len(shifts) - 1 and di + 1 < len(days):
+                next_day = days[di + 1]
+                first = shifts[0]
+                nxt = []
+                for lst in (a.get(next_day, {}).get(first, []) or []):
+                    nxt.extend(lst or [])
+                if nm in nxt:
+                    return True
+            return False
+        # max shifts per worker map
+        name_to_max = { (w.get("name") or ""): int(w.get("max_shifts") or 5) for w in workers }
+        name_to_avail = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+        # count assigned per worker
+        assigned_per_name: Dict[str, int] = {}
+        for dk, sm in assignments.items():
+            for sn, perst in sm.items():
+                for lst in perst:
+                    for nm in (lst or []):
+                        assigned_per_name[nm] = assigned_per_name.get(nm, 0) + 1
+        # inspect trous
+        holes: List[Tuple[str,str,int,int]] = []  # (day, shift, station_idx, deficit)
+        for t, st in enumerate(stations):
+            cap_map = st.get("capacity", {})
+            for d, day_key in enumerate(days):
+                for s, sh_name in enumerate(shifts):
+                    req = int(cap_map.get(day_key, {}).get(sh_name, 0))
+                    if req <= 0:
+                        continue
+                    got = len(assignments.get(day_key, {}).get(sh_name, [])[t] or [])
+                    if got < req:
+                        holes.append((day_key, sh_name, t, req - got))
+        if holes:
+            logger.info("[BASE] couverture=%d trous=%d", base_total_assigned, sum(d for (_,_,_,d) in holes))
+            # pour quelques trous, estimer nb de candidats simples
+            for i, (dk, sn, t_idx, deficit) in enumerate(holes[:10]):
+                cand = 0
+                for nm, max_sh in name_to_max.items():
+                    # dispo
+                    av = name_to_avail.get(nm) or {}
+                    if sn not in (av.get(dk) or []):
+                        continue
+                    # pas déjà le même jour
+                    if name_present_same_day(assignments, dk, nm):
+                        continue
+                    # pas adjacent
+                    if has_adjacent_in_assign(assignments, nm, dk, sn):
+                        continue
+                    # quota hebdo
+                    if assigned_per_name.get(nm, 0) >= max_sh:
+                        continue
+                    cand += 1
+                logger.info("[TROU] %s / %s / station=%s deficit=%d candidats_simples=%d", dk, sn, stations[t_idx].get("name"), deficit, cand)
+    except Exception:
+        pass
+
     # Enumerate alternative full solutions by re-solving with a nogood to change global distribution
     # This produces alternatives that can change per-worker totals (not only swaps)
     alternatives_from_resolve: List[Dict[str, Dict[str, List[List[str]]]]] = []
@@ -879,6 +1106,83 @@ def solve_schedule_stream(
         )
     except Exception:
         pass
+    # Greedy fill pass (stream): try to reduce holes without violating constraints and role rules
+    try:
+        # Helpers already defined: has_adjacent_in_candidate, role_map_for, can_assign_with_roles
+        # availability and same-day presence helpers
+        def _name_present_same_day(a: Dict[str, Dict[str, List[List[str]]]], dkey: str, nm: str) -> bool:
+            for sname in shifts:
+                for lst in (a.get(dkey, {}).get(sname, []) or []):
+                    if nm in (lst or []):
+                        return True
+            return False
+        # per-worker caps
+        name_to_max = { (w.get("name") or ""): int(w.get("max_shifts") or 5) for w in workers }
+        name_to_avail = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+        # night counter
+        def _is_night_name(name: str) -> bool:
+            s = (name or "").strip().lower()
+            return s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("\u05dc\u05d9\u05dc\u05d4" in name)
+        night_count: Dict[str, int] = {}
+        assign_count: Dict[str, int] = {}
+        for dk in days:
+            for sn in shifts:
+                for lst in (base.get(dk, {}).get(sn, []) or []):
+                    for nm in (lst or []):
+                        assign_count[nm] = assign_count.get(nm, 0) + 1
+                        if _is_night_name(sn):
+                            night_count[nm] = night_count.get(nm, 0) + 1
+        added = 0
+        for dk in days:
+            for sn in shifts:
+                per_station = base.get(dk, {}).get(sn, []) or []
+                for t_idx in range(len(stations)):
+                    req = int(stations[t_idx].get("capacity", {}).get(dk, {}).get(sn, 0))
+                    if req <= 0:
+                        continue
+                    names_here = list(per_station[t_idx] or [])
+                    if len(names_here) >= req:
+                        continue
+                    role_caps = role_map_for(t_idx, dk, sn)
+                    # iterate all workers in fairness-friendly order (least assigned first)
+                    candidates = [(w.get("name") or "") for w in workers]
+                    candidates = [nm for nm in candidates if nm and nm not in names_here]
+                    candidates.sort(key=lambda nm: (assign_count.get(nm, 0), nm))
+                    while len(names_here) < req:
+                        picked = None
+                        need_role = bool(role_caps) and not can_assign_with_roles(names_here, "__probe__", role_caps)
+                        for nm in candidates:
+                            # availability
+                            if sn not in (name_to_avail.get(nm, {}).get(dk) or []):
+                                continue
+                            # same-day / adjacency
+                            if _name_present_same_day(base, dk, nm):
+                                continue
+                            if has_adjacent_in_candidate(base, nm, dk, sn):
+                                continue
+                            # per-worker caps
+                            if assign_count.get(nm, 0) >= name_to_max.get(nm, 5):
+                                continue
+                            if _is_night_name(sn) and night_count.get(nm, 0) >= max_nights_per_worker:
+                                continue
+                            # role rule: only pick if feasible with roles
+                            if role_caps and not can_assign_with_roles(names_here, nm, role_caps):
+                                continue
+                            picked = nm
+                            break
+                        if not picked:
+                            break
+                        names_here.append(picked)
+                        base[dk][sn][t_idx] = names_here
+                        assign_count[picked] = assign_count.get(picked, 0) + 1
+                        if _is_night_name(sn):
+                            night_count[picked] = night_count.get(picked, 0) + 1
+                        added += 1
+        if added:
+            logger.info("[STREAM][GREEDY] trous comblés=%d", added)
+    except Exception:
+        pass
+
     yield {"type": "base", "days": days, "shifts": shifts, "stations": [st.get("name") for st in stations], "assignments": base}
 
     # Now generate alternatives using existing functions on-the-fly
@@ -929,6 +1233,29 @@ def solve_schedule_stream(
 
     # base copy to start generating alternatives
     assignments = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in base.items()}
+    # Baseline coverage (number of assignments) and holes
+    def _count_assigned(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+        total = 0
+        for dk in days:
+            for sn in shifts:
+                for lst in (a.get(dk, {}).get(sn, []) or []):
+                    total += len(lst or [])
+        return total
+    baseline_coverage = _count_assigned(assignments)
+    def _count_holes(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+        total = 0
+        for t_idx in range(len(stations)):
+            cap = stations[t_idx].get("capacity", {}) or {}
+            for dk in days:
+                for sn in shifts:
+                    req = int((cap.get(dk, {}) or {}).get(sn, 0))
+                    if req <= 0:
+                        continue
+                    got = len(((a.get(dk, {}) or {}).get(sn, []) or [[] for _ in stations])[t_idx] or [])
+                    if got < req:
+                        total += (req - got)
+        return total
+    baseline_holes = _count_holes(assignments)
     seen: set = set()
     def sig(a: Dict[str, Dict[str, List[List[str]]]]):
         return tuple((dk, tuple((sn, tuple(tuple(lst) for lst in (a.get(dk, {}).get(sn, []) or []))) for sn in shifts)) for dk in days)
@@ -963,7 +1290,44 @@ def solve_schedule_stream(
     skipped_duplicate = 0
     skipped_adjacency = 0
     skipped_capacity = 0
-    logger.info("[STREAM] alternatives budget=%d", budget)
+    logger.info("[STREAM] alternatives budget=%d baseline_coverage=%d baseline_holes=%d", budget, baseline_coverage, baseline_holes)
+    def _required_of(t_idx: int, dkey: str, sname: str) -> int:
+        return int((stations[t_idx].get("capacity", {}) or {}).get(dkey, {}).get(sname, 0))
+    # Vérifie que la liste de noms satisfait les rôles requis d'une cellule
+    def _meets_roles(names: List[str], t_idx: int, dkey: str, sname: str) -> bool:
+        role_caps = role_map_for(t_idx, dkey, sname)
+        if not role_caps:
+            return True
+        caps = dict(role_caps)
+        for nm in names:
+            roles = name_to_roles.get(nm) or []
+            ok = False
+            for r in roles:
+                if r in caps and caps[r] > 0:
+                    caps[r] -= 1
+                    ok = True
+                    break
+            if not ok:
+                # Ce nom ne couvre aucun rôle restant requis
+                return False
+        # Tous les noms ont pu être appariés aux rôles requis
+        return True
+
+    # Calcule la somme des déficits de rôles pour une cellule (combien de rôles requis manquent)
+    def _role_deficit_for(names: List[str], t_idx: int, dkey: str, sname: str) -> int:
+        role_caps = role_map_for(t_idx, dkey, sname)
+        if not role_caps:
+            return 0
+        counts: Dict[str, int] = {}
+        for nm in names:
+            for r in (name_to_roles.get(nm) or []):
+                counts[r] = counts.get(r, 0) + 1
+        deficit = 0
+        for r, cap in role_caps.items():
+            have = counts.get(r, 0)
+            if have < int(cap):
+                deficit += int(cap) - have
+        return deficit
     for dkey in days:
         if budget <= 0:
             break
@@ -973,6 +1337,7 @@ def solve_schedule_stream(
             non_empty = [sname for sname in shifts if _names_in_cell(assignments, dkey, sname, t_idx)]
             for s_from in non_empty:
                 names_from = _names_in_cell(assignments, dkey, s_from, t_idx)
+                req_from = _required_of(t_idx, dkey, s_from)
                 for nm in names_from:
                     for s_to in shifts:
                         if s_to == s_from:
@@ -982,11 +1347,20 @@ def solve_schedule_stream(
                             skipped_capacity += 1
                             continue
                         names_to = _names_in_cell(assignments, dkey, s_to, t_idx)
-                        if nm in names_to or len(names_to) >= cap_to:
+                        # ensure destination has room and source keeps coverage
+                        if nm in names_to or len(names_to) >= cap_to or (len(names_from) - 1) < req_from:
                             skipped_capacity += 1
                             continue
+                        names_from_new = [n for n in names_from if n != nm]
+                        # Vérifier que la source reste valide en termes de rôles
+                        if not _meets_roles(names_from_new, t_idx, dkey, s_from):
+                            skipped_capacity += 1
+                            continue
+                        # Ne pas augmenter le déficit de rôles (trous) combiné source+destination
+                        base_def_src = _role_deficit_for(names_from, t_idx, dkey, s_from)
+                        base_def_dst = _role_deficit_for(names_to, t_idx, dkey, s_to)
                         cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
-                        _write_cell(cand, dkey, s_from, t_idx, [n for n in names_from if n != nm])
+                        _write_cell(cand, dkey, s_from, t_idx, names_from_new)
                         if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                             skipped_adjacency += 1
                             continue
@@ -996,6 +1370,20 @@ def solve_schedule_stream(
                             skipped_capacity += 1
                             continue
                         _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                        # calcul du nouveau déficit combinaisons
+                        new_def_src = _role_deficit_for(names_from_new, t_idx, dkey, s_from)
+                        new_def_dst = _role_deficit_for(names_to + [nm], t_idx, dkey, s_to)
+                        if (new_def_src + new_def_dst) > (base_def_src + base_def_dst):
+                            skipped_capacity += 1
+                            continue
+                        # drop any alternative that reduces coverage
+                        if _count_assigned(cand) < baseline_coverage:
+                            skipped_capacity += 1
+                            continue
+                        # stop streaming if more holes than baseline
+                        if _count_holes(cand) > baseline_holes:
+                            yield {"type": "done"}
+                            return
                         signature = sig(cand)
                         tried += 1
                         if signature in seen:
@@ -1052,6 +1440,12 @@ def solve_schedule_stream(
                             if has_adjacent_in_candidate(cand, nm2, d1, sname) or has_adjacent_in_candidate(cand, nm1, d2, sname):
                                 skipped_adjacency += 1
                                 continue
+                            # coverage/holes check relative to baseline
+                            if _count_assigned(cand) < baseline_coverage:
+                                continue
+                            if _count_holes(cand) > baseline_holes:
+                                yield {"type": "done"}
+                                return
                             signature = sig(cand)
                             tried += 1
                             if signature in seen:
@@ -1115,6 +1509,12 @@ def solve_schedule_stream(
                 break
             solver = solver2
             cand = _build_assignments_from_current_solver(solver)
+            # baseline guards
+            if _count_assigned(cand) < baseline_coverage:
+                continue
+            if _count_holes(cand) > baseline_holes:
+                yield {"type": "done"}
+                return
             signature = sig(cand)
             tried += 1
             if signature in seen:
