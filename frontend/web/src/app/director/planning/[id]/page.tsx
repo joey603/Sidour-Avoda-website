@@ -89,6 +89,421 @@ export default function PlanningPage() {
     }
   }, [aiPlan?.status]);
 
+  // Mode manuel (drag & drop)
+  const [isManual, setIsManual] = useState(false);
+  type AssignmentsMap = Record<string, Record<string, string[][]>>;
+  const [manualAssignments, setManualAssignments] = useState<AssignmentsMap | null>(null);
+  // Role hints per slot in manual mode (preserved from auto)
+  type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
+  const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
+  const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
+  const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
+  const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
+
+  // Helpers: day order and shift kind
+  const dayOrder = ["sun","mon","tue","wed","thu","fri","sat"] as const;
+  const prevDayKeyOf = (key: string) => dayOrder[(dayOrder.indexOf(key as any) + 6) % 7];
+  const nextDayKeyOf = (key: string) => dayOrder[(dayOrder.indexOf(key as any) + 1) % 7];
+  function detectShiftKind(sn: string): "morning" | "noon" | "night" | "other" {
+    const s = String(sn || "");
+    if (/בוקר|^0?6|06-14/i.test(s)) return "morning";
+    if (/צהר(יים|י)ם?|14-22|^1?4/i.test(s)) return "noon";
+    if (/לילה|22-06|^2?2|night/i.test(s)) return "night";
+    return "other";
+  }
+
+  // Worker role check usable outside of render helpers
+  const normLocal = (n: string) => (n || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+  function workerHasRole(workerName: string, roleName: string): boolean {
+    const w = workers.find((x) => (x.name || "").trim() === (workerName || "").trim());
+    if (!w) return false;
+    const target = normLocal(roleName);
+    return (w.roles || []).some((r) => normLocal(String(r)) === target);
+  }
+
+  function onWorkerDragStart(e: React.DragEvent, workerName: string) {
+    try {
+      e.dataTransfer.setData("text/plain", workerName);
+      e.dataTransfer.effectAllowed = "copy";
+    } catch {}
+    // debug
+    try { console.log("[DND] dragstart worker:", workerName); } catch {}
+  }
+
+  // Slot-level DnD only in manual mode; no cell-level drop
+  function onSlotDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = "copy"; } catch {}
+  }
+
+  function dropIntoSlot(
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number,
+    slotIndex: number,
+    workerName: string,
+    expectedRoleFromUI?: string | null,
+    prechecked?: boolean
+  ) {
+    const trimmed = (workerName || "").trim();
+    if (!trimmed) return;
+    setManualAssignments((prev) => {
+      const stationsCount = (site?.config?.stations || []).length || 0;
+      const ensureBase = (base?: AssignmentsMap | null): AssignmentsMap => {
+        const next: AssignmentsMap = base ? JSON.parse(JSON.stringify(base)) : ({} as any);
+        if (!next[dayKey]) next[dayKey] = {} as any;
+        if (!next[dayKey][shiftName]) next[dayKey][shiftName] = Array.from({ length: stationsCount }, () => []);
+        if ((next[dayKey][shiftName] as any[]).length !== stationsCount) {
+          next[dayKey][shiftName] = Array.from({ length: stationsCount }, (_, i) => (next[dayKey][shiftName][i] || []));
+        }
+        return next;
+      };
+      const base = ensureBase(prev);
+      const beforeArr: string[] = Array.from(base[dayKey][shiftName][stationIndex] || []);
+
+      // --- role context (station requirements and hints) ---
+      const stCfg = (site?.config?.stations || [])[stationIndex] || null;
+      const roleReq: Record<string, number> = (() => {
+        const out: Record<string, number> = {};
+        if (!stCfg) return out;
+        const push = (name?: string, count?: number, enabled?: boolean) => {
+          const rn = (name || "").trim();
+          const c = Number(count || 0);
+          if (!rn || !enabled || c <= 0) return; out[rn] = (out[rn] || 0) + c;
+        };
+        if (stCfg.perDayCustom) {
+          const dcfg = stCfg.dayOverrides?.[dayKey];
+          if (!dcfg || dcfg.active === false) return out;
+          if (stCfg.uniformRoles) {
+            for (const r of (stCfg.roles || [])) push(r?.name, r?.count, r?.enabled);
+          } else {
+            const sh = (dcfg.shifts || []).find((x: any) => x?.name === shiftName);
+            for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+          }
+          return out;
+        }
+        if (stCfg.uniformRoles) {
+          for (const r of (stCfg.roles || [])) push(r?.name, r?.count, r?.enabled);
+        } else {
+          const sh = (stCfg.shifts || []).find((x: any) => x?.name === shiftName);
+          for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+        }
+        return out;
+      })();
+      const norm = (n: string) => (n || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ");
+      const findAssignedRole = (nm: string): string | null => {
+        const w = workers.find((x) => (x.name || "").trim() === (nm || "").trim());
+        if (!w) return null;
+        const roles = Object.keys(roleReq);
+        for (const rName of roles) {
+          if ((w.roles || []).some((r) => norm(String(r)) === norm(rName))) return rName;
+        }
+        return null;
+      };
+      const currentAssignedPerRole = new Map<string, number>();
+      beforeArr.forEach((nm) => {
+        const r = findAssignedRole(nm);
+        if (!r) return;
+        currentAssignedPerRole.set(r, (currentAssignedPerRole.get(r) || 0) + 1);
+      });
+      const roleHints: string[] = [];
+      Object.entries(roleReq).forEach(([rName, rCount]) => {
+        const have = currentAssignedPerRole.get(rName) || 0;
+        const deficit = Math.max(0, (rCount || 0) - have);
+        for (let i = 0; i < deficit; i++) roleHints.push(rName);
+      });
+      const slotMetaBefore = beforeArr.map((nm, i) => ({ idx: i, nm, assignedRole: findAssignedRole(nm), roleHint: roleHints[i] || null }));
+      try {
+        console.log("[DND] dropIntoSlot BEFORE:", { dayKey, shiftName, stationIndex, slotIndex, workerName: trimmed });
+        console.log("[DND] roleReq:", Object.entries(roleReq));
+        console.log("[DND] slotMetaBefore:", slotMetaBefore.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole, roleHint: x.roleHint })));
+        console.table(slotMetaBefore.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole || "—", roleHint: x.roleHint || "—" })));
+      } catch {}
+      const arr: string[] = Array.from(beforeArr);
+      // Remove existing occurrence in this cell to avoid duplicates
+      const filtered = arr.filter((x) => (x || "").trim() !== trimmed);
+      // Role validation: if the slot expects a role and the worker has roles, ensure match or confirm
+      const worker = workers.find((w) => (w.name || "").trim() === trimmed);
+      const workerRoles: string[] = Array.isArray(worker?.roles) ? worker!.roles : [];
+      const hasWorkerRoles = workerRoles.length > 0;
+      const slotHintComputed: string | null = roleHints[slotIndex] || null;
+      const slotExpectedRole = (expectedRoleFromUI || slotHintComputed || "").trim() || null;
+      if (!prechecked && slotExpectedRole) {
+        const match = workerRoles.some((r) => norm(String(r)) === norm(slotExpectedRole as string));
+        if (!match) {
+          try { console.log("[DND] role mismatch (computed)", { worker: trimmed, workerRoles, slotExpectedRole }); } catch {}
+          const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${trimmed}" אין את התפקיד "${slotExpectedRole}" בתא זה. להקצות בכל זאת?`);
+          if (!ok) {
+            try { console.log("[DND] assignment cancelled by user"); } catch {}
+            return prev;
+          }
+        }
+      }
+      // Other constraints confirmations
+      const conflicts: string[] = [];
+      try {
+        const isNight = detectShiftKind(shiftName) === "night";
+        if (isNight) {
+          // count night assignments for this worker across manualAssignments + this one
+          let nightCount = 0;
+          const dayKeysAll = Object.keys(manualAssignments || {});
+          for (const dKey of dayKeysAll) {
+            const shiftsMap = (manualAssignments as any)?.[dKey] || {};
+            for (const sn of Object.keys(shiftsMap)) {
+              if (detectShiftKind(sn) !== "night") continue;
+              const perStation: string[][] = shiftsMap[sn] || [];
+              for (const namesHere of perStation) if ((namesHere || []).some((nm) => (nm || "").trim() === trimmed)) nightCount++;
+            }
+          }
+          // if not already counted in this exact target cell, account for the new drop
+          const alreadyHere = beforeArr.some((nm, i) => i === slotIndex ? nm === trimmed : false);
+          if (!alreadyHere) nightCount += 1;
+          if (nightCount > 3) conflicts.push("יותר מ־3 לילות בשבוע");
+        }
+        // same day+shift elsewhere
+        const perStationSame: string[][] = ((manualAssignments as any)?.[dayKey]?.[shiftName] || []) as any;
+        let existsElsewhere = false;
+        perStationSame.forEach((namesArr: string[], sIdx: number) => {
+          if (sIdx === stationIndex) return;
+          if ((namesArr || []).some((nm) => (nm || "").trim() === trimmed)) existsElsewhere = true;
+        });
+        if (existsElsewhere) conflicts.push("אותו עובד כבר שובץ במשמרת זו בעמדה אחרת");
+        // adjacent shifts (including day boundary)
+        const kind = detectShiftKind(shiftName);
+        const prevCheck = () => {
+          if (kind === "morning") {
+            const prevDay = prevDayKeyOf(dayKey);
+            const perStationPrevNight = ((manualAssignments as any)?.[prevDay]?.[Object.keys(((manualAssignments as any)?.[prevDay]||{})).find((sn) => detectShiftKind(sn) === "night") || "__none__"] || []) as any;
+            return perStationPrevNight.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          if (kind === "noon") {
+            const perStationPrevMorning = ((manualAssignments as any)?.[dayKey]?.[Object.keys(((manualAssignments as any)?.[dayKey]||{})).find((sn) => detectShiftKind(sn) === "morning") || "__none__"] || []) as any;
+            return perStationPrevMorning.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          if (kind === "night") {
+            const perStationPrevNoon = ((manualAssignments as any)?.[dayKey]?.[Object.keys(((manualAssignments as any)?.[dayKey]||{})).find((sn) => detectShiftKind(sn) === "noon") || "__none__"] || []) as any;
+            return perStationPrevNoon.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          return false;
+        };
+        const nextCheck = () => {
+          if (kind === "morning") {
+            const perStationNextNoon = ((manualAssignments as any)?.[dayKey]?.[Object.keys(((manualAssignments as any)?.[dayKey]||{})).find((sn) => detectShiftKind(sn) === "noon") || "__none__"] || []) as any;
+            return perStationNextNoon.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          if (kind === "noon") {
+            const perStationNextNight = ((manualAssignments as any)?.[dayKey]?.[Object.keys(((manualAssignments as any)?.[dayKey]||{})).find((sn) => detectShiftKind(sn) === "night") || "__none__"] || []) as any;
+            return perStationNextNight.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          if (kind === "night") {
+            const nextDay = nextDayKeyOf(dayKey);
+            const perStationNextMorning = ((manualAssignments as any)?.[nextDay]?.[Object.keys(((manualAssignments as any)?.[nextDay]||{})).find((sn) => detectShiftKind(sn) === "morning") || "__none__"] || []) as any;
+            return perStationNextMorning.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+          }
+          return false;
+        };
+        if (prevCheck() || nextCheck()) conflicts.push("אין משמרות צמודות (כולל חציית יום)");
+      } catch {}
+      if (conflicts.length > 0) {
+        const conflictKey = `${dayKey}|${shiftName}|${stationIndex}|${slotIndex}|${trimmed}`;
+        const last = lastConflictConfirmRef.current;
+        if (!(last && last.key === conflictKey && Date.now() - last.ts < 1500)) {
+          const msg = `שיבוץ עלול להפר חוקים:\n- ${conflicts.join("\n- ")}.\nלהקצות בכל זאת?`;
+          const ok = typeof window !== "undefined" && window.confirm && window.confirm(msg);
+          if (!ok) return prev;
+          lastConflictConfirmRef.current = { key: conflictKey, ts: Date.now() };
+        }
+      }
+      while (filtered.length <= slotIndex) filtered.push("");
+      filtered[slotIndex] = trimmed;
+      base[dayKey][shiftName][stationIndex] = filtered;
+      // Update manualRoleHints according to expected role from UI
+      try {
+        if (typeof expectedRoleFromUI !== "undefined") {
+          setManualRoleHints((prevHints) => {
+            const stationsCount2 = (site?.config?.stations || []).length || 0;
+            const ensureHints = (h?: RoleHintsMap | null): RoleHintsMap => {
+              const nextH: RoleHintsMap = h ? JSON.parse(JSON.stringify(h)) : ({} as any);
+              if (!nextH[dayKey]) nextH[dayKey] = {} as any;
+              if (!nextH[dayKey][shiftName]) nextH[dayKey][shiftName] = Array.from({ length: stationsCount2 }, () => []);
+              if ((nextH[dayKey][shiftName] as any[]).length !== stationsCount2) {
+                nextH[dayKey][shiftName] = Array.from({ length: stationsCount2 }, (_, i) => (nextH[dayKey][shiftName][i] || []));
+              }
+              return nextH;
+            };
+            const nh = ensureHints(prevHints);
+            const arrHints: (string | null)[] = Array.from(nh[dayKey][shiftName][stationIndex] || []);
+            while (arrHints.length <= slotIndex) arrHints.push(null);
+            const roleToSet = expectedRoleFromUI && workerHasRole(trimmed, expectedRoleFromUI) ? expectedRoleFromUI : null;
+            arrHints[slotIndex] = roleToSet as any;
+            nh[dayKey][shiftName][stationIndex] = arrHints;
+            return nh;
+          });
+        }
+      } catch {}
+      const afterArr: string[] = Array.from(base[dayKey][shiftName][stationIndex] || []);
+      const currentAssignedPerRoleAfter = new Map<string, number>();
+      afterArr.forEach((nm) => {
+        const r = findAssignedRole(nm);
+        if (!r) return;
+        currentAssignedPerRoleAfter.set(r, (currentAssignedPerRoleAfter.get(r) || 0) + 1);
+      });
+      const roleHintsAfter: string[] = [];
+      Object.entries(roleReq).forEach(([rName, rCount]) => {
+        const have = currentAssignedPerRoleAfter.get(rName) || 0;
+        const deficit = Math.max(0, (rCount || 0) - have);
+        for (let i = 0; i < deficit; i++) roleHintsAfter.push(rName);
+      });
+      const slotMetaAfter = afterArr.map((nm, i) => ({ idx: i, nm, assignedRole: findAssignedRole(nm), roleHint: roleHintsAfter[i] || null }));
+      try {
+        console.log("[DND] dropIntoSlot AFTER:", { afterArr });
+        console.log("[DND] slotMetaAfter:", slotMetaAfter.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole, roleHint: x.roleHint })));
+        console.table(slotMetaAfter.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole || "—", roleHint: x.roleHint || "—" })));
+      } catch {}
+      return { ...base };
+    });
+  }
+
+  function onCellDrop(e: React.DragEvent, dayKey: string, shiftName: string, stationIndex: number) {
+    e.preventDefault();
+    const name = (() => {
+      try { return e.dataTransfer.getData("text/plain"); } catch { return ""; }
+    })();
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    setManualAssignments((prev) => {
+      const stationsCount = (site?.config?.stations || []).length || 0;
+      const ensureBase = (base?: AssignmentsMap | null): AssignmentsMap => {
+        const next: AssignmentsMap = base ? JSON.parse(JSON.stringify(base)) : {} as any;
+        if (!next[dayKey]) next[dayKey] = {} as any;
+        if (!next[dayKey][shiftName]) next[dayKey][shiftName] = Array.from({ length: stationsCount }, () => []);
+        // ensure length
+        if (next[dayKey][shiftName].length !== stationsCount) {
+          next[dayKey][shiftName] = Array.from({ length: stationsCount }, (_, i) => (next[dayKey][shiftName][i] || []));
+        }
+        return next;
+      };
+      const base = ensureBase(prev);
+      const cell = base[dayKey][shiftName][stationIndex] || [];
+      if (!cell.includes(trimmed)) {
+        base[dayKey][shiftName][stationIndex] = [...cell, trimmed];
+      }
+      return { ...base };
+    });
+  }
+
+  function onSlotDrop(
+    e: React.DragEvent,
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number,
+    slotIndex: number
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    const name = (() => {
+      try { return e.dataTransfer.getData("text/plain"); } catch { return ""; }
+    })();
+    try { console.log("[DND] onSlotDrop", { dayKey, shiftName, stationIndex, slotIndex, name }); } catch {}
+    lastDropRef.current = { key: `${dayKey}|${shiftName}|${stationIndex}|${slotIndex}`, ts: Date.now() };
+    const roleHintAttr = (e.currentTarget as HTMLElement | null)?.getAttribute?.("data-rolehint") || null;
+    // Pre-check mismatch before state update for reliable popup
+    if (roleHintAttr) {
+      const worker = workers.find((w) => (w.name || "").trim() === (name || "").trim());
+      const workerRoles: string[] = Array.isArray(worker?.roles) ? worker!.roles : [];
+      const match = workerRoles.some((r) => (r || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ") === (roleHintAttr || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " "));
+      if (!match) {
+        const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${name}" אין את התפקיד "${roleHintAttr}" בתא זה. להקצות בכל זאת?`);
+        if (!ok) {
+          try { console.log("[DND] precheck: cancelled"); } catch {}
+          setHoverSlotKey(null);
+          return;
+        }
+      }
+    }
+    dropIntoSlot(dayKey, shiftName, stationIndex, slotIndex, name, roleHintAttr, true);
+    setHoverSlotKey(null);
+  }
+
+  function onCellContainerDrop(
+    e: React.DragEvent,
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number
+  ) {
+    if (!isManual) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // If a child slot handled the drop recently for the same target, ignore container drop
+    const ld = lastDropRef.current;
+    // If the event target is within a slot, ignore (child handles)
+    const isInsideSlot = (e.target as HTMLElement | null)?.closest?.('[data-slot="1"]');
+    if (isInsideSlot) {
+      try { console.log("[DND] container drop ignored: inside slot target"); } catch {}
+      return;
+    }
+    let targetDay = dayKey;
+    let targetShift = shiftName;
+    let targetStation = stationIndex;
+    let targetSlot = -1;
+    // Prefer hovered slot if still set
+    if (hoverSlotKey) {
+      const [dKey, sName, stIdxStr, slotIdxStr] = hoverSlotKey.split("|");
+      const stIdx = Number(stIdxStr);
+      const slotIdx = Number(slotIdxStr);
+      if (dKey === dayKey && sName === shiftName && stIdx === stationIndex && Number.isFinite(slotIdx)) {
+        targetSlot = slotIdx;
+      }
+    }
+    // Fallback: find closest slot under pointer
+    if (targetSlot < 0 && typeof document !== "undefined") {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const slotEl = el?.closest?.('[data-slot="1"]') as HTMLElement | null;
+      if (slotEl) {
+        const dkey = slotEl.getAttribute("data-dkey") || dayKey;
+        const sname = slotEl.getAttribute("data-sname") || shiftName;
+        const stidx = Number(slotEl.getAttribute("data-stidx") || stationIndex);
+        const sidx = Number(slotEl.getAttribute("data-slotidx") || -1);
+        if (dkey === dayKey && sname === shiftName && stidx === stationIndex && Number.isFinite(sidx)) {
+          targetSlot = sidx;
+        }
+      }
+    }
+    // After we know the precise target slot, check recent slot drop exact-key guard
+    if (ld) {
+      const targetKey = `${dayKey}|${shiftName}|${stationIndex}|${targetSlot}`;
+      if (ld.key === targetKey && Date.now() - ld.ts < 1000) { // 1s guard
+        try { console.log("[DND] container drop ignored due to recent slot drop (exact key)", ld); } catch {}
+        return;
+      }
+    }
+    try { console.log("[DND] onCellContainerDrop", { dayKey, shiftName, stationIndex, hoverSlotKey, resolvedTargetSlot: targetSlot }); } catch {}
+    if (targetSlot < 0) return;
+    const name = (() => { try { return e.dataTransfer.getData("text/plain"); } catch { return ""; } })();
+    let expectedRole: string | null = null;
+    if (typeof document !== "undefined") {
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      const slotEl = el?.closest?.('[data-slot="1"]') as HTMLElement | null;
+      expectedRole = (slotEl?.getAttribute?.("data-rolehint") || null);
+    }
+    // Pre-check mismatch
+    if (expectedRole) {
+      const worker = workers.find((w) => (w.name || "").trim() === (name || "").trim());
+      const workerRoles: string[] = Array.isArray(worker?.roles) ? worker!.roles : [];
+      const match = workerRoles.some((r) => (r || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " ") === (expectedRole || "").normalize("NFKC").trim().toLowerCase().replace(/\s+/g, " "));
+      if (!match) {
+        const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${name}" אין את התפקיד "${expectedRole}" בתא זה. להקצות בכל זאת?`);
+        if (!ok) {
+          setHoverSlotKey(null);
+          return;
+        }
+      }
+    }
+    try { console.log("[DND] onCellContainerDrop applying", { targetDay, targetShift, targetStation, targetSlot, name, expectedRole }); } catch {}
+    dropIntoSlot(targetDay, targetShift, targetStation, targetSlot, name, expectedRole, true);
+    setHoverSlotKey(null);
+  }
+
   // Construire un mapping nom -> couleur distincte (éviter rouge/vert), stable et réparti (golden angle)
   const nameToColor = useMemo(() => {
     const set = new Set<string>();
@@ -243,6 +658,148 @@ export default function PlanningPage() {
         .filter(Boolean)
     )
   );
+
+  // Initialiser/vider les affectations manuelles lors du changement de mode
+  useEffect(() => {
+    if (!isManual) {
+      setManualAssignments(null);
+      return;
+    }
+    const stationsCount = (site?.config?.stations || []).length || 0;
+    if (stationsCount <= 0) return;
+    const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+    const base: AssignmentsMap = {} as any;
+    const hintsBase: RoleHintsMap = {} as any;
+    const getRequiredForLocal = (st: any, shiftName: string, dayKey: string): number => {
+      if (!st) return 0;
+      if (st.perDayCustom) {
+        const dayCfg = st.dayOverrides?.[dayKey];
+        if (!dayCfg || dayCfg.active === false) return 0;
+        if (st.uniformRoles) return Number(st.workers || 0);
+        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+        if (!sh || !sh.enabled) return 0;
+        return Number(sh.workers || 0);
+      }
+      if (st.days && st.days[dayKey] === false) return 0;
+      if (st.uniformRoles) return Number(st.workers || 0);
+      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+      if (!sh || !sh.enabled) return 0;
+      return Number(sh.workers || 0);
+    };
+    for (const d of dayKeys) {
+      base[d] = {} as any;
+      // compute shift names locally to avoid init order issues
+      const shiftNamesLocal: string[] = Array.from(
+        new Set(
+          (site?.config?.stations || [])
+            .flatMap((st: any) => (st?.shifts || [])
+              .filter((sh: any) => sh?.enabled)
+              .map((sh: any) => sh?.name))
+            .filter(Boolean)
+        )
+      );
+      for (const sn of shiftNamesLocal) {
+        const fromAI = (aiPlan?.assignments as any)?.[d]?.[sn] || [];
+        const stationArr: string[][] = [];
+        const stationHintsArr: (string | null)[][] = [];
+        for (let i = 0; i < stationsCount; i++) {
+          const namesOriginal = Array.from((fromAI[i] || []) as string[]);
+          const stCfg = (site?.config?.stations || [])[i] || null;
+          const req = getRequiredForLocal(stCfg, sn, d);
+          // role requirements map
+          const reqMap: Record<string, number> = (() => {
+            const out: Record<string, number> = {};
+            const push = (name?: string, count?: number, enabled?: boolean) => {
+              const rn = (name || "").trim();
+              const c = Number(count || 0);
+              if (!rn || !enabled || c <= 0) return; out[rn] = (out[rn] || 0) + c;
+            };
+            const st = stCfg;
+            if (!st) return out;
+            if (st.perDayCustom) {
+              const dayCfg = st.dayOverrides?.[d];
+              if (!dayCfg || dayCfg.active === false) return out;
+              if (st.uniformRoles) { for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled); }
+              else { const sh = (dayCfg.shifts || []).find((x: any) => x?.name === sn); for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled); }
+              return out;
+            }
+            if (st.uniformRoles) { for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled); }
+            else { const sh = (st.shifts || []).find((x: any) => x?.name === sn); for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled); }
+            return out;
+          })();
+          // Créer un plan de slots avec positions fixes pour les rôles (comme en mode automatique)
+          type SlotType = { roleHint: string | null, workerName: string | null };
+          const fixedSlots: SlotType[] = [];
+          
+          // Créer un slot pour chaque rôle requis (dans l'ordre des rôles)
+          Object.entries(reqMap).forEach(([rName, rCount]) => {
+            for (let i = 0; i < (rCount || 0); i++) {
+              fixedSlots.push({ roleHint: rName, workerName: null });
+            }
+          });
+          const totalRoleSlots = fixedSlots.length;
+          
+          // Ajouter les slots sans rôle pour les assignations restantes
+          const remainingRequired = Math.max(0, req - totalRoleSlots);
+          for (let i = 0; i < remainingRequired; i++) {
+            fixedSlots.push({ roleHint: null, workerName: null });
+          }
+          
+          // Remplir les slots avec les assignations existantes
+          const usedSlots = new Set<number>();
+          const assignedWithoutRole: string[] = [];
+          
+          // Déterminer quels noms ont un rôle
+          const roles = Object.keys(reqMap);
+          const namesWithRole: { nm: string; role: string | null }[] = namesOriginal.map((nm) => {
+            let matched: string | null = null;
+            for (const rName of roles) { if (workerHasRole(nm, rName)) { matched = rName; break; } }
+            return { nm, role: matched };
+          });
+          
+          // D'abord remplir les slots de rôle avec les travailleurs qui ont ce rôle
+          namesWithRole.forEach(({ nm, role }) => {
+            if (role) {
+              // Trouver le premier slot vide pour ce rôle
+              for (let j = 0; j < totalRoleSlots; j++) {
+                if (usedSlots.has(j)) continue;
+                if (fixedSlots[j].roleHint === role) {
+                  fixedSlots[j].workerName = nm;
+                  usedSlots.add(j);
+                  break;
+                }
+              }
+            } else {
+              assignedWithoutRole.push(nm);
+            }
+          });
+          
+          // Remplir les slots sans rôle avec les travailleurs restants
+          let neutralSlotIdx = totalRoleSlots;
+          assignedWithoutRole.forEach((nm) => {
+            if (neutralSlotIdx < fixedSlots.length) {
+              fixedSlots[neutralSlotIdx].workerName = nm;
+              neutralSlotIdx++;
+            }
+          });
+          
+          // Construire le tableau selon l'ordre fixe
+          const cell = fixedSlots.map(slot => slot.workerName || "");
+          stationArr.push(cell);
+          
+          // Construire les hints alignés avec les slots fixes
+          const hints = fixedSlots.map(slot => slot.roleHint);
+          stationHintsArr.push(hints);
+        }
+        base[d][sn] = stationArr;
+        hintsBase[d] = hintsBase[d] || ({} as any);
+        hintsBase[d][sn] = stationHintsArr as any;
+      }
+    }
+    setManualAssignments(base);
+    setManualRoleHints(hintsBase);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isManual, site?.config?.stations, aiPlan?.assignments]);
 
   const allRoleNames: string[] = Array.from(
     new Set(
@@ -816,7 +1373,30 @@ export default function PlanningPage() {
               <h2 className="text-lg font-semibold text-center">
                 גריד שבועי לפי עמדה
               </h2>
-              <div className="flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsManual(false)}
+                  className={
+                    "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
+                    (isManual ? "opacity-60 dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
+                  }
+                >
+                  אוטומטי
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsManual(true)}
+                  className={
+                    "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
+                    (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
+                  }
+                >
+                  ידני
+                </button>
+              </div>
+              <div className="flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300">
+                <div className="flex items-center gap-3">
                 <button
                   type="button"
                   aria-label="שבוע קודם"
@@ -838,6 +1418,21 @@ export default function PlanningPage() {
                   className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isManual) {
+                      setManualAssignments(null);
+                      setManualRoleHints(null);
+                    } else {
+                      setAiPlan(null);
+                    }
+                  }}
+                  className="inline-flex items-center rounded-md border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                >
+                  איפוס
                 </button>
               </div>
               {(() => {
@@ -991,7 +1586,104 @@ export default function PlanningPage() {
                   <div className="space-y-6">
                     {(site?.config?.stations || []).map((st: any, idx: number) => (
                       <div key={idx} className="rounded-xl border p-3 dark:border-zinc-800">
-                        <div className="mb-2 text-base font-medium">{st.name}</div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="text-base font-medium">{st.name}</div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isManual) {
+                                setManualAssignments((prev) => {
+                                  if (!prev) return prev;
+                                  const base = JSON.parse(JSON.stringify(prev));
+                                  const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                                  const shiftNames = Array.from(
+                                    new Set(
+                                      (site?.config?.stations || [])
+                                        .flatMap((station: any) => (station?.shifts || [])
+                                          .filter((sh: any) => sh?.enabled)
+                                          .map((sh: any) => sh?.name))
+                                        .filter(Boolean)
+                                    )
+                                  );
+                                  for (const d of dayKeys) {
+                                    const dayData: any = (base as any)[d];
+                                    if (!dayData) continue;
+                                    for (const sn of shiftNames) {
+                                      // @ts-ignore
+                                      const shiftData: any = dayData[sn];
+                                      if (!shiftData) continue;
+                                      const arr = shiftData as any;
+                                      if (Array.isArray(arr) && Array.isArray(arr[idx])) {
+                                        arr[idx] = [];
+                                      }
+                                    }
+                                  }
+                                  return base;
+                                });
+                                setManualRoleHints((prevHints) => {
+                                  if (!prevHints) return prevHints;
+                                  const base = JSON.parse(JSON.stringify(prevHints));
+                                  const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                                  const shiftNames = Array.from(
+                                    new Set(
+                                      (site?.config?.stations || [])
+                                        .flatMap((station: any) => (station?.shifts || [])
+                                          .filter((sh: any) => sh?.enabled)
+                                          .map((sh: any) => sh?.name))
+                                        .filter(Boolean)
+                                    )
+                                  );
+                                  for (const d of dayKeys) {
+                                    const dayData: any = (base as any)[d];
+                                    if (!dayData) continue;
+                                    for (const sn of shiftNames) {
+                                      // @ts-ignore
+                                      const shiftData: any = dayData[sn];
+                                      if (!shiftData) continue;
+                                      const arr = shiftData as any;
+                                      if (Array.isArray(arr) && Array.isArray(arr[idx])) {
+                                        arr[idx] = [];
+                                      }
+                                    }
+                                  }
+                                  return base;
+                                });
+                              } else {
+                                setAiPlan((prev) => {
+                                  if (!prev || !prev.assignments) return prev;
+                                  const base = JSON.parse(JSON.stringify(prev));
+                                  const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                                  const shiftNames = Array.from(
+                                    new Set(
+                                      (site?.config?.stations || [])
+                                        .flatMap((station: any) => (station?.shifts || [])
+                                          .filter((sh: any) => sh?.enabled)
+                                          .map((sh: any) => sh?.name))
+                                        .filter(Boolean)
+                                    )
+                                  );
+                                  for (const d of dayKeys) {
+                                    const dayData: any = base.assignments[d];
+                                    if (!dayData) continue;
+                                    for (const sn of shiftNames) {
+                                      // @ts-ignore
+                                      const shiftData: any = (dayData as any)[sn];
+                                      if (!shiftData) continue;
+                                      const arr = shiftData as any;
+                                      if (Array.isArray(arr) && Array.isArray(arr[idx])) {
+                                        arr[idx] = [];
+                                      }
+                                    }
+                                  }
+                                  return base;
+                                });
+                              }
+                            }}
+                            className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                          >
+                            איפוס עמדה
+                          </button>
+                        </div>
                         <div className="overflow-x-auto">
                           <table className="w-full border-collapse text-sm table-fixed">
                             <thead>
@@ -1030,12 +1722,17 @@ export default function PlanningPage() {
                                     {dayCols.map((d) => {
                                       const required = getRequiredFor(st, sn, d.key);
                                       const assignedNames: string[] = (() => {
+                                        if (isManual) {
+                                          const cell = (manualAssignments as any)?.[d.key]?.[sn]?.[idx];
+                                          return Array.isArray(cell) ? cell : [];
+                                        }
                                         if (!aiPlan) return [];
                                         const cell = aiPlan.assignments?.[d.key]?.[sn]?.[idx];
                                         if (!cell) return [];
                                         return cell;
                                       })();
                                       const roleMap = assignRoles(assignedNames, st, sn, d.key);
+                                      const assignedCount = isManual ? (assignedNames.filter(Boolean).length) : assignedNames.length;
                                       const activeDay = isDayActive(st, d.key);
                                       return (
                                         <td
@@ -1047,61 +1744,273 @@ export default function PlanningPage() {
                                           }
                                         >
                                         {enabled ? (
-                                            <div className="flex flex-col items-center">
-                                              {aiPlan && required > 0 ? (
-                                                <div className="mb-1 flex flex-col items-center gap-1">
+                                            <div
+                                              className="flex flex-col items-center"
+                                              onDragOver={isManual ? (e) => { e.preventDefault(); try { (e as any).dataTransfer.dropEffect = "copy"; } catch {} } : undefined}
+                                              onDrop={isManual ? (e) => onCellContainerDrop(e, d.key, sn, idx) : undefined}
+                                            >
+                                              {required > 0 ? (
+                                                <div className="mb-1 flex flex-col items-center gap-1 min-w-full">
+                                                  {isManual ? (
+                                                    <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
                                                   {(() => {
                                                     const reqRoles = roleRequirements(st, sn, d.key);
-                                                    // Compter les assignations par rôle déjà présentes
+                                                        // Count only roles actually matched by slot hint and worker capability
                                                     const assignedPerRole = new Map<string, number>();
-                                                    roleMap.forEach((rName) => {
-                                                      if (!rName) return;
-                                                      assignedPerRole.set(rName, (assignedPerRole.get(rName) || 0) + 1);
-                                                    });
-                                                    // Placeholders par déficit de rôle uniquement
-                                                    const rolePlaceholders: JSX.Element[] = [];
-                                                    let totalRoleDeficits = 0;
+                                                        // We'll construct roleHints after seeing how many are already fulfilled
+                                                        // First pass: determine which assigned names satisfy a hinted role
+                                                        // roleHints will be filled by remaining deficits below
+                                                        const roleHints: string[] = [];
+                                                        // Compute deficits based on current satisfied roles
+                                                        assignedNames.forEach((nm, i) => {
+                                                          const hint = roleHints[i];
+                                                          // roleHints not yet filled; we need to compute satisfied counts against reqRoles; use worker capability and station reqRoles keys
+                                                          const workerHasRole = (rName: string) => nameHasRole(nm, rName);
+                                                          // If there is an existing hint array not built yet, skip; instead, we consider only explicit matching when hint exists; since not built yet, we can't rely.
+                                                        });
+                                                        // Build role hints list by deficits relative to satisfied counts
+                                                        const satisfiedPerRole = new Map<string, number>();
+                                                        // satisfiedPerRole: count matches at slots that explicitly carry that role hint and worker can fill it
+                                                        // Since we haven't built slot hints yet at this point, we consider current assigned names contribute nothing to satisfied; hints will represent deficits entirely.
                                                     Object.entries(reqRoles).forEach(([rName, rCount]) => {
-                                                      const have = assignedPerRole.get(rName) || 0;
+                                                          const have = satisfiedPerRole.get(rName) || 0;
                                                       const deficit = Math.max(0, (rCount || 0) - have);
-                                                      totalRoleDeficits += deficit;
-                                                      if (deficit <= 0) return;
-                                                      const c = colorForRole(rName);
-                                                      for (let i = 0; i < deficit; i++) {
-                    rolePlaceholders.push(
+                                                          for (let i = 0; i < deficit; i++) roleHints.push(rName);
+                                                        });
+                                                        const slots = Math.max(required, assignedNames.length, roleHints.length, 1);
+                                                        return Array.from({ length: slots }).map((_, slotIdx) => {
+                                                          const nm = assignedNames[slotIdx];
+                                                          if (nm) {
+                                                            const c = colorForName(nm);
+                                                            const hintedStored = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? null) as (string | null);
+                                                            const hinted = (hintedStored ?? roleHints[slotIdx] ?? null) as (string | null);
+                                                            const rn = hinted && nameHasRole(nm, hinted) ? hinted : null;
+                                                            const rc = rn ? colorForRole(rn) : null;
+                                                            return (
+                                                              <div
+                                                                key={"slot-nm-wrapper-" + slotIdx}
+                                                                className="w-full flex justify-center py-0.5"
+                                                                onDragEnter={(e) => {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  setHoverSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                }}
+                                                                onDragLeave={(e) => {
+                                                                  const rect = e.currentTarget.getBoundingClientRect();
+                                                                  const x = e.clientX;
+                                                                  const y = e.clientY;
+                                                                  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                                                                    setHoverSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                  }
+                                                                }}
+                                                                onDragOver={onSlotDragOver}
+                                                                onDrop={(e) => onSlotDrop(e, d.key, sn, idx, slotIdx)}
+                                                                data-slot="1"
+                                                                data-dkey={d.key}
+                                                                data-sname={sn}
+                                                                data-stidx={idx}
+                                                                data-slotidx={slotIdx}
+                                                              >
                       <span
-                        key={`roleph-${rName}-${i}`}
-                        className="inline-flex h-9 min-w-[2.5rem] flex-col items-center justify-center rounded-full border px-2 py-0.5 bg-white dark:bg-zinc-900"
-                        style={{ borderColor: c.border }}
-                      >
-                        <span className="text-[10px] font-medium" style={{ color: c.text }}>{rName}</span>
+                                                                  key={"slot-nm-" + slotIdx}
+                                                                  className={
+                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center rounded-full border px-3 py-1 shadow-sm gap-2 select-none transition-transform " +
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                  }
+                                                                  style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  draggable
+                                                                  onDragStart={(e) => onWorkerDragStart(e, nm)}
+                                                                  data-slot="1"
+                                                                  data-dkey={d.key}
+                                                                  data-sname={sn}
+                                                                  data-stidx={idx}
+                                                                  data-slotidx={slotIdx}
+                                                                >
+                                                                  <span className="flex flex-col items-center leading-tight">
+                                                                    {rn ? (
+                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 max-w-[6rem] truncate mb-0.5">{rn}</span>
+                                                                    ) : null}
+                                                                    <span className="text-sm">{nm}</span>
+                                                                  </span>
+                                                                  <button
+                                                                    type="button"
+                                                                    aria-label="הסר"
+                                                                    title="הסר"
+                                                                    onClick={(e) => {
+                                                                      e.stopPropagation();
+                                                                      setManualAssignments((prev) => {
+                                                                        if (!prev) return prev;
+                                                                        const base = JSON.parse(JSON.stringify(prev));
+                                                                        const arr: string[] = base[d.key]?.[sn]?.[idx] || [];
+                                                                        base[d.key] = base[d.key] || {};
+                                                                        base[d.key][sn] = base[d.key][sn] || [];
+                                                                        base[d.key][sn][idx] = (arr as string[]).map((x: string, i: number) => (i === slotIdx ? "" : x)).filter(Boolean);
+                                                                        return base;
+                                                                      });
+                                                                    }}
+                                                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60"
+                                                                    style={{ borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  >
+                                                                    ×
+                                                                  </button>
+                                                                </span>
+                                                              </div>
+                                                            );
+                                                          }
+                                                          const hint = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? roleHints[slotIdx] ?? null) as (string | null);
+                                                          if (hint) {
+                                                            const rc = colorForRole(hint);
+                                                            return (
+                                                              <div
+                                                                key={"slot-hint-wrapper-" + slotIdx}
+                                                                className="w-full flex justify-center py-0.5"
+                                                                onDragEnter={(e) => {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  setHoverSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                }}
+                                                                onDragLeave={(e) => {
+                                                                  const rect = e.currentTarget.getBoundingClientRect();
+                                                                  const x = e.clientX;
+                                                                  const y = e.clientY;
+                                                                  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                                                                    setHoverSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                  }
+                                                                }}
+                                                                onDragOver={onSlotDragOver}
+                                                                onDrop={(e) => onSlotDrop(e, d.key, sn, idx, slotIdx)}
+                                                                data-slot="1"
+                                                                data-dkey={d.key}
+                                                                data-sname={sn}
+                                                                data-stidx={idx}
+                                                                data-slotidx={slotIdx}
+                                                                data-rolehint={hint}
+                                                              >
+                                                                <span
+                                                                  className={
+                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-transform cursor-pointer " +
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                  }
+                                                                  style={{ borderColor: rc.border }}
+                                                                >
+                                                                  <span className="text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
                         <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
+                                                              </div>
                     );
                   }
-                                                    });
-                                                    const already = assignedNames.length;
-                                                    const remainingMissing = Math.max(0, required - already - totalRoleDeficits);
-                                                    const neutralEmpty = Array.from({ length: remainingMissing }).map((_, i) => (
+                                                          return (
+                                                              <div
+                                                                key={"slot-empty-wrapper-" + slotIdx}
+                                                                className="w-full flex justify-center py-0.5"
+                                                                onDragEnter={(e) => {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  setHoverSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                }}
+                                                                onDragLeave={(e) => {
+                                                                  const rect = e.currentTarget.getBoundingClientRect();
+                                                                  const x = e.clientX;
+                                                                  const y = e.clientY;
+                                                                  if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                                                                    setHoverSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                  }
+                                                                }}
+                                                                onDragOver={onSlotDragOver}
+                                                                onDrop={(e) => onSlotDrop(e, d.key, sn, idx, slotIdx)}
+                                                                data-slot="1"
+                                                                data-dkey={d.key}
+                                                                data-sname={sn}
+                                                                data-stidx={idx}
+                                                                data-slotidx={slotIdx}
+                                                              >
                                                       <span
-                                                        key={"empty-" + i}
-                                                        className="inline-flex h-7 min-w-[2.5rem] items-center justify-center rounded-full border px-2 py-0.5 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                                                                  key={"slot-empty-" + slotIdx}
+                                                                  className={
+                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-transform cursor-pointer " +
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                  }
                                                       >
                                                         —
                                                       </span>
-                                                    ));
-                                                    return (
-                                                      <>
-                                                        {rolePlaceholders}
-                                                        {neutralEmpty}
-                                                        {assignedNames.map((nm, i) => {
+                                                              </div>
+                                                          );
+                                                        });
+                                                      })()}
+                                                    </div>
+                                                  ) : (
+                                                    (() => {
+                                                      const reqRoles = roleRequirements(st, sn, d.key);
+                                                      // Créer un plan de slots avec positions fixes pour les rôles
+                                                      // Chaque rôle requis a un slot fixe, même s'il est vide
+                                                      type SlotType = { type: 'assigned' | 'role-empty' | 'neutral-empty', name?: string, role?: string | null, roleHint?: string };
+                                                      const slots: SlotType[] = [];
+                                                      
+                                                      // Créer un slot pour chaque rôle requis (dans l'ordre des rôles)
+                                                      Object.entries(reqRoles).forEach(([rName, rCount]) => {
+                                                        for (let i = 0; i < (rCount || 0); i++) {
+                                                          slots.push({ type: 'role-empty', roleHint: rName });
+                                                        }
+                                                      });
+                                                      
+                                                      // Compter les assignations par rôle
+                                                      const assignedPerRole = new Map<string, number>();
+                                                      roleMap.forEach((rName) => {
+                                                        if (!rName) return;
+                                                        assignedPerRole.set(rName, (assignedPerRole.get(rName) || 0) + 1);
+                                                      });
+                                                      
+                                                      // Remplir les slots de rôle avec les assignations correspondantes
+                                                      const usedSlots = new Set<number>();
+                                                      const assignedWithoutRole: Array<{ name: string, index: number }> = [];
+                                                      
+                                                      // D'abord remplir les slots de rôle avec les assignations qui ont ce rôle
+                                                      assignedNames.forEach((nm, i) => {
+                                                        if (!nm) return;
+                                                        const assignedRole = roleMap.get(nm) || null;
+                                                        if (assignedRole) {
+                                                          // Trouver le premier slot vide pour ce rôle
+                                                          for (let j = 0; j < slots.length; j++) {
+                                                            if (usedSlots.has(j)) continue;
+                                                            if (slots[j].roleHint === assignedRole) {
+                                                              slots[j] = { type: 'assigned', name: nm, role: assignedRole };
+                                                              usedSlots.add(j);
+                                                              assignedPerRole.set(assignedRole, (assignedPerRole.get(assignedRole) || 0) - 1);
+                                                              break;
+                                                            }
+                                                          }
+                                                        } else {
+                                                          assignedWithoutRole.push({ name: nm, index: i });
+                                                        }
+                                                      });
+                                                      
+                                                      // Ajouter les slots sans rôle pour les assignations restantes
+                                                      const totalRoleSlots = slots.length;
+                                                      const remainingRequired = Math.max(0, required - totalRoleSlots);
+                                                      for (let i = 0; i < remainingRequired; i++) {
+                                                        slots.push({ type: 'neutral-empty' });
+                                                      }
+                                                      
+                                                      // Remplir les slots sans rôle avec les assignations restantes
+                                                      let neutralSlotIdx = totalRoleSlots;
+                                                      assignedWithoutRole.forEach(({ name }) => {
+                                                        if (neutralSlotIdx < slots.length) {
+                                                          slots[neutralSlotIdx] = { type: 'assigned', name: name, role: null };
+                                                          neutralSlotIdx++;
+                                                        }
+                                                      });
+                                                      
+                                                      const renderChip = (nm: string, i: number, rn: string | null) => {
                                                           const c = colorForName(nm);
-                                                          const rn = roleMap.get(nm);
                                                           const rc = rn ? colorForRole(rn) : null;
                                                           return (
+                                                            <div
+                                                              key={"chip-wrapper-" + i}
+                                                              className="w-full flex justify-center py-0.5"
+                                                            >
                                                             <span
                                                               key={"nm-" + i}
-                                                              className="inline-flex items-center rounded-full border px-3 py-1 shadow-sm"
+                                                                className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center rounded-full border px-3 py-1 shadow-sm gap-2"
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                             >
                                                               <span className="flex flex-col items-center leading-tight">
@@ -1111,23 +2020,66 @@ export default function PlanningPage() {
                                                                 <span className="text-sm">{nm}</span>
                                                               </span>
                                                             </span>
+                                                            </div>
                                                           );
-                                                        })}
-                                                      </>
-                                                    );
-                                                  })()}
+                                                      };
+                                                      
+                                                      return (
+                                                        <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
+                                                          {slots.map((slot, idx) => {
+                                                            if (slot.type === 'assigned' && slot.name) {
+                                                              return renderChip(slot.name, idx, slot.role ?? null);
+                                                            } else if (slot.type === 'role-empty' && slot.roleHint) {
+                                                              const c = colorForRole(slot.roleHint);
+                                                              return (
+                                                                <div
+                                                                  key={`roleph-wrapper-${slot.roleHint}-${idx}`}
+                                                                  className="w-full flex justify-center py-0.5"
+                                                                >
+                                                                  <span
+                                                                    key={`roleph-${slot.roleHint}-${idx}`}
+                                                                    className="inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900"
+                                                                    style={{ borderColor: c.border }}
+                                                                  >
+                                                                    <span className="text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
+                                                                    <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                  </span>
+                                                                </div>
+                                                              );
+                                                            } else {
+                                                              return (
+                                                                <div
+                                                                  key={"empty-wrapper-" + idx}
+                                                                  className="w-full flex justify-center py-0.5"
+                                                                >
+                                                                  <span
+                                                                    key={"empty-" + idx}
+                                                                    className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                                                                  >
+                                                                    —
+                                                                  </span>
+                                                                </div>
+                                                              );
+                                                            }
+                                                          })}
+                                                        </div>
+                                                      );
+                                                    })()
+                                                  )}
                                                 </div>
                                               ) : null}
-                                              <span className={
+                                              <span
+                                                className={
                                                 "text-xs " + (
-                                                  aiPlan && assignedNames.length < required
+                                                    assignedCount < required
                                                     ? "text-red-600 dark:text-red-400"
-                                                    : (aiPlan && required > 0 && assignedNames.length >= required
+                                                      : (required > 0 && assignedCount >= required
                                                         ? "text-green-600 dark:text-green-400"
                                                         : "")
                                                 )
-                                              }>
-                                                {"שיבוצים: "}{aiPlan ? assignedNames.length : 0}
+                                                }
+                                              >
+                                                {"שיבוצים: "}{assignedCount}
                                               </span>
                                               <span className="text-xs text-zinc-500">נדרש: {required}</span>
                                           </div>
@@ -1143,13 +2095,34 @@ export default function PlanningPage() {
                             </tbody>
                           </table>
                         </div>
+                        {isManual && (
+                          <div className="mt-3">
+                            <div className="mb-1 text-xs text-zinc-600 dark:text-zinc-300 text-center">גרור/י עובד אל תא השיבוץ</div>
+                            <div className="flex flex-wrap items-center justify-center gap-2">
+                              {workers.filter((w) => !hiddenWorkerIds.includes(w.id)).map((w) => {
+                                const c = colorForName(w.name);
+                                return (
+                                  <span
+                                    key={w.id}
+                                    draggable
+                                    onDragStart={(e) => onWorkerDragStart(e, w.name)}
+                                    className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm select-none cursor-grab active:cursor-grabbing"
+                                    style={{ backgroundColor: c.bg, borderColor: c.border, color: c.text }}
+                                  >
+                                    {w.name}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                     {/* per-station summary removed; replaced by global summary below */}
                       </div>
                     ))}
                   </div>
                 );
               })()}
-              {aiPlan && (
+              {aiPlan && !isManual && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
@@ -1351,6 +2324,100 @@ export default function PlanningPage() {
                   })()}
                 </div>
               )}
+              {isManual && manualAssignments && (
+                <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  {(() => {
+                    // Build counts from manualAssignments
+                    const counts = new Map<string, number>();
+                    const days = Object.keys(manualAssignments || {});
+                    for (const dKey of days) {
+                      const shiftsMap = (manualAssignments as any)[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        const perStation: string[][] = shiftsMap[sn] || [];
+                        for (const namesHere of perStation) {
+                          for (const nm of (namesHere || [])) {
+                            if (!nm) continue;
+                            counts.set(nm, (counts.get(nm) || 0) + 1);
+                          }
+                        }
+                      }
+                    }
+                    // Include all workers with 0
+                    workers.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
+                    const order = new Map<string, number>();
+                    workers.forEach((w, i) => order.set(w.name, i));
+                    const items = Array.from(counts.entries()).sort((a, b) => {
+                      const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      if (ia !== ib) return ia - ib;
+                      return a[0].localeCompare(b[0]);
+                    });
+                    // Compute totals required from site config as in AI summary
+                    const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
+                    function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
+                      if (!st) return 0;
+                      if (st.perDayCustom) {
+                        const dayCfg = st.dayOverrides?.[dayKey];
+                        if (!dayCfg || dayCfg.active === false) return 0;
+                        if (st.uniformRoles) return Number(st.workers || 0);
+                        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                        if (!sh || !sh.enabled) return 0;
+                        return Number(sh.workers || 0);
+                      }
+                      if (st.days && st.days[dayKey] === false) return 0;
+                      if (st.uniformRoles) return Number(st.workers || 0);
+                      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                      if (!sh || !sh.enabled) return 0;
+                      return Number(sh.workers || 0);
+                    }
+                    let totalRequired = 0;
+                    for (const dKey of days) {
+                      const shiftsMap = (manualAssignments as any)[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
+                          totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
+                        }
+                      }
+                    }
+                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+                    return (
+                      <>
+                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                          <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
+                          <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse text-sm table-fixed">
+                            <thead>
+                              <tr className="border-b dark:border-zinc-800">
+                                <th className="px-2 py-2 text-right w-64">עובד</th>
+                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map(([nm, c]) => {
+                                const col = colorForName(nm);
+                                return (
+                                  <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
+                                    <td className="px-2 py-2 w-64">
+                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
+                                        {nm}
+                                      </span>
+                                    </td>
+                                    <td className="px-2 py-2 w-28">{c}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
+              {!isManual && (
               <div className="pt-2 text-center">
                 <button
                   type="button"
@@ -1537,6 +2604,7 @@ export default function PlanningPage() {
                   </div>
                 )}
               </div>
+              )}
             </section>
           </div>
         )}
