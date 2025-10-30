@@ -164,6 +164,9 @@ def solve_schedule(
     S = list(range(len(shifts)))
     T = list(range(len(stations)))
 
+    # Liste pour collecter toutes les pénuries de rôles (pour pénalisation dans l'objectif)
+    role_shortfalls_total: List[cp_model.IntVar] = []
+
     # Normalisation des libellés de rôle pour aligner config et profils employés
     def _norm_role_local(name: Any) -> str:
         s = str(name or "").strip()
@@ -224,8 +227,11 @@ def solve_schedule(
                     short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"short_total_t{t}_d{d}_s{s}")
                     if len(shortfalls) > 1:
                         model.Add(short_total == sum(shortfalls))
-                    # Empêcher qu'un non-rôle comble la pénurie: limiter la couverture totale
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required - short_total)
+                    # Ajouter à la liste pour pénalisation dans l'objectif
+                    role_shortfalls_total.append(short_total)
+                    # Permettre de remplir jusqu'à required même avec pénurie de rôles (pour maximiser les assignations)
+                    # mais pénaliser les pénuries dans l'objectif
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
                 else:
                     # Pas de rôles requis: simple borne supérieure sur la cellule
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
@@ -303,9 +309,12 @@ def solve_schedule(
     for dev in fairness_terms:
         model.Add(dev <= max_dev)
 
-    # Maximize coverage strongly, then minimize max deviation, then total deviation
-    # Weights chosen to keep lexicographic-like priority: coverage >> max_dev >> sum(dev)
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms))
+    # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
+    total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
+
+    # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls
+    # Weights chosen to keep lexicographic-like priority: coverage >> max_dev >> sum(dev) >> role_shortfalls
+    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
@@ -940,6 +949,9 @@ def solve_schedule_stream(
     S = list(range(len(shifts)))
     T = list(range(len(stations)))
 
+    # Liste pour collecter toutes les pénuries de rôles (pour pénalisation dans l'objectif)
+    role_shortfalls_total: List[cp_model.IntVar] = []
+
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
 
     # Normalisation locale des rôles et cache par employé
@@ -991,7 +1003,11 @@ def solve_schedule_stream(
                     short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"s_short_total_t{t}_d{d}_s{s}")
                     if len(shortfalls) > 1:
                         model.Add(short_total == sum(shortfalls))
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required - short_total)
+                    # Ajouter à la liste pour pénalisation dans l'objectif
+                    role_shortfalls_total.append(short_total)
+                    # Permettre de remplir jusqu'à required même avec pénurie de rôles (pour maximiser les assignations)
+                    # mais pénaliser les pénuries dans l'objectif
+                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
                 else:
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
@@ -1040,7 +1056,9 @@ def solve_schedule_stream(
     max_dev = model.NewIntVar(0, len(D), "max_dev")
     for dev in fairness_terms:
         model.Add(dev <= max_dev)
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms))
+    # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
+    total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
+    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)

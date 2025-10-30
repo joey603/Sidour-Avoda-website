@@ -625,7 +625,7 @@ export default function PlanningPage() {
   }
 
   function formatHebDate(d: Date): string {
-    return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit" });
+    return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" });
   }
 
   useEffect(() => {
@@ -1892,7 +1892,7 @@ export default function PlanningPage() {
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
                                                                   }
                                                                   style={{ borderColor: rc.border }}
-                                                                >
+                      >
                                                                   <span className="text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
                         <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
@@ -2063,7 +2063,7 @@ export default function PlanningPage() {
                                                             }
                                                           })}
                                                         </div>
-                                                      );
+                                                    );
                                                     })()
                                                   )}
                                                 </div>
