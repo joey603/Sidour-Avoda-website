@@ -97,6 +97,19 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
     return SiteOut(id=site.id, name=site.name, workers_count=0, config=site.config)
 
 
+@router.get("/all-workers", response_model=list[WorkerOut])
+def list_all_workers(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    """Retourne tous les travailleurs de tous les sites du directeur"""
+    # Récupérer tous les sites du directeur
+    sites = db.query(Site.id).filter(Site.director_id == user.id).all()
+    site_ids = [s.id for s in sites]
+    if not site_ids:
+        return []
+    # Récupérer tous les travailleurs de ces sites
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+    return [WorkerOut(id=r.id, site_id=r.site_id, name=r.name, max_shifts=r.max_shifts, roles=r.roles or [], availability=r.availability or {}) for r in rows]
+
+
 @router.get("/{site_id}", response_model=SiteOut)
 def get_site(site_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     site = db.get(Site, site_id)

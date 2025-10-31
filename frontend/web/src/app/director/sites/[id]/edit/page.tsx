@@ -770,7 +770,8 @@ export default function EditSitePage() {
                                                   {sh.roles.map((sr, rj) => (
                                                     <div key={rj} className="grid grid-cols-1 gap-3 md:grid-cols-3 items-center">
                                                       <div className="text-sm">{sr.name}</div>
-                                                      <label className="inline-flex items-center gap-2 text-sm">
+                                                      <label className="inline-flex items-center">
+                                                        <span className="relative inline-block h-5 w-9">
                                                         <input
                                                           type="checkbox"
                                                           checked={sr.enabled}
@@ -788,8 +789,12 @@ export default function EditSitePage() {
                                                               return { ...x, dayOverrides: next };
                                                             }));
                                                           }}
+                                                            className="sr-only peer"
+                                                            aria-label="הפעל תפקיד למשמרת"
                                                         />
-                                                        כן / לא
+                                                          <span className="absolute inset-0 rounded-full bg-zinc-300 peer-checked:bg-[#00A8E0] transition-colors" />
+                                                          <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform translate-x-4 peer-checked:translate-x-0" />
+                                                        </span>
                                                       </label>
                                                       {sr.enabled && (
                                                         <input

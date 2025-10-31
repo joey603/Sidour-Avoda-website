@@ -117,12 +117,20 @@ export default function TopNav() {
                 בית
               </Link>
               <Link
-                href="/director/sites/new"
-                className={`${baseBtn} ${pathname === "/director/sites/new" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
-                aria-label="הוספת אתר"
-                aria-current={pathname === "/director/sites/new" ? "page" : undefined}
+                href="/director/sites"
+                className={`${baseBtn} ${pathname === "/director/sites" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                aria-label="רשימת אתרים"
+                aria-current={pathname === "/director/sites" ? "page" : undefined}
               >
-                הוספת אתר
+                רשימת אתרים
+              </Link>
+              <Link
+                href="/director/workers"
+                className={`${baseBtn} ${pathname === "/director/workers" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                aria-label="רשימת עובדים"
+                aria-current={pathname === "/director/workers" ? "page" : undefined}
+              >
+                רשימת עובדים
               </Link>
             </>
           )}

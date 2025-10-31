@@ -64,6 +64,16 @@ export default function PlanningPage() {
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const prevAltCountRef = useRef<number>(0);
 
+  // Snapshot sauvegardé pour la semaine (assignations + éventuelle liste travailleurs)
+  const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
+    assignments: Record<string, Record<string, string[][]>>,
+    isManual?: boolean,
+    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>
+  }>(null);
+  const isSavedMode = !!savedWeekPlan?.assignments;
+  // Mode édition après chargement d'une grille sauvegardée
+  const [editingSaved, setEditingSaved] = useState(false);
+
   // Logs de debug pour l'état du bouton
   useEffect(() => {
     // eslint-disable-next-line no-console
@@ -878,15 +888,81 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
+  // Charger le plan sauvegardé pour la semaine sélectionnée (si existe)
+  useEffect(() => {
+    const start = new Date(weekStart);
+    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const key = `plan_${params.id}_${iso(start)}`;
+    try {
+      setSavedWeekPlan(null);
+      setEditingSaved(false);
+      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.assignments) {
+          setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+        }
+      }
+    } catch {
+      setSavedWeekPlan(null);
+    }
+  }, [params.id, weekStart]);
+
+  function onSavePlan() {
+    try {
+      const effective = isManual && manualAssignments ? manualAssignments : aiPlan?.assignments;
+      if (!effective) {
+        toast.error("אין מה לשמור", { description: "לא נמצא תכנון קיים לשמירה" });
+        return;
+      }
+      // Range de semaine
+      const start = new Date(weekStart);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const key = `plan_${params.id}_${iso(start)}`;
+      const payload = {
+        siteId: Number(params.id),
+        week: { startISO: iso(start), endISO: iso(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
+        isManual,
+        assignments: effective,
+        workers: (workers || []).map((w) => ({
+          id: w.id,
+          name: w.name,
+          max_shifts: typeof (w as any).max_shifts === "number" ? (w as any).max_shifts : (w.maxShifts ?? 0),
+          roles: Array.isArray(w.roles) ? w.roles : [],
+          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+        })),
+      };
+      if (typeof window !== "undefined") {
+        localStorage.setItem(key, JSON.stringify(payload));
+      }
+      toast.success("התכנון נשמר בהצלחה");
+    } catch (e: any) {
+      toast.error("שמירה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+    }
+  }
+
   return (
     <div className="min-h-screen p-6">
       <div className="mx-auto max-w-5xl space-y-6">
+        <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            aria-label="חזור"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          </button>
+        </div>
         {loading ? (
           <p>טוען...</p>
         ) : error ? (
           <p className="text-red-600">{error}</p>
         ) : (
+          <>
           <div className="rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>
@@ -958,7 +1034,13 @@ export default function PlanningPage() {
                           setNewWorkerAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
                           setIsAddModalOpen(true);
                         }}
-                        className="inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
+                        disabled={isSavedMode}
+                        className={
+                          "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm " +
+                          (isSavedMode
+                            ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                            : "border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30")
+                        }
                       >
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                         הוסף עובד
@@ -976,8 +1058,25 @@ export default function PlanningPage() {
                             </tr>
                           </thead>
                           <tbody>
-                          {workers.filter((w) => !hiddenWorkerIds.includes(w.id)).length > 0 ? (
-                            workers.filter((w) => !hiddenWorkerIds.includes(w.id)).map((w) => (
+                          {(() => {
+                            const displayWorkers: Worker[] = (savedWeekPlan?.workers || []).length
+                              ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
+                                  id: rw.id,
+                                  name: rw.name,
+                                  maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
+                                  roles: Array.isArray(rw.roles) ? rw.roles : [],
+                                  availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                                }))
+                              : workers;
+                            const rows = displayWorkers.filter((w) => !hiddenWorkerIds.includes(w.id));
+                            if (rows.length === 0) {
+                              return (
+                                <tr>
+                                  <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">אין עובדים</td>
+                                </tr>
+                              );
+                            }
+                            return rows.map((w) => (
                               <tr key={w.id} className="border-b last:border-0 dark:border-zinc-800">
                                 <td className="px-3 py-2">{w.name}</td>
                                 <td className="px-3 py-2">{w.maxShifts}</td>
@@ -1005,7 +1104,11 @@ export default function PlanningPage() {
                                         setNewWorkerAvailability({ ...w.availability });
                                         setIsAddModalOpen(true);
                                       }}
-                                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                                      disabled={isSavedMode}
+                                      className={
+                                        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
+                                        (isSavedMode ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600" : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                                      }
                                     >
                                       <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
                                       ערוך
@@ -1090,8 +1193,13 @@ export default function PlanningPage() {
                                           setDeletingId(null);
                                         }
                                       }}
-                                      disabled={deletingId === w.id}
-                                      className="inline-flex items-center gap-1 rounded-md border border-red-600 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40"
+                                      disabled={isSavedMode || deletingId === w.id}
+                                      className={
+                                        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
+                                        ((isSavedMode || deletingId === w.id)
+                                          ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                                          : "border-red-600 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40")
+                                      }
                                     >
                                       <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden><path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/></svg>
                                       מחק
@@ -1099,12 +1207,8 @@ export default function PlanningPage() {
                                   </div>
                                 </td>
                               </tr>
-                            ))
-                          ) : (
-                            <tr>
-                              <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">אין עובדים</td>
-                            </tr>
-                          )}
+                            ));
+                          })()}
                           </tbody>
                         </table>
                       </div>
@@ -1112,7 +1216,7 @@ export default function PlanningPage() {
                 );
               })()}
             </section>
-            {/* removed global summary here, kept only below the grids */}
+          {/* removed per-user request: saved summary shown separately below using standard format */}
 
             {/* Modal d'ajout d'employé */}
             {isAddModalOpen && (
@@ -1377,9 +1481,12 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={() => setIsManual(false)}
+                  disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
-                    (isManual ? "opacity-60 dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
+                    (isSavedMode
+                      ? "opacity-60 cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-700 dark:text-zinc-600"
+                      : (isManual ? "opacity-60 dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]"))
                   }
                 >
                   אוטומטי
@@ -1387,9 +1494,12 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={() => setIsManual(true)}
+                  disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
-                    (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
+                    (isSavedMode
+                      ? "opacity-60 cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-700 dark:text-zinc-600"
+                      : (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700"))
                   }
                 >
                   ידני
@@ -1430,7 +1540,13 @@ export default function PlanningPage() {
                       setAiPlan(null);
                     }
                   }}
-                  className="inline-flex items-center rounded-md border border-red-300 px-3 py-1 text-sm text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                  disabled={isSavedMode}
+                  className={
+                    "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
+                    (isSavedMode
+                      ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                      : "border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20")
+                  }
                 >
                   איפוס
                 </button>
@@ -1679,7 +1795,13 @@ export default function PlanningPage() {
                                 });
                               }
                             }}
-                            className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                            disabled={isSavedMode}
+                            className={
+                              "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
+                              (isSavedMode
+                                ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                                : "border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20")
+                            }
                           >
                             איפוס עמדה
                           </button>
@@ -1719,9 +1841,15 @@ export default function PlanningPage() {
                                     <div className="font-medium">{sn}</div>
                                   </div>
                                 </td>
-                                    {dayCols.map((d) => {
+                                    {dayCols.map((d, dayIdx) => {
                                       const required = getRequiredFor(st, sn, d.key);
+                                      const dateCell = addDays(weekStart, dayIdx);
+                                      const today0 = new Date(); today0.setHours(0,0,0,0);
+                                      const isPastDay = editingSaved && dateCell < today0;
                                       const assignedNames: string[] = (() => {
+                                        // Priorité au plan sauvegardé pour la semaine
+                                        const savedCell = (savedWeekPlan as any)?.assignments?.[d.key]?.[sn]?.[idx];
+                                        if (Array.isArray(savedCell)) return savedCell as string[];
                                         if (isManual) {
                                           const cell = (manualAssignments as any)?.[d.key]?.[sn]?.[idx];
                                           return Array.isArray(cell) ? cell : [];
@@ -1740,7 +1868,8 @@ export default function PlanningPage() {
                                           className={
                                             "px-2 py-2 text-center " +
                                             (enabled ? "" : "text-zinc-400 ") +
-                                            (!activeDay ? "bg-zinc-100 text-zinc-400 dark:bg-zinc-900/40 " : "")
+                                            (!activeDay ? "bg-zinc-100 text-zinc-400 dark:bg-zinc-900/40 " : "") +
+                                            (isPastDay ? " bg-zinc-100 dark:bg-zinc-900/40 " : "")
                                           }
                                         >
                                         {enabled ? (
@@ -1814,7 +1943,7 @@ export default function PlanningPage() {
                       <span
                                                                   key={"slot-nm-" + slotIdx}
                                                                   className={
-                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center rounded-full border px-3 py-1 shadow-sm gap-2 select-none transition-transform " +
+                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none transition-transform " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
@@ -1826,11 +1955,11 @@ export default function PlanningPage() {
                                                                   data-stidx={idx}
                                                                   data-slotidx={slotIdx}
                                                                 >
-                                                                  <span className="flex flex-col items-center leading-tight">
+                                                                  <span className="flex flex-col items-start flex-1 min-w-0">
                                                                     {rn ? (
-                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 max-w-[6rem] truncate mb-0.5">{rn}</span>
+                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
-                                                                    <span className="text-sm">{nm}</span>
+                                                                    <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
                                                                   </span>
                                                                   <button
                                                                     type="button"
@@ -1848,7 +1977,7 @@ export default function PlanningPage() {
                                                                         return base;
                                                                       });
                                                                     }}
-                                                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60"
+                                                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60 flex-shrink-0"
                                                                     style={{ borderColor: (rc?.border || c.border), color: c.text }}
                                                                   >
                                                                     ×
@@ -2010,14 +2139,14 @@ export default function PlanningPage() {
                                                             >
                                                             <span
                                                               key={"nm-" + i}
-                                                                className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center rounded-full border px-3 py-1 shadow-sm gap-2"
+                                                                className="inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2"
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                             >
-                                                              <span className="flex flex-col items-center leading-tight">
+                                                              <span className="flex flex-col items-start leading-tight flex-1 min-w-0">
                                                                 {rn ? (
-                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 max-w-[6rem] truncate mb-0.5">{rn}</span>
+                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                 ) : null}
-                                                                <span className="text-sm">{nm}</span>
+                                                                <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
                                                               </span>
                                                             </span>
                                                             </div>
@@ -2122,6 +2251,105 @@ export default function PlanningPage() {
                   </div>
                 );
               })()}
+              {savedWeekPlan?.assignments && (
+                <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  {(() => {
+                    const assignments = savedWeekPlan!.assignments as any;
+                    const counts = new Map<string, number>();
+                    const dayKeys = Object.keys(assignments || {});
+                    for (const dKey of dayKeys) {
+                      const shiftsMap = assignments[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        const perStation: string[][] = shiftsMap[sn] || [];
+                        for (const namesHere of perStation) {
+                          for (const nm of (namesHere || [])) {
+                            if (!nm) continue;
+                            counts.set(nm, (counts.get(nm) || 0) + 1);
+                          }
+                        }
+                      }
+                    }
+                    // Worker ordering based on saved snapshot workers if available
+                    const workerList: { name: string }[] = (Array.isArray(savedWeekPlan!.workers) && savedWeekPlan!.workers!.length)
+                      ? (savedWeekPlan!.workers as any[]).map((w) => ({ name: String(w.name) }))
+                      : workers.map((w) => ({ name: w.name }));
+                    workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
+                    const order = new Map<string, number>();
+                    workerList.forEach((w, i) => order.set(w.name, i));
+                    const items = Array.from(counts.entries()).sort((a, b) => {
+                      const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      if (ia !== ib) return ia - ib;
+                      return a[0].localeCompare(b[0]);
+                    });
+                    // Totaux
+                    const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
+                    function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
+                      if (!st) return 0;
+                      if (st.perDayCustom) {
+                        const dayCfg = st.dayOverrides?.[dayKey];
+                        if (!dayCfg || dayCfg.active === false) return 0;
+                        if (st.uniformRoles) return Number(st.workers || 0);
+                        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                        if (!sh || !sh.enabled) return 0;
+                        return Number(sh.workers || 0);
+                      }
+                      if (st.days && st.days[dayKey] === false) return 0;
+                      if (st.uniformRoles) return Number(st.workers || 0);
+                      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                      if (!sh || !sh.enabled) return 0;
+                      return Number(sh.workers || 0);
+                    }
+                    let totalRequired = 0;
+                    for (const dKey of dayKeys) {
+                      const shiftsMap = assignments[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
+                          totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
+                        }
+                      }
+                    }
+                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+                    if (workerList.length === 0) {
+                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
+                    }
+                    return (
+                      <>
+                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                          <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
+                          <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse text-sm table-fixed">
+                            <thead>
+                              <tr className="border-b dark:border-zinc-800">
+                                <th className="px-2 py-2 text-right w-64">עובד</th>
+                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map(([nm, c]) => {
+                                const col = colorForName(nm);
+                                return (
+                                  <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
+                                    <td className="px-2 py-2 w-64">
+                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
+                                        {nm}
+                                      </span>
+                                    </td>
+                                    <td className="px-2 py-2 w-28">{c}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               {aiPlan && !isManual && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
@@ -2549,8 +2777,13 @@ export default function PlanningPage() {
                       setAiLoading(false);
                     }
                   }}
-                  className="inline-flex items-center rounded-md bg-[#00A8E0] px-6 py-2 text-white hover:bg-[#0092c6] disabled:opacity-60"
-                  disabled={aiLoading}
+                  className={
+                    "inline-flex items-center rounded-md px-6 py-2 text-white disabled:opacity-60 " +
+                    (isSavedMode
+                      ? "bg-zinc-300 cursor-not-allowed dark:bg-zinc-700"
+                      : "bg-[#00A8E0] hover:bg-[#0092c6]")
+                  }
+                  disabled={isSavedMode || aiLoading}
                 >
                   {aiLoading ? "יוצר..." : "יצירת תכנון"}
                 </button>
@@ -2607,6 +2840,73 @@ export default function PlanningPage() {
               )}
             </section>
           </div>
+          <div className="flex items-center justify-end gap-2">
+            {isSavedMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    if (!savedWeekPlan || !savedWeekPlan.assignments) return;
+                    const assignmentsAny: any = savedWeekPlan.assignments;
+                    // Re-matérialiser les données enregistrées dans les états actifs
+                    const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                    const shiftNames = Array.from(
+                      new Set(
+                        (site?.config?.stations || [])
+                          .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+                          .filter(Boolean)
+                      )
+                    );
+                    const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+                    if (savedWeekPlan.isManual) {
+                      setIsManual(true);
+                      setManualAssignments(assignmentsAny as any);
+                    } else {
+                      setIsManual(false);
+                      const newPlan = {
+                        days: dayKeys,
+                        shifts: shiftNames,
+                        stations: stationNames,
+                        assignments: assignmentsAny,
+                        alternatives: [],
+                        status: "SAVED_EDIT",
+                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+                      } as any;
+                      setAiPlan(newPlan);
+                    }
+                    if (Array.isArray(savedWeekPlan.workers) && savedWeekPlan.workers.length) {
+                      const mapped = (savedWeekPlan.workers as any[]).map((w: any) => ({
+                        id: w.id,
+                        name: String(w.name),
+                        maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+                        roles: Array.isArray(w.roles) ? w.roles : [],
+                        availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                      }));
+                      setWorkers(mapped);
+                    }
+                  } finally {
+                    // Sortir du mode "sauvegardé" tout en conservant les données matérialisées
+                    setSavedWeekPlan(null);
+                    setEditingSaved(true);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+              >
+                ערוך
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onSavePlan}
+              className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                <path d="M17 3H7a2 2 0 0 0-2 2v14l7-3 7 3V5a2 2 0 0 0-2-2Z"/>
+              </svg>
+              שמור
+            </button>
+          </div>
+          </>
         )}
       </div>
     </div>
