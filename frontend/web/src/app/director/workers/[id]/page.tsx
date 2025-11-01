@@ -49,6 +49,8 @@ export default function WorkerDetailsPage() {
     isManual: boolean;
     workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>;
   }>(null);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
 
   function addDays(d: Date, days: number): Date {
     const n = new Date(d);
@@ -124,6 +126,13 @@ export default function WorkerDetailsPage() {
     })();
   }, [worker, weekStart]);
 
+  // Synchroniser le mois du calendrier avec la semaine sélectionnée
+  useEffect(() => {
+    if (!isCalendarOpen) {
+      setCalendarMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
+    }
+  }, [weekStart, isCalendarOpen]);
+
   const effectiveWorker = useMemo(() => {
     if (!worker) return null;
     const snap = weekPlan?.workers?.find((w: any) => String(w.id) === String(worker.id));
@@ -174,6 +183,17 @@ export default function WorkerDetailsPage() {
             >
               ←
             </button>
+            <button
+              onClick={() => setIsCalendarOpen(true)}
+              className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="בחר שבוע מלוח שנה"
+              title="בחר שבוע מלוח שנה"
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
+                <path d="M7 14h5v5H7z"/>
+              </svg>
+            </button>
           </div>
           <button
             onClick={() => router.back()}
@@ -191,7 +211,152 @@ export default function WorkerDetailsPage() {
         {loading ? (
           <p>טוען...</p>
         ) : worker ? (
-          <div className="space-y-6">
+          <>
+            {isCalendarOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsCalendarOpen(false)}>
+                <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-xl max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold">בחר שבוע</h3>
+                    <button
+                      type="button"
+                      onClick={() => setIsCalendarOpen(false)}
+                      className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                    >
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="mb-4 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextMonth = new Date(calendarMonth);
+                        nextMonth.setMonth(nextMonth.getMonth() + 1);
+                        setCalendarMonth(nextMonth);
+                      }}
+                      className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                    >
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
+                      </svg>
+                    </button>
+                    <span className="text-lg font-medium">
+                      {new Intl.DateTimeFormat("he-IL", { month: "long", year: "numeric" }).format(calendarMonth)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const prevMonth = new Date(calendarMonth);
+                        prevMonth.setMonth(prevMonth.getMonth() - 1);
+                        setCalendarMonth(prevMonth);
+                      }}
+                      className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                    >
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1 mb-2">
+                    {["א", "ב", "ג", "ד", "ה", "ו", "ש"].map((day) => (
+                      <div key={day} className="text-center text-sm font-medium text-zinc-600 dark:text-zinc-400 p-2">
+                        {day}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-7 gap-1">
+                    {(() => {
+                      const year = calendarMonth.getFullYear();
+                      const month = calendarMonth.getMonth();
+                      const firstDay = new Date(year, month, 1);
+                      const startDate = new Date(firstDay);
+                      startDate.setDate(startDate.getDate() - firstDay.getDay()); // Start from Sunday
+                      const days: JSX.Element[] = [];
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      
+                      // Helper function to check if worker is assigned on a date
+                      const isWorkerAssignedOnDate = (date: Date): boolean => {
+                        if (!worker || typeof window === "undefined") return false;
+                        const weekStartForDate = new Date(date);
+                        weekStartForDate.setDate(date.getDate() - date.getDay()); // Sunday
+                        const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                        const key = `plan_${worker.site_id}_${iso(weekStartForDate)}`;
+                        const raw = localStorage.getItem(key);
+                        if (!raw) return false;
+                        try {
+                          const parsed = JSON.parse(raw);
+                          if (!parsed || !parsed.assignments) return false;
+                          const assignments = parsed.assignments;
+                          const dayKey = ["sun","mon","tue","wed","thu","fri","sat"][date.getDay()];
+                          if (!assignments[dayKey]) return false;
+                          // Check all shifts and stations
+                          for (const shiftName of Object.keys(assignments[dayKey])) {
+                            const perStation = assignments[dayKey][shiftName] || [];
+                            for (const stationAssignments of perStation) {
+                              if (Array.isArray(stationAssignments) && stationAssignments.includes(worker.name)) {
+                                return true;
+                              }
+                            }
+                          }
+                          return false;
+                        } catch {
+                          return false;
+                        }
+                      };
+                      
+                      for (let i = 0; i < 42; i++) {
+                        const date = new Date(startDate);
+                        date.setDate(date.getDate() + i);
+                        const isCurrentMonth = date.getMonth() === month;
+                        const isToday = date.getTime() === today.getTime();
+                        const isWeekStart = date.getDay() === 0; // Sunday
+                        
+                        // Check if this date is in the current week
+                        const weekStartForDate = new Date(date);
+                        weekStartForDate.setDate(date.getDate() - date.getDay());
+                        const isCurrentWeek = weekStartForDate.getTime() === weekStart.getTime();
+                        
+                        // Check if worker is assigned on this date
+                        const isAssigned = isWorkerAssignedOnDate(date);
+                        
+                        days.push(
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => {
+                              // Calculer le début de la semaine pour cette date
+                              const selectedWeekStart = new Date(date);
+                              selectedWeekStart.setDate(date.getDate() - date.getDay()); // Dimanche
+                              setWeekStart(selectedWeekStart);
+                              setCalendarMonth(new Date(year, month, 1));
+                              setIsCalendarOpen(false);
+                            }}
+                            className={`
+                              p-2 text-sm rounded flex flex-col items-center relative
+                              ${!isCurrentMonth ? "text-zinc-300 dark:text-zinc-600" : ""}
+                              ${isToday ? "bg-[#00A8E0] text-white font-semibold" : ""}
+                              ${isCurrentWeek && isCurrentMonth && !isToday ? "bg-[#00A8E0]/20 border border-[#00A8E0]" : ""}
+                              ${isWeekStart && isCurrentMonth ? "font-semibold" : ""}
+                              hover:bg-zinc-100 dark:hover:bg-zinc-800
+                              ${isCurrentMonth && !isToday && !isCurrentWeek ? "text-zinc-700 dark:text-zinc-300" : ""}
+                            `}
+                          >
+                            <span>{date.getDate()}</span>
+                            {isAssigned && (
+                              <span className="absolute bottom-0.5 w-1 h-1 rounded-full bg-red-500"></span>
+                            )}
+                          </button>
+                        );
+                      }
+                      return days;
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="space-y-6">
             <section className="rounded-xl border p-4 dark:border-zinc-800">
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div>
@@ -303,7 +468,8 @@ export default function WorkerDetailsPage() {
                 ערוך באתר
               </button>
             </div>
-          </div>
+            </div>
+          </>
         ) : null}
       </div>
     </div>

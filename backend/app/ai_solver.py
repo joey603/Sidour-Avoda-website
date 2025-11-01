@@ -145,7 +145,7 @@ def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], 
 def solve_schedule(
     config: Dict[str, Any],
     workers: List[Dict[str, Any]],
-    time_limit_seconds: int = 10,
+    time_limit_seconds: int = 30,
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
 ) -> Dict[str, Any]:
@@ -236,10 +236,9 @@ def solve_schedule(
                     # Pas de rôles requis: simple borne supérieure sur la cellule
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
-    # At most one shift per day per worker (across all stations and shifts)
-    for w in W:
-        for d in D:
-            model.Add(sum(x[(w, d, s, t)] for s in S for t in T) <= 1)
+    # Allow multiple non-adjacent shifts per day for a worker.
+    # The adjacency constraints below already forbid back-to-back shifts (including across stations),
+    # so we remove the strict "one shift per day" cap to maximize feasible coverage.
 
     # No adjacent shifts for a worker (including across day boundary)
     # Build adjacency pairs (d,s,t1),(d,s+1,t2) across any stations
@@ -922,7 +921,7 @@ def solve_schedule(
 def solve_schedule_stream(
     config: Dict[str, Any],
     workers: List[Dict[str, Any]],
-    time_limit_seconds: int = 10,
+    time_limit_seconds: int = 30,
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
 ):
@@ -1011,10 +1010,7 @@ def solve_schedule_stream(
                 else:
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
-    # one shift per day per worker
-    for w in W:
-        for d in D:
-            model.Add(sum(x[(w, d, s, t)] for s in S for t in T) <= 1)
+    # Allow multiple non-adjacent shifts per day (adjacency constraints below prevent back-to-back)
 
     # no adjacent
     for w in W:

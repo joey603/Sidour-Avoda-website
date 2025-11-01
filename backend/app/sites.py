@@ -166,17 +166,24 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    # Unicité par site du nom (insensible à la casse)
-    exists = (
-        db.query(SiteWorker.id)
+    # Vérifier si un worker avec ce nom existe déjà
+    existing = (
+        db.query(SiteWorker)
         .filter(
             SiteWorker.site_id == site_id,
             func.lower(SiteWorker.name) == func.lower(payload.name),
         )
         .first()
     )
-    if exists:
-        raise HTTPException(status_code=400, detail="שם עובד כבר קיים באתר")
+    if existing:
+        # Si le worker existe déjà, mettre à jour ses données et le retourner (réutilisation)
+        existing.max_shifts = payload.max_shifts
+        existing.roles = payload.roles or []
+        existing.availability = payload.availability or {}
+        db.commit()
+        db.refresh(existing)
+        return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {})
+    # Créer un nouveau worker
     w = SiteWorker(site_id=site_id, name=payload.name, max_shifts=payload.max_shifts, roles=payload.roles or [], availability=payload.availability or {})
     db.add(w)
     db.commit()

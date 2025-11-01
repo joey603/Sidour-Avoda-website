@@ -47,6 +47,8 @@ export default function PlanningPage() {
     nextWeek.setDate(startThisWeek.getDate() + 7); // semaine prochaine par défaut
     return nextWeek;
   });
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
 
   // IA planning result
   const [aiLoading, setAiLoading] = useState(false);
@@ -63,6 +65,9 @@ export default function PlanningPage() {
   const [altIndex, setAltIndex] = useState<number>(0);
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const prevAltCountRef = useRef<number>(0);
+  const aiControllerRef = useRef<AbortController | null>(null);
+  const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const aiIdleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Snapshot sauvegardé pour la semaine (assignations + éventuelle liste travailleurs)
   const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
@@ -899,14 +904,71 @@ export default function PlanningPage() {
       const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
       if (raw) {
         const parsed = JSON.parse(raw);
+        // Charger les workers même si assignments est null (après suppression)
         if (parsed && parsed.assignments) {
           setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+          // Recharger tous les workers du site pour permettre la réutilisation (ne pas écraser workers)
+          loadWorkers();
+        } else if (parsed && Array.isArray(parsed.workers) && parsed.workers.length) {
+          // Si assignments est null mais workers existe, ne pas écraser workers
+          // Les workers de la semaine sauvegardée sont utilisés uniquement pour l'affichage
+          // On garde tous les workers du site dans l'état workers pour permettre la réutilisation
+          // Recharger les workers depuis l'API pour avoir la liste complète
+          loadWorkers();
+          setAiPlan(null);
+          setManualAssignments(null);
+          setAltIndex(0);
+          baseAssignmentsRef.current = null;
+        } else {
+          // Aucune grille sauvegardée trouvée pour cette date, réinitialiser les états actifs
+          setAiPlan(null);
+          setManualAssignments(null);
+          setAltIndex(0);
+          baseAssignmentsRef.current = null;
         }
+      } else {
+        // Aucune grille sauvegardée trouvée pour cette date, réinitialiser les états actifs
+        setAiPlan(null);
+        setManualAssignments(null);
+        setAltIndex(0);
+        baseAssignmentsRef.current = null;
       }
     } catch {
       setSavedWeekPlan(null);
+      // En cas d'erreur, réinitialiser aussi les états actifs
+      setAiPlan(null);
+      setManualAssignments(null);
+      setAltIndex(0);
+      baseAssignmentsRef.current = null;
     }
   }, [params.id, weekStart]);
+
+  // Synchroniser le mois du calendrier avec la semaine sélectionnée
+  useEffect(() => {
+    if (!isCalendarOpen) {
+      setCalendarMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
+    }
+  }, [weekStart, isCalendarOpen]);
+
+  function stopAiGeneration() {
+    if (aiControllerRef.current) {
+      try {
+        aiControllerRef.current.abort();
+      } catch (e) {
+        // Ignorer les erreurs d'annulation
+      }
+      aiControllerRef.current = null;
+    }
+    if (aiTimeoutRef.current) {
+      clearTimeout(aiTimeoutRef.current);
+      aiTimeoutRef.current = null;
+    }
+    if (aiIdleTimeoutRef.current) {
+      clearTimeout(aiIdleTimeoutRef.current);
+      aiIdleTimeoutRef.current = null;
+    }
+    setAiLoading(false);
+  }
 
   function onSavePlan() {
     try {
@@ -937,9 +999,131 @@ export default function PlanningPage() {
       if (typeof window !== "undefined") {
         localStorage.setItem(key, JSON.stringify(payload));
       }
+      // Recharger le plan sauvegardé et sortir du mode ערוך
+      if (editingSaved) {
+        setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers });
+        setEditingSaved(false);
+      }
       toast.success("התכנון נשמר בהצלחה");
     } catch (e: any) {
       toast.error("שמירה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+    }
+  }
+
+  function onCancelEdit() {
+    try {
+      // Recharger le plan sauvegardé depuis localStorage
+      const start = new Date(weekStart);
+      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const key = `plan_${params.id}_${iso(start)}`;
+      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      if (!raw) {
+        // Pas de plan sauvegardé, réinitialiser tout
+        setAiPlan(null);
+        setManualAssignments(null);
+        setEditingSaved(false);
+        setSavedWeekPlan(null);
+        loadWorkers();
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.assignments) {
+        // Plan sauvegardé sans assignments, réinitialiser
+        setAiPlan(null);
+        setManualAssignments(null);
+        setEditingSaved(false);
+        setSavedWeekPlan(null);
+        loadWorkers();
+        return;
+      }
+      // Restaurer le plan sauvegardé
+      const assignmentsAny: any = parsed.assignments;
+      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+      const shiftNames = Array.from(
+        new Set(
+          (site?.config?.stations || [])
+            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+            .filter(Boolean)
+        )
+      );
+      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+      if (parsed.isManual) {
+        setIsManual(true);
+        setManualAssignments(assignmentsAny as any);
+      } else {
+        setIsManual(false);
+        const newPlan = {
+          days: dayKeys,
+          shifts: shiftNames,
+          stations: stationNames,
+          assignments: assignmentsAny,
+          alternatives: [],
+          status: "SAVED",
+          objective: typeof (parsed as any)?.objective === "number" ? (parsed as any).objective : 0,
+        } as any;
+        setAiPlan(newPlan);
+      }
+      if (Array.isArray(parsed.workers) && parsed.workers.length) {
+        const mapped = (parsed.workers as any[]).map((w: any) => ({
+          id: w.id,
+          name: String(w.name),
+          maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+          roles: Array.isArray(w.roles) ? w.roles : [],
+          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+        }));
+        setWorkers(mapped);
+      } else {
+        loadWorkers();
+      }
+      // Restaurer savedWeekPlan et sortir du mode ערוך
+      setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+      setEditingSaved(false);
+      toast.success("השינויים בוטלו");
+    } catch (e: any) {
+      toast.error("ביטול נכשל", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+    }
+  }
+
+  function onDeletePlan() {
+    try {
+      if (!savedWeekPlan?.assignments) {
+        toast.error("אין מה למחוק", { description: "לא נמצא תכנון לשמירה למחיקה" });
+        return;
+      }
+      const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי? זה ימחק את כל השיבוצים אך ישמור את רשימת העובדים והזמינות שלהם.");
+      if (!confirmed) return;
+      const start = new Date(weekStart);
+      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const key = `plan_${params.id}_${iso(start)}`;
+      // Charger les données actuelles pour garder les workers
+      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        // Garder les workers, supprimer les assignments
+        const payload = {
+          siteId: parsed.siteId,
+          week: parsed.week,
+          isManual: false,
+          assignments: null,
+          workers: parsed.workers || [],
+        };
+        if (typeof window !== "undefined") {
+          localStorage.setItem(key, JSON.stringify(payload));
+        }
+      } else {
+        // Si aucune donnée n'existe, supprimer complètement
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(key);
+        }
+      }
+      // Réinitialiser les états
+      setSavedWeekPlan(null);
+      setEditingSaved(false);
+      setAiPlan(null);
+      setManualAssignments(null);
+      toast.success("התכנון נמחק בהצלחה");
+    } catch (e: any) {
+      toast.error("מחיקה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
     }
   }
 
@@ -1050,10 +1234,10 @@ export default function PlanningPage() {
                         <table className="w-full border-collapse text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-3 py-2 text-right">שם</th>
-                              <th className="px-3 py-2 text-right">מקס' משמרות</th>
-                              <th className="px-3 py-2 text-right">תפקידים</th>
-                              <th className="px-3 py-2 text-right">זמינות</th>
+                              <th className="px-3 py-2 text-center">שם</th>
+                              <th className="px-3 py-2 text-center">מקס' משמרות</th>
+                              <th className="px-3 py-2 text-center">תפקידים</th>
+                              <th className="px-3 py-2 text-center">זמינות</th>
                               <th className="px-3 py-2"></th>
                             </tr>
                           </thead>
@@ -1078,10 +1262,10 @@ export default function PlanningPage() {
                             }
                             return rows.map((w) => (
                               <tr key={w.id} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-3 py-2">{w.name}</td>
-                                <td className="px-3 py-2">{w.maxShifts}</td>
-                                <td className="px-3 py-2">{w.roles.join(", ") || "—"}</td>
-                                <td className="px-3 py-2">
+                                <td className="px-3 py-2 text-center">{w.name}</td>
+                                <td className="px-3 py-2 text-center">{w.maxShifts}</td>
+                                <td className="px-3 py-2 text-center">{w.roles.join(", ") || "—"}</td>
+                                <td className="px-3 py-2 text-center">
                                   {dayDefs.map((d, i) => (
                                     <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
                                       {d.label}:{" "}
@@ -1374,22 +1558,39 @@ export default function PlanningPage() {
                         const DUP_MSG = "שם עובד כבר קיים באתר";
                         // eslint-disable-next-line no-console
                         console.log("[Workers] save clicked", { editingWorkerId, trimmed });
+                        // Utiliser la même logique que displayWorkers : vérifier uniquement dans la liste de la semaine actuelle
+                        const currentWeekWorkers: Worker[] = (savedWeekPlan?.workers || []).length
+                          ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
+                              id: rw.id,
+                              name: rw.name,
+                              maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
+                              roles: Array.isArray(rw.roles) ? rw.roles : [],
+                              availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                            }))
+                          : workers;
                         // Pré-vérification côté client pour éviter un aller-retour inutile
                         if (!editingWorkerId) {
                           // eslint-disable-next-line no-console
-                          console.log("[Workers] checking duplicate (create)", { trimmed, workers });
-                          if (workers.some((w) => (w.name || "").trim().toLowerCase() === trimmed.toLowerCase())) {
+                          console.log("[Workers] checking duplicate (create)", { trimmed, currentWeekWorkers, allWorkers: workers });
+                          // Vérifier d'abord dans la semaine actuelle - si présent, bloquer
+                          if (currentWeekWorkers.some((w) => (w.name || "").trim().toLowerCase() === trimmed.toLowerCase())) {
                             // eslint-disable-next-line no-console
-                            console.log("[Workers] duplicate detected (create)");
+                            console.log("[Workers] duplicate detected in current week (create)");
                             toast.info(DUP_MSG);
                             return;
                           }
+                          // Si pas dans la semaine actuelle, vérifier si existe dans tous les workers du site
+                          // Si oui, on le réutilisera (autorisé)
+                          // Si non, nouveau worker (autorisé aussi)
+                          // eslint-disable-next-line no-console
+                          console.log("[Workers] name not in current week, checking if exists in all workers");
                         } else {
                           // eslint-disable-next-line no-console
-                          console.log("[Workers] checking duplicate (update)", { editingWorkerId, trimmed, workers });
-                          if (workers.some((w) => w.id !== editingWorkerId && (w.name || "").trim().toLowerCase() === trimmed.toLowerCase())) {
+                          console.log("[Workers] checking duplicate (update)", { editingWorkerId, trimmed, currentWeekWorkers });
+                          // En mode édition, vérifier les doublons dans la semaine actuelle (sauf le worker en cours d'édition)
+                          if (currentWeekWorkers.some((w) => w.id !== editingWorkerId && (w.name || "").trim().toLowerCase() === trimmed.toLowerCase())) {
                             // eslint-disable-next-line no-console
-                            console.log("[Workers] duplicate detected (update)");
+                            console.log("[Workers] duplicate detected in current week (update)");
                             toast.info(DUP_MSG);
                             return;
                           }
@@ -1422,7 +1623,8 @@ export default function PlanningPage() {
                           } else {
                             // eslint-disable-next-line no-console
                             console.log("[Workers] calling API (POST)");
-                            const created = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
+                            // Le backend gère automatiquement la réutilisation si le worker existe déjà
+                            const result = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
                               method: "POST",
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                               body: JSON.stringify({
@@ -1433,16 +1635,25 @@ export default function PlanningPage() {
                               }),
                             });
                             // eslint-disable-next-line no-console
-                            console.log("[Workers] API ok (POST)", created);
+                            console.log("[Workers] API ok (POST)", result);
                             const mapped: Worker = {
-                              id: created.id,
-                              name: created.name,
-                              maxShifts: created.max_shifts ?? created.maxShifts ?? 0,
-                              roles: Array.isArray(created.roles) ? created.roles : [],
-                              availability: created.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                              id: result.id,
+                              name: result.name,
+                              maxShifts: result.max_shifts ?? result.maxShifts ?? 0,
+                              roles: Array.isArray(result.roles) ? result.roles : [],
+                              availability: result.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
                             };
+                            // Vérifier si le worker existe déjà dans la liste (réutilisé)
+                            const existingIndex = workers.findIndex((w) => w.id === result.id);
+                            if (existingIndex >= 0) {
+                              // Worker réutilisé - mettre à jour
+                              setWorkers((prev) => prev.map((x) => (x.id === result.id ? mapped : x)));
+                              toast.success("עובד עודכן בהצלחה!");
+                            } else {
+                              // Nouveau worker - ajouter
                             setWorkers((prev) => [...prev, mapped]);
                             toast.success("עובד נוסף בהצלחה!");
+                            }
                           }
                           setEditingWorkerId(null);
                           setNewWorkerName("");
@@ -1454,12 +1665,6 @@ export default function PlanningPage() {
                           const msg = String(e?.message || "");
                           // eslint-disable-next-line no-console
                           console.log("[Workers] save error", { status: e?.status, message: msg, raw: e });
-                          if ((e?.status === 400 && msg.includes(DUP_MSG)) || msg.includes(DUP_MSG)) {
-                            // eslint-disable-next-line no-console
-                            console.log("[Workers] duplicate detected (backend)");
-                            toast.info(DUP_MSG);
-                            return;
-                          }
                           toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
                         }
                       }}
@@ -1505,12 +1710,23 @@ export default function PlanningPage() {
                   ידני
                 </button>
               </div>
-              <div className="flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300">
+              <div className="flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
                 <div className="flex items-center gap-3">
                 <button
                   type="button"
                   aria-label="שבוע קודם"
-                  onClick={() => setWeekStart((prev) => addDays(prev, -7))}
+                  onClick={() => {
+                    if (editingSaved) {
+                      const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
+                      if (!confirmed) return;
+                      setEditingSaved(false);
+                    }
+                    stopAiGeneration();
+                    setAiPlan(null);
+                    setAltIndex(0);
+                    baseAssignmentsRef.current = null;
+                    setWeekStart((prev) => addDays(prev, -7));
+                  }}
                   className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
@@ -1524,33 +1740,176 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   aria-label="שבוע הבא"
-                  onClick={() => setWeekStart((prev) => addDays(prev, 7))}
+                  onClick={() => {
+                    if (editingSaved) {
+                      const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
+                      if (!confirmed) return;
+                      setEditingSaved(false);
+                    }
+                    stopAiGeneration();
+                    setAiPlan(null);
+                    setAltIndex(0);
+                    baseAssignmentsRef.current = null;
+                    setWeekStart((prev) => addDays(prev, 7));
+                  }}
                   className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-                  </button>
-                </div>
+                </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isManual) {
-                      setManualAssignments(null);
-                      setManualRoleHints(null);
-                    } else {
-                      setAiPlan(null);
-                    }
-                  }}
-                  disabled={isSavedMode}
-                  className={
-                    "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
-                    (isSavedMode
-                      ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
-                      : "border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20")
-                  }
+                  aria-label="בחר שבוע מלוח שנה"
+                  onClick={() => setIsCalendarOpen(true)}
+                  className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
-                  איפוס
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                    <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
+                    <path d="M7 14h5v5H7z"/>
+                  </svg>
                 </button>
               </div>
+              </div>
+              {isCalendarOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsCalendarOpen(false)}>
+                  <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-xl max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold">בחר שבוע</h3>
+                      <button
+                        type="button"
+                        onClick={() => setIsCalendarOpen(false)}
+                        className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                      >
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                          <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="mb-4 flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextMonth = new Date(calendarMonth);
+                          nextMonth.setMonth(nextMonth.getMonth() + 1);
+                          setCalendarMonth(nextMonth);
+                        }}
+                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                      >
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                          <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
+                        </svg>
+                      </button>
+                      <span className="text-lg font-medium">
+                        {new Intl.DateTimeFormat("he-IL", { month: "long", year: "numeric" }).format(calendarMonth)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const prevMonth = new Date(calendarMonth);
+                          prevMonth.setMonth(prevMonth.getMonth() - 1);
+                          setCalendarMonth(prevMonth);
+                        }}
+                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                      >
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                          <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 mb-2">
+                      {["א", "ב", "ג", "ד", "ה", "ו", "ש"].map((day) => (
+                        <div key={day} className="text-center text-sm font-medium text-zinc-600 dark:text-zinc-400 p-2">
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {(() => {
+                        const year = calendarMonth.getFullYear();
+                        const month = calendarMonth.getMonth();
+                        const firstDay = new Date(year, month, 1);
+                        const lastDay = new Date(year, month + 1, 0);
+                        const startDate = new Date(firstDay);
+                        startDate.setDate(startDate.getDate() - firstDay.getDay()); // Start from Sunday
+                        const days: JSX.Element[] = [];
+                        const today = new Date();
+                        today.setHours(0, 0, 0, 0);
+                        
+                        // Helper function to check if a plan exists for a date
+                        const hasSavedPlan = (date: Date): boolean => {
+                          if (typeof window === "undefined") return false;
+                          const weekStartForDate = new Date(date);
+                          weekStartForDate.setDate(date.getDate() - date.getDay()); // Sunday
+                          const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                          const key = `plan_${params.id}_${iso(weekStartForDate)}`;
+                          const raw = localStorage.getItem(key);
+                          if (!raw) return false;
+                          try {
+                            const parsed = JSON.parse(raw);
+                            return !!(parsed && parsed.assignments);
+                          } catch {
+                            return false;
+                          }
+                        };
+                        
+                        for (let i = 0; i < 42; i++) {
+                          const date = new Date(startDate);
+                          date.setDate(date.getDate() + i);
+                          const isCurrentMonth = date.getMonth() === month;
+                          const isToday = date.getTime() === today.getTime();
+                          const isWeekStart = date.getDay() === 0; // Sunday
+                          
+                          // Check if this date is in the current week
+                          const weekStartForDate = new Date(date);
+                          weekStartForDate.setDate(date.getDate() - date.getDay());
+                          const isCurrentWeek = weekStartForDate.getTime() === weekStart.getTime();
+                          
+                          // Check if there's a saved plan for this week
+                          const hasPlan = hasSavedPlan(date);
+                          
+                          days.push(
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={() => {
+                                if (editingSaved) {
+                                  const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
+                                  if (!confirmed) return;
+                                  setEditingSaved(false);
+                                }
+                                stopAiGeneration();
+                                setAiPlan(null);
+                                setAltIndex(0);
+                                baseAssignmentsRef.current = null;
+                                // Calculer le début de la semaine pour cette date
+                                const selectedWeekStart = new Date(date);
+                                selectedWeekStart.setDate(date.getDate() - date.getDay()); // Dimanche
+                                setWeekStart(selectedWeekStart);
+                                setCalendarMonth(new Date(year, month, 1));
+                                setIsCalendarOpen(false);
+                              }}
+                              className={`
+                                p-2 text-sm rounded flex flex-col items-center relative
+                                ${!isCurrentMonth ? "text-zinc-300 dark:text-zinc-600" : ""}
+                                ${isToday ? "bg-[#00A8E0] text-white font-semibold" : ""}
+                                ${isCurrentWeek && isCurrentMonth && !isToday ? "bg-[#00A8E0]/20 border border-[#00A8E0]" : ""}
+                                ${isWeekStart && isCurrentMonth ? "font-semibold" : ""}
+                                hover:bg-zinc-100 dark:hover:bg-zinc-800
+                                ${isCurrentMonth && !isToday && !isCurrentWeek ? "text-zinc-700 dark:text-zinc-300" : ""}
+                              `}
+                            >
+                              <span>{date.getDate()}</span>
+                              {hasPlan && (
+                                <span className="absolute bottom-0.5 w-1 h-1 rounded-full bg-red-500"></span>
+                              )}
+                            </button>
+                          );
+                        }
+                        return days;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              )}
               {(() => {
                 const dayCols = [
                   { key: "sun", label: "א'" },
@@ -1845,7 +2204,7 @@ export default function PlanningPage() {
                                       const required = getRequiredFor(st, sn, d.key);
                                       const dateCell = addDays(weekStart, dayIdx);
                                       const today0 = new Date(); today0.setHours(0,0,0,0);
-                                      const isPastDay = editingSaved && dateCell < today0;
+                                      const isPastDay = dateCell < today0; // Jours passés (sans le jour actuel), toujours grisés
                                       const assignedNames: string[] = (() => {
                                         // Priorité au plan sauvegardé pour la semaine
                                         const savedCell = (savedWeekPlan as any)?.assignments?.[d.key]?.[sn]?.[idx];
@@ -2251,106 +2610,7 @@ export default function PlanningPage() {
                   </div>
                 );
               })()}
-              {savedWeekPlan?.assignments && (
-                <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
-                  {(() => {
-                    const assignments = savedWeekPlan!.assignments as any;
-                    const counts = new Map<string, number>();
-                    const dayKeys = Object.keys(assignments || {});
-                    for (const dKey of dayKeys) {
-                      const shiftsMap = assignments[dKey] || {};
-                      for (const sn of Object.keys(shiftsMap)) {
-                        const perStation: string[][] = shiftsMap[sn] || [];
-                        for (const namesHere of perStation) {
-                          for (const nm of (namesHere || [])) {
-                            if (!nm) continue;
-                            counts.set(nm, (counts.get(nm) || 0) + 1);
-                          }
-                        }
-                      }
-                    }
-                    // Worker ordering based on saved snapshot workers if available
-                    const workerList: { name: string }[] = (Array.isArray(savedWeekPlan!.workers) && savedWeekPlan!.workers!.length)
-                      ? (savedWeekPlan!.workers as any[]).map((w) => ({ name: String(w.name) }))
-                      : workers.map((w) => ({ name: w.name }));
-                    workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
-                    const order = new Map<string, number>();
-                    workerList.forEach((w, i) => order.set(w.name, i));
-                    const items = Array.from(counts.entries()).sort((a, b) => {
-                      const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
-                      const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
-                      if (ia !== ib) return ia - ib;
-                      return a[0].localeCompare(b[0]);
-                    });
-                    // Totaux
-                    const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
-                    function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
-                      if (!st) return 0;
-                      if (st.perDayCustom) {
-                        const dayCfg = st.dayOverrides?.[dayKey];
-                        if (!dayCfg || dayCfg.active === false) return 0;
-                        if (st.uniformRoles) return Number(st.workers || 0);
-                        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
-                        if (!sh || !sh.enabled) return 0;
-                        return Number(sh.workers || 0);
-                      }
-                      if (st.days && st.days[dayKey] === false) return 0;
-                      if (st.uniformRoles) return Number(st.workers || 0);
-                      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
-                      if (!sh || !sh.enabled) return 0;
-                      return Number(sh.workers || 0);
-                    }
-                    let totalRequired = 0;
-                    for (const dKey of dayKeys) {
-                      const shiftsMap = assignments[dKey] || {};
-                      for (const sn of Object.keys(shiftsMap)) {
-                        for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
-                          totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
-                        }
-                      }
-                    }
-                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
-                    if (workerList.length === 0) {
-                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
-                    }
-                    return (
-                      <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
-                          <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
-                          <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full border-collapse text-sm table-fixed">
-                            <thead>
-                              <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-right w-64">עובד</th>
-                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {items.map(([nm, c]) => {
-                                const col = colorForName(nm);
-                                return (
-                                  <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-2 py-2 w-64">
-                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                        {nm}
-                                      </span>
-                                    </td>
-                                    <td className="px-2 py-2 w-28">{c}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-              {aiPlan && !isManual && (
+              {aiPlan && !isManual && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
@@ -2552,7 +2812,7 @@ export default function PlanningPage() {
                   })()}
                 </div>
               )}
-              {isManual && manualAssignments && (
+              {isManual && manualAssignments && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
@@ -2645,11 +2905,250 @@ export default function PlanningPage() {
                   })()}
                 </div>
               )}
+              {savedWeekPlan?.assignments && !editingSaved && (
+                <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  {(() => {
+                    const assignments = savedWeekPlan!.assignments as any;
+                    const counts = new Map<string, number>();
+                    const dayKeys = Object.keys(assignments || {});
+                    for (const dKey of dayKeys) {
+                      const shiftsMap = assignments[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        const perStation: string[][] = shiftsMap[sn] || [];
+                        for (const namesHere of perStation) {
+                          for (const nm of (namesHere || [])) {
+                            if (!nm) continue;
+                            counts.set(nm, (counts.get(nm) || 0) + 1);
+                          }
+                        }
+                      }
+                    }
+                    // Worker ordering based on saved snapshot workers if available
+                    const workerList: Worker[] = (Array.isArray(savedWeekPlan!.workers) && savedWeekPlan!.workers!.length)
+                      ? (savedWeekPlan!.workers as any[]).map((w: any, idx: number) => ({
+                          id: Number(w.id) || idx,
+                          name: String(w.name || ""),
+                          maxShifts: Number(w.maxShifts || 0),
+                          roles: Array.isArray(w.roles) ? w.roles : [],
+                          availability: w.availability || {},
+                        }))
+                      : workers;
+                    workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
+                    const order = new Map<string, number>();
+                    workerList.forEach((w, i) => order.set(w.name, i));
+                    const items = Array.from(counts.entries()).sort((a, b) => {
+                      const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
+                      if (ia !== ib) return ia - ib;
+                      return a[0].localeCompare(b[0]);
+                    });
+                    // Totaux
+                    const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
+                    function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
+                      if (!st) return 0;
+                      if (st.perDayCustom) {
+                        const dayCfg = st.dayOverrides?.[dayKey];
+                        if (!dayCfg || dayCfg.active === false) return 0;
+                        if (st.uniformRoles) return Number(st.workers || 0);
+                        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                        if (!sh || !sh.enabled) return 0;
+                        return Number(sh.workers || 0);
+                      }
+                      if (st.days && st.days[dayKey] === false) return 0;
+                      if (st.uniformRoles) return Number(st.workers || 0);
+                      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                      if (!sh || !sh.enabled) return 0;
+                      return Number(sh.workers || 0);
+                    }
+                    let totalRequired = 0;
+                    for (const dKey of dayKeys) {
+                      const shiftsMap = assignments[dKey] || {};
+                      for (const sn of Object.keys(shiftsMap)) {
+                        for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
+                          totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
+                        }
+                      }
+                    }
+                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+                    if (workerList.length === 0) {
+                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
+                    }
+                    return (
+                      <>
+                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                          <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
+                          <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse text-sm table-fixed">
+                            <thead>
+                              <tr className="border-b dark:border-zinc-800">
+                                <th className="px-2 py-2 text-right w-64">עובד</th>
+                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {items.map(([nm, c]) => {
+                                const col = colorForName(nm);
+                                return (
+                                  <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
+                                    <td className="px-2 py-2 w-64">
+                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
+                                        {nm}
+                                      </span>
+                                    </td>
+                                    <td className="px-2 py-2 w-28">{c}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                          {(() => {
+                            // Récap par תפקיד
+                            const roleTotals = new Map<string, number>();
+                            const stationsCfg: any[] = (site?.config?.stations || []) as any[];
+                            const getStationCfg = (tIdx: number) => stationsCfg[tIdx] || null;
+                            function roleRequirementsLocal(st: any, shiftName: string, dayKey: string): Record<string, number> {
+                              const out: Record<string, number> = {};
+                              const push = (name?: string, count?: number, enabled?: boolean) => {
+                                const rn = (name || "").trim();
+                                const c = Number(count || 0);
+                                if (!rn || !enabled || c <= 0) return; out[rn] = (out[rn] || 0) + c;
+                              };
+                              if (!st) return out;
+                              if (st.perDayCustom) {
+                                const dayCfg = st.dayOverrides?.[dayKey];
+                                if (!dayCfg || dayCfg.active === false) return out;
+                                if (st.uniformRoles) {
+                                  for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled);
+                                } else {
+                                  const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+                                  for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+                                }
+                                return out;
+                              }
+                              if (st.uniformRoles) {
+                                for (const r of (st.roles || [])) push(r?.name, r?.count, r?.enabled);
+                              } else {
+                                const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                                for (const r of ((sh?.roles as any[]) || [])) push(r?.name, r?.count, r?.enabled);
+                              }
+                              return out;
+                            }
+                            function assignRolesLocal(assignedNames: string[], st: any, shiftName: string, dayKey: string): Map<string, string | null> {
+                              const req = roleRequirementsLocal(st, shiftName, dayKey);
+                              const res = new Map<string, string | null>();
+                              const used = new Set<number>();
+                              assignedNames.forEach((nm) => res.set(nm, null));
+                              for (const [rName, rCount] of Object.entries(req)) {
+                                let left = rCount;
+                                if (left <= 0) continue;
+                                for (let i = 0; i < assignedNames.length && left > 0; i++) {
+                                  if (used.has(i)) continue;
+                                  const nm = assignedNames[i];
+                                  const w = workerList.find((x) => (x.name || "").trim() === (nm || "").trim());
+                                  const has = !!w && (w.roles || []).includes(rName);
+                                  if (!has) continue;
+                                  res.set(nm, rName);
+                                  used.add(i);
+                                  left--;
+                                }
+                              }
+                              return res;
+                            }
+                            // parcours des cellules
+                            dayKeys.forEach((dKey) => {
+                              const shiftsMap = assignments[dKey] || {};
+                              for (const sn of Object.keys(shiftsMap)) {
+                                const perStation: string[][] = shiftsMap[sn] || [];
+                                perStation.forEach((namesHere, tIdx) => {
+                                  const stCfg = getStationCfg(tIdx);
+                                  const m = assignRolesLocal((namesHere || []).filter(Boolean), stCfg, sn, dKey);
+                                  m.forEach((rName) => {
+                                    if (!rName) return;
+                                    roleTotals.set(rName, (roleTotals.get(rName) || 0) + 1);
+                                  });
+                                });
+                              }
+                            });
+                            // Compléter avec tous les rôles connus (même si 0 assignation)
+                            for (const rName of Array.from(roleColorMap.keys())) {
+                              if (!roleTotals.has(rName)) roleTotals.set(rName, 0);
+                            }
+                            // S'il n'y a aucun rôle défini globalement, ne rien afficher
+                            if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
+                            const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                            return (
+                              <div className="mt-4 overflow-x-auto">
+                                <table className="w-full border-collapse text-sm table-fixed">
+                                  <thead>
+                                    <tr className="border-b dark:border-zinc-800">
+                                      <th className="px-2 py-2 text-right w-64">תפקיד</th>
+                                      <th className="px-2 py-2 text-right w-28">סה"כ שיבוצים</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {rows.map(([rName, cnt]) => {
+                                      const rc = colorForRole(rName);
+                                      return (
+                                        <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
+                                          <td className="px-2 py-2 w-64">
+                                            <span className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-sm shadow-sm" style={{ borderColor: rc.border, color: rc.text }}>
+                                              {rName}
+                                            </span>
+                                          </td>
+                                          <td className="px-2 py-2 w-28">{cnt}</td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
               {!isManual && (
               <div className="pt-2 text-center">
                 <button
                   type="button"
                   onClick={async () => {
+                    // Vérifier si on est en mode ערוך et si la semaine contient le jour actuel
+                    if (editingSaved) {
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      const weekStartNormalized = new Date(weekStart);
+                      weekStartNormalized.setHours(0, 0, 0, 0);
+                      const weekEnd = addDays(weekStartNormalized, 6);
+                      weekEnd.setHours(23, 59, 59, 999);
+                      
+                      // eslint-disable-next-line no-console
+                      console.log("[BTN] editingSaved check:", { editingSaved, today, weekStartNormalized, weekEnd, containsToday: today >= weekStartNormalized && today <= weekEnd });
+                      
+                      // Vérifier si la semaine contient le jour actuel
+                      if (today >= weekStartNormalized && today <= weekEnd) {
+                        // Compter les jours passés (sans compter le jour actuel)
+                        const pastDaysCount = Math.floor((today.getTime() - weekStartNormalized.getTime()) / (1000 * 60 * 60 * 24));
+                        // eslint-disable-next-line no-console
+                        console.log("[BTN] pastDaysCount:", pastDaysCount);
+                        if (pastDaysCount > 0) {
+                          const confirmed = window.confirm(
+                            `כבר עברו ${pastDaysCount} ימים בשבוע זה. האם ברצונך לשנות רק את הימים הנותרים החל מהיום?`
+                          );
+                          if (!confirmed) return;
+                          // Note: Pour l'instant, on continue avec le plan complet
+                          // On pourrait implémenter une logique pour préserver les jours passés
+                        }
+                      }
+                    }
+                    // Arrêter tout processus en cours
+                    stopAiGeneration();
+                    
                     let stopped = false;
                     try {
                       // eslint-disable-next-line no-console
@@ -2659,21 +3158,27 @@ export default function PlanningPage() {
                       baseAssignmentsRef.current = null;
                       setAltIndex(0);
                       const controller = new AbortController();
+                      aiControllerRef.current = controller;
                       const timeoutId = setTimeout(() => {
                         try { controller.abort(); } catch {}
                         setAiLoading(false);
                       }, 120000);
+                      aiTimeoutRef.current = timeoutId;
                       // Inactivité: si aucune frame reçue pendant X ms, terminer proprement
-                      let idleId: any = 0;
                       const armIdle = () => {
-                        if (idleId) clearTimeout(idleId);
-                        idleId = setTimeout(async () => {
+                        if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                        aiIdleTimeoutRef.current = setTimeout(async () => {
                           // eslint-disable-next-line no-console
                           console.log("[AI][SSE] idle timeout → finalize");
                           setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
                           setAiLoading(false);
                           try { await reader.cancel?.(); } catch {}
                           try { controller.abort(); } catch {}
+                          aiControllerRef.current = null;
+                          if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                          aiTimeoutRef.current = null;
+                          if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                          aiIdleTimeoutRef.current = null;
                           stopped = true;
                           toast.success("התכנון הושלם");
                         }, 3000); // 3s d'inactivité
@@ -2737,14 +3242,22 @@ export default function PlanningPage() {
                               console.log("[AI][SSE] status", evt);
                               setAiLoading(false);
                               try { await reader.cancel(); } catch {}
-                              clearTimeout(timeoutId);
+                              if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                              aiTimeoutRef.current = null;
+                              if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                              aiIdleTimeoutRef.current = null;
+                              aiControllerRef.current = null;
                               stopped = true;
                               break;
                             } else if (evt?.type === "done") {
                               // eslint-disable-next-line no-console
                               console.log("[AI][SSE] done");
                               try { await reader.cancel(); } catch {}
-                              clearTimeout(timeoutId);
+                              if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                              aiTimeoutRef.current = null;
+                              if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                              aiIdleTimeoutRef.current = null;
+                              aiControllerRef.current = null;
                               stopped = true;
                               setAiLoading(false);
                               setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
@@ -2758,8 +3271,11 @@ export default function PlanningPage() {
                         }
                         if (stopped) break;
                       }
-                      clearTimeout(timeoutId);
-                      if (idleId) clearTimeout(idleId);
+                      if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                      aiTimeoutRef.current = null;
+                      if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                      aiIdleTimeoutRef.current = null;
+                      aiControllerRef.current = null;
                     } catch (e: any) {
                       // eslint-disable-next-line no-console
                       console.log("[BTN] error", e);
@@ -2774,6 +3290,12 @@ export default function PlanningPage() {
                     } finally {
                       // eslint-disable-next-line no-console
                       console.log("[BTN] finally set loading false");
+                      // Nettoyer les refs seulement si elles n'ont pas déjà été nettoyées
+                      if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                      if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                      aiControllerRef.current = null;
+                      aiTimeoutRef.current = null;
+                      aiIdleTimeoutRef.current = null;
                       setAiLoading(false);
                     }
                   }}
@@ -2797,7 +3319,7 @@ export default function PlanningPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              const next = (altIndex + 1) % total;
+                              const next = (altIndex - 1 + total) % total;
                               setAltIndex(next);
                               if (next === 0) {
                                 setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
@@ -2806,7 +3328,7 @@ export default function PlanningPage() {
                                 setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
                               }
                             }}
-                            disabled={total <= 1}
+                            disabled={total <= 1 || (altIndex === 0 && aiLoading)}
                             className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           >
                             חלופה →
@@ -2817,7 +3339,7 @@ export default function PlanningPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              const next = (altIndex - 1 + total) % total;
+                              const next = (altIndex + 1) % total;
                               setAltIndex(next);
                               if (next === 0) {
                                 setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
@@ -2840,71 +3362,99 @@ export default function PlanningPage() {
               )}
             </section>
           </div>
-          <div className="flex items-center justify-end gap-2">
-            {isSavedMode && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              {isSavedMode && (
+                <button
+                  type="button"
+                  onClick={onDeletePlan}
+                  className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                  מחק
+                </button>
+              )}
+              {editingSaved && (
+                <button
+                  type="button"
+                  onClick={onCancelEdit}
+                  className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-4 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                  </svg>
+                  ביטול
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {isSavedMode && !editingSaved && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      if (!savedWeekPlan || !savedWeekPlan.assignments) return;
+                      const assignmentsAny: any = savedWeekPlan.assignments;
+                      // Re-matérialiser les données enregistrées dans les états actifs
+                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                      const shiftNames = Array.from(
+                        new Set(
+                          (site?.config?.stations || [])
+                            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+                            .filter(Boolean)
+                        )
+                      );
+                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+                      if (savedWeekPlan.isManual) {
+                        setIsManual(true);
+                        setManualAssignments(assignmentsAny as any);
+                      } else {
+                        setIsManual(false);
+                        const newPlan = {
+                          days: dayKeys,
+                          shifts: shiftNames,
+                          stations: stationNames,
+                          assignments: assignmentsAny,
+                          alternatives: [],
+                          status: "SAVED_EDIT",
+                          objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+                        } as any;
+                        setAiPlan(newPlan);
+                      }
+                      if (Array.isArray(savedWeekPlan.workers) && savedWeekPlan.workers.length) {
+                        const mapped = (savedWeekPlan.workers as any[]).map((w: any) => ({
+                          id: w.id,
+                          name: String(w.name),
+                          maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+                          roles: Array.isArray(w.roles) ? w.roles : [],
+                          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                        }));
+                        setWorkers(mapped);
+                      }
+                    } finally {
+                      // Sortir du mode "sauvegardé" tout en conservant les données matérialisées
+                      setSavedWeekPlan(null);
+                      setEditingSaved(true);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+                >
+                  ערוך
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => {
-                  try {
-                    if (!savedWeekPlan || !savedWeekPlan.assignments) return;
-                    const assignmentsAny: any = savedWeekPlan.assignments;
-                    // Re-matérialiser les données enregistrées dans les états actifs
-                    const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                    const shiftNames = Array.from(
-                      new Set(
-                        (site?.config?.stations || [])
-                          .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-                          .filter(Boolean)
-                      )
-                    );
-                    const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-                    if (savedWeekPlan.isManual) {
-                      setIsManual(true);
-                      setManualAssignments(assignmentsAny as any);
-                    } else {
-                      setIsManual(false);
-                      const newPlan = {
-                        days: dayKeys,
-                        shifts: shiftNames,
-                        stations: stationNames,
-                        assignments: assignmentsAny,
-                        alternatives: [],
-                        status: "SAVED_EDIT",
-                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-                      } as any;
-                      setAiPlan(newPlan);
-                    }
-                    if (Array.isArray(savedWeekPlan.workers) && savedWeekPlan.workers.length) {
-                      const mapped = (savedWeekPlan.workers as any[]).map((w: any) => ({
-                        id: w.id,
-                        name: String(w.name),
-                        maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
-                        roles: Array.isArray(w.roles) ? w.roles : [],
-                        availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                      }));
-                      setWorkers(mapped);
-                    }
-                  } finally {
-                    // Sortir du mode "sauvegardé" tout en conservant les données matérialisées
-                    setSavedWeekPlan(null);
-                    setEditingSaved(true);
-                  }
-                }}
-                className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+                onClick={onSavePlan}
+                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
               >
-                ערוך
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M17 3H7a2 2 0 0 0-2 2v14l7-3 7 3V5a2 2 0 0 0-2-2Z"/>
+                </svg>
+                שמור
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onSavePlan}
-              className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
-            >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                <path d="M17 3H7a2 2 0 0 0-2 2v14l7-3 7 3V5a2 2 0 0 0-2-2Z"/>
-              </svg>
-              שמור
-            </button>
+            </div>
           </div>
           </>
         )}
