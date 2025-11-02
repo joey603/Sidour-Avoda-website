@@ -111,6 +111,8 @@ export default function PlanningPage() {
   // Role hints per slot in manual mode (preserved from auto)
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
+  // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
+  const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
   const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
   const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
@@ -134,6 +136,41 @@ export default function PlanningPage() {
     if (!w) return false;
     const target = normLocal(roleName);
     return (w.roles || []).some((r) => normLocal(String(r)) === target);
+  }
+
+  // Ordre d'affichage pour זמינות: matin → midi → nuit → autres
+  function displayShiftOrderIndex(sn: string): number {
+    const s = String(sn || "");
+    if (/בוקר|^0?6|06-14/i.test(s)) return 0; // morning
+    if (/צהר(יים|י)ם?|14-22|^1?4/i.test(s)) return 1; // noon
+    if (/לילה|22-06|^2?2|night/i.test(s)) return 2; // night
+    return 3; // others
+  }
+
+  function findWorkerByName(workerName: string) {
+    const trimmed = (workerName || "").trim();
+    const list = (savedWeekPlan?.workers || []).length
+      ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
+          id: rw.id,
+          name: rw.name,
+          maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
+          roles: Array.isArray(rw.roles) ? rw.roles : [],
+          availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+        }))
+      : workers;
+    return list.find((w) => (w.name || "").trim() === trimmed);
+  }
+
+  function ensureOverlay(name: string, dayKey: string, shiftName: string) {
+    setAvailabilityOverlays((prev) => {
+      const next = { ...prev } as any;
+      const nm = (name || "").trim();
+      next[nm] = next[nm] || {};
+      const cur: string[] = Array.from((next[nm][dayKey] || []));
+      if (!cur.includes(shiftName)) cur.push(shiftName);
+      next[nm][dayKey] = cur;
+      return next;
+    });
   }
 
   function onWorkerDragStart(e: React.DragEvent, workerName: string) {
@@ -162,6 +199,14 @@ export default function PlanningPage() {
   ) {
     const trimmed = (workerName || "").trim();
     if (!trimmed) return;
+    // Vérification de la זמינות: si non demandée, demander confirmation et, si oui, ajouter un overlay rouge
+    const w = findWorkerByName(trimmed);
+    const allowed = !!w && Array.isArray(w.availability?.[dayKey]) && (w.availability![dayKey] as string[]).includes(shiftName);
+    if (!allowed) {
+      const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${trimmed}" אין זמינות למשמרת זו. להקצות בכל זאת?`);
+      if (!ok) return;
+      ensureOverlay(trimmed, dayKey, shiftName);
+    }
     setManualAssignments((prev) => {
       const stationsCount = (site?.config?.stations || []).length || 0;
       const ensureBase = (base?: AssignmentsMap | null): AssignmentsMap => {
@@ -325,8 +370,9 @@ export default function PlanningPage() {
         if (!(last && last.key === conflictKey && Date.now() - last.ts < 1500)) {
           const msg = `שיבוץ עלול להפר חוקים:\n- ${conflicts.join("\n- ")}.\nלהקצות בכל זאת?`;
           const ok = typeof window !== "undefined" && window.confirm && window.confirm(msg);
-          if (!ok) return prev;
+          // Mémoriser la décision (OK ou Annuler) pour éviter une répétition immédiate
           lastConflictConfirmRef.current = { key: conflictKey, ts: Date.now() };
+          if (!ok) return prev;
         }
       }
       while (filtered.length <= slotIndex) filtered.push("");
@@ -386,6 +432,14 @@ export default function PlanningPage() {
     })();
     const trimmed = (name || "").trim();
     if (!trimmed) return;
+    // Vérifier זמינות et demander confirmation si nécessaire
+    const w = findWorkerByName(trimmed);
+    const allowed = !!w && Array.isArray(w.availability?.[dayKey]) && (w.availability![dayKey] as string[]).includes(shiftName);
+    if (!allowed) {
+      const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${trimmed}" אין זמינות למשמרת זו. להקצות בכל זאת?`);
+      if (!ok) return;
+      ensureOverlay(trimmed, dayKey, shiftName);
+    }
     setManualAssignments((prev) => {
       const stationsCount = (site?.config?.stations || []).length || 0;
       const ensureBase = (base?: AssignmentsMap | null): AssignmentsMap => {
@@ -1266,13 +1320,30 @@ export default function PlanningPage() {
                                 <td className="px-3 py-2 text-center">{w.maxShifts}</td>
                                 <td className="px-3 py-2 text-center">{w.roles.join(", ") || "—"}</td>
                                 <td className="px-3 py-2 text-center">
-                                  {dayDefs.map((d, i) => (
-                                    <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
-                                      {d.label}:{" "}
-                                      {(w.availability[d.key] || []).join("/") || "—"}
-                                      {i < dayDefs.length - 1 ? "  " : ""}
-                                    </span>
-                                  ))}
+                                  {dayDefs.map((d, i) => {
+                                    const baseRaw = (w.availability[d.key] || []) as string[];
+                                    const base = [...baseRaw].sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
+                                    const extra = ((availabilityOverlays[w.name]?.[d.key]) || [])
+                                      .filter((sn) => !baseRaw.includes(sn))
+                                      .sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
+                                    return (
+                                      <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
+                                        <span className="font-semibold">{d.label}</span>:{" "}
+                                        {base.length > 0 ? base.join("/") : "—"}
+                                        {extra.length > 0 && (
+                                          <>
+                                            {base.length > 0 ? " / " : ""}
+                                            {extra.map((sn, idx) => (
+                                              <span key={sn + idx} className="text-red-600 dark:text-red-400">
+                                                {sn}{idx < extra.length - 1 ? "/" : ""}
+                                              </span>
+                                            ))}
+                                          </>
+                                        )}
+                                        {i < dayDefs.length - 1 ? "  " : ""}
+                                      </span>
+                                    );
+                                  })}
                                 </td>
                                 <td className="px-3 py-2 text-left">
                                   <div className="flex items-center gap-2">
@@ -1685,7 +1756,30 @@ export default function PlanningPage() {
               <div className="flex items-center justify-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsManual(false)}
+                  onClick={() => {
+                    if (isManual && manualAssignments) {
+                      // Copier les assignations manuelles dans le plan automatique
+                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                      const shiftNames = Array.from(
+                        new Set(
+                          (site?.config?.stations || [])
+                            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+                            .filter(Boolean)
+                        )
+                      );
+                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+                      setAiPlan({
+                        days: dayKeys,
+                        shifts: shiftNames,
+                        stations: stationNames,
+                        assignments: manualAssignments,
+                        alternatives: [],
+                        status: "TEMP",
+                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+                      } as any);
+                    }
+                    setIsManual(false);
+                  }}
                   disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
@@ -1698,7 +1792,13 @@ export default function PlanningPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsManual(true)}
+                  onClick={() => {
+                    if (!isManual && aiPlan?.assignments) {
+                      // Copier les assignations automatiques dans le plan manuel
+                      setManualAssignments(aiPlan.assignments);
+                    }
+                    setIsManual(true);
+                  }}
                   disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
@@ -2080,19 +2180,55 @@ export default function PlanningPage() {
                                         .filter(Boolean)
                                     )
                                   );
+                                  // Collecte des noms retirés (manuel) par (jour, shift)
+                                  const removedMapManual: Record<string, Record<string, Set<string>>> = {};
                                   for (const d of dayKeys) {
                                     const dayData: any = (base as any)[d];
                                     if (!dayData) continue;
                                     for (const sn of shiftNames) {
-                                      // @ts-ignore
                                       const shiftData: any = dayData[sn];
-                                      if (!shiftData) continue;
-                                      const arr = shiftData as any;
-                                      if (Array.isArray(arr) && Array.isArray(arr[idx])) {
-                                        arr[idx] = [];
+                                      if (!Array.isArray(shiftData)) continue;
+                                      if (Array.isArray(shiftData[idx])) {
+                                        const removed = Array.isArray(shiftData[idx])
+                                          ? (shiftData[idx] as string[]).map((s) => (s || "").trim()).filter(Boolean)
+                                          : [];
+                                        if (removed.length > 0) {
+                                          removedMapManual[d] = removedMapManual[d] || {} as any;
+                                          removedMapManual[d][sn] = removedMapManual[d][sn] || new Set<string>();
+                                          removed.forEach((nm) => removedMapManual[d][sn].add(nm));
+                                        }
+                                        shiftData[idx] = [];
                                       }
                                     }
                                   }
+                                  // Mise à jour des overlays pour le mode manuel
+                                  try {
+                                    setAvailabilityOverlays((prevOv) => {
+                                      const next: any = { ...prevOv };
+                                      for (const d of Object.keys(removedMapManual)) {
+                                        for (const sn of Object.keys(removedMapManual[d] || {})) {
+                                          const namesRemoved = Array.from(removedMapManual[d][sn] || []);
+                                          const perStationAll: string[][] = (((base as any) || {})?.[d]?.[sn] || []) as any;
+                                          for (const nm of namesRemoved) {
+                                            const stillThere = (perStationAll || []).some((cell) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nm));
+                                            if (!stillThere) {
+                                              if (next?.[nm]?.[d]) {
+                                                const list: string[] = Array.from(next[nm][d] || []);
+                                                const filtered = list.filter((s) => s !== sn);
+                                                if (filtered.length > 0) {
+                                                  next[nm][d] = filtered;
+                                                } else {
+                                                  delete next[nm][d];
+                                                  if (Object.keys(next[nm] || {}).length === 0) delete next[nm];
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                      return next;
+                                    });
+                                  } catch {}
                                   return base;
                                 });
                                 setManualRoleHints((prevHints) => {
@@ -2137,19 +2273,54 @@ export default function PlanningPage() {
                                         .filter(Boolean)
                                     )
                                   );
+                                  // Collecte des noms retirés par (jour, shift)
+                                  const removedMap: Record<string, Record<string, Set<string>>> = {};
                                   for (const d of dayKeys) {
                                     const dayData: any = base.assignments[d];
                                     if (!dayData) continue;
                                     for (const sn of shiftNames) {
-                                      // @ts-ignore
                                       const shiftData: any = (dayData as any)[sn];
                                       if (!shiftData) continue;
                                       const arr = shiftData as any;
                                       if (Array.isArray(arr) && Array.isArray(arr[idx])) {
+                                        const removed = Array.isArray(arr[idx]) ? (arr[idx] as string[]).map((s) => (s || "").trim()).filter(Boolean) : [];
+                                        if (removed.length > 0) {
+                                          removedMap[d] = removedMap[d] || {} as any;
+                                          removedMap[d][sn] = removedMap[d][sn] || new Set<string>();
+                                          removed.forEach((nm) => removedMap[d][sn].add(nm));
+                                        }
                                         arr[idx] = [];
                                       }
                                     }
                                   }
+                                  // Met à jour les overlays: retirer le rouge si le nom n'apparaît plus sur ce jour/shift
+                                  try {
+                                    setAvailabilityOverlays((prevOv) => {
+                                      const next: any = { ...prevOv };
+                                      for (const d of Object.keys(removedMap)) {
+                                        for (const sn of Object.keys(removedMap[d] || {})) {
+                                          const namesRemoved = Array.from(removedMap[d][sn] || []);
+                                          const perStationAll: string[][] = ((base.assignments as any)?.[d]?.[sn] || []) as any;
+                                          for (const nm of namesRemoved) {
+                                            const stillThere = (perStationAll || []).some((cell) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nm));
+                                            if (!stillThere) {
+                                              if (next?.[nm]?.[d]) {
+                                                const list: string[] = Array.from(next[nm][d] || []);
+                                                const filtered = list.filter((s) => s !== sn);
+                                                if (filtered.length > 0) {
+                                                  next[nm][d] = filtered;
+                                                } else {
+                                                  delete next[nm][d];
+                                                  if (Object.keys(next[nm] || {}).length === 0) delete next[nm];
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                      return next;
+                                    });
+                                  } catch {}
                                   return base;
                                 });
                               }
@@ -2219,7 +2390,8 @@ export default function PlanningPage() {
                                         return cell;
                                       })();
                                       const roleMap = assignRoles(assignedNames, st, sn, d.key);
-                                      const assignedCount = isManual ? (assignedNames.filter(Boolean).length) : assignedNames.length;
+                                      // Filtrer les valeurs vides/falsy pour compter uniquement les assignations réelles
+                                      const assignedCount = assignedNames.filter(Boolean).length;
                                       const activeDay = isDayActive(st, d.key);
                                       return (
                                         <td
@@ -2333,6 +2505,27 @@ export default function PlanningPage() {
                                                                         base[d.key] = base[d.key] || {};
                                                                         base[d.key][sn] = base[d.key][sn] || [];
                                                                         base[d.key][sn][idx] = (arr as string[]).map((x: string, i: number) => (i === slotIdx ? "" : x)).filter(Boolean);
+                                                                        // Si l'overlay rouge a été ajouté pour ce nom/jour/shift et que c'est la dernière occurrence, le retirer aussi
+                                                                        try {
+                                                                          const nameTrimmed = (nm || "").trim();
+                                                                          const stillThere = (base?.[d.key]?.[sn] || []).some((cell: string[]) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nameTrimmed));
+                                                                          if (!stillThere) {
+                                                                            setAvailabilityOverlays((prevOv) => {
+                                                                              const next: any = { ...prevOv };
+                                                                              if (next?.[nameTrimmed]?.[d.key]) {
+                                                                                const list: string[] = Array.from(next[nameTrimmed][d.key] || []);
+                                                                                const filtered = list.filter((s) => s !== sn);
+                                                                                if (filtered.length > 0) {
+                                                                                  next[nameTrimmed][d.key] = filtered;
+                                                                                } else {
+                                                                                  delete next[nameTrimmed][d.key];
+                                                                                  if (Object.keys(next[nameTrimmed] || {}).length === 0) delete next[nameTrimmed];
+                                                                                }
+                                                                              }
+                                                                              return next;
+                                                                            });
+                                                                          }
+                                                                        } catch {}
                                                                         return base;
                                                                       });
                                                                     }}
@@ -2622,6 +2815,7 @@ export default function PlanningPage() {
                         const perStation: string[][] = shiftsMap[sn] || [];
                         for (const namesHere of perStation) {
                           for (const nm of (namesHere || [])) {
+                            if (!nm) continue; // Ignorer les cellules vides
                             counts.set(nm, (counts.get(nm) || 0) + 1);
                           }
                         }
@@ -2763,7 +2957,9 @@ export default function PlanningPage() {
                               const perStation: string[][] = shiftsMap[sn] || [];
                               perStation.forEach((namesHere, tIdx) => {
                                 const stCfg = getStationCfg(tIdx);
-                                const m = assignRolesLocal(namesHere || [], stCfg, sn, dKey);
+                                // Filtrer les valeurs vides avant d'assigner les rôles
+                                const filteredNames = (namesHere || []).filter(Boolean);
+                                const m = assignRolesLocal(filteredNames, stCfg, sn, dKey);
                                 m.forEach((rName) => {
                                   if (!rName) return;
                                   roleTotals.set(rName, (roleTotals.get(rName) || 0) + 1);
@@ -3183,6 +3379,31 @@ export default function PlanningPage() {
                           toast.success("התכנון הושלם");
                         }, 3000); // 3s d'inactivité
                       };
+                      // Construire les cellules fixées (préaffectations)
+                      // Priorité: manuel > planning sauvegardé (non en édition) > plan AI courant
+                      const fixed = (() => {
+                        const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
+                        const pickSource = () => {
+                          if (isManual && nonEmpty(manualAssignments)) return manualAssignments;
+                          if (!isManual && savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return savedWeekPlan.assignments as any;
+                          if (!isManual && aiPlan?.assignments && nonEmpty(aiPlan.assignments as any)) return aiPlan.assignments as any;
+                          return null;
+                        };
+                        const src = pickSource();
+                        if (!src) return null;
+                        // Nettoyer: ne garder que des chaînes non vides et respecter la forme [day][shift][station][]
+                        const out: any = {};
+                        Object.keys(src || {}).forEach((day) => {
+                          out[day] = out[day] || {};
+                          const shifts = (src as any)[day] || {};
+                          Object.keys(shifts).forEach((sn) => {
+                            const perStation: string[][] = (shifts as any)[sn] || [];
+                            out[day][sn] = perStation.map((arr) => Array.isArray(arr) ? arr.filter((s) => !!s && String(s).trim().length > 0) : []);
+                          });
+                        });
+                        return out;
+                      })();
+
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
@@ -3190,7 +3411,7 @@ export default function PlanningPage() {
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
-                        body: JSON.stringify({ num_alternatives: 500 }),
+                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined }),
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {

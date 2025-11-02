@@ -72,6 +72,8 @@ class AIPlanningRequest(BaseModel):
     time_limit_seconds: int | None = 10
     max_nights_per_worker: int | None = 3
     num_alternatives: int | None = 20
+    # Optional map of fixed assignments: assignments[day][shift][station_index] -> list[str]
+    fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
 
 
 class AIPlanningCell(BaseModel):

@@ -16,11 +16,35 @@ def order_days(days: List[DayKey]) -> List[DayKey]:
 
 
 def order_shifts(shift_names: List[ShiftName]) -> List[ShiftName]:
-    # Try to order by typical pattern 06-14, 14-22, 22-06, else keep given order
-    preferred = ["06-14", "14-22", "22-06"]
-    present = [s for s in preferred if s in shift_names]
-    others = [s for s in shift_names if s not in preferred]
-    return present + others
+    """Order shifts as morning → noon → night when possible, else keep input order.
+
+    Heuristics align with frontend detectShiftKind:
+      - morning: contains "בוקר" or starts with 06 or exactly "06-14"
+      - noon: contains "צהריים/צהרים" or starts with 14 or exactly "14-22"
+      - night: contains "לילה" or starts with 22 or exactly "22-06" or contains "night"
+    """
+    def is_morning(name: str) -> bool:
+        n = (name or "").strip()
+        low = n.lower()
+        return ("בוקר" in n) or low.startswith("06") or ("06-14" in low)
+
+    def is_noon(name: str) -> bool:
+        n = (name or "").strip()
+        low = n.lower()
+        return ("צהר" in n) or low.startswith("14") or ("14-22" in low)
+
+    def is_night(name: str) -> bool:
+        n = (name or "").strip()
+        low = n.lower()
+        return ("לילה" in n) or ("night" in low) or low.startswith("22") or ("22-06" in low)
+
+    morning = [s for s in shift_names if is_morning(s)]
+    noon = [s for s in shift_names if is_noon(s)]
+    night = [s for s in shift_names if is_night(s)]
+    used = set(morning + noon + night)
+    others = [s for s in shift_names if s not in used]
+    # Preserve within-class original order
+    return morning + noon + night + others
 
 
 def next_day(day: DayKey) -> DayKey | None:
@@ -148,6 +172,7 @@ def solve_schedule(
     time_limit_seconds: int = 30,
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
+    fixed_assignments: Dict[str, Dict[str, List[List[str]]]] | None = None,
 ) -> Dict[str, Any]:
     """Return a schedule dict with assignments per day/shift/station as worker name lists.
 
@@ -173,10 +198,41 @@ def solve_schedule(
         s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
         s = s.replace('"', "'")
         return s
+    def _norm_name_local(name: Any) -> str:
+        s = str(name or "").strip()
+        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+        return s
     worker_roles_norm: List[set[str]] = [
         { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
         for w in W
     ]
+
+    # Map worker name -> index
+    name_to_w: Dict[str, int] = {_norm_name_local(workers[i].get("name")): i for i in range(len(workers))}
+
+    # Pre-assign map: (d,s,t) -> set of worker indices
+    pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
+    fixed_assignments = fixed_assignments or {}
+    for d, day_key in enumerate(days):
+        day_map = fixed_assignments.get(day_key) or {}
+        for s, sh_name in enumerate(shifts):
+            per_station = (day_map.get(sh_name) or [])
+            for t in range(len(stations)):
+                names = []
+                try:
+                    names = per_station[t] if t < len(per_station) else []
+                except Exception:
+                    names = []
+                if not names:
+                    continue
+                for nm in names:
+                    nm_str = _norm_name_local(nm)
+                    if not nm_str:
+                        continue
+                    widx = name_to_w.get(nm_str)
+                    if widx is None:
+                        continue
+                    pre_assign.setdefault((d, s, t), set()).add(widx)
 
     # Decision variables: x[w,d,s,t] in {0,1} worker w works shift s at station t on day d
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
@@ -190,8 +246,12 @@ def solve_schedule(
                     avail = (workers[w].get("availability") or {}).get(day_key, [])
                     allowed = sh_name in avail if isinstance(avail, list) else False
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
-                    if not allowed:
-                        model.Add(var == 0)
+                    # Pré-affectation prioritaire: force à 1 et ignore indisponibilité
+                    if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
+                        model.Add(var == 1)
+                    else:
+                        if not allowed:
+                            model.Add(var == 0)
                     x[(w, d, s, t)] = var
 
     # Capacity per station/day/shift
@@ -265,6 +325,60 @@ def solve_schedule(
                 <= max_nights_per_worker
             )
 
+    # Soft constraint: avoid morning & night same day for same worker when possible
+    def _is_morning_name(name: str) -> bool:
+        s = (name or "").strip().lower()
+        return ("בוקר" in name) or s.startswith("06") or ("06-14" in s)
+    def _is_noon_name(name: str) -> bool:
+        s = (name or "").strip().lower()
+        return ("צהר" in name) or s.startswith("14") or ("14-22" in s)
+    morning_indices = [i for i, nm in enumerate(shifts) if _is_morning_name(nm)]
+    noon_indices = [i for i, nm in enumerate(shifts) if _is_noon_name(nm)]
+    morning_night_pairs: List[cp_model.IntVar] = []
+    noon_next_morning_pairs: List[cp_model.IntVar] = []
+    if morning_indices and night_indices:
+        for w in W:
+            for d in D:
+                morn_any = model.NewBoolVar(f"mn_morn_any_w{w}_d{d}")
+                night_any = model.NewBoolVar(f"mn_night_any_w{w}_d{d}")
+                # OR over stations and relevant shifts
+                morn_lits = [x[(w, d, s, t)] for s in morning_indices for t in T]
+                night_lits = [x[(w, d, s, t)] for s in night_indices for t in T]
+                if morn_lits:
+                    model.AddMaxEquality(morn_any, morn_lits)
+                else:
+                    model.Add(morn_any == 0)
+                if night_lits:
+                    model.AddMaxEquality(night_any, night_lits)
+                else:
+                    model.Add(night_any == 0)
+                both = model.NewBoolVar(f"mn_both_w{w}_d{d}")
+                # both == 1 iff morn_any == 1 and night_any == 1
+                model.Add(both <= morn_any)
+                model.Add(both <= night_any)
+                model.Add(both >= morn_any + night_any - 1)
+                morning_night_pairs.append(both)
+        # Noon (day d) with Morning (day d+1)
+        for w in W:
+            for d in range(len(D) - 1):
+                noon_any = model.NewBoolVar(f"mn2_noon_any_w{w}_d{d}")
+                next_morn_any = model.NewBoolVar(f"mn2_morn_any_w{w}_d{d+1}")
+                noon_lits = [x[(w, d, s, t)] for s in noon_indices for t in T]
+                morn_lits_next = [x[(w, d + 1, s, t)] for s in morning_indices for t in T]
+                if noon_lits:
+                    model.AddMaxEquality(noon_any, noon_lits)
+                else:
+                    model.Add(noon_any == 0)
+                if morn_lits_next:
+                    model.AddMaxEquality(next_morn_any, morn_lits_next)
+                else:
+                    model.Add(next_morn_any == 0)
+                both2 = model.NewBoolVar(f"mn2_both_w{w}_d{d}")
+                model.Add(both2 <= noon_any)
+                model.Add(both2 <= next_morn_any)
+                model.Add(both2 >= noon_any + next_morn_any - 1)
+                noon_next_morning_pairs.append(both2)
+
     # No 7 consecutive days for a worker: over a 7-day window sum <= 6
     for w in W:
         day_work = [model.NewBoolVar(f"y_w{w}_d{d}") for d in D]
@@ -310,10 +424,14 @@ def solve_schedule(
 
     # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
     total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
+    # Soft penalty for morning+night same day pairs (very small weight)
+    mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
+    nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
 
-    # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls
-    # Weights chosen to keep lexicographic-like priority: coverage >> max_dev >> sum(dev) >> role_shortfalls
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall)
+    # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls,
+    # then avoid morning+night pairs when possible
+    # Weights chosen to keep lexicographic-like priority: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs
+    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall - 5 * mn_penalty - 5 * nm_penalty)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
@@ -679,6 +797,30 @@ def solve_schedule(
         a[dkey][sname][t_idx] = list(names)
 
     # Generate alternatives with deduplication
+    # Respect fixed cells: do not move names that were pre-assigned (fixed_assignments)
+    fixed_cells: Dict[Tuple[str, str, int], set[str]] = {}
+    try:
+        fa = fixed_assignments or {}
+        for dkey in days:
+            day_map = (fa.get(dkey) or {})
+            for sname in shifts:
+                per_station = (day_map.get(sname) or [])
+                for t_idx in range(len(stations)):
+                    names = []
+                    try:
+                        names = per_station[t_idx] if t_idx < len(per_station) else []
+                    except Exception:
+                        names = []
+                    normed = { _norm_name_local(nm) for nm in (names or []) if str(nm or "").strip() }
+                    if normed:
+                        fixed_cells[(dkey, sname, t_idx)] = normed
+    except Exception:
+        fixed_cells = {}
+    def _is_fixed_here(nm: str, dkey: str, sname: str, t_idx: int) -> bool:
+        key = (dkey, sname, t_idx)
+        if key not in fixed_cells:
+            return False
+        return _norm_name_local(nm) in fixed_cells[key]
     alternatives: List[Dict[str, Dict[str, List[List[str]]]]] = []
     seen: set = set()
     def sig(a: Dict[str, Dict[str, List[List[str]]]]):
@@ -777,6 +919,11 @@ def solve_schedule(
                         for nm2 in names2:
                             if nm1 == nm2:
                                 continue
+                            # do not move fixed names out of their fixed cells
+                            if _is_fixed_here(nm1, dkey, s1, t_idx):
+                                continue
+                            if _is_fixed_here(nm2, dkey, s2, t_idx):
+                                continue
                             # respect availability for destinations
                             if not is_allowed(nm1, dkey, s2):
                                 continue
@@ -815,6 +962,9 @@ def solve_schedule(
             for s_from in non_empty:
                 names_from = _names_in_cell(assignments, dkey, s_from, t_idx)
                 for nm in names_from:
+                    # cannot move a fixed name from its fixed cell
+                    if _is_fixed_here(nm, dkey, s_from, t_idx):
+                        continue
                     for s_to in shifts:
                         if s_to == s_from:
                             continue
@@ -882,6 +1032,11 @@ def solve_schedule(
                         for nm2 in names2:
                             if nm1 == nm2:
                                 continue
+                            # do not move fixed names out of their fixed cells
+                            if _is_fixed_here(nm1, d1, sname, t_idx):
+                                continue
+                            if _is_fixed_here(nm2, d2, sname, t_idx):
+                                continue
                         # respect availability when swapping days
                         if not is_allowed(nm1, d2, sname):
                             continue
@@ -907,6 +1062,191 @@ def solve_schedule(
                             if alt_budget <= 0:
                                 break
 
+    # Final pass: try to produce alternatives that reduce morning+night pairs without increasing holes
+    def _is_morning_name_local(n: str) -> bool:
+        s = (n or "").strip().lower()
+        return ("בוקר" in n) or s.startswith("06") or ("06-14" in s)
+    def _count_mn_pairs(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+        cnt = 0
+        for dk in days:
+            for nm in name_to_avail.keys():
+                has_m = False; has_n = False
+                for si, sn in enumerate(shifts):
+                    per = a.get(dk, {}).get(sn, []) or []
+                    flat = []
+                    for lst in per:
+                        flat.extend(lst or [])
+                    if _is_morning_name_local(sn) and nm in flat:
+                        has_m = True
+                    if _is_night_name(sn) and nm in flat:
+                        has_n = True
+                if has_m and has_n:
+                    cnt += 1
+        return cnt
+    baseline_mn = _count_mn_pairs(assignments)
+    # Also, try to reduce Noon(d) + Morning(d+1) pairs by moving next morning to noon (same station)
+    def _is_noon_name_local(n: str) -> bool:
+        s = (n or "").strip().lower()
+        return ("צהר" in n) or s.startswith("14") or ("14-22" in s)
+    def _count_nm_pairs(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+        cnt = 0
+        for di in range(len(days) - 1):
+            d = days[di]
+            dnext = days[di + 1]
+            for nm in name_to_avail.keys():
+                has_noon = False; has_morn_next = False
+                for sn in shifts:
+                    per = (a.get(d, {}).get(sn, []) or [])
+                    flat = []
+                    for lst in per:
+                        flat.extend(lst or [])
+                    if _is_noon_name_local(sn) and nm in flat:
+                        has_noon = True
+                for sn in shifts:
+                    per = (a.get(dnext, {}).get(sn, []) or [])
+                    flat = []
+                    for lst in per:
+                        flat.extend(lst or [])
+                    if _is_morning_name(sn) and nm in flat:
+                        has_morn_next = True
+                if has_noon and has_morn_next:
+                    cnt += 1
+        return cnt
+    baseline_nm = _count_nm_pairs(assignments)
+    if alt_budget_resolve >= 0:
+        # try simple moves of morning→noon or night→noon to reduce mn pairs
+        for dkey in days:
+            for t_idx, st in enumerate(stations):
+                for sname in shifts:
+                    if alt_budget_resolve <= 0:
+                        break
+                    if not (_is_morning_name_local(sname) or _is_night_name(sname)):
+                        continue
+                    names_here = _names_in_cell(assignments, dkey, sname, t_idx)
+                    if not names_here:
+                        continue
+                    # candidate destination shifts prioritizing noon-like
+                    for nm in list(names_here):
+                        # skip fixed names
+                        if _is_fixed_here(nm, dkey, sname, t_idx):
+                            continue
+                        for s_to in shifts:
+                            if alt_budget_resolve <= 0:
+                                break
+                            if s_to == sname:
+                                continue
+                            # prefer noon
+                            to_is_noon = ("צהר" in s_to) or ("14-22" in s_to) or (s_to.strip().startswith("14"))
+                            if not to_is_noon:
+                                continue
+                            cap_to = int(st.get("capacity", {}).get(dkey, {}).get(s_to, 0))
+                            if cap_to <= 0:
+                                continue
+                            names_to = _names_in_cell(assignments, dkey, s_to, t_idx)
+                            if nm in names_to or len(names_to) >= cap_to:
+                                continue
+                            # build candidate
+                            cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
+                            _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
+                            # forbid same-day multi-placement
+                            if name_present_same_day(cand, dkey, nm):
+                                continue
+                            if not is_allowed(nm, dkey, s_to):
+                                continue
+                            if has_adjacent_in_candidate(cand, nm, dkey, s_to):
+                                continue
+                            # roles feasibility at destination and keep source valid
+                            if not _meets_roles([n for n in names_here if n != nm], t_idx, dkey, sname):
+                                continue
+                            role_caps_to = (stations[t_idx].get("capacity_roles", {}) or {}).get(dkey, {}) or {}
+                            role_caps_to = role_caps_to.get(s_to, {}) or {}
+                            if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
+                                continue
+                            _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                            if _count_assigned(cand) != base_total_assigned:
+                                continue
+                            if sig(cand) in seen:
+                                continue
+                            if _count_holes(cand) > 0:
+                                continue
+                            # accept only if it reduces mn pairs or keeps same holes
+                            if _count_mn_pairs(cand) < baseline_mn:
+                                seen.add(sig(cand))
+                                alternatives_from_resolve.append(cand)
+                                alt_budget_resolve -= 1
+                                if alt_budget_resolve <= 0:
+                                    break
+
+    # Second pass: move Morning(d+1) → Noon(d+1) to reduce Noon(d)+Morning(d+1)
+    for di in range(len(days) - 1):
+        if alt_budget_resolve <= 0:
+            break
+        d = days[di]
+        dnext = days[di + 1]
+        for t_idx, st in enumerate(stations):
+            if alt_budget_resolve <= 0:
+                break
+            # all names in noon(d) and morning(d+1)
+            noon_names = []
+            for sn in shifts:
+                if _is_noon_name_local(sn):
+                    noon_names.extend(_names_in_cell(assignments, d, sn, t_idx))
+            morning_next_names = []
+            for sn in shifts:
+                if _is_morning_name(sn):
+                    morning_next_names.extend(_names_in_cell(assignments, dnext, sn, t_idx))
+            # Intersect per name
+            for nm in set(noon_names).intersection(set(morning_next_names)):
+                if alt_budget_resolve <= 0:
+                    break
+                # try move nm from morning(d+1) to noon(d+1)
+                for s_to in shifts:
+                    if alt_budget_resolve <= 0:
+                        break
+                    if not _is_noon_name_local(s_to):
+                        continue
+                    cap_to = int(st.get("capacity", {}).get(dnext, {}).get(s_to, 0))
+                    if cap_to <= 0:
+                        continue
+                    names_to = _names_in_cell(assignments, dnext, s_to, t_idx)
+                    if nm in names_to or len(names_to) >= cap_to:
+                        continue
+                    # build candidate by removing nm from all morning cells of dnext @ station
+                    cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
+                    # remove nm from morning cells next day
+                    for sn in shifts:
+                        if _is_morning_name(sn):
+                            lst = _names_in_cell(cand, dnext, sn, t_idx)
+                            if nm in lst:
+                                _write_cell(cand, dnext, sn, t_idx, [n for n in lst if n != nm])
+                    # guards
+                    if name_present_same_day(cand, dnext, nm):
+                        continue
+                    if not is_allowed(nm, dnext, s_to):
+                        continue
+                    if has_adjacent_in_candidate(cand, nm, dnext, s_to):
+                        continue
+                    # role feasibility for destination
+                    role_caps_to = (stations[t_idx].get("capacity_roles", {}) or {}).get(dnext, {}) or {}
+                    role_caps_to = role_caps_to.get(s_to, {}) or {}
+                    if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
+                        continue
+                    _write_cell(cand, dnext, s_to, t_idx, names_to + [nm])
+                    if _count_assigned(cand) != base_total_assigned:
+                        continue
+                    if _count_holes(cand) > 0:
+                        continue
+                    if _count_nm_pairs(cand) >= baseline_nm:
+                        continue
+                    signature = sig(cand)
+                    if signature in seen:
+                        continue
+                    seen.add(signature)
+                    alternatives_from_resolve.append(cand)
+                    alt_budget_resolve -= 1
+                    if alt_budget_resolve <= 0:
+                        break
+
     return {
         "days": days,
         "shifts": shifts,
@@ -924,6 +1264,7 @@ def solve_schedule_stream(
     time_limit_seconds: int = 30,
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
+    fixed_assignments: Dict[str, Dict[str, List[List[str]]]] | None = None,
 ):
     """Generator: yields incremental planning results: base then alternatives.
     Each yield is a dict with keys: type ('base'|'alternative'|'done'|'status'), and data.
@@ -953,12 +1294,44 @@ def solve_schedule_stream(
 
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
 
-    # Normalisation locale des rôles et cache par employé
+    # Normalisation locale (rôles et noms)
     def _norm_role_local(name: Any) -> str:
         s = str(name or "").strip()
         s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
         s = s.replace('"', "'")
         return s
+    def _norm_name_local(name: Any) -> str:
+        s = str(name or "").strip()
+        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+        return s
+
+    # Map worker name (normalisé) -> index
+    name_to_w: Dict[str, int] = {_norm_name_local(workers[i].get("name")): i for i in range(len(workers))}
+    # Pre-assign map
+    pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
+    fixed_assignments = fixed_assignments or {}
+    for d, day_key in enumerate(days):
+        day_map = fixed_assignments.get(day_key) or {}
+        for s, sh_name in enumerate(shifts):
+            per_station = (day_map.get(sh_name) or [])
+            for t in range(len(stations)):
+                names = []
+                try:
+                    names = per_station[t] if t < len(per_station) else []
+                except Exception:
+                    names = []
+                if not names:
+                    continue
+                for nm in names:
+                    nm_str = _norm_name_local(nm)
+                    if not nm_str:
+                        continue
+                    widx = name_to_w.get(nm_str)
+                    if widx is None:
+                        continue
+                    pre_assign.setdefault((d, s, t), set()).add(widx)
+
+    # Normalisation locale des rôles et cache par employé
     worker_roles_norm: List[set[str]] = [
         { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
         for w in W
@@ -972,8 +1345,12 @@ def solve_schedule_stream(
                     avail = (workers[w].get("availability") or {}).get(day_key, [])
                     allowed = sh_name in avail if isinstance(avail, list) else False
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
-                    if not allowed:
-                        model.Add(var == 0)
+                    # Pré-affectation prioritaire
+                    if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
+                        model.Add(var == 1)
+                    else:
+                        if not allowed:
+                            model.Add(var == 0)
                     x[(w, d, s, t)] = var
 
     # capacity
@@ -1029,7 +1406,7 @@ def solve_schedule_stream(
         for w in W:
             model.Add(sum(x[(w, d, s, t)] for d in D for s in night_indices for t in T) <= max_nights_per_worker)
 
-    # per-week max per worker (target)
+    # per-week max per worker (target) — préaffectations comptées dans la somme, ce qui réduit automatiquement le solde restant
     for w in W:
         max_sh = int(workers[w].get("max_shifts") or 5)
         model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in T) <= max_sh)
@@ -1054,7 +1431,42 @@ def solve_schedule_stream(
         model.Add(dev <= max_dev)
     # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
     total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall)
+
+    # Soft constraint in streaming too: avoid morning & night same day when possible
+    def _is_morning_name(name: str) -> bool:
+        s = (name or "").strip().lower()
+        return ("בוקר" in name) or s.startswith("06") or ("06-14" in s)
+    def _is_noon_name(name: str) -> bool:
+        s = (name or "").strip().lower()
+        return ("צהר" in name) or s.startswith("14") or ("14-22" in s)
+    morning_indices = [i for i, nm in enumerate(shifts) if _is_morning_name(nm)]
+    noon_indices = [i for i, nm in enumerate(shifts) if _is_noon_name(nm)]
+    morning_night_pairs: List[cp_model.IntVar] = []
+    noon_next_morning_pairs: List[cp_model.IntVar] = []
+    if morning_indices and night_indices:
+        for w in W:
+            for d in D:
+                morn_any = model.NewBoolVar(f"s_mn_morn_any_w{w}_d{d}")
+                night_any = model.NewBoolVar(f"s_mn_night_any_w{w}_d{d}")
+                morn_lits = [x[(w, d, s, t)] for s in morning_indices for t in T]
+                night_lits = [x[(w, d, s, t)] for s in night_indices for t in T]
+                if morn_lits:
+                    model.AddMaxEquality(morn_any, morn_lits)
+                else:
+                    model.Add(morn_any == 0)
+                if night_lits:
+                    model.AddMaxEquality(night_any, night_lits)
+                else:
+                    model.Add(night_any == 0)
+                both = model.NewBoolVar(f"s_mn_both_w{w}_d{d}")
+                model.Add(both <= morn_any)
+                model.Add(both <= night_any)
+                model.Add(both >= morn_any + night_any - 1)
+                morning_night_pairs.append(both)
+    mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
+    nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
+
+    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall - 5 * mn_penalty - 5 * nm_penalty)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
@@ -1246,6 +1658,30 @@ def solve_schedule_stream(
         return False
 
     # base copy to start generating alternatives
+    # Respect fixed cells in streaming too
+    fixed_cells: Dict[Tuple[str, str, int], set[str]] = {}
+    try:
+        fa = fixed_assignments or {}
+        for dkey in days:
+            day_map = (fa.get(dkey) or {})
+            for sname in shifts:
+                per_station = (day_map.get(sname) or [])
+                for t_idx in range(len(stations)):
+                    names = []
+                    try:
+                        names = per_station[t_idx] if t_idx < len(per_station) else []
+                    except Exception:
+                        names = []
+                    normed = { _norm_name_local(nm) for nm in (names or []) if str(nm or "").trim() }
+                    if normed:
+                        fixed_cells[(dkey, sname, t_idx)] = normed
+    except Exception:
+        fixed_cells = {}
+    def _is_fixed_here(nm: str, dkey: str, sname: str, t_idx: int) -> bool:
+        key = (dkey, sname, t_idx)
+        if key not in fixed_cells:
+            return False
+        return _norm_name_local(nm) in fixed_cells[key]
     assignments = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in base.items()}
     # Baseline coverage (number of assignments) and holes
     def _count_assigned(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
@@ -1353,6 +1789,8 @@ def solve_schedule_stream(
                 names_from = _names_in_cell(assignments, dkey, s_from, t_idx)
                 req_from = _required_of(t_idx, dkey, s_from)
                 for nm in names_from:
+                    if _is_fixed_here(nm, dkey, s_from, t_idx):
+                        continue
                     for s_to in shifts:
                         if s_to == s_from:
                             continue
@@ -1440,6 +1878,8 @@ def solve_schedule_stream(
                     for nm1 in n1:
                         for nm2 in n2:
                             if nm1 == nm2:
+                                continue
+                            if _is_fixed_here(nm1, d1, sname, t_idx) or _is_fixed_here(nm2, d2, sname, t_idx):
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
                             newd1 = [n for n in n1 if n != nm1] + [nm2]
@@ -1557,6 +1997,90 @@ def solve_schedule_stream(
             produced += 1
             yield {"type": "alternative", "index": produced, "assignments": cand}
             budget -= 1
+
+    # Bonus pass: if budget remains, try to yield alternatives reducing morning+night pairs
+    if budget > 0:
+        def _is_morning_name_local(n: str) -> bool:
+            s = (n or "").strip().lower()
+            return ("בוקר" in n) or s.startswith("06") or ("06-14" in s)
+        def _count_mn_pairs(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
+            cnt = 0
+            for dk in days:
+                # build flat per shift per day
+                for nm in name_to_roles.keys():
+                    has_m = False; has_n = False
+                    for sn in shifts:
+                        per = (a.get(dk, {}).get(sn, []) or [])
+                        flat = []
+                        for lst in per:
+                            flat.extend(lst or [])
+                        if _is_morning_name_local(sn) and nm in flat:
+                            has_m = True
+                        if _is_night_name(sn) and nm in flat:
+                            has_n = True
+                    if has_m and has_n:
+                        cnt += 1
+            return cnt
+        baseline_mn = _count_mn_pairs(assignments)
+        for dkey in days:
+            if budget <= 0:
+                break
+            for t_idx, st in enumerate(stations):
+                if budget <= 0:
+                    break
+                for sname in shifts:
+                    if budget <= 0:
+                        break
+                    if not (_is_morning_name_local(sname) or _is_night_name(sname)):
+                        continue
+                    names_here = _names_in_cell(assignments, dkey, sname, t_idx)
+                    for nm in list(names_here):
+                        if _is_fixed_here(nm, dkey, sname, t_idx):
+                            continue
+                        # Try move to noon-like shift same day, same station
+                        for s_to in shifts:
+                            if budget <= 0:
+                                break
+                            to_is_noon = ("צהר" in s_to) or ("14-22" in s_to) or (s_to.strip().startswith("14"))
+                            if not to_is_noon or s_to == sname:
+                                continue
+                            cap_to = int(st.get("capacity", {}).get(dkey, {}).get(s_to, 0))
+                            if cap_to <= 0:
+                                continue
+                            names_to = _names_in_cell(assignments, dkey, s_to, t_idx)
+                            if nm in names_to or len(names_to) >= cap_to:
+                                continue
+                            cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
+                            _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
+                            if name_present_same_day(cand, dkey, nm):
+                                continue
+                            if not is_allowed(nm, dkey, s_to):
+                                continue
+                            if has_adjacent_in_candidate(cand, nm, dkey, s_to):
+                                continue
+                            rm_src = role_map_for(t_idx, dkey, sname)
+                            if rm_src and not _meets_roles([n for n in names_here if n != nm], t_idx, dkey, sname):
+                                continue
+                            rm_dst = role_map_for(t_idx, dkey, s_to)
+                            if rm_dst and not can_assign_with_roles(list(names_to), nm, rm_dst):
+                                continue
+                            _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                            if _count_assigned(cand) < baseline_coverage:
+                                continue
+                            if _count_holes(cand) > baseline_holes:
+                                continue
+                            if _count_mn_pairs(cand) >= baseline_mn:
+                                continue
+                            signature = sig(cand)
+                            tried += 1
+                            if signature in seen:
+                                continue
+                            seen.add(signature)
+                            produced += 1
+                            yield {"type": "alternative", "index": produced, "assignments": cand}
+                            budget -= 1
+                            if budget <= 0:
+                                break
 
     logger.info(
         "[STREAM] alternatives finished: produced=%d tried=%d skipped_duplicate=%d skipped_adjacency=%d skipped_capacity=%d remaining_budget=%d",
