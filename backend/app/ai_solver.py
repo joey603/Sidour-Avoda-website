@@ -55,7 +55,7 @@ def next_day(day: DayKey) -> DayKey | None:
     return ref[idx + 1] if idx < len(ref) - 1 else None
 
 
-def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], List[ShiftName], List[Dict[str, Any]]]:
+def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayKey] | None = None) -> Tuple[List[DayKey], List[ShiftName], List[Dict[str, Any]]]:
     """Return (days, shifts, stations) where stations[i] has name, per-day per-shift capacity
     and per-role capacities.
 
@@ -162,6 +162,9 @@ def build_capacities_from_config(config: Dict[str, Any]) -> Tuple[List[DayKey], 
         stations.append({"name": name, "capacity": cap, "capacity_roles": cap_roles})
 
     days = order_days(list(all_days)) or ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+    if exclude_days:
+        excl = set(exclude_days)
+        days = [d for d in days if d not in excl]
     shifts = order_shifts(list(all_shifts)) or ["06-14", "14-22", "22-06"]
     return days, shifts, stations
 
@@ -173,13 +176,14 @@ def solve_schedule(
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
     fixed_assignments: Dict[str, Dict[str, List[List[str]]]] | None = None,
+    exclude_days: List[str] | None = None,
 ) -> Dict[str, Any]:
     """Return a schedule dict with assignments per day/shift/station as worker name lists.
 
     workers: [{"id": int, "name": str, "max_shifts": int, "availability": {day: [shift]}}]
     """
     logger = logging.getLogger("ai_solver")
-    days, shifts, stations = build_capacities_from_config(config or {})
+    days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
     logger.info("Start solve: days=%s shifts=%s stations=%s workers=%s", days, shifts, [st.get("name") for st in stations], [w.get("name") for w in workers])
 
     model = cp_model.CpModel()
@@ -1265,6 +1269,7 @@ def solve_schedule_stream(
     max_nights_per_worker: int = 3,
     num_alternatives: int = 20,
     fixed_assignments: Dict[str, Dict[str, List[List[str]]]] | None = None,
+    exclude_days: List[str] | None = None,
 ):
     """Generator: yields incremental planning results: base then alternatives.
     Each yield is a dict with keys: type ('base'|'alternative'|'done'|'status'), and data.
@@ -1281,7 +1286,7 @@ def solve_schedule_stream(
     except Exception:
         pass
     # Build base model and plan using existing function but reusing logic inline for streaming
-    days, shifts, stations = build_capacities_from_config(config or {})
+    days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
 
     model = cp_model.CpModel()
     W = list(range(len(workers)))

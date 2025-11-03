@@ -74,6 +74,8 @@ class AIPlanningRequest(BaseModel):
     num_alternatives: int | None = 20
     # Optional map of fixed assignments: assignments[day][shift][station_index] -> list[str]
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
+    # Optional: exclude specific day keys from planning (e.g., past days of the current week)
+    exclude_days: list[str] | None = None
 
 
 class AIPlanningCell(BaseModel):

@@ -276,6 +276,7 @@ def ai_generate_planning(
         max_nights_per_worker=int(payload.max_nights_per_worker or 3),
         num_alternatives=int(payload.num_alternatives or 20),
         fixed_assignments=payload.fixed_assignments or None,
+        exclude_days=(payload.exclude_days or None),
     )
     return AIPlanningResponse(
         days=result["days"],
@@ -328,6 +329,7 @@ def ai_generate_stream(
                     max_nights_per_worker=eff_max_nights,
                     num_alternatives=eff_num_alts,
                     fixed_assignments=payload.fixed_assignments or None,
+                    exclude_days=(payload.exclude_days or None),
                 )
                 for item in gen:
                     q.put(item)

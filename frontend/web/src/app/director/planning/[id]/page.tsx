@@ -111,6 +111,10 @@ export default function PlanningPage() {
   // Role hints per slot in manual mode (preserved from auto)
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
+  // Dialogue de génération (grille non vide)
+  const [showGenDialog, setShowGenDialog] = useState(false);
+  const [genUseFixed, setGenUseFixed] = useState(false);
+  const [genExcludeDays, setGenExcludeDays] = useState<string[] | null>(null);
   // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
@@ -3310,9 +3314,10 @@ export default function PlanningPage() {
                 </div>
               )}
               {!isManual && (
-              <div className="pt-2 text-center">
+                  <div className="pt-2 text-center">
                 <button
                   type="button"
+                      id="btn-generate-plan"
                   onClick={async () => {
                     // Vérifier si on est en mode ערוך et si la semaine contient le jour actuel
                     if (editingSaved) {
@@ -3345,6 +3350,54 @@ export default function PlanningPage() {
                     // Arrêter tout processus en cours
                     stopAiGeneration();
                     
+                    // Vérifier si la grille n'est pas vide
+                    const checkGridNonEmpty = () => {
+                      const check = (assignments: any): boolean => {
+                        if (!assignments || typeof assignments !== "object") return false;
+                        for (const dayKey of Object.keys(assignments)) {
+                          const shiftsMap = assignments[dayKey];
+                          if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                          for (const shiftName of Object.keys(shiftsMap)) {
+                            const perStation = shiftsMap[shiftName];
+                            if (!Array.isArray(perStation)) continue;
+                            for (const cell of perStation) {
+                              if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                                return true;
+                              }
+                            }
+                          }
+                        }
+                        return false;
+                      };
+                      return check(manualAssignments) || check(aiPlan?.assignments) || (check(savedWeekPlan?.assignments) && !editingSaved);
+                    };
+
+                    const hasContent = checkGridNonEmpty();
+                    if (hasContent) {
+                      setShowGenDialog(true);
+                      return;
+                    }
+                    setGenUseFixed(false);
+                    // Grille vide: proposer d'ignorer les jours passés si la semaine en contient
+                    const today = new Date(); today.setHours(0,0,0,0);
+                    const weekStartNormalized = new Date(weekStart); weekStartNormalized.setHours(0,0,0,0);
+                    const weekEnd = addDays(weekStartNormalized, 6); weekEnd.setHours(23,59,59,999);
+                    let excludeList: string[] | null = null;
+                    if (today >= weekStartNormalized && today <= weekEnd) {
+                      const pastDaysCount = Math.max(0, Math.floor((today.getTime() - weekStartNormalized.getTime()) / (1000*60*60*24)));
+                      if (pastDaysCount > 0) {
+                        const ok = window.confirm(`כבר עברו ${pastDaysCount} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`);
+                        if (ok) {
+                          const order = ["sun","mon","tue","wed","thu","fri","sat"];
+                          const startIdx = 0;
+                          excludeList = order.slice(startIdx, Math.min(order.indexOf(dayDefs[0].key) + pastDaysCount, order.length));
+                          // plus simple: construire depuis weekStart
+                          excludeList = order.slice(0, pastDaysCount);
+                        }
+                      }
+                    }
+                    setGenExcludeDays(excludeList);
+
                     let stopped = false;
                     try {
                       // eslint-disable-next-line no-console
@@ -3381,7 +3434,9 @@ export default function PlanningPage() {
                       };
                       // Construire les cellules fixées (préaffectations)
                       // Priorité: manuel > planning sauvegardé (non en édition) > plan AI courant
+                      // Mais seulement si l'utilisateur a choisi de les garder comme fixes (genUseFixed)
                       const fixed = (() => {
+                        if (!genUseFixed) return null;
                         const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
                         const pickSource = () => {
                           if (isManual && nonEmpty(manualAssignments)) return manualAssignments;
@@ -3411,7 +3466,7 @@ export default function PlanningPage() {
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
-                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined }),
+                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined) }),
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {
@@ -3530,6 +3585,50 @@ export default function PlanningPage() {
                 >
                   {aiLoading ? "יוצר..." : "יצירת תכנון"}
                 </button>
+                {showGenDialog && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="mb-3 text-center text-sm">
+                        התכנית מכילה שיבוצים קיימים.<br/>
+                        האם לשמור אותם כקבועים וליצור תכנון סביבם, או להתחיל מאפס?
+                      </div>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => setShowGenDialog(false)}
+                        >
+                          ביטול
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => {
+                            setGenUseFixed(true);
+                            setShowGenDialog(false);
+                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                          }}
+                        >
+                          שמור כשיבוצים קבועים
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                          onClick={() => {
+                            setGenUseFixed(false);
+                            setShowGenDialog(false);
+                            // Vider la grille puis lancer
+                            setManualAssignments(null);
+                            setAiPlan(null);
+                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                          }}
+                        >
+                          תכנון מאפס
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {aiPlan && (
                   <div className="mt-3 flex items-center justify-center gap-2 text-sm">
                     {(() => {
