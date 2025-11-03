@@ -1331,7 +1331,7 @@ export default function PlanningPage() {
                                       .filter((sn) => !baseRaw.includes(sn))
                                       .sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
                                     return (
-                                      <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
+                                    <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
                                         <span className="font-semibold">{d.label}</span>:{" "}
                                         {base.length > 0 ? base.join("/") : "—"}
                                         {extra.length > 0 && (
@@ -1340,8 +1340,8 @@ export default function PlanningPage() {
                                             {extra.map((sn, idx) => (
                                               <span key={sn + idx} className="text-red-600 dark:text-red-400">
                                                 {sn}{idx < extra.length - 1 ? "/" : ""}
-                                              </span>
-                                            ))}
+                                    </span>
+                                  ))}
                                           </>
                                         )}
                                         {i < dayDefs.length - 1 ? "  " : ""}
@@ -2175,7 +2175,7 @@ export default function PlanningPage() {
                                   if (!prev) return prev;
                                   const base = JSON.parse(JSON.stringify(prev));
                                   const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                                  const shiftNames = Array.from(
+                                  const shiftNames: string[] = Array.from(
                                     new Set(
                                       (site?.config?.stations || [])
                                         .flatMap((station: any) => (station?.shifts || [])
@@ -2183,23 +2183,23 @@ export default function PlanningPage() {
                                           .map((sh: any) => sh?.name))
                                         .filter(Boolean)
                                     )
-                                  );
+                                  ).map(String);
                                   // Collecte des noms retirés (manuel) par (jour, shift)
                                   const removedMapManual: Record<string, Record<string, Set<string>>> = {};
                                   for (const d of dayKeys) {
-                                    const dayData: any = (base as any)[d];
+                                    const dayData = (base as Record<string, any>)[d as string] as Record<string, any[]> | undefined;
                                     if (!dayData) continue;
                                     for (const sn of shiftNames) {
-                                      const shiftData: any = dayData[sn];
+                                      const shiftData = (dayData as Record<string, any[]>)[sn as string] as any[] | undefined;
                                       if (!Array.isArray(shiftData)) continue;
                                       if (Array.isArray(shiftData[idx])) {
                                         const removed = Array.isArray(shiftData[idx])
                                           ? (shiftData[idx] as string[]).map((s) => (s || "").trim()).filter(Boolean)
                                           : [];
                                         if (removed.length > 0) {
-                                          removedMapManual[d] = removedMapManual[d] || {} as any;
-                                          removedMapManual[d][sn] = removedMapManual[d][sn] || new Set<string>();
-                                          removed.forEach((nm) => removedMapManual[d][sn].add(nm));
+                                          removedMapManual[d as string] = (removedMapManual[d as string] || {}) as Record<string, Set<string>>;
+                                          removedMapManual[d as string][sn as string] = removedMapManual[d as string][sn as string] || new Set<string>();
+                                          removed.forEach((nm) => removedMapManual[d as string][sn as string].add(nm));
                                         }
                                         shiftData[idx] = [];
                                       }
@@ -2210,23 +2210,23 @@ export default function PlanningPage() {
                                     setAvailabilityOverlays((prevOv) => {
                                       const next: any = { ...prevOv };
                                       for (const d of Object.keys(removedMapManual)) {
-                                        for (const sn of Object.keys(removedMapManual[d] || {})) {
-                                          const namesRemoved = Array.from(removedMapManual[d][sn] || []);
-                                          const perStationAll: string[][] = (((base as any) || {})?.[d]?.[sn] || []) as any;
+                                        for (const sn of Object.keys(removedMapManual[d as string] || {})) {
+                                          const namesRemoved = Array.from((removedMapManual[d as string]?.[sn as string] || new Set<string>()) as Set<string>);
+                                          const perStationAll: string[][] = (((base as any) || {})?.[d as string]?.[sn as string] || []) as any;
                                           for (const nm of namesRemoved) {
-                                            const stillThere = (perStationAll || []).some((cell) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nm));
+                                            const stillThere = (perStationAll || []).some((cell: any) => Array.isArray(cell) && cell.some((x: any) => (x || "").trim() === nm));
                                             if (!stillThere) {
-                                              if (next?.[nm]?.[d]) {
-                                                const list: string[] = Array.from(next[nm][d] || []);
+                                              if ((next as any)?.[nm]?.[d as string]) {
+                                                const list: string[] = Array.from(((next as any)[nm][d as string] || []) as string[]);
                                                 const filtered = list.filter((s) => s !== sn);
                                                 if (filtered.length > 0) {
-                                                  next[nm][d] = filtered;
+                                                  (next as any)[nm][d as string] = filtered;
                                                 } else {
-                                                  delete next[nm][d];
-                                                  if (Object.keys(next[nm] || {}).length === 0) delete next[nm];
-                                                }
-                                              }
-                                            }
+                                                  delete (next as any)[nm][d as string];
+                                                  if (Object.keys(((next as any)[nm] || {})).length === 0) delete (next as any)[nm];
+                                      }
+                                    }
+                                  }
                                           }
                                         }
                                       }
@@ -2239,7 +2239,7 @@ export default function PlanningPage() {
                                   if (!prevHints) return prevHints;
                                   const base = JSON.parse(JSON.stringify(prevHints));
                                   const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                                  const shiftNames = Array.from(
+                                  const shiftNames: string[] = Array.from(
                                     new Set(
                                       (site?.config?.stations || [])
                                         .flatMap((station: any) => (station?.shifts || [])
@@ -2247,7 +2247,7 @@ export default function PlanningPage() {
                                           .map((sh: any) => sh?.name))
                                         .filter(Boolean)
                                     )
-                                  );
+                                  ).map(String);
                                   for (const d of dayKeys) {
                                     const dayData: any = (base as any)[d];
                                     if (!dayData) continue;
@@ -2280,18 +2280,18 @@ export default function PlanningPage() {
                                   // Collecte des noms retirés par (jour, shift)
                                   const removedMap: Record<string, Record<string, Set<string>>> = {};
                                   for (const d of dayKeys) {
-                                    const dayData: any = base.assignments[d];
+                                    const dayData = (base.assignments as Record<string, Record<string, any[]>>)[d as string] as Record<string, any[]> | undefined;
                                     if (!dayData) continue;
                                     for (const sn of shiftNames) {
-                                      const shiftData: any = (dayData as any)[sn];
+                                      const shiftData = (dayData as Record<string, any[]>)[sn as string] as any[] | undefined;
                                       if (!shiftData) continue;
                                       const arr = shiftData as any;
                                       if (Array.isArray(arr) && Array.isArray(arr[idx])) {
                                         const removed = Array.isArray(arr[idx]) ? (arr[idx] as string[]).map((s) => (s || "").trim()).filter(Boolean) : [];
                                         if (removed.length > 0) {
-                                          removedMap[d] = removedMap[d] || {} as any;
-                                          removedMap[d][sn] = removedMap[d][sn] || new Set<string>();
-                                          removed.forEach((nm) => removedMap[d][sn].add(nm));
+                                          removedMap[d as string] = (removedMap[d as string] || {}) as Record<string, Set<string>>;
+                                          removedMap[d as string][sn as string] = removedMap[d as string][sn as string] || new Set<string>();
+                                          removed.forEach((nm) => removedMap[d as string][sn as string].add(nm));
                                         }
                                         arr[idx] = [];
                                       }
@@ -2302,20 +2302,20 @@ export default function PlanningPage() {
                                     setAvailabilityOverlays((prevOv) => {
                                       const next: any = { ...prevOv };
                                       for (const d of Object.keys(removedMap)) {
-                                        for (const sn of Object.keys(removedMap[d] || {})) {
-                                          const namesRemoved = Array.from(removedMap[d][sn] || []);
-                                          const perStationAll: string[][] = ((base.assignments as any)?.[d]?.[sn] || []) as any;
+                                        for (const sn of Object.keys(removedMap[d as string] || {})) {
+                                          const namesRemoved = Array.from((removedMap[d as string]?.[sn as string] || new Set<string>()) as Set<string>);
+                                          const perStationAll: string[][] = ((base.assignments as any)?.[d as string]?.[sn as string] || []) as any;
                                           for (const nm of namesRemoved) {
-                                            const stillThere = (perStationAll || []).some((cell) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nm));
+                                            const stillThere = (perStationAll || []).some((cell: any) => Array.isArray(cell) && cell.some((x: any) => (x || "").trim() === nm));
                                             if (!stillThere) {
-                                              if (next?.[nm]?.[d]) {
-                                                const list: string[] = Array.from(next[nm][d] || []);
+                                              if ((next as any)?.[nm]?.[d as string]) {
+                                                const list: string[] = Array.from(((next as any)[nm][d as string] || []) as string[]);
                                                 const filtered = list.filter((s) => s !== sn);
                                                 if (filtered.length > 0) {
-                                                  next[nm][d] = filtered;
+                                                  (next as any)[nm][d as string] = filtered;
                                                 } else {
-                                                  delete next[nm][d];
-                                                  if (Object.keys(next[nm] || {}).length === 0) delete next[nm];
+                                                  delete (next as any)[nm][d as string];
+                                                  if (Object.keys(((next as any)[nm] || {})).length === 0) delete (next as any)[nm];
                                                 }
                                               }
                                             }
@@ -3314,7 +3314,7 @@ export default function PlanningPage() {
                 </div>
               )}
               {!isManual && (
-                  <div className="pt-2 text-center">
+              <div className="pt-2 text-center">
                 <button
                   type="button"
                       id="btn-generate-plan"
@@ -3397,7 +3397,7 @@ export default function PlanningPage() {
                       }
                     }
                     setGenExcludeDays(excludeList);
-
+                    
                     let stopped = false;
                     try {
                       // eslint-disable-next-line no-console
@@ -3459,6 +3459,7 @@ export default function PlanningPage() {
                         return out;
                       })();
 
+                      const effectiveExcludeDays = (excludeList && excludeList.length ? excludeList : (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined));
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
@@ -3466,7 +3467,7 @@ export default function PlanningPage() {
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
-                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined) }),
+                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: effectiveExcludeDays }),
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {

@@ -79,6 +79,8 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
         s = s.replace('"', "'")
         return s
 
+    excl_set = set(exclude_days or [])
+
     for st in stations_cfg:
         name = st.get("name") or "Station"
         per_day_custom = bool(st.get("perDayCustom"))
@@ -116,9 +118,15 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
                     # Total requis: priorité au paramètre "workers" (ou station_workers en mode uniforme),
                     # sinon somme des rôles actifs
                     required_total = int(station_workers if uniform_roles else (sh.get("workers") or 0))
+                    if day in excl_set:
+                        required_total = 0
+                        role_counts = {}
                     if required_total <= 0:
                         required_total = sum(role_counts.values())
                     if required_total <= 0:
+                        # S'assurer que la shift existe avec capacité 0
+                        all_shifts.add(sh_name)
+                        cap.setdefault(day, {})[sh_name] = 0
                         continue
                     all_shifts.add(sh_name)
                     cap.setdefault(day, {})[sh_name] = required_total
@@ -150,9 +158,14 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
                                 if cnt > 0:
                                     role_counts[norm_role(r.get("name"))] = cnt
                     required_total = int(station_workers if uniform_roles else (sh.get("workers") or 0))
+                    if day in excl_set:
+                        required_total = 0
+                        role_counts = {}
                     if required_total <= 0:
                         required_total = sum(role_counts.values())
                     if required_total <= 0:
+                        all_shifts.add(sh_name)
+                        cap.setdefault(day, {})[sh_name] = 0
                         continue
                     all_shifts.add(sh_name)
                     cap.setdefault(day, {})[sh_name] = required_total
@@ -162,12 +175,42 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
         stations.append({"name": name, "capacity": cap, "capacity_roles": cap_roles})
 
     days = order_days(list(all_days)) or ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
-    if exclude_days:
-        excl = set(exclude_days)
-        days = [d for d in days if d not in excl]
     shifts = order_shifts(list(all_shifts)) or ["06-14", "14-22", "22-06"]
     return days, shifts, stations
 
+
+def sanitize_plan(assignments: Dict[str, Dict[str, List[List[str]]]],
+                  days: List[DayKey],
+                  shifts: List[ShiftName],
+                  stations: List[Dict[str, Any]]) -> None:
+    """Ensure no duplicate worker appears twice within the same cell and trim to capacity.
+    This function mutates the passed assignments in-place.
+    """
+    for t_idx, st in enumerate(stations):
+        cap_map: Dict[str, Dict[str, int]] = st.get("capacity", {}) or {}
+        for d in days:
+            day_map = assignments.get(d)
+            if day_map is None:
+                continue
+            for s in shifts:
+                per_station = (day_map.get(s) or [])
+                if not isinstance(per_station, list) or t_idx >= len(per_station):
+                    continue
+                required = int((cap_map.get(d, {}) or {}).get(s, 0))
+                cell = per_station[t_idx] or []
+                seen: set[str] = set()
+                uniq: List[str] = []
+                for nm in cell:
+                    v = (str(nm or "").strip())
+                    if not v:
+                        continue
+                    if v in seen:
+                        continue
+                    seen.add(v)
+                    uniq.append(v)
+                    if required > 0 and len(uniq) >= required:
+                        break
+                per_station[t_idx] = uniq
 
 def solve_schedule(
     config: Dict[str, Any],
@@ -492,6 +535,8 @@ def solve_schedule(
                     if len(unique) >= required:
                         break
                 assignments[day_key][sh_name][t] = unique
+    # Safety: enforce uniqueness within each cell
+    sanitize_plan(assignments, days, shifts, stations)
     logger.info("Base plan: cells=%d required_total=%d", non_empty_cells, total_required)
     def _count_assigned(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
         total = 0
@@ -760,6 +805,31 @@ def solve_schedule(
                             lits.append(x[(w, d, s, t)])
         return lits
 
+    # Small helper to sanitize: ensure uniqueness within each cell and respect capacity
+    def _sanitize_assignments(a: Dict[str, Dict[str, List[List[str]]]]):
+        for t_i, st in enumerate(stations):
+            cap_map = st.get("capacity", {}) or {}
+            for dkey in days:
+                for sname in shifts:
+                    req = int((cap_map.get(dkey, {}) or {}).get(sname, 0))
+                    per = (a.get(dkey, {}).get(sname, []) or [])
+                    if not per:
+                        continue
+                    for i in range(len(per)):
+                        seen_local: set[str] = set()
+                        uniq: List[str] = []
+                        for nm in (per[i] or []):
+                            v = (nm or "").strip()
+                            if not v:
+                                continue
+                            if v in seen_local:
+                                continue
+                            seen_local.add(v)
+                            uniq.append(v)
+                            if req > 0 and len(uniq) >= req:
+                                break
+                        per[i] = uniq
+
     # Add successive nogoods and re-solve
     alt_budget_resolve = max(0, int(num_alternatives))
     seen_signatures: set = set()
@@ -784,6 +854,7 @@ def solve_schedule(
         # Switch main solver reference to new solution for extraction convenience
         solver = solver2
         cand_assign = build_assignments_from_solver()
+        sanitize_plan(cand_assign, days, shifts, stations)
         # Garder uniquement les alternatives avec couverture maximale égale à la base
         if _count_assigned(cand_assign) != base_total_assigned:
             continue
@@ -935,8 +1006,13 @@ def solve_schedule(
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # remove nm1 from s1, nm2 from s2
-                            _write_cell(cand, dkey, s1, t_idx, [n for n in names1 if n != nm1] + [nm2])
-                            _write_cell(cand, dkey, s2, t_idx, [n for n in names2 if n != nm2] + [nm1])
+                            new1 = [n for n in names1 if n != nm1] + [nm2]
+                            new2 = [n for n in names2 if n != nm2] + [nm1]
+                            if len(set(new1)) != len(new1) or len(set(new2)) != len(new2):
+                                continue
+                            _write_cell(cand, dkey, s1, t_idx, new1)
+                            _write_cell(cand, dkey, s2, t_idx, new2)
+                            _sanitize_assignments(cand)
                             sg = sig(cand)
                             if sg in seen:
                                 continue
@@ -991,7 +1067,11 @@ def solve_schedule(
                         if name_present_same_day(cand, dkey, nm):
                             continue
                         # place to s_to
-                        _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                        new_to = names_to + [nm]
+                        if len(set(new_to)) != len(new_to):
+                            continue
+                        _write_cell(cand, dkey, s_to, t_idx, new_to)
+                        _sanitize_assignments(cand)
                         sg = sig(cand)
                         if sg in seen:
                             continue
@@ -1048,13 +1128,18 @@ def solve_schedule(
                             continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # swap dans sname @ t_idx entre d1 et d2
-                            _write_cell(cand, d1, sname, t_idx, [n for n in names1 if n != nm1] + [nm2])
-                            _write_cell(cand, d2, sname, t_idx, [n for n in names2 if n != nm2] + [nm1])
+                            newd1 = [n for n in names1 if n != nm1] + [nm2]
+                            newd2 = [n for n in names2 if n != nm2] + [nm1]
+                            if len(set(newd1)) != len(newd1) or len(set(newd2)) != len(newd2):
+                                continue
+                            _write_cell(cand, d1, sname, t_idx, newd1)
+                            _write_cell(cand, d2, sname, t_idx, newd2)
                             # Unicité par jour déjà assurée (1 garde/jour) car même shift/station
                             if has_adjacent_in_candidate(cand, nm2, d1, sname):
                                 continue
                             if has_adjacent_in_candidate(cand, nm1, d2, sname):
                                 continue
+                            _sanitize_assignments(cand)
                             sg = sig(cand)
                             if sg in seen:
                                 continue
@@ -1166,7 +1251,10 @@ def solve_schedule(
                             role_caps_to = role_caps_to.get(s_to, {}) or {}
                             if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
                                 continue
-                            _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                            new_to2 = names_to + [nm]
+                            if len(set(new_to2)) != len(new_to2):
+                                continue
+                            _write_cell(cand, dkey, s_to, t_idx, new_to2)
                             if _count_assigned(cand) != base_total_assigned:
                                 continue
                             if sig(cand) in seen:
@@ -1235,7 +1323,10 @@ def solve_schedule(
                     role_caps_to = role_caps_to.get(s_to, {}) or {}
                     if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
                         continue
-                    _write_cell(cand, dnext, s_to, t_idx, names_to + [nm])
+                    new_to_last = names_to + [nm]
+                    if len(set(new_to_last)) != len(new_to_last):
+                        continue
+                    _write_cell(cand, dnext, s_to, t_idx, new_to_last)
                     if _count_assigned(cand) != base_total_assigned:
                         continue
                     if _count_holes(cand) > 0:
@@ -1249,7 +1340,7 @@ def solve_schedule(
                     alternatives_from_resolve.append(cand)
                     alt_budget_resolve -= 1
                     if alt_budget_resolve <= 0:
-                        break
+                                break
 
     return {
         "days": days,
@@ -1614,6 +1705,7 @@ def solve_schedule_stream(
     except Exception:
         pass
 
+    sanitize_plan(base, days, shifts, stations)
     yield {"type": "base", "days": days, "shifts": shifts, "stations": [st.get("name") for st in stations], "assignments": base}
 
     # Now generate alternatives using existing functions on-the-fly
@@ -1663,6 +1755,29 @@ def solve_schedule_stream(
         return False
 
     # base copy to start generating alternatives
+    def _sanitize_assignments(a: Dict[str, Dict[str, List[List[str]]]]):
+        for t_i, st in enumerate(stations):
+            cap_map = st.get("capacity", {}) or {}
+            for dkey in days:
+                for sname in shifts:
+                    req = int((cap_map.get(dkey, {}) or {}).get(sname, 0))
+                    per = (a.get(dkey, {}).get(sname, []) or [])
+                    if not per:
+                        continue
+                    for i in range(len(per)):
+                        seen_local: set[str] = set()
+                        uniq: List[str] = []
+                        for nm in (per[i] or []):
+                            v = (nm or "").strip()
+                            if not v:
+                                continue
+                            if v in seen_local:
+                                continue
+                            seen_local.add(v)
+                            uniq.append(v)
+                            if req > 0 and len(uniq) >= req:
+                                break
+                        per[i] = uniq
     # Respect fixed cells in streaming too
     fixed_cells: Dict[Tuple[str, str, int], set[str]] = {}
     try:
@@ -1688,6 +1803,7 @@ def solve_schedule_stream(
             return False
         return _norm_name_local(nm) in fixed_cells[key]
     assignments = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in base.items()}
+    _sanitize_assignments(assignments)
     # Baseline coverage (number of assignments) and holes
     def _count_assigned(a: Dict[str, Dict[str, List[List[str]]]]) -> int:
         total = 0
@@ -1826,7 +1942,11 @@ def solve_schedule_stream(
                         if role_caps and not can_assign_with_roles(list(names_to), nm, role_caps):
                             skipped_capacity += 1
                             continue
-                        _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                        new_to3 = names_to + [nm]
+                        if len(set(new_to3)) != len(new_to3):
+                            skipped_capacity += 1
+                            continue
+                        _write_cell(cand, dkey, s_to, t_idx, new_to3)
                         # calcul du nouveau déficit combinaisons
                         new_def_src = _role_deficit_for(names_from_new, t_idx, dkey, s_from)
                         new_def_dst = _role_deficit_for(names_to + [nm], t_idx, dkey, s_to)
@@ -1847,6 +1967,7 @@ def solve_schedule_stream(
                             skipped_duplicate += 1
                             continue
                         seen.add(signature)
+                        sanitize_plan(cand, days, shifts, stations)
                         produced += 1
                         yield {"type": "alternative", "index": produced, "assignments": cand}
                         budget -= 1
@@ -1911,6 +2032,7 @@ def solve_schedule_stream(
                                 skipped_duplicate += 1
                                 continue
                             seen.add(signature)
+                            sanitize_plan(cand, days, shifts, stations)
                             produced += 1
                             yield {"type": "alternative", "index": produced, "assignments": cand}
                             budget -= 1
@@ -1999,6 +2121,7 @@ def solve_schedule_stream(
             if not ok:
                 continue
             seen.add(signature)
+            sanitize_plan(cand, days, shifts, stations)
             produced += 1
             yield {"type": "alternative", "index": produced, "assignments": cand}
             budget -= 1
@@ -2069,7 +2192,10 @@ def solve_schedule_stream(
                             rm_dst = role_map_for(t_idx, dkey, s_to)
                             if rm_dst and not can_assign_with_roles(list(names_to), nm, rm_dst):
                                 continue
-                            _write_cell(cand, dkey, s_to, t_idx, names_to + [nm])
+                            new_to4 = names_to + [nm]
+                            if len(set(new_to4)) != len(new_to4):
+                                continue
+                            _write_cell(cand, dkey, s_to, t_idx, new_to4)
                             if _count_assigned(cand) < baseline_coverage:
                                 continue
                             if _count_holes(cand) > baseline_holes:
@@ -2081,6 +2207,7 @@ def solve_schedule_stream(
                             if signature in seen:
                                 continue
                             seen.add(signature)
+                            sanitize_plan(cand, days, shifts, stations)
                             produced += 1
                             yield {"type": "alternative", "index": produced, "assignments": cand}
                             budget -= 1
