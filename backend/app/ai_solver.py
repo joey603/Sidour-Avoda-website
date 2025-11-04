@@ -1378,6 +1378,16 @@ def solve_schedule_stream(
         pass
     # Build base model and plan using existing function but reusing logic inline for streaming
     days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
+    # Debug: print each worker's requests (availability) for all days in scope
+    try:
+        for w in workers:
+            nm = (w.get("name") or "").strip()
+            av = w.get("availability") or {}
+            # ensure we log only lists per day (empty list if none)
+            req_map = { d: (av.get(d) if isinstance(av.get(d), list) else []) for d in days }
+            logger.info("[REQ] worker=%s availability=%s", nm, req_map)
+    except Exception:
+        pass
 
     model = cp_model.CpModel()
     W = list(range(len(workers)))
@@ -1706,7 +1716,7 @@ def solve_schedule_stream(
         pass
 
     sanitize_plan(base, days, shifts, stations)
-    yield {"type": "base", "days": days, "shifts": shifts, "stations": [st.get("name") for st in stations], "assignments": base}
+    yield {"type": "base", "index": 0, "source": "BASE", "days": days, "shifts": shifts, "stations": [st.get("name") for st in stations], "assignments": base}
 
     # Now generate alternatives using existing functions on-the-fly
     # Reuse helper functions from above region
@@ -1792,7 +1802,7 @@ def solve_schedule_stream(
                         names = per_station[t_idx] if t_idx < len(per_station) else []
                     except Exception:
                         names = []
-                    normed = { _norm_name_local(nm) for nm in (names or []) if str(nm or "").trim() }
+                    normed = { _norm_name_local(nm) for nm in (names or []) if str(nm or "").strip() }
                     if normed:
                         fixed_cells[(dkey, sname, t_idx)] = normed
     except Exception:
@@ -1855,6 +1865,21 @@ def solve_schedule_stream(
         # then candidate
         return fit_one(nm)
 
+    # Global availability map and validator for entire candidate plans
+    name_to_avail_all: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+    def _avail_list_of(name: str, dkey: str) -> List[str]:
+        day_val = (name_to_avail_all.get(name) or {}).get(dkey)
+        return day_val if isinstance(day_val, list) else []
+    def _respects_availability_all(a: Dict[str, Dict[str, List[List[str]]]]) -> bool:
+        for dk in days:
+            for sn in shifts:
+                per = (a.get(dk, {}).get(sn, []) or [])
+                for lst in per:
+                    for nm in (lst or []):
+                        if sn not in _avail_list_of(nm, dk):
+                            return False
+        return True
+
     budget = int(num_alternatives or 20)
     produced = 0
     tried = 0
@@ -1899,6 +1924,168 @@ def solve_schedule_stream(
             if have < int(cap):
                 deficit += int(cap) - have
         return deficit
+
+    # Debug helper: log for each alternative the workers' requests and their assignments
+    def _log_alt_plan(label: str, a: Dict[str, Dict[str, List[List[str]]]]) -> None:
+        try:
+            for dk in days:
+                for sname in shifts:
+                    for t_idx, st in enumerate(stations):
+                        cell = (a.get(dk, {}).get(sname, []) or [[] for _ in stations])[t_idx]
+                        if not cell:
+                            continue
+                        assigned_req = { nm: _avail_list_of(nm, dk) for nm in (cell or []) }
+                        logger.info(
+                            "[ALT][DETAIL][%s] day=%s shift=%s station=%s assigned=%s requests=%s",
+                            label,
+                            dk,
+                            sname,
+                            st.get("name"),
+                            cell,
+                            assigned_req,
+                        )
+        except Exception:
+            pass
+    # New: alternatives that ONLY fill empty cells, respecting availability/requests and roles.
+    try:
+        # Build per-worker caps/availability based on current assignments
+        name_to_avail_stream: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
+        def _avail_list_stream_of(name: str, dkey: str) -> List[str]:
+            day_val = (name_to_avail_stream.get(name) or {}).get(dkey)
+            return day_val if isinstance(day_val, list) else []
+        def _is_night_name_local(n: str) -> bool:
+            s = (n or "").strip().lower()
+            return s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("\u05dc\u05d9\u05dc\u05d4" in n)
+        assign_count_fill: Dict[str, int] = {}
+        night_count_fill: Dict[str, int] = {}
+        for dk in days:
+            for sn in shifts:
+                for lst in (assignments.get(dk, {}).get(sn, []) or []):
+                    for nm in (lst or []):
+                        assign_count_fill[nm] = assign_count_fill.get(nm, 0) + 1
+                        if _is_night_name_local(sn):
+                            night_count_fill[nm] = night_count_fill.get(nm, 0) + 1
+        for dkey in days:
+            if budget <= 0:
+                break
+            for t_idx, st in enumerate(stations):
+                if budget <= 0:
+                    break
+                for sname in shifts:
+                    if budget <= 0:
+                        break
+                    req = _required_of(t_idx, dkey, sname)
+                    if req <= 0:
+                        continue
+                    names_here = (assignments.get(dkey, {}).get(sname, []) or [[] for _ in stations])[t_idx] or []
+                    if len(names_here) >= req:
+                        continue  # already full
+                    # Debug: log cell status and holes to fill
+                    try:
+                        logger.info(
+                            "[ALT][CELL] day=%s shift=%s station=%s req=%d have=%d holes=%d",
+                            dkey,
+                            sname,
+                            st.get("name"),
+                            req,
+                            len(names_here),
+                            max(0, req - len(names_here)),
+                        )
+                    except Exception:
+                        pass
+                    # Propose one candidate per alternative (no movement of existing names)
+                    for w in workers:
+                        if budget <= 0:
+                            break
+                        nm = (w.get("name") or "").strip()
+                        if not nm or nm in names_here:
+                            continue
+                        # respect availability/requests
+                        if sname not in _avail_list_stream_of(nm, dkey):
+                            continue
+                        # same-day uniqueness and adjacency
+                        # not already assigned same day across any station
+                        present_same_day = False
+                        for sn in shifts:
+                            per = (assignments.get(dkey, {}).get(sn, []) or [])
+                            for lst in per:
+                                if nm in (lst or []):
+                                    present_same_day = True
+                                    break
+                            if present_same_day:
+                                break
+                        if present_same_day:
+                            continue
+                        if has_adjacent_in_candidate(assignments, nm, dkey, sname):
+                            continue
+                        # per-worker caps
+                        maxs = int(w.get("max_shifts") or 5)
+                        if assign_count_fill.get(nm, 0) >= maxs:
+                            continue
+                        if _is_night_name_local(sname) and night_count_fill.get(nm, 0) >= max_nights_per_worker:
+                            continue
+                        # role feasibility
+                        role_caps_here = role_map_for(t_idx, dkey, sname)
+                        if role_caps_here and not can_assign_with_roles(list(names_here), nm, role_caps_here):
+                            continue
+                        # build candidate alt: add nm into this cell only
+                        cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
+                        new_names = list(names_here) + [nm]
+                        if len(set(new_names)) != len(new_names):
+                            continue
+                        cand[dkey][sname][t_idx] = new_names
+                        signature = sig(cand)
+                        tried += 1
+                        if signature in seen:
+                            skipped_duplicate += 1
+                            continue
+                        seen.add(signature)
+                        # Skip any alternative that violates worker availability/requests globally
+                        if not _respects_availability_all(cand):
+                            continue
+                        # Debug: log the requests of assigned workers and the proposed assignment
+                        try:
+                            assigned_req = { name: _avail_list_stream_of(name, dkey) for name in new_names }
+                            logger.info(
+                                "[ALT][YIELD] day=%s shift=%s station=%s add=%s requests=%s before=%s after=%s",
+                                dkey,
+                                sname,
+                                st.get("name"),
+                                nm,
+                                _avail_list_stream_of(nm, dkey),
+                                names_here,
+                                new_names,
+                            )
+                            logger.info(
+                                "[ALT][ASSIGNMENTS] day=%s shift=%s assigned=%s requests=%s",
+                                dkey,
+                                sname,
+                                new_names,
+                                assigned_req,
+                            )
+                        except Exception:
+                            pass
+                        _log_alt_plan("HOLE", cand)
+                        sanitize_plan(cand, days, shifts, stations)
+                        produced += 1
+                        try:
+                            logger.info("[ALT][EMIT] index=%d source=%s", produced, "HOLE")
+                        except Exception:
+                            pass
+                        yield {"type": "alternative", "index": produced, "source": "HOLE", "assignments": cand}
+                        budget -= 1
+                        if budget <= 0:
+                            break
+        logger.info("[STREAM] hole-fill alternatives produced=%d", produced)
+    except Exception as e:
+        try:
+            logger.exception("[STREAM] hole-fill alternatives error: %s", e)
+        except Exception:
+            pass
+    if budget <= 0:
+        yield {"type": "done"}
+        return
+
     for dkey in days:
         if budget <= 0:
             break
@@ -1967,9 +2154,16 @@ def solve_schedule_stream(
                             skipped_duplicate += 1
                             continue
                         seen.add(signature)
+                        # Skip any alternative that violates worker availability/requests globally
+                        if not _respects_availability_all(cand):
+                            continue
                         sanitize_plan(cand, days, shifts, stations)
                         produced += 1
-                        yield {"type": "alternative", "index": produced, "assignments": cand}
+                        try:
+                            logger.info("[ALT][EMIT] index=%d source=%s", produced, "SWAP-INTRA")
+                        except Exception:
+                            pass
+                        yield {"type": "alternative", "index": produced, "source": "SWAP-INTRA", "assignments": cand}
                         budget -= 1
                         if budget <= 0:
                             break
@@ -1980,70 +2174,12 @@ def solve_schedule_stream(
             if budget <= 0:
                 break
 
-    # cross-day swaps same station/shift
-    for sname in shifts:
-        if budget <= 0:
-            break
-        for t_idx in range(len(stations)):
-            if budget <= 0:
-                break
-            for i in range(len(days)):
-                if budget <= 0:
-                    break
-                d1 = days[i]
-                n1 = _names_in_cell(assignments, d1, sname, t_idx)
-                if not n1:
-                    continue
-                for j in range(i + 1, len(days)):
-                    if budget <= 0:
-                        break
-                    d2 = days[j]
-                    n2 = _names_in_cell(assignments, d2, sname, t_idx)
-                    if not n2:
-                        continue
-                    for nm1 in n1:
-                        for nm2 in n2:
-                            if nm1 == nm2:
-                                continue
-                            if _is_fixed_here(nm1, d1, sname, t_idx) or _is_fixed_here(nm2, d2, sname, t_idx):
-                                continue
-                            cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
-                            newd1 = [n for n in n1 if n != nm1] + [nm2]
-                            newd2 = [n for n in n2 if n != nm2] + [nm1]
-                            # role feasibility for both cells after swap
-                            rm1 = role_map_for(t_idx, d1, sname)
-                            rm2 = role_map_for(t_idx, d2, sname)
-                            if (rm1 and not can_assign_with_roles([x for x in newd1 if x != nm2], nm2, rm1)) or (rm2 and not can_assign_with_roles([x for x in newd2 if x != nm1], nm1, rm2)):
-                                continue
-                            _write_cell(cand, d1, sname, t_idx, newd1)
-                            _write_cell(cand, d2, sname, t_idx, newd2)
-                            if has_adjacent_in_candidate(cand, nm2, d1, sname) or has_adjacent_in_candidate(cand, nm1, d2, sname):
-                                skipped_adjacency += 1
-                                continue
-                            # coverage/holes check relative to baseline
-                            if _count_assigned(cand) < baseline_coverage:
-                                continue
-                            if _count_holes(cand) > baseline_holes:
-                                yield {"type": "done"}
-                                return
-                            signature = sig(cand)
-                            tried += 1
-                            if signature in seen:
-                                skipped_duplicate += 1
-                                continue
-                            seen.add(signature)
-                            sanitize_plan(cand, days, shifts, stations)
-                            produced += 1
-                            yield {"type": "alternative", "index": produced, "assignments": cand}
-                            budget -= 1
-                            if budget <= 0:
-                                break
-                        if budget <= 0:
-                            break
-                    if budget <= 0:
-                        break
-            if budget <= 0:
-                break
+    # cross-day swaps same station/shift (disabled)
+    try:
+        logger.info("[STREAM] SWAP-CROSSDAY disabled: skipping cross-day swap alternatives")
+    except Exception:
+        pass
+    # previously cross-day swaps were generated here; now disabled.
 
     # If budget remains, try re-solving with nogoods to explore structurally different solutions
     if budget > 0:
@@ -2121,9 +2257,17 @@ def solve_schedule_stream(
             if not ok:
                 continue
             seen.add(signature)
+            # Skip any alternative that violates worker availability/requests globally
+            if not _respects_availability_all(cand):
+                continue
+            _log_alt_plan("RESOLVE", cand)
             sanitize_plan(cand, days, shifts, stations)
             produced += 1
-            yield {"type": "alternative", "index": produced, "assignments": cand}
+            try:
+                logger.info("[ALT][EMIT] index=%d source=%s", produced, "RESOLVE")
+            except Exception:
+                pass
+            yield {"type": "alternative", "index": produced, "source": "RESOLVE", "assignments": cand}
             budget -= 1
 
     # Bonus pass: if budget remains, try to yield alternatives reducing morning+night pairs
@@ -2207,9 +2351,17 @@ def solve_schedule_stream(
                             if signature in seen:
                                 continue
                             seen.add(signature)
+                            # Skip any alternative that violates worker availability/requests globally
+                            if not _respects_availability_all(cand):
+                                continue
+                            _log_alt_plan("BONUS", cand)
                             sanitize_plan(cand, days, shifts, stations)
                             produced += 1
-                            yield {"type": "alternative", "index": produced, "assignments": cand}
+                            try:
+                                logger.info("[ALT][EMIT] index=%d source=%s", produced, "BONUS")
+                            except Exception:
+                                pass
+                            yield {"type": "alternative", "index": produced, "source": "BONUS", "assignments": cand}
                             budget -= 1
                             if budget <= 0:
                                 break

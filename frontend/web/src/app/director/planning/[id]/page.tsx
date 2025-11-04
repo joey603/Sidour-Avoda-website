@@ -111,10 +111,19 @@ export default function PlanningPage() {
   // Role hints per slot in manual mode (preserved from auto)
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
+    // Mode switch confirmation dialog
+    const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
+    const [modeSwitchTarget, setModeSwitchTarget] = useState<"auto" | "manual" | null>(null);
   // Dialogue de génération (grille non vide)
   const [showGenDialog, setShowGenDialog] = useState(false);
   const [genUseFixed, setGenUseFixed] = useState(false);
+  const genUseFixedRef = useRef(false);
+  useEffect(() => { genUseFixedRef.current = genUseFixed; }, [genUseFixed]);
+  // Bypass re-opening the generation dialog after user already chose an action
+  const genDialogBypassRef = useRef<"fixed" | "reset" | null>(null);
   const [genExcludeDays, setGenExcludeDays] = useState<string[] | null>(null);
+  const [showPastDaysDialog, setShowPastDaysDialog] = useState(false);
+  const [pendingExcludeDays, setPendingExcludeDays] = useState<string[] | null>(null);
   // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
@@ -1028,6 +1037,54 @@ export default function PlanningPage() {
     setAiLoading(false);
   }
 
+  function triggerGenerateButton() {
+    try {
+      // If we're in saved mode (button disabled), exit saved mode first
+      if (savedWeekPlan && savedWeekPlan.assignments && !editingSaved) {
+        try {
+          setSavedWeekPlan(null);
+          setEditingSaved(true);
+        } catch {}
+        setTimeout(() => {
+          try { triggerGenerateButton(); } catch {}
+        }, 0);
+        return;
+      }
+      const btn = document.getElementById('btn-generate-plan') as HTMLButtonElement | null;
+      // eslint-disable-next-line no-console
+      console.log('[DBG] triggerGenerateButton: btn exists?', !!btn);
+      if (btn) {
+        // eslint-disable-next-line no-console
+        console.log('[DBG] triggerGenerateButton: disabled=', btn.disabled);
+        if (!btn.disabled) {
+          try { 
+            // eslint-disable-next-line no-console
+            console.log('[DBG] triggerGenerateButton: invoking .click()');
+            btn.click(); 
+            return; 
+          } catch (e) { 
+            // eslint-disable-next-line no-console
+            console.log('[DBG] triggerGenerateButton: .click() failed', e);
+          }
+          try { 
+            // eslint-disable-next-line no-console
+            console.log('[DBG] triggerGenerateButton: dispatching MouseEvent');
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); 
+            return; 
+          } catch (e) { 
+            // eslint-disable-next-line no-console
+            console.log('[DBG] triggerGenerateButton: dispatch failed', e);
+          }
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log('[DBG] triggerGenerateButton: done (button missing or disabled)');
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log('[DBG] triggerGenerateButton: error', e);
+    }
+  }
+
   function onSavePlan() {
     try {
       const effective = isManual && manualAssignments ? manualAssignments : aiPlan?.assignments;
@@ -1761,35 +1818,40 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (isManual && manualAssignments) {
-                      // Copier les assignations manuelles dans le plan automatique
-                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                      const shiftNames = Array.from(
-                        new Set(
-                          (site?.config?.stations || [])
-                            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-                            .filter(Boolean)
-                        )
-                      );
-                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-                      setAiPlan({
-                        days: dayKeys,
-                        shifts: shiftNames,
-                        stations: stationNames,
-                        assignments: manualAssignments,
-                        alternatives: [],
-                        status: "TEMP",
-                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-                      } as any);
-                    }
+                    // If already in auto mode, do nothing (no popup)
+                    if (!isManual) return;
+                    // Only show dialog if current grid has content; else switch directly
+                    const nonEmpty = (assignments: any): boolean => {
+                      if (!assignments || typeof assignments !== "object") return false;
+                      for (const dayKey of Object.keys(assignments)) {
+                        const shiftsMap = (assignments as any)[dayKey];
+                        if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                        for (const shiftName of Object.keys(shiftsMap)) {
+                          const perStation = (shiftsMap as any)[shiftName];
+                          if (!Array.isArray(perStation)) continue;
+                          for (const cell of perStation) {
+                            if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                              return true;
+                            }
+                          }
+                        }
+                      }
+                      return false;
+                    };
+                    const hasContent = isManual
+                      ? nonEmpty(manualAssignments)
+                      : (nonEmpty(aiPlan?.assignments as any) || (!!savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments as any)));
+                    if (!hasContent) {
+                      // No content: switch to auto immediately
                     setIsManual(false);
+                      return;
+                    }
+                    setModeSwitchTarget("auto");
+                    setShowModeSwitchDialog(true);
                   }}
-                  disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
-                    (isSavedMode
-                      ? "opacity-60 cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-700 dark:text-zinc-600"
-                      : (isManual ? "opacity-60 dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]"))
+                     (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
                   }
                 >
                   אוטומטי
@@ -1797,18 +1859,41 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (!isManual && aiPlan?.assignments) {
-                      // Copier les assignations automatiques dans le plan manuel
-                      setManualAssignments(aiPlan.assignments);
-                    }
+                    // If already in manual mode, do nothing (no popup)
+                    if (isManual) return;
+                    // Only show dialog if current grid has content; else switch directly
+                    const nonEmpty = (assignments: any): boolean => {
+                      if (!assignments || typeof assignments !== "object") return false;
+                      for (const dayKey of Object.keys(assignments)) {
+                        const shiftsMap = (assignments as any)[dayKey];
+                        if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                        for (const shiftName of Object.keys(shiftsMap)) {
+                          const perStation = (shiftsMap as any)[shiftName];
+                          if (!Array.isArray(perStation)) continue;
+                          for (const cell of perStation) {
+                            if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                              return true;
+                            }
+                          }
+                        }
+                      }
+                      return false;
+                    };
+                    const hasContent = !isManual
+                      ? nonEmpty(aiPlan?.assignments as any)
+                      : (nonEmpty(manualAssignments) || (!!savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments as any)));
+                    if (!hasContent) {
+                      // No content: switch to manual immediately, stop any ongoing AI generation
+                      try { stopAiGeneration(); } catch {}
                     setIsManual(true);
+                      return;
+                    }
+                    setModeSwitchTarget("manual");
+                    setShowModeSwitchDialog(true);
                   }}
-                  disabled={isSavedMode}
                   className={
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
-                    (isSavedMode
-                      ? "opacity-60 cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-700 dark:text-zinc-600"
-                      : (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700"))
+                     (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
                   }
                 >
                   ידני
@@ -3374,29 +3459,38 @@ export default function PlanningPage() {
 
                     const hasContent = checkGridNonEmpty();
                     if (hasContent) {
+                      if (genDialogBypassRef.current) {
+                        // eslint-disable-next-line no-console
+                        console.log('[DBG] bypass GenDialog once with', genDialogBypassRef.current);
+                        genDialogBypassRef.current = null; // consume bypass and proceed to generation
+                      } else {
+                        // eslint-disable-next-line no-console
+                        console.log('[DBG] open GenDialog: grid has content. isManual=', isManual);
                       setShowGenDialog(true);
                       return;
+                      }
                     }
                     setGenUseFixed(false);
                     // Grille vide: proposer d'ignorer les jours passés si la semaine en contient
-                    const today = new Date(); today.setHours(0,0,0,0);
-                    const weekStartNormalized = new Date(weekStart); weekStartNormalized.setHours(0,0,0,0);
-                    const weekEnd = addDays(weekStartNormalized, 6); weekEnd.setHours(23,59,59,999);
-                    let excludeList: string[] | null = null;
-                    if (today >= weekStartNormalized && today <= weekEnd) {
-                      const pastDaysCount = Math.max(0, Math.floor((today.getTime() - weekStartNormalized.getTime()) / (1000*60*60*24)));
-                      if (pastDaysCount > 0) {
-                        const ok = window.confirm(`כבר עברו ${pastDaysCount} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`);
-                        if (ok) {
+                    if (genExcludeDays === null) {
+                      const today = new Date(); today.setHours(0,0,0,0);
+                      const weekStartNormalized = new Date(weekStart); weekStartNormalized.setHours(0,0,0,0);
+                      const weekEnd = addDays(weekStartNormalized, 6); weekEnd.setHours(23,59,59,999);
+                      let excludeList: string[] | null = null;
+                      if (today >= weekStartNormalized && today <= weekEnd) {
+                        const pastDaysCount = Math.max(0, Math.floor((today.getTime() - weekStartNormalized.getTime()) / (1000*60*60*24)));
+                        if (pastDaysCount > 0) {
                           const order = ["sun","mon","tue","wed","thu","fri","sat"];
-                          const startIdx = 0;
-                          excludeList = order.slice(startIdx, Math.min(order.indexOf(dayDefs[0].key) + pastDaysCount, order.length));
-                          // plus simple: construire depuis weekStart
+                          // Construire la liste à exclure depuis le début de la semaine jusqu'à hier
                           excludeList = order.slice(0, pastDaysCount);
+                          // Ouvrir un dialogue à 3 choix (Oui / Non / Annuler)
+                          setPendingExcludeDays(excludeList);
+                          setShowPastDaysDialog(true);
+                          return; // attendre la décision de l'utilisateur
                         }
                       }
+                      setGenExcludeDays(excludeList);
                     }
-                    setGenExcludeDays(excludeList);
                     
                     let stopped = false;
                     try {
@@ -3436,16 +3530,24 @@ export default function PlanningPage() {
                       // Priorité: manuel > planning sauvegardé (non en édition) > plan AI courant
                       // Mais seulement si l'utilisateur a choisi de les garder comme fixes (genUseFixed)
                       const fixed = (() => {
-                        if (!genUseFixed) return null;
+                        if (!genUseFixedRef.current) return null;
                         const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
                         const pickSource = () => {
-                          if (isManual && nonEmpty(manualAssignments)) return manualAssignments;
-                          if (!isManual && savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return savedWeekPlan.assignments as any;
-                          if (!isManual && aiPlan?.assignments && nonEmpty(aiPlan.assignments as any)) return aiPlan.assignments as any;
+                          // Toujours préférer les assignations manuelles si présentes, même si on vient de basculer en auto
+                          if (nonEmpty(manualAssignments)) return { src: 'manual', data: manualAssignments } as const;
+                          if (savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return { src: 'saved', data: savedWeekPlan.assignments as any } as const;
+                          if (aiPlan?.assignments && nonEmpty(aiPlan.assignments as any)) return { src: 'ai', data: aiPlan.assignments as any } as const;
                           return null;
                         };
-                        const src = pickSource();
-                        if (!src) return null;
+                        const chosen = pickSource();
+                        if (!chosen) {
+                          // eslint-disable-next-line no-console
+                          console.log('[DBG] fixed: no source chosen');
+                          return null;
+                        }
+                        // eslint-disable-next-line no-console
+                        console.log('[DBG] fixed: using source', chosen.src);
+                        const src = chosen.data as any;
                         // Nettoyer: ne garder que des chaînes non vides et respecter la forme [day][shift][station][]
                         const out: any = {};
                         Object.keys(src || {}).forEach((day) => {
@@ -3459,7 +3561,7 @@ export default function PlanningPage() {
                         return out;
                       })();
 
-                      const effectiveExcludeDays = (excludeList && excludeList.length ? excludeList : (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined));
+                      const effectiveExcludeDays = (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined);
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
@@ -3605,9 +3707,15 @@ export default function PlanningPage() {
                           type="button"
                           className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           onClick={() => {
+                            genDialogBypassRef.current = "fixed";
+                            // eslint-disable-next-line no-console
+                            console.log('[DBG] GenDialog: keep as fixed clicked');
+                            genUseFixedRef.current = true;
                             setGenUseFixed(true);
                             setShowGenDialog(false);
-                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                            // Ensure the generate button exists (auto mode)
+                            setIsManual(false);
+                            setTimeout(() => { try { triggerGenerateButton(); } catch {} }, 0);
                           }}
                         >
                           שמור כשיבוצים קבועים
@@ -3616,12 +3724,18 @@ export default function PlanningPage() {
                           type="button"
                           className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                           onClick={() => {
+                            genDialogBypassRef.current = "reset";
+                            // eslint-disable-next-line no-console
+                            console.log('[DBG] GenDialog: reset grid clicked');
+                            genUseFixedRef.current = false;
                             setGenUseFixed(false);
                             setShowGenDialog(false);
                             // Vider la grille puis lancer
                             setManualAssignments(null);
                             setAiPlan(null);
-                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                            // Ensure the generate button exists (auto mode)
+                            setIsManual(false);
+                            setTimeout(() => { try { triggerGenerateButton(); } catch {} }, 0);
                           }}
                         >
                           תכנון מאפס
@@ -3630,6 +3744,51 @@ export default function PlanningPage() {
                     </div>
                   </div>
                 )}
+                {showPastDaysDialog && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
+                      <div className="mb-3 text-sm">
+                        {`כבר עברו ${Array.isArray(pendingExcludeDays) ? pendingExcludeDays.length : 0} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`}
+                      </div>
+                      <div className="flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => { setShowPastDaysDialog(false); /* Annuler: ne rien faire */ }}
+                        >
+                          ביטול
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => {
+                            // Non: ne pas exclure
+                            // Use empty array so the generator won't re-open this dialog again
+                            // null triggers the prompt; [] means "no excluded days"
+                            setGenExcludeDays([]);
+                            setShowPastDaysDialog(false);
+                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                          }}
+                        >
+                          לא
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                          onClick={() => {
+                            // Oui: utiliser pendingExcludeDays
+                            setGenExcludeDays((pendingExcludeDays && pendingExcludeDays.length) ? pendingExcludeDays : null);
+                            setShowPastDaysDialog(false);
+                            setTimeout(() => document.getElementById('btn-generate-plan')?.dispatchEvent(new MouseEvent('click', { bubbles: true })), 0);
+                          }}
+                        >
+                          כן
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* Mode switch dialog moved outside mode-specific blocks */}
                 {aiPlan && (
                   <div className="mt-3 flex items-center justify-center gap-2 text-sm">
                     {(() => {
@@ -3780,6 +3939,83 @@ export default function PlanningPage() {
           </>
         )}
       </div>
+      {showModeSwitchDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
+            <div className="mb-3 text-sm">
+              {modeSwitchTarget === "manual"
+                ? "לעבור למצב ידני. לשמור את השיבוצים הנוכחיים במקומם?"
+                : "לעבור למצב אוטומטי. לשמור את השיבוצים הנוכחיים במקומם?"}
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => { setShowModeSwitchDialog(false); setModeSwitchTarget(null); }}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  // Keep current placements while switching
+                  if (modeSwitchTarget === "auto") {
+                    if (isManual && manualAssignments) {
+                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                      const shiftNames = Array.from(new Set(((site?.config?.stations || []) as any[])
+                        .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+                        .filter(Boolean)));
+                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+                      setAiPlan({
+                        days: dayKeys,
+                        shifts: shiftNames,
+                        stations: stationNames,
+                        assignments: manualAssignments,
+                        alternatives: [],
+                        status: "TEMP",
+                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+                      } as any);
+                    }
+                    setIsManual(false);
+                  } else if (modeSwitchTarget === "manual") {
+                    try { stopAiGeneration(); } catch {}
+                    if (!isManual && aiPlan?.assignments) {
+                      setManualAssignments(aiPlan.assignments);
+                    }
+                    setIsManual(true);
+                  }
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                שמור מיקומים
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  // Reset grid when switching
+                  if (modeSwitchTarget === "auto") {
+                    setAiPlan(null);
+                    setIsManual(false);
+                  } else if (modeSwitchTarget === "manual") {
+                    try { stopAiGeneration(); } catch {}
+                    setManualAssignments(null);
+                    setManualRoleHints(null);
+                    setAiPlan(null);
+                    setIsManual(true);
+                  }
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                אפס גריד
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
