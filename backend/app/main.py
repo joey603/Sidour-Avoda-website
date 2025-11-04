@@ -1,7 +1,5 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-import logging
-import sys
 
 from .database import Base, engine
 from .auth import router as auth_router
@@ -12,21 +10,6 @@ from .deps import get_current_user, require_role
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Scheduler API")
 
-    # Logging: ensure 'ai_solver' logger (and root) output to stdout (captured by backend.server.log)
-    try:
-        root = logging.getLogger()
-        if not root.handlers:
-            h = logging.StreamHandler(sys.stdout)
-            fmt = logging.Formatter("[%(levelname)s] %(name)s - %(message)s")
-            h.setFormatter(fmt)
-            root.addHandler(h)
-        root.setLevel(logging.INFO)
-        ai_logger = logging.getLogger("ai_solver")
-        ai_logger.setLevel(logging.INFO)
-        # Let it propagate to root handler
-        ai_logger.propagate = True
-    except Exception:
-        pass
 
     # CORS (adapt front URL au besoin)
     app.add_middleware(
