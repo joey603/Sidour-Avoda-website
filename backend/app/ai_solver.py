@@ -1378,16 +1378,7 @@ def solve_schedule_stream(
         pass
     # Build base model and plan using existing function but reusing logic inline for streaming
     days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
-    # Debug: print each worker's requests (availability) for all days in scope
-    try:
-        for w in workers:
-            nm = (w.get("name") or "").strip()
-            av = w.get("availability") or {}
-            # ensure we log only lists per day (empty list if none)
-            req_map = { d: (av.get(d) if isinstance(av.get(d), list) else []) for d in days }
-            logger.info("[REQ] worker=%s availability=%s", nm, req_map)
-    except Exception:
-        pass
+    # (debug availability logging removed)
 
     model = cp_model.CpModel()
     W = list(range(len(workers)))
@@ -1925,27 +1916,7 @@ def solve_schedule_stream(
                 deficit += int(cap) - have
         return deficit
 
-    # Debug helper: log for each alternative the workers' requests and their assignments
-    def _log_alt_plan(label: str, a: Dict[str, Dict[str, List[List[str]]]]) -> None:
-        try:
-            for dk in days:
-                for sname in shifts:
-                    for t_idx, st in enumerate(stations):
-                        cell = (a.get(dk, {}).get(sname, []) or [[] for _ in stations])[t_idx]
-                        if not cell:
-                            continue
-                        assigned_req = { nm: _avail_list_of(nm, dk) for nm in (cell or []) }
-                        logger.info(
-                            "[ALT][DETAIL][%s] day=%s shift=%s station=%s assigned=%s requests=%s",
-                            label,
-                            dk,
-                            sname,
-                            st.get("name"),
-                            cell,
-                            assigned_req,
-                        )
-        except Exception:
-            pass
+    # (debug alternative detail logger removed)
     # New: alternatives that ONLY fill empty cells, respecting availability/requests and roles.
     try:
         # Build per-worker caps/availability based on current assignments
@@ -1980,19 +1951,7 @@ def solve_schedule_stream(
                     names_here = (assignments.get(dkey, {}).get(sname, []) or [[] for _ in stations])[t_idx] or []
                     if len(names_here) >= req:
                         continue  # already full
-                    # Debug: log cell status and holes to fill
-                    try:
-                        logger.info(
-                            "[ALT][CELL] day=%s shift=%s station=%s req=%d have=%d holes=%d",
-                            dkey,
-                            sname,
-                            st.get("name"),
-                            req,
-                            len(names_here),
-                            max(0, req - len(names_here)),
-                        )
-                    except Exception:
-                        pass
+                    # (debug cell logging removed)
                     # Propose one candidate per alternative (no movement of existing names)
                     for w in workers:
                         if budget <= 0:
@@ -2043,35 +2002,9 @@ def solve_schedule_stream(
                         # Skip any alternative that violates worker availability/requests globally
                         if not _respects_availability_all(cand):
                             continue
-                        # Debug: log the requests of assigned workers and the proposed assignment
-                        try:
-                            assigned_req = { name: _avail_list_stream_of(name, dkey) for name in new_names }
-                            logger.info(
-                                "[ALT][YIELD] day=%s shift=%s station=%s add=%s requests=%s before=%s after=%s",
-                                dkey,
-                                sname,
-                                st.get("name"),
-                                nm,
-                                _avail_list_stream_of(nm, dkey),
-                                names_here,
-                                new_names,
-                            )
-                            logger.info(
-                                "[ALT][ASSIGNMENTS] day=%s shift=%s assigned=%s requests=%s",
-                                dkey,
-                                sname,
-                                new_names,
-                                assigned_req,
-                            )
-                        except Exception:
-                            pass
-                        _log_alt_plan("HOLE", cand)
+                        # (debug alternative assignment logging removed)
                         sanitize_plan(cand, days, shifts, stations)
                         produced += 1
-                        try:
-                            logger.info("[ALT][EMIT] index=%d source=%s", produced, "HOLE")
-                        except Exception:
-                            pass
                         yield {"type": "alternative", "index": produced, "source": "HOLE", "assignments": cand}
                         budget -= 1
                         if budget <= 0:
@@ -2159,10 +2092,6 @@ def solve_schedule_stream(
                             continue
                         sanitize_plan(cand, days, shifts, stations)
                         produced += 1
-                        try:
-                            logger.info("[ALT][EMIT] index=%d source=%s", produced, "SWAP-INTRA")
-                        except Exception:
-                            pass
                         yield {"type": "alternative", "index": produced, "source": "SWAP-INTRA", "assignments": cand}
                         budget -= 1
                         if budget <= 0:
@@ -2175,10 +2104,7 @@ def solve_schedule_stream(
                 break
 
     # cross-day swaps same station/shift (disabled)
-    try:
-        logger.info("[STREAM] SWAP-CROSSDAY disabled: skipping cross-day swap alternatives")
-    except Exception:
-        pass
+    # (cross-day swap disabled silently)
     # previously cross-day swaps were generated here; now disabled.
 
     # If budget remains, try re-solving with nogoods to explore structurally different solutions
@@ -2260,13 +2186,8 @@ def solve_schedule_stream(
             # Skip any alternative that violates worker availability/requests globally
             if not _respects_availability_all(cand):
                 continue
-            _log_alt_plan("RESOLVE", cand)
             sanitize_plan(cand, days, shifts, stations)
             produced += 1
-            try:
-                logger.info("[ALT][EMIT] index=%d source=%s", produced, "RESOLVE")
-            except Exception:
-                pass
             yield {"type": "alternative", "index": produced, "source": "RESOLVE", "assignments": cand}
             budget -= 1
 
@@ -2354,13 +2275,8 @@ def solve_schedule_stream(
                             # Skip any alternative that violates worker availability/requests globally
                             if not _respects_availability_all(cand):
                                 continue
-                            _log_alt_plan("BONUS", cand)
                             sanitize_plan(cand, days, shifts, stations)
                             produced += 1
-                            try:
-                                logger.info("[ALT][EMIT] index=%d source=%s", produced, "BONUS")
-                            except Exception:
-                                pass
                             yield {"type": "alternative", "index": produced, "source": "BONUS", "assignments": cand}
                             budget -= 1
                             if budget <= 0:
