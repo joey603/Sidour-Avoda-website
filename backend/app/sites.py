@@ -246,16 +246,21 @@ def ai_generate_planning(
         raise HTTPException(status_code=404, detail="Site introuvable")
     # Load workers
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
-    workers = [
-        {
+    overrides = (payload.weekly_availability or {}) if payload else {}
+    workers = []
+    for r in rows:
+        avail = r.availability or {}
+        # Apply weekly override by worker name if provided
+        ovr = overrides.get(r.name)
+        if isinstance(ovr, dict):
+            avail = ovr
+        workers.append({
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
             "roles": r.roles or [],
-            "availability": r.availability or {},
-        }
-        for r in rows
-    ]
+            "availability": avail,
+        })
     if not workers:
         # Return empty structure with days/shifts from config mapping
         from .ai_solver import build_capacities_from_config
@@ -304,10 +309,20 @@ def ai_generate_stream(
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
-    workers = [
-        {"id": r.id, "name": r.name, "max_shifts": r.max_shifts, "roles": r.roles or [], "availability": r.availability or {}}
-        for r in rows
-    ]
+    overrides = (payload.weekly_availability or {}) if payload else {}
+    workers = []
+    for r in rows:
+        avail = r.availability or {}
+        ovr = overrides.get(r.name)
+        if isinstance(ovr, dict):
+            avail = ovr
+        workers.append({
+            "id": r.id,
+            "name": r.name,
+            "max_shifts": r.max_shifts,
+            "roles": r.roles or [],
+            "availability": avail,
+        })
 
     # Choose effective parameters (query overrides body if provided)
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))

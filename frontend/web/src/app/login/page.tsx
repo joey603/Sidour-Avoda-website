@@ -17,7 +17,7 @@ export default function LoginPage() {
     if (token) {
       fetchMe().then((me) => {
         if (!me) return;
-        router.replace(me.role === "director" ? "/director" : "/worker");
+        router.replace("/");
       });
     }
   }, [router]);
@@ -32,8 +32,8 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
       setToken(data.access_token);
-      const me = await fetchMe();
-      router.replace(me?.role === "director" ? "/director" : "/worker");
+      await fetchMe();
+      router.replace("/");
     } catch (err: any) {
       setError("שגיאת התחברות. בדקו את הפרטים.");
     } finally {

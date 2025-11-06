@@ -76,6 +76,8 @@ class AIPlanningRequest(BaseModel):
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
     # Optional: exclude specific day keys from planning (e.g., past days of the current week)
     exclude_days: list[str] | None = None
+    # Optional: per-week availability overrides by worker name
+    weekly_availability: dict[str, dict[str, list[str]]] | None = None
 
 
 class AIPlanningCell(BaseModel):

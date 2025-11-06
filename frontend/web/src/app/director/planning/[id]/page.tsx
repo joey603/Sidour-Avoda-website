@@ -126,6 +126,65 @@ export default function PlanningPage() {
   const [pendingExcludeDays, setPendingExcludeDays] = useState<string[] | null>(null);
   // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
+  // Weekly per-worker availability overrides (per week, per site). Keys by worker name.
+  const [weeklyAvailability, setWeeklyAvailability] = useState<Record<string, WorkerAvailability>>({});
+
+  // Helpers to compute week key and persist weekly availability in localStorage
+  function weekKeyOf(date: Date): string {
+    const d = new Date(date);
+    const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`;
+    const wk = new Date(d);
+    wk.setDate(d.getDate() - d.getDay()); // Sunday
+    return `avail_${params.id}_${iso(wk)}`;
+  }
+  function loadWeeklyAvailability() {
+    try {
+      const raw = localStorage.getItem(weekKeyOf(weekStart));
+      if (!raw) {
+        setWeeklyAvailability({});
+        return;
+      }
+      const parsed = JSON.parse(raw || '{}');
+      setWeeklyAvailability(parsed && typeof parsed === 'object' ? parsed : {});
+    } catch {
+      setWeeklyAvailability({});
+    }
+  }
+  function saveWeeklyAvailability(next: Record<string, WorkerAvailability>) {
+    try {
+      localStorage.setItem(weekKeyOf(weekStart), JSON.stringify(next));
+    } catch {}
+  }
+
+  // Build the availability to send to backend: weekly overrides merged with red overlays
+  function buildWeeklyAvailabilityForRequest(): Record<string, WorkerAvailability> {
+    const out: Record<string, WorkerAvailability> = JSON.parse(JSON.stringify(weeklyAvailability || {}));
+    const ensureDays = (wa: WorkerAvailability): WorkerAvailability => ({
+      sun: wa.sun || [],
+      mon: wa.mon || [],
+      tue: wa.tue || [],
+      wed: wa.wed || [],
+      thu: wa.thu || [],
+      fri: wa.fri || [],
+      sat: wa.sat || [],
+    });
+    Object.keys(availabilityOverlays || {}).forEach((name) => {
+      const perDay = (availabilityOverlays[name] || {}) as Record<string, string[]>;
+      const base = ensureDays(out[name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+      Object.keys(perDay).forEach((dayKey) => {
+        const list = new Set<string>(base[dayKey as keyof WorkerAvailability] || []);
+        (perDay[dayKey] || []).forEach((sn) => list.add(sn));
+        (base as any)[dayKey] = Array.from(list);
+      });
+      out[name] = base;
+    });
+    return out;
+  }
+
+  useEffect(() => {
+    loadWeeklyAvailability();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStart, params.id]);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
   const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
   const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
@@ -214,7 +273,25 @@ export default function PlanningPage() {
     if (!trimmed) return;
     // Vérification de la זמינות: si non demandée, demander confirmation et, si oui, ajouter un overlay rouge
     const w = findWorkerByName(trimmed);
-    const allowed = !!w && Array.isArray(w.availability?.[dayKey]) && (w.availability![dayKey] as string[]).includes(shiftName);
+    // Effective availability: weekly override first, else worker base availability
+    const effAvail = (() => {
+      const wk = (weeklyAvailability[trimmed] || null) as any;
+      if (wk && typeof wk === "object") return wk as Record<string, string[]>;
+      return (w?.availability || {}) as Record<string, string[]>;
+    })();
+    // Accept equivalent shift names by kind (morning/noon/night)
+    const isMorning = (n?: string) => !!n && (/בוקר/.test(n) || /^0?6/.test(n) || /06-14/i.test(n));
+    const isNoon = (n?: string) => !!n && (/צהר/.test(n) || /^1?4/.test(n) || /14-22/i.test(n));
+    const isNight = (n?: string) => !!n && (/לילה/.test(n) || /night/i.test(n) || /^2?2/.test(n) || /22-06/i.test(n));
+    const matchesShift = (target: string, list: string[]) => {
+      if (list.includes(target)) return true;
+      if (isMorning(target) && list.some(isMorning)) return true;
+      if (isNoon(target) && list.some(isNoon)) return true;
+      if (isNight(target) && list.some(isNight)) return true;
+      return false;
+    };
+    const dayList = (effAvail?.[dayKey] || []) as string[];
+    const allowed = matchesShift(shiftName, dayList);
     if (!allowed) {
       const ok = typeof window !== "undefined" && window.confirm && window.confirm(`לעובד "${trimmed}" אין זמינות למשמרת זו. להקצות בכל זאת?`);
       if (!ok) return;
@@ -1243,7 +1320,7 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-6 pb-24">
       <div className="mx-auto max-w-5xl space-y-6">
         <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
@@ -1359,14 +1436,28 @@ export default function PlanningPage() {
                           <tbody>
                           {(() => {
                             const displayWorkers: Worker[] = (savedWeekPlan?.workers || []).length
-                              ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
+                              ? (savedWeekPlan!.workers as any[]).map((rw: any) => {
+                                  const baseAvail = (rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
+                                  const weekOverride = (weeklyAvailability[rw.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
+                                  const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
+                                  const merged: Record<string, string[]> = {} as any;
+                                  daysK.forEach((dk) => {
+                                    const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
+                                    (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
+                                    merged[dk] = Array.from(s);
+                                  });
+                                  return ({
                                   id: rw.id,
                                   name: rw.name,
                                   maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
-                                  availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                                }))
-                              : workers;
+                                    availability: merged,
+                                  });
+                                })
+                              : workers.map((bw) => ({
+                                  ...bw,
+                                  availability: weeklyAvailability[bw.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                                }));
                             const rows = displayWorkers.filter((w) => !hiddenWorkerIds.includes(w.id));
                             if (rows.length === 0) {
                               return (
@@ -1417,7 +1508,9 @@ export default function PlanningPage() {
                                         setNewWorkerName(w.name);
                                         setNewWorkerMax(w.maxShifts);
                                         setNewWorkerRoles([...w.roles]);
-                                        setNewWorkerAvailability({ ...w.availability });
+                                        // Preload weekly availability (or empty) for this worker for this week only
+                                        const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                                        setNewWorkerAvailability({ ...wa });
                                         setIsAddModalOpen(true);
                                       }}
                                       disabled={isSavedMode}
@@ -1738,7 +1831,7 @@ export default function PlanningPage() {
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
-                                availability: newWorkerAvailability,
+                                // do not update global availability here
                               }),
                             });
                             // eslint-disable-next-line no-console
@@ -1763,7 +1856,7 @@ export default function PlanningPage() {
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
-                                availability: newWorkerAvailability,
+                                // do not set global availability here
                               }),
                             });
                             // eslint-disable-next-line no-console
@@ -1787,6 +1880,15 @@ export default function PlanningPage() {
                             toast.success("עובד נוסף בהצלחה!");
                             }
                           }
+                          // Save weekly override for this specific week
+                          try {
+                            const key = weekKeyOf(weekStart);
+                            const cur = localStorage.getItem(key);
+                            const parsed = cur ? JSON.parse(cur) : {};
+                            parsed[trimmed] = { ...newWorkerAvailability };
+                            localStorage.setItem(key, JSON.stringify(parsed));
+                            setWeeklyAvailability(parsed);
+                          } catch {}
                           setEditingWorkerId(null);
                           setNewWorkerName("");
                           setNewWorkerMax(5);
@@ -1853,11 +1955,13 @@ export default function PlanningPage() {
                     "inline-flex items-center rounded-md border px-3 py-1 text-sm " +
                      (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
                   }
+                  style={{ display: 'none' }}
                 >
                   אוטומטי
                 </button>
                 <button
                   type="button"
+                  style={{ display: 'none' }}
                   onClick={() => {
                     // If already in manual mode, do nothing (no popup)
                     if (isManual) return;
@@ -1905,18 +2009,17 @@ export default function PlanningPage() {
                   type="button"
                   aria-label="שבוע קודם"
                   onClick={() => {
-                    if (editingSaved) {
-                      const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
-                      if (!confirmed) return;
-                      setEditingSaved(false);
-                    }
+                    if (editingSaved) return;
                     stopAiGeneration();
                     setAiPlan(null);
                     setAltIndex(0);
                     baseAssignmentsRef.current = null;
+                    // Default to automatic mode on week change
+                    setIsManual(false);
                     setWeekStart((prev) => addDays(prev, -7));
                   }}
-                  className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  disabled={editingSaved}
+                  className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
                 </button>
@@ -1930,26 +2033,26 @@ export default function PlanningPage() {
                   type="button"
                   aria-label="שבוע הבא"
                   onClick={() => {
-                    if (editingSaved) {
-                      const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
-                      if (!confirmed) return;
-                      setEditingSaved(false);
-                    }
+                    if (editingSaved) return;
                     stopAiGeneration();
                     setAiPlan(null);
                     setAltIndex(0);
                     baseAssignmentsRef.current = null;
+                    // Default to automatic mode on week change
+                    setIsManual(false);
                     setWeekStart((prev) => addDays(prev, 7));
                   }}
-                  className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  disabled={editingSaved}
+                  className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
                 </button>
                 <button
                   type="button"
                   aria-label="בחר שבוע מלוח שנה"
-                  onClick={() => setIsCalendarOpen(true)}
-                  className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  onClick={() => { if (!editingSaved) setIsCalendarOpen(true); }}
+                  disabled={editingSaved}
+                  className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
                 >
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
                     <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
@@ -1977,11 +2080,13 @@ export default function PlanningPage() {
                       <button
                         type="button"
                         onClick={() => {
+                          if (editingSaved) return;
                           const nextMonth = new Date(calendarMonth);
                           nextMonth.setMonth(nextMonth.getMonth() + 1);
                           setCalendarMonth(nextMonth);
                         }}
-                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                        disabled={editingSaved}
+                        className={`p-1 rounded ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                       >
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                           <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
@@ -1993,11 +2098,13 @@ export default function PlanningPage() {
                       <button
                         type="button"
                         onClick={() => {
+                          if (editingSaved) return;
                           const prevMonth = new Date(calendarMonth);
                           prevMonth.setMonth(prevMonth.getMonth() - 1);
                           setCalendarMonth(prevMonth);
                         }}
-                        className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded"
+                        disabled={editingSaved}
+                        className={`p-1 rounded ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                       >
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                           <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
@@ -2060,29 +2167,27 @@ export default function PlanningPage() {
                               key={i}
                               type="button"
                               onClick={() => {
-                                if (editingSaved) {
-                                  const confirmed = window.confirm("אזהרה: כל השינויים שלא נשמרו יבוטלו אם תשנה תאריך. האם אתה בטוח שברצונך להמשיך?");
-                                  if (!confirmed) return;
-                                  setEditingSaved(false);
-                                }
+                                if (editingSaved) return;
                                 stopAiGeneration();
                                 setAiPlan(null);
                                 setAltIndex(0);
                                 baseAssignmentsRef.current = null;
-                                // Calculer le début de la semaine pour cette date
                                 const selectedWeekStart = new Date(date);
-                                selectedWeekStart.setDate(date.getDate() - date.getDay()); // Dimanche
+                                selectedWeekStart.setDate(date.getDate() - date.getDay());
+                                // Default to automatic mode on week change
+                                setIsManual(false);
                                 setWeekStart(selectedWeekStart);
                                 setCalendarMonth(new Date(year, month, 1));
                                 setIsCalendarOpen(false);
                               }}
+                              disabled={editingSaved}
                               className={`
                                 p-2 text-sm rounded flex flex-col items-center relative
                                 ${!isCurrentMonth ? "text-zinc-300 dark:text-zinc-600" : ""}
                                 ${isToday ? "bg-[#00A8E0] text-white font-semibold" : ""}
                                 ${isCurrentWeek && isCurrentMonth && !isToday ? "bg-[#00A8E0]/20 border border-[#00A8E0]" : ""}
                                 ${isWeekStart && isCurrentMonth ? "font-semibold" : ""}
-                                hover:bg-zinc-100 dark:hover:bg-zinc-800
+                                ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-100 dark:hover:bg-zinc-800"}
                                 ${isCurrentMonth && !isToday && !isCurrentWeek ? "text-zinc-700 dark:text-zinc-300" : ""}
                               `}
                             >
@@ -2466,17 +2571,37 @@ export default function PlanningPage() {
                                       const today0 = new Date(); today0.setHours(0,0,0,0);
                                       const isPastDay = dateCell < today0; // Jours passés (sans le jour actuel), toujours grisés
                                       const assignedNames: string[] = (() => {
-                                        // Priorité au plan sauvegardé pour la semaine
-                                        const savedCell = (savedWeekPlan as any)?.assignments?.[d.key]?.[sn]?.[idx];
+                                        // En mode ערוך, utiliser les assignations en cours d'édition, sinon utiliser savedWeekPlan
+                                        if (editingSaved) {
+                                          if (isManual && manualAssignments) {
+                                            const cell = (manualAssignments as any)[d.key]?.[sn]?.[idx];
+                                            if (Array.isArray(cell) && cell.length > 0) return cell;
+                                          }
+                                          if (aiPlan?.assignments) {
+                                            const cell = aiPlan.assignments[d.key]?.[sn]?.[idx];
+                                            if (Array.isArray(cell) && cell.length > 0) return cell;
+                                          }
+                                          // Fallback: utiliser savedWeekPlan si les assignations en cours d'édition ne sont pas encore chargées
+                                          if (savedWeekPlan?.assignments) {
+                                            const savedCell = (savedWeekPlan as any).assignments[d.key]?.[sn]?.[idx];
                                         if (Array.isArray(savedCell)) return savedCell as string[];
-                                        if (isManual) {
-                                          const cell = (manualAssignments as any)?.[d.key]?.[sn]?.[idx];
+                                          }
+                                          return [];
+                                        }
+                                        // Mode normal: priorité au plan sauvegardé
+                                        if (savedWeekPlan?.assignments) {
+                                          const savedCell = (savedWeekPlan as any).assignments[d.key]?.[sn]?.[idx];
+                                          if (Array.isArray(savedCell)) return savedCell as string[];
+                                        }
+                                        if (isManual && manualAssignments) {
+                                          const cell = (manualAssignments as any)[d.key]?.[sn]?.[idx];
                                           return Array.isArray(cell) ? cell : [];
                                         }
-                                        if (!aiPlan) return [];
-                                        const cell = aiPlan.assignments?.[d.key]?.[sn]?.[idx];
-                                        if (!cell) return [];
-                                        return cell;
+                                        if (aiPlan?.assignments) {
+                                          const cell = aiPlan.assignments[d.key]?.[sn]?.[idx];
+                                          if (Array.isArray(cell)) return cell;
+                                        }
+                                        return [];
                                       })();
                                       const roleMap = assignRoles(assignedNames, st, sn, d.key);
                                       // Filtrer les valeurs vides/falsy pour compter uniquement les assignations réelles
@@ -3403,6 +3528,8 @@ export default function PlanningPage() {
                 <button
                   type="button"
                       id="btn-generate-plan"
+                  style={{ display: 'none' }}
+                  aria-hidden
                   onClick={async () => {
                     // Vérifier si on est en mode ערוך et si la semaine contient le jour actuel
                     if (editingSaved) {
@@ -3569,7 +3696,7 @@ export default function PlanningPage() {
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
-                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: effectiveExcludeDays }),
+                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: effectiveExcludeDays, weekly_availability: buildWeeklyAvailabilityForRequest() }),
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {
@@ -3789,95 +3916,122 @@ export default function PlanningPage() {
                   </div>
                 )}
                 {/* Mode switch dialog moved outside mode-specific blocks */}
-                {aiPlan && (
-                  <div className="mt-3 flex items-center justify-center gap-2 text-sm">
-                    {(() => {
-                      const alts = aiPlan?.alternatives || [];
-                      const total = 1 + (alts?.length || 0);
-                      return (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = (altIndex - 1 + total) % total;
-                              setAltIndex(next);
-                              if (next === 0) {
-                                setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                              } else {
-                                const alt = alts[next - 1];
-                                setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                              }
-                            }}
-                            disabled={total <= 1 || (altIndex === 0 && aiLoading)}
-                            className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          >
-                            חלופה →
-                          </button>
-                          <span>
-                            {altIndex + 1} / {total}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const next = (altIndex + 1) % total;
-                              setAltIndex(next);
-                              if (next === 0) {
-                                setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                              } else {
-                                const alt = alts[next - 1];
-                                setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                              }
-                            }}
-                            disabled={total <= 1}
-                            className="inline-flex items-center rounded-md border px-2 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          >
-                            ← חלופה
-                          </button>
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
+                {/* Inline alternatives controls removed in favor of fixed bottom bar */}
               </div>
               )}
             </section>
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              {isSavedMode && (
-                <button
-                  type="button"
-                  onClick={onDeletePlan}
-                  className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
-                >
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-                  </svg>
-                  מחק
-                </button>
-              )}
-              {editingSaved && (
-                <button
-                  type="button"
-                  onClick={onCancelEdit}
-                  className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-4 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
-                >
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                  </svg>
-                  ביטול
-                </button>
-              )}
+          {/* legacy footer controls removed; now using fixed bottom bar */}
+          </>
+        )}
+      </div>
+      {showModeSwitchDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
+            <div className="mb-3 text-sm">
+              {modeSwitchTarget === "manual"
+                ? "לעבור למצב ידני. לשמור את השיבוצים הנוכחיים במקומם?"
+                : "לעבור למצב אוטומטי. לשמור את השיבוצים הנוכחיים במקומם?"}
             </div>
+            <div className="flex items-center justify-center gap-2">
+                          <button
+                            type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => { setShowModeSwitchDialog(false); setModeSwitchTarget(null); }}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                            onClick={() => {
+                  // Keep current placements while switching
+                  if (modeSwitchTarget === "auto") {
+                    if (isManual && manualAssignments) {
+                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+                      const shiftNames = Array.from(new Set(((site?.config?.stations || []) as any[])
+                        .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+                        .filter(Boolean)));
+                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+                      setAiPlan({
+                        days: dayKeys,
+                        shifts: shiftNames,
+                        stations: stationNames,
+                        assignments: manualAssignments,
+                        alternatives: [],
+                        status: "TEMP",
+                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+                      } as any);
+                    }
+                    setIsManual(false);
+                  } else if (modeSwitchTarget === "manual") {
+                    try { stopAiGeneration(); } catch {}
+                    if (!isManual && aiPlan?.assignments) {
+                      setManualAssignments(aiPlan.assignments);
+                    }
+                    setIsManual(true);
+                  }
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                שמור מיקומים
+                          </button>
+                          <button
+                            type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                            onClick={() => {
+                  // Reset grid when switching
+                  if (modeSwitchTarget === "auto") {
+                    setAiPlan(null);
+                    setIsManual(false);
+                  } else if (modeSwitchTarget === "manual") {
+                    try { stopAiGeneration(); } catch {}
+                    setManualAssignments(null);
+                    setManualRoleHints(null);
+                    setAiPlan(null);
+                    setIsManual(true);
+                  }
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                אפס גריד
+                          </button>
+                  </div>
+              </div>
+          </div>
+      )}
+      {(() => {
+        const alts = aiPlan?.alternatives || [];
+        const total = 1 + (alts?.length || 0);
+        return (
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-zinc-900/90 dark:border-zinc-800">
+            <div className="mx-auto max-w-6xl px-3 py-2 grid grid-cols-3 items-center gap-4 text-sm">
+              {/* Left: Save / Edit / Delete */}
             <div className="flex items-center gap-2">
-              {isSavedMode && !editingSaved && (
+              <button
+                type="button"
+                onClick={onDeletePlan}
+                disabled={!isSavedMode}
+                className={
+                  "inline-flex items-center gap-2 rounded-md px-3 py-1 text-sm " +
+                  (isSavedMode
+                    ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+                    : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
+                }
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+                מחק
+              </button>
+              {!editingSaved && (
                 <button
                   type="button"
                   onClick={() => {
-                    try {
-                      if (!savedWeekPlan || !savedWeekPlan.assignments) return;
-                      const assignmentsAny: any = savedWeekPlan.assignments;
-                      // Re-matérialiser les données enregistrées dans les états actifs
+                    if (!isSavedMode || !savedWeekPlan || !savedWeekPlan.assignments) return;
+                    const assignmentsAny: any = savedWeekPlan.assignments;
                       const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
                       const shiftNames = Array.from(
                         new Set(
@@ -3912,110 +4066,209 @@ export default function PlanningPage() {
                           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
                         }));
                         setWorkers(mapped);
-                      }
-                    } finally {
-                      // Sortir du mode "sauvegardé" tout en conservant les données matérialisées
-                      setSavedWeekPlan(null);
-                      setEditingSaved(true);
+                      // Précharger les זמינות hebdomadaires avec celles du planning sauvegardé (fusion avec overrides existants)
+                      try {
+                        const merged: Record<string, WorkerAvailability> = {} as any;
+                        const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
+                        (savedWeekPlan.workers as any[]).forEach((rw: any) => {
+                          const baseAvail = (rw.availability || {}) as Record<string, string[]>;
+                          const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
+                          const out: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+                          daysK.forEach((dk) => {
+                            const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
+                            (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
+                            (out as any)[dk] = Array.from(s);
+                          });
+                          merged[rw.name] = out;
+                        });
+                        setWeeklyAvailability(merged);
+                      } catch {}
                     }
+                      setEditingSaved(true);
+                    // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
                   }}
-                  className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+                  disabled={!isSavedMode}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md px-3 py-1 text-sm " +
+                    (isSavedMode
+                      ? "bg-[#00A8E0] text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+                      : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-700")
+                  }
                 >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                  </svg>
                   ערוך
+                </button>
+              )}
+                {editingSaved && (
+                  <button
+                    type="button"
+                    onClick={onCancelEdit}
+                    className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-1 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                    </svg>
+                    ביטול
                 </button>
               )}
               <button
                 type="button"
                 onClick={onSavePlan}
-                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                  className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                  <path d="M17 3H7a2 2 0 0 0-2 2v14l7-3 7 3V5a2 2 0 0 0-2-2Z"/>
+                  <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
                 </svg>
                 שמור
               </button>
+                {/* Mode toggle near save removed per request */}
             </div>
+              {/* Middle: Generate Plan + Mode toggle on the right */}
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => { try { triggerGenerateButton(); } catch {} }}
+                  disabled={aiLoading || isSavedMode || isManual}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 " +
+                    ((aiLoading || isSavedMode || isManual)
+                      ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
+                      : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
+                  }
+                >
+                  {aiLoading ? (
+                    <>
+                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                      </svg>
+                      יוצר...
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                      </svg>
+                      יצירת תכנון
+                    </>
+                  )}
+                </button>
+                {(!isSavedMode || editingSaved) && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModeSwitchTarget("auto");
+                        setShowModeSwitchDialog(true);
+                      }}
+                      className={
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                         (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94 0 .32.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                      </svg>
+                      אוטומטי
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isManual) return;
+                        const nonEmpty = (assignments: any): boolean => {
+                          if (!assignments || typeof assignments !== "object") return false;
+                          for (const dayKey of Object.keys(assignments)) {
+                            const shiftsMap = (assignments as any)[dayKey];
+                            if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                            for (const shiftName of Object.keys(shiftsMap)) {
+                              const perStation = (shiftsMap as any)[shiftName];
+                              if (!Array.isArray(perStation)) continue;
+                              for (const cell of perStation) {
+                                if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                                  return true;
+                                }
+                              }
+                            }
+                          }
+                          return false;
+                        };
+                        const hasContent = !isManual
+                          ? nonEmpty(aiPlan?.assignments as any)
+                          : (nonEmpty(manualAssignments) || (!!savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments as any)));
+                        if (!hasContent) {
+                          try { stopAiGeneration(); } catch {}
+                          setIsManual(true);
+                          return;
+                        }
+                        setModeSwitchTarget("manual");
+                        setShowModeSwitchDialog(true);
+                      }}
+                      className={
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                         (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M9 11.24V7.5a2.5 2.5 0 0 1 5 0v3.74c1.21-.81 2-2.18 2-3.74C16 5.01 13.99 3 11.5 3S7 5.01 7 7.5c0 1.56.79 2.93 2 3.74zm9.84 4.63l-4.54-2.26c-.17-.07-.35-.11-.54-.11H13v-6c0-.83-.67-1.5-1.5-1.5S10 6.67 10 7.5v10.74l-3.43-.72c-.08-.01-.15-.03-.24-.03-.31 0-.59.13-.79.33l-.79.8 4.94 4.94c.27.27.65.44 1.06.44h6.79c.75 0 1.33-.55 1.44-1.28l.75-5.27c.01-.07.02-.14.02-.2 0-.62-.38-1.16-.91-1.38z"/>
+                      </svg>
+                      ידני
+                    </button>
           </div>
-          </>
         )}
       </div>
-      {showModeSwitchDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
-            <div className="mb-3 text-sm">
-              {modeSwitchTarget === "manual"
-                ? "לעבור למצב ידני. לשמור את השיבוצים הנוכחיים במקומם?"
-                : "לעבור למצב אוטומטי. לשמור את השיבוצים הנוכחיים במקומם?"}
-            </div>
-            <div className="flex items-center justify-center gap-2">
-              <button
-                type="button"
-                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => { setShowModeSwitchDialog(false); setModeSwitchTarget(null); }}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => {
-                  // Keep current placements while switching
-                  if (modeSwitchTarget === "auto") {
-                    if (isManual && manualAssignments) {
-                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                      const shiftNames = Array.from(new Set(((site?.config?.stations || []) as any[])
-                        .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-                        .filter(Boolean)));
-                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-                      setAiPlan({
-                        days: dayKeys,
-                        shifts: shiftNames,
-                        stations: stationNames,
-                        assignments: manualAssignments,
-                        alternatives: [],
-                        status: "TEMP",
-                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-                      } as any);
-                    }
-                    setIsManual(false);
-                  } else if (modeSwitchTarget === "manual") {
-                    try { stopAiGeneration(); } catch {}
-                    if (!isManual && aiPlan?.assignments) {
-                      setManualAssignments(aiPlan.assignments);
-                    }
-                    setIsManual(true);
-                  }
-                  setShowModeSwitchDialog(false);
-                  setModeSwitchTarget(null);
-                }}
-              >
-                שמור מיקומים
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
-                onClick={() => {
-                  // Reset grid when switching
-                  if (modeSwitchTarget === "auto") {
-                    setAiPlan(null);
-                    setIsManual(false);
-                  } else if (modeSwitchTarget === "manual") {
-                    try { stopAiGeneration(); } catch {}
-                    setManualAssignments(null);
-                    setManualRoleHints(null);
-                    setAiPlan(null);
-                    setIsManual(true);
-                  }
-                  setShowModeSwitchDialog(false);
-                  setModeSwitchTarget(null);
-                }}
-              >
-                אפס גריד
-              </button>
-            </div>
+              {/* Right: Alternatives (only in auto mode) */}
+              {!isManual && aiPlan && total > 1 && (
+                <div className="flex items-center justify-end gap-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = (altIndex - 1 + total) % total;
+                      setAltIndex(next);
+                      if (next === 0) {
+                        setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
+                      } else {
+                        const alt = alts[next - 1];
+                        setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
+                      }
+                    }}
+                    disabled={total <= 1 || (altIndex === 0 && aiLoading)}
+                    className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/>
+                    </svg>
+                    חלופה
+                  </button>
+                  <span className="min-w-20 text-center">
+                    {altIndex + 1} / {total}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = (altIndex + 1) % total;
+                      setAltIndex(next);
+                      if (next === 0) {
+                        setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
+                      } else {
+                        const alt = alts[next - 1];
+                        setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
+                      }
+                    }}
+                    disabled={total <= 1}
+                    className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  >
+                    חלופה
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
+                    </svg>
+                  </button>
+                </div>
+        )}
+      </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
