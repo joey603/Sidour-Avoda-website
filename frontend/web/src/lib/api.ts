@@ -31,7 +31,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     if (res.status === 401) {
       try { clearToken(); } catch {}
       if (typeof window !== "undefined") {
-        try { window.location.href = "/login"; } catch {}
+        try { window.location.href = "/login/director"; } catch {}
       }
     }
     const err: any = new Error(message);

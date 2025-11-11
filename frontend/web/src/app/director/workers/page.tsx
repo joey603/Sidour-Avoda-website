@@ -29,6 +29,11 @@ export default function WorkersList() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState<string>("");
   const [viewMode, setViewMode] = useState<"list" | "cards">("list");
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
+  const [newWorkerName, setNewWorkerName] = useState("");
+  const [newWorkerPhone, setNewWorkerPhone] = useState("");
+  const [addingWorker, setAddingWorker] = useState(false);
 
   async function fetchWorkers() {
     try {
@@ -57,7 +62,7 @@ export default function WorkersList() {
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       try {
         await Promise.all([fetchWorkers(), fetchSites()]);
@@ -77,6 +82,48 @@ export default function WorkersList() {
     if (!q) return workers;
     return (workers || []).filter((w) => (w?.name || "").toLowerCase().includes(q));
   }, [workers, query]);
+
+  async function handleAddWorker() {
+    if (!selectedSiteId || !newWorkerName.trim() || !newWorkerPhone.trim()) {
+      toast.error("נא למלא את כל השדות");
+      return;
+    }
+    setAddingWorker(true);
+    try {
+      // Créer d'abord le User worker
+      await apiFetch(`/director/sites/${selectedSiteId}/create-worker-user`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        body: JSON.stringify({
+          name: newWorkerName.trim(),
+          phone: newWorkerPhone.trim(),
+        }),
+      });
+      
+      // Ensuite créer le SiteWorker
+      await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        body: JSON.stringify({
+          name: newWorkerName.trim(),
+          max_shifts: 5, // Valeur par défaut
+          roles: [],
+          availability: {},
+        }),
+      });
+      
+      toast.success("העובד נוסף בהצלחה");
+      setIsAddModalOpen(false);
+      setNewWorkerName("");
+      setNewWorkerPhone("");
+      setSelectedSiteId(null);
+      await fetchWorkers();
+    } catch (e: any) {
+      toast.error("שגיאה בהוספת עובד", { description: e?.message || "נסה שוב מאוחר יותר." });
+    } finally {
+      setAddingWorker(false);
+    }
+  }
 
   return (
     <div className="min-h-screen p-6">
@@ -102,7 +149,17 @@ export default function WorkersList() {
                 className="h-9 w-56 md:w-64 rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
               />
             </div>
-            <div />
+            <div className="justify-self-end flex items-center gap-2">
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                  <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/>
+                </svg>
+                הוסף עובד
+              </button>
+            </div>
           </div>
           <div className="mb-4 flex items-center justify-start">
             <div className="inline-flex rounded-md border dark:border-zinc-700 overflow-hidden">
@@ -194,6 +251,75 @@ export default function WorkersList() {
           )}
         </div>
       </div>
+
+      {/* Modal pour ajouter un travailleur */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsAddModalOpen(false)}>
+          <div className="w-full max-w-md rounded-xl border bg-white p-6 shadow-lg dark:border-zinc-700 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-4 text-lg font-semibold">הוסף עובד חדש</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">אתר</label>
+                <select
+                  value={selectedSiteId || ""}
+                  onChange={(e) => setSelectedSiteId(Number(e.target.value) || null)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800"
+                >
+                  <option value="">בחר אתר</option>
+                  {sites.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">שם העובד</label>
+                <input
+                  type="text"
+                  value={newWorkerName}
+                  onChange={(e) => setNewWorkerName(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800"
+                  placeholder="הזן שם עובד"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">מספר טלפון</label>
+                <input
+                  type="tel"
+                  dir="ltr"
+                  value={newWorkerPhone}
+                  onChange={(e) => setNewWorkerPhone(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800"
+                  placeholder="הזן מספר טלפון"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddModalOpen(false);
+                  setNewWorkerName("");
+                  setNewWorkerPhone("");
+                  setSelectedSiteId(null);
+                }}
+                className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                onClick={handleAddWorker}
+                disabled={addingWorker || !selectedSiteId || !newWorkerName.trim() || !newWorkerPhone.trim()}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+              >
+                {addingWorker ? "מוסיף..." : "הוסף"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

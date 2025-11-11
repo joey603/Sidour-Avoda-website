@@ -34,18 +34,22 @@ export default function PlanningPage() {
     sat: [],
   });
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState(false);
+  const [newWorkerPhone, setNewWorkerPhone] = useState("");
   const [editingWorkerId, setEditingWorkerId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [hiddenWorkerIds, setHiddenWorkerIds] = useState<number[]>([]);
   const [weekStart, setWeekStart] = useState<Date>(() => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const day = today.getDay(); // 0 = Sunday
-    const startThisWeek = new Date(today);
-    startThisWeek.setDate(today.getDate() - day);
-    const nextWeek = new Date(startThisWeek);
-    nextWeek.setDate(startThisWeek.getDate() + 7); // semaine prochaine par défaut
-    return nextWeek;
+    // Calculer la semaine prochaine (identique à la page worker)
+    const today = new Date();
+    const currentDay = today.getDay(); // 0 = dimanche, 6 = samedi
+    const daysUntilNextSunday = currentDay === 0 ? 7 : 7 - currentDay; // Si c'est dimanche, prendre le dimanche suivant
+    
+    const nextSunday = new Date(today);
+    nextSunday.setDate(today.getDate() + daysUntilNextSunday);
+    nextSunday.setHours(0, 0, 0, 0);
+    
+    return nextSunday;
   });
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
@@ -158,23 +162,47 @@ export default function PlanningPage() {
 
   // Build the availability to send to backend: weekly overrides merged with red overlays
   function buildWeeklyAvailabilityForRequest(): Record<string, WorkerAvailability> {
-    const out: Record<string, WorkerAvailability> = JSON.parse(JSON.stringify(weeklyAvailability || {}));
-    const ensureDays = (wa: WorkerAvailability): WorkerAvailability => ({
-      sun: wa.sun || [],
-      mon: wa.mon || [],
-      tue: wa.tue || [],
-      wed: wa.wed || [],
-      thu: wa.thu || [],
-      fri: wa.fri || [],
-      sat: wa.sat || [],
+    const out: Record<string, WorkerAvailability> = {};
+    // Nettoyer weeklyAvailability pour s'assurer qu'il n'y a pas de structure imbriquée incorrecte
+    Object.keys(weeklyAvailability || {}).forEach((workerName) => {
+      const wa = weeklyAvailability[workerName];
+      // Si wa a une propriété "availability", c'est une structure incorrecte - extraire directement
+      if (wa && typeof wa === 'object' && 'availability' in wa && !('sun' in wa)) {
+        // Structure incorrecte: {availability: {...}}, extraire directement
+        out[workerName] = (wa as any).availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+      } else {
+        // Structure correcte: {sun: [...], mon: [...], ...}
+        out[workerName] = wa || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+      }
     });
+    
+    const ensureDays = (wa: WorkerAvailability): WorkerAvailability => ({
+      sun: Array.isArray(wa.sun) ? wa.sun : [],
+      mon: Array.isArray(wa.mon) ? wa.mon : [],
+      tue: Array.isArray(wa.tue) ? wa.tue : [],
+      wed: Array.isArray(wa.wed) ? wa.wed : [],
+      thu: Array.isArray(wa.thu) ? wa.thu : [],
+      fri: Array.isArray(wa.fri) ? wa.fri : [],
+      sat: Array.isArray(wa.sat) ? wa.sat : [],
+    });
+    
+    // Nettoyer chaque entrée pour s'assurer qu'elle a la bonne structure
+    Object.keys(out).forEach((name) => {
+      out[name] = ensureDays(out[name]);
+    });
+    
+    // Ajouter les overlays (disponibilités rouges)
     Object.keys(availabilityOverlays || {}).forEach((name) => {
       const perDay = (availabilityOverlays[name] || {}) as Record<string, string[]>;
       const base = ensureDays(out[name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
       Object.keys(perDay).forEach((dayKey) => {
-        const list = new Set<string>(base[dayKey as keyof WorkerAvailability] || []);
-        (perDay[dayKey] || []).forEach((sn) => list.add(sn));
-        (base as any)[dayKey] = Array.from(list);
+        if (Array.isArray(perDay[dayKey])) {
+          const list = new Set<string>(base[dayKey as keyof WorkerAvailability] || []);
+          perDay[dayKey].forEach((sn) => {
+            if (sn) list.add(sn);
+          });
+          (base as any)[dayKey] = Array.from(list);
+        }
       });
       out[name] = base;
     });
@@ -222,13 +250,18 @@ export default function PlanningPage() {
   function findWorkerByName(workerName: string) {
     const trimmed = (workerName || "").trim();
     const list = (savedWeekPlan?.workers || []).length
-      ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
-          id: rw.id,
-          name: rw.name,
-          maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
-          roles: Array.isArray(rw.roles) ? rw.roles : [],
-          availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-        }))
+      ? (savedWeekPlan!.workers as any[]).map((rw: any) => {
+          // Utiliser le maxShifts de l'état workers (mis à jour toutes les 10 secondes) au lieu de celui sauvegardé
+          const currentWorker = workers.find((w) => w.name === rw.name);
+          const currentMaxShifts = currentWorker?.maxShifts ?? rw.max_shifts ?? rw.maxShifts ?? 0;
+          return {
+            id: rw.id,
+            name: rw.name,
+            maxShifts: currentMaxShifts,
+            roles: Array.isArray(rw.roles) ? rw.roles : [],
+            availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+          };
+        })
       : workers;
     return list.find((w) => (w.name || "").trim() === trimmed);
   }
@@ -981,7 +1014,7 @@ export default function PlanningPage() {
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       try {
         const data = await apiFetch(`/director/sites/${params.id}`, {
@@ -1007,6 +1040,28 @@ export default function PlanningPage() {
     })();
   }, [params.id, router]);
 
+  // Calculer la semaine prochaine (identique à la page worker)
+  function calculateNextWeek(): Date {
+    const today = new Date();
+    const currentDay = today.getDay(); // 0 = dimanche, 6 = samedi
+    const daysUntilNextSunday = currentDay === 0 ? 7 : 7 - currentDay; // Si c'est dimanche, prendre le dimanche suivant
+    
+    const nextSunday = new Date(today);
+    nextSunday.setDate(today.getDate() + daysUntilNextSunday);
+    nextSunday.setHours(0, 0, 0, 0);
+    
+    return nextSunday;
+  }
+
+  // Vérifier si la date est la semaine prochaine
+  function isNextWeek(date: Date): boolean {
+    const nextWeekStart = calculateNextWeek();
+    const weekStartNormalized = new Date(date);
+    weekStartNormalized.setHours(0, 0, 0, 0);
+    
+    return weekStartNormalized.getTime() === nextWeekStart.getTime();
+  }
+
   async function loadWorkers() {
     try {
       // eslint-disable-next-line no-console
@@ -1027,6 +1082,41 @@ export default function PlanningPage() {
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: mapped", mapped);
       setWorkers(mapped);
+      
+      // Si on est sur la semaine prochaine, charger les זמינות depuis la base de données dans weeklyAvailability
+      if (isNextWeek(weekStart)) {
+        const nextWeekAvail: Record<string, WorkerAvailability> = {};
+        mapped.forEach((w) => {
+          if (w.availability && Object.keys(w.availability).length > 0) {
+            // Vérifier si les זמינות ne sont pas vides
+            const hasAvailability = Object.values(w.availability).some((shifts) => Array.isArray(shifts) && shifts.length > 0);
+            if (hasAvailability) {
+              // Utiliser directement les זמינות de la base de données pour la semaine prochaine
+              nextWeekAvail[w.name] = w.availability;
+            }
+          }
+        });
+        if (Object.keys(nextWeekAvail).length > 0) {
+          // Charger d'abord depuis localStorage pour voir si le directeur a fait des modifications
+          const currentWeekly = weeklyAvailability;
+          const merged: Record<string, WorkerAvailability> = { ...currentWeekly };
+          
+          // Pour chaque worker, utiliser les זמינות de la base de données si le directeur n'a pas fait de modifications
+          Object.keys(nextWeekAvail).forEach((name) => {
+            // Si le directeur n'a pas modifié les זמינות pour ce worker, utiliser celles de la base de données
+            if (!currentWeekly[name] || Object.keys(currentWeekly[name] || {}).length === 0) {
+              merged[name] = nextWeekAvail[name];
+            }
+          });
+          
+          // Mettre à jour l'état et sauvegarder dans localStorage
+          setWeeklyAvailability(merged);
+          saveWeeklyAvailability(merged);
+        }
+      } else {
+        // Si ce n'est pas la semaine prochaine, charger depuis localStorage uniquement
+        loadWeeklyAvailability();
+      }
     } catch (e: any) {
       toast.error("שגיאה בטעינת עובדים", { description: e?.message || "נסה שוב מאוחר יותר." });
     }
@@ -1034,6 +1124,15 @@ export default function PlanningPage() {
 
   useEffect(() => {
     loadWorkers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id, weekStart]);
+
+  // Recharger les workers périodiquement pour récupérer les זמינות et max_shifts mises à jour par les travailleurs
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadWorkers();
+    }, 10000); // Recharger toutes les 10 secondes pour voir les mises à jour plus rapidement
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
@@ -1405,10 +1504,11 @@ export default function PlanningPage() {
                           // reset form for add
                           setEditingWorkerId(null);
                           setNewWorkerName("");
+                          setNewWorkerPhone("");
                           setNewWorkerMax(5);
                           setNewWorkerRoles([]);
                           setNewWorkerAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                          setIsAddModalOpen(true);
+                          setIsCreateUserModalOpen(true);
                         }}
                         disabled={isSavedMode}
                         className={
@@ -1437,27 +1537,56 @@ export default function PlanningPage() {
                           {(() => {
                             const displayWorkers: Worker[] = (savedWeekPlan?.workers || []).length
                               ? (savedWeekPlan!.workers as any[]).map((rw: any) => {
+                                  // Utiliser les זמינות de la base de données comme base
                                   const baseAvail = (rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
-                                  const weekOverride = (weeklyAvailability[rw.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
+                                  // weeklyAvailability sert d'override pour cette semaine
+                                  const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
                                   const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
                                   const merged: Record<string, string[]> = {} as any;
                                   daysK.forEach((dk) => {
-                                    const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
-                                    (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
-                                    merged[dk] = Array.from(s);
+                                    // Si un override existe pour ce jour, l'utiliser, sinon utiliser la base
+                                    if (weekOverride[dk] && Array.isArray(weekOverride[dk]) && weekOverride[dk].length > 0) {
+                                      merged[dk] = weekOverride[dk];
+                                    } else {
+                                      merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
+                                    }
                                   });
+                                  // Utiliser le maxShifts de l'état workers (mis à jour toutes les 10 secondes) au lieu de celui sauvegardé
+                                  const currentWorker = workers.find((w) => w.name === rw.name);
+                                  const currentMaxShifts = currentWorker?.maxShifts ?? rw.max_shifts ?? rw.maxShifts ?? 0;
                                   return ({
                                   id: rw.id,
                                   name: rw.name,
-                                  maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
+                                  maxShifts: currentMaxShifts,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
                                     availability: merged,
                                   });
                                 })
-                              : workers.map((bw) => ({
-                                  ...bw,
-                                  availability: weeklyAvailability[bw.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                                }));
+                              : workers.map((bw) => {
+                                  // Pour la semaine prochaine, utiliser les זמינות de la base de données OU weeklyAvailability
+                                  // Pour les autres semaines, utiliser uniquement weeklyAvailability (pas les זמינות de la base de données)
+                                  const isNextWeekDisplay = isNextWeek(weekStart);
+                                  const baseAvail = (bw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
+                                  const weekOverride = (weeklyAvailability[bw.name] || {}) as Record<string, string[]>;
+                                  const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
+                                  const merged: Record<string, string[]> = {} as any;
+                                  daysK.forEach((dk) => {
+                                    // Si un override existe pour ce jour, l'utiliser
+                                    if (weekOverride[dk] && Array.isArray(weekOverride[dk]) && weekOverride[dk].length > 0) {
+                                      merged[dk] = weekOverride[dk];
+                                    } else if (isNextWeekDisplay) {
+                                      // Pour la semaine prochaine uniquement, utiliser les זמינות de la base de données
+                                      merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
+                                    } else {
+                                      // Pour les autres semaines, ne pas utiliser les זמינות de la base de données
+                                      merged[dk] = [];
+                                    }
+                                  });
+                                  return {
+                                    ...bw,
+                                    availability: merged,
+                                  };
+                                });
                             const rows = displayWorkers.filter((w) => !hiddenWorkerIds.includes(w.id));
                             if (rows.length === 0) {
                               return (
@@ -1626,6 +1755,90 @@ export default function PlanningPage() {
               })()}
             </section>
           {/* removed per-user request: saved summary shown separately below using standard format */}
+
+            {/* Modal de création d'utilisateur worker (nom + téléphone) */}
+            {isCreateUserModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="relative mb-3 flex items-center justify-center">
+                    <h3 className="text-lg font-semibold text-center">יצירת עובד חדש</h3>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateUserModalOpen(false)}
+                      className="absolute right-2 top-1.5 rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-semibold mb-2">שם העובד</label>
+                      <input
+                        type="text"
+                        value={newWorkerName}
+                        onChange={(e) => setNewWorkerName(e.target.value)}
+                        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        placeholder="הזן שם"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold mb-2">מספר טלפון</label>
+                      <input
+                        type="tel"
+                        value={newWorkerPhone}
+                        onChange={(e) => setNewWorkerPhone(e.target.value)}
+                        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        placeholder="הזן מספר טלפון"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsCreateUserModalOpen(false)}
+                      className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      ביטול
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const trimmedName = newWorkerName.trim();
+                        const trimmedPhone = newWorkerPhone.trim();
+                        if (!trimmedName || !trimmedPhone) {
+                          toast.error("נא למלא את כל השדות");
+                          return;
+                        }
+                        try {
+                          // Créer l'utilisateur worker
+                          const userResult = await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
+                            method: "POST",
+                            headers: { 
+                              Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+                              "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                              name: trimmedName,
+                              phone: trimmedPhone,
+                            }),
+                          });
+                          toast.success("עובד נוצר בהצלחה!");
+                          setIsCreateUserModalOpen(false);
+                          // Ouvrir le modal des זמינות avec le nom pré-rempli
+                          setIsAddModalOpen(true);
+                        } catch (e: any) {
+                          const msg = String(e?.message || "");
+                          toast.error("שגיאה ביצירת עובד", { description: msg || "נסה שוב מאוחר יותר." });
+                        }
+                      }}
+                      className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                    >
+                      המשך
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Modal d'ajout d'employé */}
             {isAddModalOpen && (
@@ -1856,7 +2069,7 @@ export default function PlanningPage() {
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
-                                // do not set global availability here
+                                availability: newWorkerAvailability, // Sauvegarder la disponibilité dans la base de données
                               }),
                             });
                             // eslint-disable-next-line no-console
@@ -3696,7 +3909,17 @@ export default function PlanningPage() {
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
-                        body: JSON.stringify({ num_alternatives: 500, fixed_assignments: fixed || undefined, exclude_days: effectiveExcludeDays, weekly_availability: buildWeeklyAvailabilityForRequest() }),
+                        body: JSON.stringify({ 
+                          num_alternatives: 500, 
+                          fixed_assignments: fixed || undefined, 
+                          exclude_days: effectiveExcludeDays, 
+                          weekly_availability: (() => {
+                            const wa = buildWeeklyAvailabilityForRequest();
+                            // eslint-disable-next-line no-console
+                            console.log("[BTN] weekly_availability to send:", Object.keys(wa), Object.keys(wa).map(k => ({ name: k, days: Object.keys(wa[k] || {}) })));
+                            return wa;
+                          })()
+                        }),
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {
@@ -4010,9 +4233,9 @@ export default function PlanningPage() {
             <div className="mx-auto max-w-6xl px-3 py-2 grid grid-cols-3 items-center gap-4 text-sm">
               {/* Left: Save / Edit / Delete */}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onDeletePlan}
+                <button
+                  type="button"
+                  onClick={onDeletePlan}
                 disabled={!isSavedMode}
                 className={
                   "inline-flex items-center gap-2 rounded-md px-3 py-1 text-sm " +
@@ -4020,18 +4243,18 @@ export default function PlanningPage() {
                     ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
                     : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
                 }
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-                </svg>
-                מחק
-              </button>
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                  </svg>
+                  מחק
+                </button>
               {!editingSaved && (
                 <button
                   type="button"
                   onClick={() => {
                     if (!isSavedMode || !savedWeekPlan || !savedWeekPlan.assignments) return;
-                    const assignmentsAny: any = savedWeekPlan.assignments;
+                      const assignmentsAny: any = savedWeekPlan.assignments;
                       const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
                       const shiftNames = Array.from(
                         new Set(
@@ -4151,8 +4374,8 @@ export default function PlanningPage() {
                         <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
                       </svg>
                       יצירת תכנון
-                    </>
-                  )}
+          </>
+        )}
                 </button>
                 {(!isSavedMode || editingSaved) && (
                   <div className="flex items-center gap-2">
@@ -4214,7 +4437,7 @@ export default function PlanningPage() {
                       </svg>
                       ידני
                     </button>
-          </div>
+      </div>
         )}
       </div>
               {/* Right: Alternatives (only in auto mode) */}
@@ -4236,7 +4459,7 @@ export default function PlanningPage() {
                     className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/>
+                      <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
                     </svg>
                     חלופה
                   </button>
@@ -4260,7 +4483,7 @@ export default function PlanningPage() {
                   >
                     חלופה
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
+                      <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/>
                     </svg>
                   </button>
                 </div>

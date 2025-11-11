@@ -35,7 +35,7 @@ export default function DirectorDashboard() {
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       setName(me.full_name);
       try {

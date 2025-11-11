@@ -12,6 +12,7 @@ interface Worker {
   max_shifts: number;
   roles: string[];
   availability: Record<string, string[]>;
+  phone?: string | null;
 }
 
 interface Site { id: number; name: string; config?: any }
@@ -65,7 +66,7 @@ export default function WorkerDetailsPage() {
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       try {
         const [workers, sitesList] = await Promise.all([
@@ -83,6 +84,8 @@ export default function WorkerDetailsPage() {
         if (!found) {
           setError("עובד לא נמצא");
         }
+        // eslint-disable-next-line no-console
+        console.log("[WorkerDetails] Found worker:", found);
         setWorker(found || null);
       } catch (e: any) {
         setError("שגיאה בטעינת עובד");
@@ -135,6 +138,8 @@ export default function WorkerDetailsPage() {
 
   const effectiveWorker = useMemo(() => {
     if (!worker) return null;
+    // eslint-disable-next-line no-console
+    console.log("[WorkerDetails] effectiveWorker - worker:", worker, "phone:", worker.phone);
     const snap = weekPlan?.workers?.find((w: any) => String(w.id) === String(worker.id));
     if (snap) {
       return {
@@ -144,6 +149,7 @@ export default function WorkerDetailsPage() {
         max_shifts: typeof (snap as any).max_shifts === "number" ? (snap as any).max_shifts : worker.max_shifts,
         roles: Array.isArray((snap as any).roles) ? (snap as any).roles : worker.roles,
         availability: (snap as any).availability || worker.availability,
+        phone: worker.phone, // Toujours utiliser le phone du worker actuel, pas celui sauvegardé
       } as Worker;
     }
     return worker;
@@ -368,8 +374,8 @@ export default function WorkerDetailsPage() {
                   <div className="text-base font-medium">{siteName}</div>
                 </div>
                 <div>
-                  <div className="text-sm text-zinc-500">משמרות מקסימליות</div>
-                  <div className="text-base font-medium">{effectiveWorker?.max_shifts}</div>
+                  <div className="text-sm text-zinc-500">מספר טלפון</div>
+                  <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
                 </div>
                 <div>
                   <div className="text-sm text-zinc-500">תפקידים</div>

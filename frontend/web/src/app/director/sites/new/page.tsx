@@ -70,7 +70,7 @@ export default function NewSitePage() {
 
   useEffect(() => {
     fetchMe().then((me) => {
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
     });
   }, [router]);

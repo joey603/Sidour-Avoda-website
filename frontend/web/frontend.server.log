@@ -1,0 +1,1193 @@
+
+> web@0.1.0 dev
+> next dev --webpack
+
+   ▲ Next.js 16.0.0 (webpack)
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.1.3:3000
+
+ ✓ Starting...
+ ✓ Ready in 4.2s
+ GET / 200 in 2.3s (compile: 1903ms, render: 371ms)
+ GET /director/sites 200 in 810ms (compile: 592ms, render: 219ms)
+ GET /director/planning/5 200 in 165ms (compile: 98ms, render: 68ms)
+ GET /director/planning/1 200 in 1561ms (compile: 1490ms, render: 71ms)
+ GET /director/planning/5 200 in 219ms (compile: 13ms, render: 206ms)
+ GET /director/planning/5 200 in 129ms (compile: 18ms, render: 112ms)
+ GET /director/planning/5 200 in 206ms (compile: 160ms, render: 46ms)
+ GET /director/planning/5 200 in 181ms (compile: 138ms, render: 43ms)
+ GET /director/planning/5 200 in 312ms (compile: 223ms, render: 89ms)
+ GET /director/planning/5 200 in 177ms (compile: 115ms, render: 62ms)
+ GET /director/planning/5 200 in 290ms (compile: 163ms, render: 127ms)
+ GET /director/planning/5 200 in 193ms (compile: 16ms, render: 177ms)
+ GET /director/planning/5 200 in 187ms (compile: 116ms, render: 71ms)
+ GET /director/planning/5 200 in 133ms (compile: 105ms, render: 28ms)
+ GET /director/planning/5 200 in 198ms (compile: 101ms, render: 97ms)
+ GET /director/planning/5 200 in 198ms (compile: 16ms, render: 182ms)
+ GET /director/planning/5 200 in 72ms (compile: 14ms, render: 58ms)
+ GET /director/planning/5 200 in 62ms (compile: 10ms, render: 52ms)
+ GET /director/planning/5 200 in 219ms (compile: 177ms, render: 42ms)
+ GET /director/planning/5 200 in 158ms (compile: 127ms, render: 31ms)
+ GET /director/planning/5 200 in 180ms (compile: 7ms, render: 173ms)
+ GET /director/planning/5 200 in 269ms (compile: 228ms, render: 41ms)
+ GET /director/planning/5 200 in 254ms (compile: 211ms, render: 44ms)
+ GET /director/planning/5 200 in 193ms (compile: 15ms, render: 178ms)
+ GET /director/planning/5 200 in 221ms (compile: 175ms, render: 45ms)
+ GET /director/planning/5 200 in 189ms (compile: 13ms, render: 177ms)
+ GET /director/planning/5 200 in 243ms (compile: 174ms, render: 69ms)
+ GET /director/planning/5 200 in 240ms (compile: 182ms, render: 59ms)
+ GET /director/planning/5 200 in 284ms (compile: 190ms, render: 94ms)
+ GET /director/planning/5 200 in 154ms (compile: 115ms, render: 39ms)
+ GET /director/planning/5 200 in 177ms (compile: 14ms, render: 164ms)
+ GET /director/planning/5 200 in 167ms (compile: 134ms, render: 33ms)
+ GET /director/planning/5 200 in 140ms (compile: 6ms, render: 134ms)
+ GET /director/planning/5 200 in 163ms (compile: 103ms, render: 60ms)
+ GET /director/planning/5 200 in 215ms (compile: 155ms, render: 60ms)
+ GET /director/planning/5 200 in 261ms (compile: 177ms, render: 84ms)
+ GET /director/planning/5 200 in 161ms (compile: 7ms, render: 154ms)
+ GET /director/planning/5 200 in 240ms (compile: 213ms, render: 26ms)
+ GET /director/planning/5 200 in 212ms (compile: 167ms, render: 44ms)
+ GET /director/planning/5 200 in 140ms (compile: 99ms, render: 42ms)
+ GET /director/planning/5 200 in 119ms (compile: 90ms, render: 29ms)
+ GET /director/planning/5 200 in 256ms (compile: 203ms, render: 53ms)
+ GET /director/planning/5 200 in 133ms (compile: 96ms, render: 37ms)
+ GET /director/planning/5 200 in 133ms (compile: 102ms, render: 31ms)
+ GET /director/planning/5 200 in 280ms (compile: 92ms, render: 188ms)
+ GET /director/planning/5 200 in 206ms (compile: 160ms, render: 45ms)
+ GET /director/planning/5 200 in 140ms (compile: 101ms, render: 39ms)
+ GET /director/planning/5 200 in 214ms (compile: 171ms, render: 44ms)
+ GET /director/planning/5 200 in 211ms (compile: 181ms, render: 29ms)
+ GET /director/planning/5 200 in 190ms (compile: 8ms, render: 181ms)
+ GET /director/planning/5 200 in 250ms (compile: 203ms, render: 47ms)
+ GET /director/planning/5 200 in 135ms (compile: 103ms, render: 33ms)
+ GET /director/planning/5 200 in 146ms (compile: 119ms, render: 27ms)
+ GET /director/planning/5 200 in 151ms (compile: 12ms, render: 139ms)
+ GET /director/planning/5 200 in 177ms (compile: 133ms, render: 44ms)
+ GET /director/planning/5 200 in 276ms (compile: 185ms, render: 91ms)
+ GET /director/planning/5 200 in 184ms (compile: 137ms, render: 47ms)
+ GET /director/planning/5 200 in 78ms (compile: 54ms, render: 25ms)
+ GET /director/planning/5 200 in 159ms (compile: 121ms, render: 38ms)
+ GET /director/planning/5 200 in 83ms (compile: 59ms, render: 24ms)
+ GET /director/planning/5 200 in 201ms (compile: 153ms, render: 49ms)
+ GET /director/planning/5 200 in 154ms (compile: 127ms, render: 26ms)
+ GET /director/sites 200 in 53ms (compile: 28ms, render: 25ms)
+ GET /director/planning/4 200 in 27ms (compile: 8ms, render: 19ms)
+ GET /director/planning/4 200 in 112ms (compile: 81ms, render: 32ms)
+ GET /director/planning/4 200 in 213ms (compile: 168ms, render: 45ms)
+ GET /director/planning/4 200 in 90ms (compile: 66ms, render: 25ms)
+ GET /director/planning/4 200 in 95ms (compile: 68ms, render: 27ms)
+ GET /director/planning/4 200 in 79ms (compile: 55ms, render: 23ms)
+ GET /director/planning/4 200 in 200ms (compile: 145ms, render: 55ms)
+ GET /director/planning/4 200 in 84ms (compile: 59ms, render: 25ms)
+ GET /director/workers 200 in 974ms (compile: 936ms, render: 38ms)
+ GET /director/sites 200 in 37ms (compile: 21ms, render: 16ms)
+ GET / 200 in 579ms (compile: 555ms, render: 24ms)
+ GET /director/sites 200 in 27ms (compile: 11ms, render: 17ms)
+ GET /director/planning/1 200 in 57ms (compile: 35ms, render: 21ms)
+ GET /director/planning/1 200 in 2.1s (compile: 292ms, render: 1834ms)
+ GET /director/planning/1 200 in 574ms (compile: 351ms, render: 223ms)
+ GET /director/planning/1 200 in 366ms (compile: 46ms, render: 319ms)
+ GET /director/planning/1 200 in 383ms (compile: 123ms, render: 261ms)
+ GET /director/planning/1 200 in 144ms (compile: 28ms, render: 116ms)
+ GET /director/sites 200 in 772ms (compile: 265ms, render: 507ms)
+ GET /director/planning/3 200 in 87ms (compile: 24ms, render: 63ms)
+ GET /director/planning/5 200 in 82ms (compile: 42ms, render: 40ms)
+ GET /director/planning/1 200 in 104ms (compile: 32ms, render: 72ms)
+ GET /director/planning/1 200 in 39ms (compile: 8ms, render: 31ms)
+ GET /director/planning/1 200 in 35ms (compile: 7ms, render: 28ms)
+ GET /director/planning/3 200 in 84ms (compile: 62ms, render: 22ms)
+ GET /director/planning/4 200 in 33ms (compile: 7ms, render: 26ms)
+ GET /director/planning/1 200 in 44ms (compile: 10ms, render: 34ms)
+ GET /director/planning/1 200 in 201ms (compile: 27ms, render: 174ms)
+ GET /director/planning/1 200 in 174ms (compile: 33ms, render: 141ms)
+ GET /director/planning/1 200 in 202ms (compile: 30ms, render: 172ms)
+ GET /director/planning/1 200 in 179ms (compile: 32ms, render: 147ms)
+ GET /director/planning/1 200 in 242ms (compile: 33ms, render: 209ms)
+ GET /director/planning/1 200 in 128ms (compile: 24ms, render: 104ms)
+ GET /director/planning/1 200 in 98ms (compile: 18ms, render: 81ms)
+ GET /director/sites 200 in 48ms (compile: 10ms, render: 37ms)
+ GET /director/planning/5 200 in 30ms (compile: 6ms, render: 23ms)
+ GET /director/planning/5 200 in 303ms (compile: 60ms, render: 243ms)
+ GET /director/planning/5 200 in 73ms (compile: 12ms, render: 60ms)
+ GET /director/sites 200 in 114ms (compile: 33ms, render: 81ms)
+ GET /director/planning/1 200 in 64ms (compile: 27ms, render: 37ms)
+ GET /director/planning/1 200 in 229ms (compile: 51ms, render: 177ms)
+ GET /director/planning/1 200 in 264ms (compile: 38ms, render: 226ms)
+ GET /director/planning/1 200 in 121ms (compile: 21ms, render: 101ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /login 200 in 1979ms (compile: 1807ms, render: 172ms)
+ GET /director/planning/1 200 in 148ms (compile: 53ms, render: 95ms)
+ GET /director/planning/1 200 in 80ms (compile: 12ms, render: 68ms)
+ GET /login 200 in 43ms (compile: 3ms, render: 41ms)
+ GET /login 200 in 141ms (compile: 32ms, render: 109ms)
+ GET /director 200 in 1150ms (compile: 1111ms, render: 40ms)
+ GET /director/planning/1 200 in 146ms (compile: 89ms, render: 58ms)
+ GET /director/planning/1 200 in 262ms (compile: 16ms, render: 247ms)
+ GET /director/planning/1 200 in 153ms (compile: 28ms, render: 125ms)
+ GET /director/planning/1 200 in 153ms (compile: 16ms, render: 137ms)
+ GET /login 200 in 275ms (compile: 196ms, render: 80ms)
+ GET /login 200 in 268ms (compile: 45ms, render: 223ms)
+ GET /director 200 in 109ms (compile: 27ms, render: 82ms)
+ GET /director/planning/1 200 in 51ms (compile: 25ms, render: 26ms)
+ GET /director/planning/1 200 in 177ms (compile: 34ms, render: 143ms)
+ GET /director/planning/1 200 in 299ms (compile: 42ms, render: 256ms)
+ GET /director/planning/1 200 in 881ms (compile: 166ms, render: 716ms)
+ GET /director 200 in 272ms (compile: 29ms, render: 243ms)
+ GET /director/planning/4 200 in 140ms (compile: 19ms, render: 121ms)
+ GET /director/planning/5 200 in 40ms (compile: 8ms, render: 32ms)
+ GET /director/planning/4 200 in 400ms (compile: 59ms, render: 341ms)
+ GET /director/planning/4 200 in 465ms (compile: 90ms, render: 375ms)
+ GET /director/planning/4 200 in 493ms (compile: 54ms, render: 439ms)
+ GET /director/planning/4 200 in 157ms (compile: 128ms, render: 29ms)
+ GET /director/planning/4 200 in 119ms (compile: 7ms, render: 112ms)
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/4 500 in 2.6s (compile: 2.3s, render: 318ms)
+ GET /director/planning/4 500 in 14ms (compile: 5ms, render: 9ms)
+ GET /director/planning/4 500 in 12ms (compile: 4ms, render: 8ms)
+ GET /director/planning/4 500 in 14ms (compile: 6ms, render: 8ms)
+ ○ Compiling /_error ...
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET /director/planning/4 500 in 248ms
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/4 500 in 704ms (compile: 690ms, render: 14ms)
+ GET /director/planning/4 500 in 11ms (compile: 4ms, render: 7ms)
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET /director/planning/4 500 in 756ms
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/4 500 in 2.0s
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/4 500 in 328ms (compile: 246ms, render: 82ms)
+ GET /director/planning/4 500 in 18ms (compile: 5ms, render: 13ms)
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected ',', got '{'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:3972:1]
+ [2m3969[0m |         </div>
+ [2m3970[0m |       )}
+ [2m3971[0m |     </div>
+ [2m3972[0m |     {(() => {
+      : [35;1m    ^[0m
+ [2m3973[0m |       const alts = aiPlan?.alternatives || [];
+ [2m3974[0m |       const total = 1 + (alts?.length || 0);
+ [2m3975[0m |       if (!aiPlan || total <= 1) return null;
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/4 500 in 479ms (compile: 456ms, render: 23ms)
+ GET /director/planning/4 500 in 19ms (compile: 6ms, render: 12ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/4 200 in 1884ms (compile: 1705ms, render: 178ms)
+ GET /director/planning/4 200 in 144ms (compile: 103ms, render: 41ms)
+ GET /director/planning/4 200 in 81ms (compile: 58ms, render: 23ms)
+ GET /director/planning/4 200 in 138ms (compile: 10ms, render: 127ms)
+ GET /director/planning/4 200 in 69ms (compile: 13ms, render: 57ms)
+ GET /director/planning/4 200 in 113ms (compile: 22ms, render: 92ms)
+ GET /director/planning/4 200 in 203ms (compile: 153ms, render: 50ms)
+ GET /director/planning/4 200 in 172ms (compile: 137ms, render: 35ms)
+ GET /director/planning/4 200 in 123ms (compile: 85ms, render: 38ms)
+ GET /director/planning/4 200 in 123ms (compile: 81ms, render: 43ms)
+ GET /director/planning/4 200 in 76ms (compile: 51ms, render: 25ms)
+ GET /director/planning/4 200 in 147ms (compile: 93ms, render: 54ms)
+ GET /director/planning/4 200 in 187ms (compile: 58ms, render: 129ms)
+ GET /director/planning/4 200 in 87ms (compile: 55ms, render: 32ms)
+ GET /director/planning/4 200 in 150ms (compile: 8ms, render: 142ms)
+ GET /director/planning/4 200 in 174ms (compile: 134ms, render: 40ms)
+ GET /director/planning/4 200 in 85ms (compile: 56ms, render: 29ms)
+ GET /director/planning/4 200 in 112ms (compile: 78ms, render: 35ms)
+ GET /director/planning/4 200 in 184ms (compile: 136ms, render: 48ms)
+ GET /director/planning/4 200 in 89ms (compile: 58ms, render: 31ms)
+ GET /director/planning/4 200 in 94ms (compile: 69ms, render: 25ms)
+ GET /director/planning/4 200 in 147ms (compile: 96ms, render: 51ms)
+ GET /director/planning/4 200 in 195ms (compile: 151ms, render: 44ms)
+ GET /director/planning/4 200 in 301ms (compile: 186ms, render: 115ms)
+ GET /director/planning/4 200 in 232ms (compile: 106ms, render: 126ms)
+ GET /director/planning/4 200 in 123ms (compile: 59ms, render: 64ms)
+ GET /director/planning/4 200 in 234ms (compile: 192ms, render: 42ms)
+ GET /director/planning/4 200 in 128ms (compile: 86ms, render: 42ms)
+ GET /director/planning/4 200 in 131ms (compile: 97ms, render: 34ms)
+ GET /director/planning/4 200 in 76ms (compile: 51ms, render: 25ms)
+ GET /director/planning/4 200 in 156ms (compile: 11ms, render: 145ms)
+ GET /director/planning/4 200 in 150ms (compile: 102ms, render: 49ms)
+ GET /director/planning/4 200 in 84ms (compile: 55ms, render: 29ms)
+ GET /director/planning/4 200 in 111ms (compile: 72ms, render: 39ms)
+ GET /director/planning/4 200 in 142ms (compile: 90ms, render: 52ms)
+ GET /director/planning/4 200 in 111ms (compile: 78ms, render: 33ms)
+ GET /director/planning/4 200 in 260ms (compile: 186ms, render: 74ms)
+ GET /director/planning/4 200 in 101ms (compile: 65ms, render: 36ms)
+ GET /director/planning/4 200 in 119ms (compile: 82ms, render: 37ms)
+ GET /director/planning/4 200 in 105ms (compile: 71ms, render: 34ms)
+ GET /director/planning/4 200 in 114ms (compile: 87ms, render: 27ms)
+ GET /director/planning/4 200 in 193ms (compile: 139ms, render: 54ms)
+ GET /director/planning/4 200 in 122ms (compile: 86ms, render: 36ms)
+ GET /director/planning/4 200 in 81ms (compile: 52ms, render: 29ms)
+ GET /director/planning/4 200 in 163ms (compile: 131ms, render: 31ms)
+ GET /director/planning/4 200 in 157ms (compile: 118ms, render: 39ms)
+ GET /director/planning/4 200 in 103ms (compile: 56ms, render: 47ms)
+ GET /director/planning/4 200 in 96ms (compile: 69ms, render: 28ms)
+ GET /director/planning/4 200 in 116ms (compile: 60ms, render: 56ms)
+ GET /director/planning/4 200 in 97ms (compile: 62ms, render: 35ms)
+ GET /director/planning/4 200 in 117ms (compile: 79ms, render: 38ms)
+ GET /director/planning/4 200 in 106ms (compile: 64ms, render: 41ms)
+ GET /director/planning/4 200 in 329ms (compile: 280ms, render: 49ms)
+ GET /director/planning/4 200 in 141ms (compile: 104ms, render: 37ms)
+ GET /director/planning/4 200 in 183ms (compile: 109ms, render: 74ms)
+ GET /director/planning/4 200 in 351ms (compile: 129ms, render: 221ms)
+ GET /director/planning/4 200 in 282ms (compile: 113ms, render: 169ms)
+ GET /director/planning/4 200 in 87ms (compile: 56ms, render: 30ms)
+ GET /director/planning/4 200 in 247ms (compile: 210ms, render: 37ms)
+ GET /director/planning/4 200 in 170ms (compile: 112ms, render: 58ms)
+ GET /director 200 in 166ms (compile: 67ms, render: 99ms)
+ GET /director/planning/5 200 in 62ms (compile: 22ms, render: 41ms)
+ GET /director/planning/5 200 in 195ms (compile: 115ms, render: 80ms)
+ GET /director/planning/5 200 in 110ms (compile: 79ms, render: 31ms)
+ GET /director/planning/5 200 in 79ms (compile: 52ms, render: 27ms)
+ GET /director/planning/5 200 in 201ms (compile: 115ms, render: 85ms)
+ GET /director/planning/5 200 in 168ms (compile: 8ms, render: 160ms)
+ GET /director 200 in 123ms (compile: 94ms, render: 29ms)
+ GET /director/sites/new 200 in 946ms (compile: 911ms, render: 35ms)
+ GET /director/planning/6 200 in 91ms (compile: 72ms, render: 19ms)
+ GET /director/planning/6 200 in 209ms (compile: 160ms, render: 49ms)
+ GET /director/planning/6 200 in 169ms (compile: 99ms, render: 70ms)
+ GET /director/planning/6 200 in 106ms (compile: 61ms, render: 45ms)
+ GET /director/planning/6 200 in 285ms (compile: 222ms, render: 63ms)
+ GET /director/planning/6 200 in 118ms (compile: 73ms, render: 45ms)
+ GET /director/planning/6 200 in 291ms (compile: 7ms, render: 284ms)
+ GET /director/planning/6 200 in 234ms (compile: 120ms, render: 114ms)
+ GET /director/planning/6 200 in 108ms (compile: 74ms, render: 34ms)
+ GET /director/planning/6 200 in 133ms (compile: 72ms, render: 61ms)
+ GET /director/planning/6 200 in 223ms (compile: 174ms, render: 49ms)
+ GET /director/planning/6 200 in 154ms (compile: 96ms, render: 58ms)
+ GET /director/planning/6 200 in 100ms (compile: 73ms, render: 26ms)
+ GET /director/planning/6 200 in 151ms (compile: 103ms, render: 47ms)
+ GET /director/planning/6 200 in 244ms (compile: 178ms, render: 66ms)
+ GET /director/planning/6 200 in 131ms (compile: 92ms, render: 39ms)
+ GET /director/planning/6 200 in 93ms (compile: 63ms, render: 29ms)
+ GET /director/planning/6 200 in 100ms (compile: 61ms, render: 39ms)
+ GET /director/planning/6 200 in 242ms (compile: 172ms, render: 70ms)
+ GET /director/planning/6 200 in 91ms (compile: 61ms, render: 30ms)
+ GET /director/planning/6 200 in 107ms (compile: 70ms, render: 37ms)
+ GET /director/planning/6 200 in 595ms (compile: 569ms, render: 26ms)
+ GET /director/planning/6 200 in 449ms (compile: 62ms, render: 388ms)
+ GET /director/planning/6 200 in 137ms (compile: 105ms, render: 32ms)
+ GET /director/planning/6 200 in 259ms (compile: 133ms, render: 127ms)
+ GET /director/planning/6 200 in 203ms (compile: 81ms, render: 122ms)
+ GET /director/planning/6 200 in 162ms (compile: 108ms, render: 54ms)
+ GET /director/planning/6 200 in 187ms (compile: 162ms, render: 25ms)
+ GET /director/planning/6 200 in 110ms (compile: 77ms, render: 33ms)
+ GET /director/planning/6 200 in 212ms (compile: 165ms, render: 47ms)
+ GET /director/planning/6 200 in 87ms (compile: 56ms, render: 31ms)
+ GET /director/planning/6 200 in 114ms (compile: 82ms, render: 32ms)
+ GET /director/planning/6 200 in 249ms (compile: 174ms, render: 74ms)
+ GET /director/planning/6 200 in 284ms (compile: 30ms, render: 254ms)
+ GET /director/planning/6 200 in 124ms (compile: 76ms, render: 48ms)
+ GET /director/planning/6 200 in 198ms (compile: 159ms, render: 39ms)
+ GET /director/planning/6 200 in 49ms (compile: 8ms, render: 40ms)
+ GET /director/planning/6 200 in 215ms (compile: 11ms, render: 204ms)
+ GET /director 200 in 659ms (compile: 354ms, render: 305ms)
+ GET / 200 in 1347ms (compile: 1079ms, render: 268ms)
+ GET /director/sites 200 in 141ms (compile: 118ms, render: 24ms)
+ GET / 200 in 25ms (compile: 4ms, render: 21ms)
+ GET /director/sites 200 in 22ms (compile: 4ms, render: 18ms)
+ GET /director/workers 200 in 1177ms (compile: 1121ms, render: 56ms)
+ GET / 200 in 30ms (compile: 9ms, render: 21ms)
+ GET /director/sites 200 in 30ms (compile: 10ms, render: 20ms)
+ GET /director/workers 200 in 115ms (compile: 14ms, render: 101ms)
+ GET /director/sites 200 in 21ms (compile: 4ms, render: 17ms)
+ GET / 200 in 23ms (compile: 7ms, render: 16ms)
+ GET /director/sites 200 in 18ms (compile: 3ms, render: 15ms)
+ GET /director/workers 200 in 15ms (compile: 2ms, render: 13ms)
+ GET /director/sites 200 in 22ms (compile: 4ms, render: 19ms)
+ GET / 200 in 17ms (compile: 4ms, render: 13ms)
+ GET /director/sites 200 in 17ms (compile: 3ms, render: 14ms)
+ GET /director/workers 200 in 16ms (compile: 3ms, render: 13ms)
+ GET /director/sites 200 in 16ms (compile: 3ms, render: 13ms)
+ GET / 200 in 15ms (compile: 4ms, render: 12ms)
+ GET /director/sites 200 in 24ms (compile: 3ms, render: 21ms)
+ GET /director/workers 200 in 18ms (compile: 4ms, render: 15ms)
+ GET /director/sites 200 in 17ms (compile: 3ms, render: 13ms)
+ GET /director/workers 200 in 20ms (compile: 3ms, render: 16ms)
+ GET /director/sites 200 in 22ms (compile: 3ms, render: 19ms)
+ GET /director/planning/1 200 in 882ms (compile: 474ms, render: 408ms)
+ GET /director/planning/1 200 in 328ms (compile: 15ms, render: 313ms)
+ GET /director/planning/1 200 in 143ms (compile: 13ms, render: 131ms)
+ GET /director/planning/1 200 in 94ms (compile: 16ms, render: 78ms)
+ GET /director/planning/1 200 in 1229ms (compile: 997ms, render: 232ms)
+ GET /director/planning/1 200 in 188ms (compile: 11ms, render: 177ms)
+ GET /director/planning/1 200 in 276ms (compile: 213ms, render: 62ms)
+ GET /director/planning/1 200 in 133ms (compile: 97ms, render: 37ms)
+ GET /director/planning/1 200 in 200ms (compile: 114ms, render: 85ms)
+ GET /director/planning/1 200 in 4.0s (compile: 3.9s, render: 145ms)
+ GET /director/planning/1 200 in 176ms (compile: 5ms, render: 172ms)
+ GET /director/planning/1 200 in 705ms (compile: 152ms, render: 554ms)
+ GET /director/planning/1 200 in 467ms (compile: 131ms, render: 336ms)
+ GET /director/sites 200 in 142ms (compile: 99ms, render: 43ms)
+ GET /director/planning/6 200 in 45ms (compile: 10ms, render: 35ms)
+ GET /director/sites 200 in 714ms (compile: 346ms, render: 367ms)
+ GET /director/planning/1 200 in 97ms (compile: 37ms, render: 60ms)
+ GET /director/planning/3 200 in 38ms (compile: 9ms, render: 29ms)
+ GET /director/planning/4 200 in 25ms (compile: 8ms, render: 17ms)
+ GET /director/sites/new 200 in 106ms (compile: 81ms, render: 26ms)
+ GET /director/planning/7 200 in 28ms (compile: 10ms, render: 18ms)
+ GET /director/planning/7 200 in 439ms (compile: 305ms, render: 135ms)
+ GET /director/planning/7 200 in 724ms (compile: 526ms, render: 198ms)
+ GET /director/planning/7 200 in 481ms (compile: 302ms, render: 179ms)
+ GET /director/planning/7 200 in 499ms (compile: 268ms, render: 231ms)
+ GET /director/planning/7 200 in 276ms (compile: 201ms, render: 75ms)
+ GET /director/sites 200 in 379ms (compile: 293ms, render: 86ms)
+ GET /director/sites/new 200 in 55ms (compile: 33ms, render: 22ms)
+ GET /director/planning/7 200 in 42ms (compile: 24ms, render: 18ms)
+ GET /director/sites/new 200 in 26ms (compile: 4ms, render: 22ms)
+ GET /director/planning/7 200 in 26ms (compile: 8ms, render: 19ms)
+ GET /director/planning/7 200 in 350ms (compile: 256ms, render: 95ms)
+ GET /director/planning/7 200 in 838ms (compile: 35ms, render: 803ms)
+ GET /director/planning/7 200 in 309ms (compile: 226ms, render: 83ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 200 in 6.7s (compile: 5.1s, render: 1698ms)
+ GET /director/planning/7 200 in 299ms (compile: 153ms, render: 146ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 200 in 5.1s (compile: 4.4s, render: 693ms)
+ GET /director/planning/7 200 in 328ms (compile: 6ms, render: 322ms)
+ GET /director/planning/7 200 in 552ms (compile: 306ms, render: 247ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 200 in 5.6s (compile: 4.8s, render: 734ms)
+ GET /director/planning/7 200 in 303ms (compile: 5ms, render: 298ms)
+ GET /director/planning/7 200 in 546ms (compile: 312ms, render: 234ms)
+ GET /director/planning/7 200 in 667ms (compile: 416ms, render: 250ms)
+ GET /director/planning/7 200 in 37ms (compile: 11ms, render: 26ms)
+ GET /director/planning/7 200 in 759ms (compile: 50ms, render: 708ms)
+ ○ Compiling / ...
+ GET / 200 in 8.4s (compile: 8.2s, render: 168ms)
+ GET /director/sites 200 in 178ms (compile: 117ms, render: 61ms)
+ GET /director/planning/7 200 in 327ms (compile: 247ms, render: 81ms)
+ GET /director/planning/1 200 in 48ms (compile: 14ms, render: 34ms)
+ GET /director/planning/7 200 in 139ms (compile: 22ms, render: 117ms)
+ GET /director/planning/7 200 in 174ms (compile: 133ms, render: 40ms)
+ GET /director/planning/7 200 in 108ms (compile: 69ms, render: 40ms)
+ GET /director/planning/7 200 in 104ms (compile: 71ms, render: 33ms)
+ GET /director/planning/7 200 in 388ms (compile: 26ms, render: 362ms)
+ GET /director/planning/7 200 in 298ms (compile: 243ms, render: 55ms)
+ GET /director/planning/7 200 in 428ms (compile: 49ms, render: 379ms)
+ GET /director/planning/7 200 in 149ms (compile: 109ms, render: 40ms)
+ GET /director/planning/7 200 in 248ms (compile: 174ms, render: 74ms)
+ GET /director/planning/7 200 in 104ms (compile: 70ms, render: 34ms)
+ GET /director/planning/7 200 in 119ms (compile: 67ms, render: 52ms)
+ GET /director/planning/7 200 in 465ms (compile: 387ms, render: 78ms)
+ GET /director/planning/7 200 in 196ms (compile: 163ms, render: 33ms)
+ GET /director/planning/7 200 in 117ms (compile: 86ms, render: 31ms)
+ GET /director/planning/7 200 in 197ms (compile: 139ms, render: 58ms)
+ GET /director/planning/7 200 in 149ms (compile: 104ms, render: 45ms)
+ GET /director/planning/7 200 in 126ms (compile: 75ms, render: 51ms)
+ GET /director/planning/7 200 in 325ms (compile: 21ms, render: 304ms)
+ GET /director/planning/7 200 in 172ms (compile: 93ms, render: 80ms)
+ GET /director/planning/7 200 in 174ms (compile: 16ms, render: 158ms)
+ GET /director/planning/7 200 in 76ms (compile: 21ms, render: 55ms)
+ GET /director/sites 200 in 116ms (compile: 74ms, render: 42ms)
+ GET /director/planning/1 200 in 28ms (compile: 7ms, render: 21ms)
+ GET /director/planning/1 200 in 265ms (compile: 184ms, render: 82ms)
+ GET /director/planning/1 200 in 242ms (compile: 141ms, render: 101ms)
+ GET /director/planning/1 200 in 65ms (compile: 26ms, render: 39ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/1 200 in 7.1s (compile: 5.0s, render: 2.0s)
+ GET /director/planning/1 200 in 1259ms (compile: 893ms, render: 367ms)
+ GET /director/planning/1 200 in 1447ms (compile: 1198ms, render: 249ms)
+ GET /director/planning/1 200 in 1156ms (compile: 880ms, render: 276ms)
+ GET /director/planning/1 200 in 1306ms (compile: 649ms, render: 657ms)
+ GET /director/planning/1 200 in 2.9s (compile: 2.3s, render: 604ms)
+ GET /director/planning/1 200 in 2.3s (compile: 1751ms, render: 513ms)
+ GET /director/planning/1 200 in 6.4s (compile: 1694ms, render: 4.7s)
+ GET /director/planning/1 200 in 2.0s (compile: 1472ms, render: 539ms)
+ GET /director/planning/1 200 in 2.0s (compile: 1072ms, render: 935ms)
+ GET /director/planning/1 200 in 28.8s (compile: 379ms, render: 28.4s)
+ GET /director/planning/1 200 in 1843ms (compile: 46ms, render: 1797ms)
+ ○ Compiling /login ...
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/1 200 in 27.4s (compile: 22.8s, render: 4.6s)
+ GET /director/planning/1 200 in 26.9s (compile: 22.2s, render: 4.6s)
+ GET /login 200 in 697ms (compile: 9ms, render: 688ms)
+ GET /login 200 in 1421ms (compile: 10ms, render: 1411ms)
+ GET /director 200 in 3.4s (compile: 1801ms, render: 1583ms)
+ GET /director/planning/7 200 in 70ms (compile: 22ms, render: 48ms)
+ GET /director 200 in 991ms (compile: 5ms, render: 986ms)
+ GET /director/sites 200 in 999ms (compile: 390ms, render: 609ms)
+ GET /director/sites 200 in 1000ms (compile: 387ms, render: 613ms)
+ GET / 200 in 727ms (compile: 340ms, render: 387ms)
+ GET /director/sites 200 in 1069ms (compile: 29ms, render: 1040ms)
+ GET / 200 in 33ms (compile: 5ms, render: 28ms)
+ GET /director/sites 200 in 36ms (compile: 5ms, render: 31ms)
+ ○ Compiling /director/workers ...
+ GET /director/sites 200 in 39.6s (compile: 37.1s, render: 2.5s)
+ GET /director/workers 200 in 50s (compile: 48s, render: 2.2s)
+ GET /director/planning/1 200 in 34.0s (compile: 31.8s, render: 2.2s)
+ GET /director/planning/1 200 in 34.0s (compile: 31.8s, render: 2.2s)
+ GET /director/planning/1 200 in 34.0s (compile: 31.8s, render: 2.2s)
+ GET /director/planning/1 200 in 27.3s (compile: 25.1s, render: 2.2s)
+ GET /director/planning/1 200 in 516ms (compile: 275ms, render: 241ms)
+ GET /director/planning/1 200 in 3.1s (compile: 340ms, render: 2.8s)
+ GET /director/planning/1 200 in 28.0s (compile: 27.9s, render: 61ms)
+ GET /director/planning/1 200 in 45ms (compile: 7ms, render: 38ms)
+ GET /director/planning/1 200 in 1395ms (compile: 848ms, render: 547ms)
+ GET /login 200 in 1111ms (compile: 73ms, render: 1038ms)
+ GET /director 200 in 576ms (compile: 52ms, render: 524ms)
+ GET /director 200 in 2.1s (compile: 1340ms, render: 800ms)
+ GET /director 200 in 3.0s (compile: 2.4s, render: 644ms)
+ GET /director 200 in 5.5s (compile: 3.8s, render: 1691ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director 200 in 11.7s (compile: 8.9s, render: 2.8s)
+ GET /director/sites 200 in 591ms (compile: 545ms, render: 45ms)
+ GET / 200 in 256ms (compile: 44ms, render: 212ms)
+ GET /login 200 in 44ms (compile: 20ms, render: 24ms)
+ GET / 200 in 294ms (compile: 6ms, render: 289ms)
+ GET /director/sites 200 in 168ms (compile: 5ms, render: 163ms)
+ GET /director/planning/1 200 in 1620ms (compile: 79ms, render: 1541ms)
+ GET /director/planning/1 200 in 3.1s (compile: 1852ms, render: 1238ms)
+ GET /director/planning/1 200 in 3.7s (compile: 2.9s, render: 757ms)
+ GET /director/planning/1 200 in 5.0s (compile: 3.7s, render: 1211ms)
+ GET /director/planning/1 200 in 3.5s (compile: 2.3s, render: 1208ms)
+ GET /director/planning/1 200 in 2.3s (compile: 1387ms, render: 953ms)
+ GET /director/planning/5 200 in 3.3s (compile: 1046ms, render: 2.3s)
+ GET / 200 in 2.4s (compile: 1714ms, render: 675ms)
+ GET /login 200 in 688ms (compile: 51ms, render: 637ms)
+ GET / 200 in 974ms (compile: 367ms, render: 607ms)
+ GET /director/sites 200 in 1159ms (compile: 605ms, render: 554ms)
+ ○ Compiling /director/workers ...
+ GET /director/workers 200 in 44s (compile: 43s, render: 462ms)
+ GET /director/sites 200 in 174ms (compile: 136ms, render: 39ms)
+ GET /login 200 in 544ms (compile: 452ms, render: 92ms)
+ GET / 200 in 773ms (compile: 57ms, render: 716ms)
+ GET /director/sites 200 in 553ms (compile: 8ms, render: 545ms)
+ GET /director/planning/1 200 in 1027ms (compile: 991ms, render: 36ms)
+ GET /director/planning/3 200 in 37ms (compile: 6ms, render: 31ms)
+ GET /director/planning/3 200 in 2.5s (compile: 17ms, render: 2.5s)
+ GET /director/sites 200 in 75ms (compile: 19ms, render: 56ms)
+ GET /director/planning/4 200 in 264ms (compile: 17ms, render: 248ms)
+ GET /director/planning/4 200 in 2.3s (compile: 1607ms, render: 658ms)
+ GET /director/planning/4 200 in 3.9s (compile: 2.3s, render: 1532ms)
+ GET /director/planning/4 200 in 3.3s (compile: 318ms, render: 3.0s)
+ ○ Compiling /login ...
+ GET /login 200 in 31.2s (compile: 30.7s, render: 524ms)
+ GET / 200 in 436ms (compile: 79ms, render: 357ms)
+ GET /director/sites 200 in 734ms (compile: 86ms, render: 648ms)
+ ○ Compiling /director/sites/new ...
+ GET /director/sites/new 200 in 28.9s (compile: 28.3s, render: 589ms)
+ GET /director/planning/8 200 in 1159ms (compile: 771ms, render: 388ms)
+ GET /director/planning/4 200 in 1126ms (compile: 43ms, render: 1084ms)
+ GET /director/workers 200 in 417ms (compile: 51ms, render: 367ms)
+ ○ Compiling /director/workers/[id] ...
+ GET /director/workers/1 200 in 51s (compile: 50s, render: 399ms)
+ GET /director/workers/1 200 in 2.7s (compile: 2.6s, render: 103ms)
+ GET /director/workers/1 200 in 1236ms (compile: 242ms, render: 994ms)
+ GET /director/workers/1 200 in 364ms (compile: 220ms, render: 144ms)
+ GET /director/sites 200 in 1852ms (compile: 1749ms, render: 103ms)
+ GET /director/planning/7 200 in 81ms (compile: 55ms, render: 26ms)
+ GET /director/planning/7 200 in 1337ms (compile: 180ms, render: 1157ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 200 in 1441ms (compile: 1092ms, render: 349ms)
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected a semicolon
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4065:1]
+ [2m4062[0m |                       }
+ [2m4063[0m |                       setEditingSaved(true);
+ [2m4064[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4065[0m |                   }}
+      : [35;1m                   ^[0m
+ [2m4066[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+ [2m4067[0m |                 >
+ [2m4068[0m |                   ערוך
+      `----
+  [31mx[0m Expected '</', got 'className'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4066:1]
+ [2m4063[0m |                       setEditingSaved(true);
+ [2m4064[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4065[0m |                   }}
+ [2m4066[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+      : [35;1m                    ^^^^^^^^^[0m
+ [2m4067[0m |                 >
+ [2m4068[0m |                   ערוך
+ [2m4069[0m |                 </button>
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/7 500 in 505ms (compile: 7ms, render: 499ms)
+ GET /director/planning/7 500 in 227ms (compile: 14ms, render: 213ms)
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected a semicolon
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4065:1]
+ [2m4062[0m |                       }
+ [2m4063[0m |                       setEditingSaved(true);
+ [2m4064[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4065[0m |                   }}
+      : [35;1m                   ^[0m
+ [2m4066[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+ [2m4067[0m |                 >
+ [2m4068[0m |                   ערוך
+      `----
+  [31mx[0m Expected '</', got 'className'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4066:1]
+ [2m4063[0m |                       setEditingSaved(true);
+ [2m4064[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4065[0m |                   }}
+ [2m4066[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+      : [35;1m                    ^^^^^^^^^[0m
+ [2m4067[0m |                 >
+ [2m4068[0m |                   ערוך
+ [2m4069[0m |                 </button>
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected a semicolon
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4066:1]
+ [2m4063[0m |                       }
+ [2m4064[0m |                       setEditingSaved(true);
+ [2m4065[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4066[0m |                   }}
+      : [35;1m                   ^[0m
+ [2m4067[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+ [2m4068[0m |                 >
+ [2m4069[0m |                   ערוך
+      `----
+  [31mx[0m Expected '</', got 'className'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4067:1]
+ [2m4064[0m |                       setEditingSaved(true);
+ [2m4065[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4066[0m |                   }}
+ [2m4067[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+      : [35;1m                    ^^^^^^^^^[0m
+ [2m4068[0m |                 >
+ [2m4069[0m |                   ערוך
+ [2m4070[0m |                 </button>
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected a semicolon
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4066:1]
+ [2m4063[0m |                       }
+ [2m4064[0m |                       setEditingSaved(true);
+ [2m4065[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4066[0m |                   }}
+      : [35;1m                   ^[0m
+ [2m4067[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+ [2m4068[0m |                 >
+ [2m4069[0m |                   ערוך
+      `----
+  [31mx[0m Expected '</', got 'className'
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:4067:1]
+ [2m4064[0m |                       setEditingSaved(true);
+ [2m4065[0m |                       // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
+ [2m4066[0m |                   }}
+ [2m4067[0m |                     className="inline-flex items-center gap-2 rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6] border border-[#00A8E0]"
+      : [35;1m                    ^^^^^^^^^[0m
+ [2m4068[0m |                 >
+ [2m4069[0m |                   ערוך
+ [2m4070[0m |                 </button>
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 500 in 20ms (compile: 7ms, render: 14ms)
+ ⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET /director/planning/7 200 in 925ms (compile: 193ms, render: 733ms)
+ GET /director/planning/7 200 in 388ms (compile: 257ms, render: 131ms)
+ GET /director/planning/7 200 in 338ms (compile: 131ms, render: 207ms)
+ GET /director/planning/7 200 in 146ms (compile: 4ms, render: 142ms)
+ GET /director/planning/7 200 in 384ms (compile: 256ms, render: 127ms)
+ GET /director/planning/7 200 in 156ms (compile: 113ms, render: 43ms)
+ GET /director/planning/7 200 in 132ms (compile: 72ms, render: 60ms)
+ GET /director/planning/7 200 in 182ms (compile: 131ms, render: 52ms)
+ GET /director/planning/7 200 in 123ms (compile: 90ms, render: 33ms)
+ GET /director/planning/7 200 in 141ms (compile: 102ms, render: 40ms)
+ GET /director/planning/7 200 in 84ms (compile: 55ms, render: 29ms)
+ GET /director/planning/7 200 in 77ms (compile: 51ms, render: 26ms)
+ GET /director/planning/7 200 in 241ms (compile: 18ms, render: 223ms)
+ GET /apple-touch-icon-precomposed.png 404 in 1556ms (compile: 1469ms, render: 87ms)
+ GET /apple-touch-icon.png 404 in 36ms (compile: 3ms, render: 33ms)
+ GET /director/planning/7 200 in 160ms (compile: 42ms, render: 117ms)
+ GET /login 200 in 1373ms (compile: 1311ms, render: 63ms)
+ GET / 200 in 1106ms (compile: 1068ms, render: 38ms)
+ GET /director/sites 200 in 134ms (compile: 113ms, render: 20ms)
+ GET /director/planning/1 200 in 49ms (compile: 32ms, render: 17ms)
+ GET /director/planning/3 200 in 129ms (compile: 47ms, render: 82ms)
+ GET /director/planning/3 200 in 297ms (compile: 236ms, render: 61ms)
+ GET /director/planning/3 200 in 34ms (compile: 11ms, render: 23ms)
+ GET /director/planning/3 200 in 216ms (compile: 155ms, render: 61ms)
+ GET /director/planning/3 200 in 157ms (compile: 117ms, render: 41ms)
+ GET /director/planning/3 200 in 69ms (compile: 9ms, render: 60ms)
+ GET /director/planning/3 200 in 156ms (compile: 104ms, render: 52ms)
+ GET /director/planning/3 200 in 167ms (compile: 115ms, render: 52ms)
+ GET /director/planning/3 200 in 200ms (compile: 142ms, render: 57ms)
+ GET /director/planning/3 200 in 116ms (compile: 70ms, render: 46ms)
+ GET /director/planning/3 200 in 116ms (compile: 78ms, render: 38ms)
+ GET /director/planning/3 200 in 232ms (compile: 203ms, render: 29ms)
+ GET /director/planning/3 200 in 77ms (compile: 53ms, render: 24ms)
+ GET /director/sites 200 in 115ms (compile: 86ms, render: 29ms)
+ GET /director/workers 200 in 85ms (compile: 63ms, render: 22ms)
+ GET /director/sites 200 in 19ms (compile: 3ms, render: 16ms)
+ GET /director/planning/5 200 in 31ms (compile: 10ms, render: 21ms)
+ GET /director/planning/5 200 in 189ms (compile: 128ms, render: 61ms)
+ GET /director/planning/5 200 in 147ms (compile: 99ms, render: 48ms)
+ GET /director/planning/5 200 in 163ms (compile: 123ms, render: 40ms)
+ GET /director/planning/5 200 in 147ms (compile: 95ms, render: 52ms)
+ GET /director/planning/5 200 in 117ms (compile: 67ms, render: 50ms)
+ GET /director/planning/5 200 in 284ms (compile: 236ms, render: 48ms)
+ GET /director/planning/5 200 in 119ms (compile: 85ms, render: 35ms)
+ GET /director/planning/5 200 in 179ms (compile: 77ms, render: 102ms)
+ GET /director/planning/5 200 in 123ms (compile: 94ms, render: 29ms)
+ GET /director/planning/5 200 in 121ms (compile: 79ms, render: 42ms)
+ GET /director/planning/5 200 in 102ms (compile: 66ms, render: 36ms)
+ GET /director/planning/5 200 in 105ms (compile: 81ms, render: 25ms)
+ GET /director/planning/5 200 in 176ms (compile: 114ms, render: 63ms)
+ GET /director/planning/5 200 in 116ms (compile: 78ms, render: 38ms)
+ GET /director/planning/5 200 in 107ms (compile: 73ms, render: 34ms)
+ GET /director/planning/5 200 in 117ms (compile: 77ms, render: 40ms)
+ GET /director/planning/5 200 in 130ms (compile: 92ms, render: 38ms)
+ ⨯ ./src/app/director/planning/[id]/page.tsx
+Error:   [31mx[0m Expected a semicolon
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:1765:1]
+ [2m1762[0m |                         ))}
+ [2m1763[0m |                       </div>
+ [2m1764[0m |                     )}
+ [2m1765[0m |                   </div>
+      : [35;1m                  ^[0m
+ [2m1766[0m |                   <div className="mt-4 flex items-center justify-center">
+ [2m1767[0m |                     <button
+ [2m1768[0m |                       type="button"
+      `----
+  [31mx[0m Unterminated regexp literal
+      ,-[[36;1;4m/Users/yoelibarthel/Sidour Avoda G1/frontend/web/src/app/director/planning/[id]/page.tsx[0m:1765:1]
+ [2m1762[0m |                         ))}
+ [2m1763[0m |                       </div>
+ [2m1764[0m |                     )}
+ [2m1765[0m |                   </div>
+      : [35;1m                   ^^^^^[0m
+ [2m1766[0m |                   <div className="mt-4 flex items-center justify-center">
+ [2m1767[0m |                     <button
+ [2m1768[0m |                       type="button"
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./src/app/director/planning/[id]/page.tsx
+ GET /director/planning/5 500 in 143ms (compile: 9ms, render: 134ms)
+ GET /director/planning/5 500 in 205ms (compile: 167ms, render: 38ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/5 200 in 763ms (compile: 377ms, render: 386ms)
+ GET /director/planning/5 200 in 451ms (compile: 402ms, render: 49ms)
+ GET /director/planning/5 200 in 171ms (compile: 130ms, render: 41ms)
+ GET /director/planning/5 200 in 463ms (compile: 95ms, render: 368ms)
+ GET /director/planning/5 200 in 104ms (compile: 73ms, render: 31ms)
+ GET /director/planning/5 200 in 192ms (compile: 59ms, render: 133ms)
+ GET /director/planning/5 200 in 213ms (compile: 135ms, render: 78ms)
+ GET /director/planning/5 200 in 149ms (compile: 95ms, render: 54ms)
+ GET /director/planning/5 200 in 127ms (compile: 80ms, render: 47ms)
+ GET /director/planning/5 200 in 156ms (compile: 100ms, render: 56ms)
+ GET /director/planning/5 200 in 190ms (compile: 131ms, render: 59ms)
+ GET /director/planning/5 200 in 53ms (compile: 15ms, render: 38ms)
+ GET /director/planning/5 200 in 253ms (compile: 120ms, render: 133ms)
+ GET /director/planning/5 200 in 233ms (compile: 164ms, render: 69ms)
+ GET /director/planning/5 200 in 259ms (compile: 159ms, render: 100ms)
+ GET /director/planning/5 200 in 202ms (compile: 154ms, render: 48ms)
+ GET /director/planning/5 200 in 106ms (compile: 68ms, render: 38ms)
+ GET /director/sites 200 in 293ms (compile: 217ms, render: 75ms)
+ GET /director/workers 200 in 108ms (compile: 66ms, render: 41ms)
+ GET /director/workers/19 200 in 66ms (compile: 44ms, render: 22ms)
+ GET /director/sites 200 in 34ms (compile: 6ms, render: 28ms)
+ GET /director/planning/5 200 in 36ms (compile: 12ms, render: 24ms)
+ GET /director/workers 200 in 23ms (compile: 3ms, render: 20ms)
+ GET /director/workers/19 200 in 31ms (compile: 5ms, render: 26ms)
+ GET /director/workers/1 200 in 24ms (compile: 6ms, render: 18ms)
+ GET /director/sites 200 in 20ms (compile: 3ms, render: 17ms)
+ GET /director/planning/1 200 in 33ms (compile: 10ms, render: 23ms)
+ GET /director/planning/1 200 in 116ms (compile: 48ms, render: 68ms)
+ GET /director/planning/1 200 in 32ms (compile: 10ms, render: 22ms)
+ GET /director/planning/5 200 in 44ms (compile: 9ms, render: 35ms)
+ GET /director/planning/5 200 in 258ms (compile: 206ms, render: 52ms)
+ GET /director/planning/5 200 in 164ms (compile: 99ms, render: 64ms)
+ GET /director/planning/5 200 in 88ms (compile: 64ms, render: 24ms)
+ GET /director/planning/7 200 in 29ms (compile: 9ms, render: 20ms)
+ GET /director/planning/1 200 in 26ms (compile: 8ms, render: 17ms)
+ GET /director/planning/7 200 in 32ms (compile: 8ms, render: 24ms)
+ GET /director/planning/1 200 in 25ms (compile: 11ms, render: 15ms)
+ GET /director/planning/7 200 in 23ms (compile: 9ms, render: 14ms)
+ GET /director/planning/1 200 in 26ms (compile: 9ms, render: 17ms)
+ GET /director/planning/5 200 in 174ms (compile: 30ms, render: 144ms)
+ GET /director/planning/7 200 in 38ms (compile: 17ms, render: 21ms)
+ GET /director/planning/5 200 in 28ms (compile: 7ms, render: 21ms)
+ GET /director/planning/1 200 in 28ms (compile: 10ms, render: 18ms)
+ GET /director/planning/5 200 in 41ms (compile: 11ms, render: 29ms)
+ GET /director/planning/7 200 in 29ms (compile: 9ms, render: 20ms)
+ GET /director/planning/7 200 in 427ms (compile: 302ms, render: 125ms)
+ GET /director/planning/7 200 in 204ms (compile: 94ms, render: 110ms)
+ GET /director/planning/7 200 in 246ms (compile: 146ms, render: 100ms)
+ GET /director/planning/6 200 in 30ms (compile: 11ms, render: 19ms)
+ GET /director/planning/7 200 in 25ms (compile: 9ms, render: 16ms)
+ GET /director/sites 200 in 148ms (compile: 107ms, render: 42ms)
+ GET /director/planning/1 200 in 22ms (compile: 8ms, render: 14ms)
+ GET /director/planning/5 200 in 23ms (compile: 10ms, render: 13ms)
+ GET /director/planning/5 200 in 134ms (compile: 95ms, render: 39ms)
+ GET /director/planning/5 200 in 202ms (compile: 67ms, render: 134ms)
+ GET /director/planning/5 200 in 155ms (compile: 101ms, render: 54ms)
+ GET /director/planning/5 200 in 206ms (compile: 130ms, render: 76ms)
+ GET /director/planning/5 200 in 75ms (compile: 54ms, render: 21ms)
+ GET /director/planning/5 200 in 111ms (compile: 67ms, render: 44ms)
+ GET /director/sites 200 in 129ms (compile: 100ms, render: 29ms)
+ GET /director/planning/5 200 in 36ms (compile: 16ms, render: 20ms)
+ GET /director/planning/1 200 in 39ms (compile: 13ms, render: 26ms)
+ GET /director/planning/5 200 in 31ms (compile: 10ms, render: 21ms)
+ GET /director/planning/1 200 in 24ms (compile: 9ms, render: 15ms)
+ GET /director/planning/1 200 in 112ms (compile: 80ms, render: 31ms)
+ GET /director/planning/1 200 in 159ms (compile: 86ms, render: 73ms)
+ GET /director/planning/1 200 in 168ms (compile: 114ms, render: 54ms)
+ GET /director/planning/1 200 in 130ms (compile: 88ms, render: 41ms)
+ GET /director/planning/1 200 in 91ms (compile: 63ms, render: 27ms)
+ GET /director/planning/1 200 in 212ms (compile: 108ms, render: 104ms)
+ GET /director/planning/1 200 in 510ms (compile: 12ms, render: 498ms)
+ GET /director/planning/1 200 in 184ms (compile: 139ms, render: 45ms)
+ GET /director/planning/1 200 in 128ms (compile: 96ms, render: 31ms)
+ GET /director/planning/1 200 in 110ms (compile: 85ms, render: 25ms)
+ GET /director/planning/1 200 in 336ms (compile: 15ms, render: 320ms)
+ GET /director/planning/1 200 in 137ms (compile: 13ms, render: 125ms)
+ GET /director/planning/1 200 in 216ms (compile: 182ms, render: 34ms)
+ GET /director/planning/1 200 in 128ms (compile: 105ms, render: 23ms)
+ GET /director/planning/1 200 in 77ms (compile: 58ms, render: 20ms)
+ GET /director/workers 200 in 133ms (compile: 88ms, render: 45ms)
+ GET /director/sites 200 in 112ms (compile: 91ms, render: 21ms)
+ GET /director/sites 200 in 117ms (compile: 81ms, render: 37ms)
+ GET /director/sites 200 in 76ms (compile: 50ms, render: 26ms)
+ GET /director/sites 200 in 112ms (compile: 85ms, render: 27ms)
+ GET /director/planning/5 200 in 133ms (compile: 74ms, render: 59ms)
+ GET /director/planning/1 200 in 43ms (compile: 13ms, render: 29ms)
+ GET /director/planning/5 200 in 32ms (compile: 9ms, render: 23ms)
+ GET /director/planning/5 200 in 304ms (compile: 16ms, render: 288ms)
+ GET /director/planning/5 200 in 178ms (compile: 54ms, render: 124ms)
+ GET /director/planning/5 200 in 255ms (compile: 20ms, render: 235ms)
+ GET /director/planning/5 200 in 72ms (compile: 11ms, render: 61ms)
+ GET /director/planning/5 200 in 80ms (compile: 10ms, render: 70ms)
+ GET /director/planning/5 200 in 167ms (compile: 116ms, render: 51ms)
+ GET /director/planning/5 200 in 98ms (compile: 62ms, render: 37ms)
+ GET /director/planning/5 200 in 146ms (compile: 100ms, render: 45ms)
+ GET /login 200 in 241ms (compile: 109ms, render: 131ms)
+ GET / 200 in 1510ms (compile: 1437ms, render: 73ms)
+ GET / 200 in 2.9s (compile: 2.8s, render: 77ms)
+ GET /director/sites 200 in 114ms (compile: 99ms, render: 15ms)
+ GET /director/planning/4 200 in 49ms (compile: 34ms, render: 15ms)
+ GET /director/planning/4 200 in 2.3s (compile: 1696ms, render: 622ms)
+ GET /director/planning/4 200 in 75ms (compile: 14ms, render: 62ms)
+ GET /director/planning/3 200 in 119ms (compile: 40ms, render: 79ms)
+ GET /director/planning/3 200 in 52ms (compile: 14ms, render: 38ms)
+ GET /director/planning/6 200 in 58ms (compile: 18ms, render: 40ms)
+ GET /director/planning/3 200 in 737ms (compile: 463ms, render: 274ms)
+ GET /director/planning/3 200 in 281ms (compile: 215ms, render: 66ms)
+ GET /director/planning/3 200 in 274ms (compile: 210ms, render: 63ms)
+ GET /director/planning/3 200 in 222ms (compile: 188ms, render: 35ms)
+ GET /director/planning/3 200 in 265ms (compile: 102ms, render: 162ms)
+ GET /director/planning/4 200 in 106ms (compile: 32ms, render: 74ms)
+ GET /director/planning/3 200 in 39ms (compile: 16ms, render: 23ms)
+ GET /director/planning/3 200 in 232ms (compile: 172ms, render: 60ms)
+ GET /director/planning/3 200 in 118ms (compile: 78ms, render: 40ms)
+ GET /director/planning/3 200 in 277ms (compile: 208ms, render: 70ms)
+ GET /director/planning/3 200 in 466ms (compile: 7ms, render: 460ms)
+ GET /director/planning/4 200 in 96ms (compile: 57ms, render: 39ms)
+ GET /director/planning/3 200 in 41ms (compile: 10ms, render: 31ms)
+ GET /director/planning/6 200 in 42ms (compile: 12ms, render: 30ms)
+ GET /director/planning/4 200 in 203ms (compile: 114ms, render: 89ms)
+ GET /director/planning/4 200 in 92ms (compile: 67ms, render: 25ms)
+ GET /director/planning/4 200 in 232ms (compile: 163ms, render: 69ms)
+ GET /director/planning/3 200 in 46ms (compile: 25ms, render: 21ms)
+ GET /director/planning/4 200 in 346ms (compile: 18ms, render: 328ms)
+ GET /director/planning/3 200 in 29ms (compile: 8ms, render: 21ms)
+ GET /director/workers 200 in 112ms (compile: 69ms, render: 44ms)
+ GET /director/workers 200 in 178ms (compile: 127ms, render: 51ms)
+ GET /director/workers 200 in 72ms (compile: 50ms, render: 22ms)
+ GET /director/workers 200 in 88ms (compile: 55ms, render: 33ms)
+ GET /director/sites 200 in 163ms (compile: 143ms, render: 20ms)
+ GET /director/planning/3 200 in 63ms (compile: 43ms, render: 21ms)
+ GET /director/planning/4 200 in 30ms (compile: 8ms, render: 22ms)
+ GET /director/planning/6 200 in 27ms (compile: 10ms, render: 17ms)
+ GET /director/planning/4 200 in 22ms (compile: 6ms, render: 16ms)
+ GET /director/planning/6 200 in 56ms (compile: 17ms, render: 39ms)
+ GET /director/planning/6 200 in 193ms (compile: 135ms, render: 58ms)
+ GET /director/planning/6 200 in 370ms (compile: 276ms, render: 94ms)
+ GET /director/planning/6 200 in 290ms (compile: 12ms, render: 278ms)
+ GET /director/planning/6 200 in 138ms (compile: 95ms, render: 43ms)
+ GET /director/planning/6 200 in 266ms (compile: 122ms, render: 144ms)
+ GET /director/planning/6 200 in 188ms (compile: 109ms, render: 79ms)
+ GET /director/planning/6 200 in 120ms (compile: 87ms, render: 32ms)
+ GET /director/planning/4 200 in 32ms (compile: 14ms, render: 19ms)
+ GET /director/planning/3 200 in 32ms (compile: 13ms, render: 19ms)
+ GET /director/planning/4 200 in 21ms (compile: 7ms, render: 14ms)
+ GET /director/planning/6 200 in 23ms (compile: 8ms, render: 15ms)
+ GET /director/planning/4 200 in 26ms (compile: 8ms, render: 18ms)
+ GET /director/planning/3 200 in 24ms (compile: 7ms, render: 16ms)
+ GET /director/planning/4 200 in 36ms (compile: 19ms, render: 18ms)
+ GET /director/planning/6 200 in 28ms (compile: 7ms, render: 21ms)
+ GET /director/planning/4 200 in 19ms (compile: 6ms, render: 13ms)
+ GET /director/planning/3 200 in 25ms (compile: 7ms, render: 19ms)
+ GET /director/planning/4 200 in 23ms (compile: 7ms, render: 16ms)
+ GET /director/planning/4 200 in 150ms (compile: 115ms, render: 35ms)
+ GET /director/planning/4 200 in 142ms (compile: 80ms, render: 62ms)
+ GET /director/planning/4 200 in 168ms (compile: 96ms, render: 72ms)
+ GET /director/planning/4 200 in 157ms (compile: 100ms, render: 57ms)
+ GET /director/planning/4 200 in 148ms (compile: 95ms, render: 54ms)
+ GET /director/planning/6 200 in 34ms (compile: 11ms, render: 23ms)
+ GET /director/planning/4 200 in 31ms (compile: 9ms, render: 21ms)
+ GET /director/planning/6 200 in 425ms (compile: 14ms, render: 411ms)
+ GET /director/planning/4 200 in 30ms (compile: 10ms, render: 21ms)
+ GET /director/planning/4 200 in 158ms (compile: 110ms, render: 48ms)
+ GET /director/planning/4 200 in 271ms (compile: 174ms, render: 97ms)
+ GET /director/planning/4 200 in 90ms (compile: 61ms, render: 29ms)
+ GET /director/planning/6 200 in 38ms (compile: 18ms, render: 20ms)
+ GET /director/planning/4 200 in 38ms (compile: 13ms, render: 25ms)
+ GET /director/planning/6 200 in 91ms (compile: 9ms, render: 81ms)
+ GET /director/planning/6 200 in 222ms (compile: 145ms, render: 77ms)
+ GET /director/workers 200 in 127ms (compile: 93ms, render: 34ms)
+ GET /director/sites 200 in 175ms (compile: 151ms, render: 24ms)
+ GET /director/sites 200 in 361ms (compile: 320ms, render: 42ms)
+ GET /director/sites 200 in 216ms (compile: 140ms, render: 76ms)
+ GET /director/sites 200 in 129ms (compile: 92ms, render: 37ms)
+ GET /director/sites 200 in 111ms (compile: 68ms, render: 43ms)
+ GET /director/sites 200 in 223ms (compile: 172ms, render: 51ms)
+ GET /director/sites 200 in 97ms (compile: 70ms, render: 26ms)
+ GET /director/sites 200 in 108ms (compile: 71ms, render: 37ms)
+ GET /director/planning/4 200 in 60ms (compile: 41ms, render: 18ms)
+ GET /director/planning/6 200 in 31ms (compile: 14ms, render: 17ms)
+ GET /director/planning/4 200 in 38ms (compile: 9ms, render: 29ms)
+ GET /director/planning/6 200 in 30ms (compile: 10ms, render: 20ms)
+ GET /director/planning/4 200 in 28ms (compile: 6ms, render: 22ms)
+ GET /director/planning/6 200 in 27ms (compile: 8ms, render: 19ms)
+ GET /director/planning/4 200 in 31ms (compile: 11ms, render: 19ms)
+ GET /director/planning/6 200 in 162ms (compile: 8ms, render: 154ms)
+ GET /director/planning/4 200 in 31ms (compile: 12ms, render: 19ms)
+ GET /director/planning/6 200 in 33ms (compile: 8ms, render: 25ms)
+ GET /director/planning/4 200 in 25ms (compile: 10ms, render: 16ms)
+ GET /director/planning/6 200 in 36ms (compile: 12ms, render: 24ms)
+ GET /director/planning/6 200 in 261ms (compile: 114ms, render: 148ms)
+ GET /director/planning/6 200 in 618ms (compile: 190ms, render: 428ms)
+ GET /director/planning/6 200 in 188ms (compile: 100ms, render: 88ms)
+ GET /director/planning/6 200 in 246ms (compile: 136ms, render: 110ms)
+ GET /director/planning/6 200 in 132ms (compile: 93ms, render: 39ms)
+ GET /director/planning/6 200 in 152ms (compile: 94ms, render: 58ms)
+ GET /director/planning/6 200 in 109ms (compile: 68ms, render: 40ms)
+ GET /director/planning/6 200 in 110ms (compile: 77ms, render: 33ms)
+ GET /director/planning/4 200 in 38ms (compile: 14ms, render: 24ms)
+ GET /director/planning/6 200 in 62ms (compile: 16ms, render: 45ms)
+ GET /director/planning/4 200 in 103ms (compile: 10ms, render: 93ms)
+ GET /director/planning/6 200 in 50ms (compile: 22ms, render: 28ms)
+ GET /director/planning/6 200 in 168ms (compile: 119ms, render: 49ms)
+ GET /director/planning/6 200 in 171ms (compile: 92ms, render: 79ms)
+ GET /director/planning/6 200 in 341ms (compile: 193ms, render: 148ms)
+ GET /director/planning/6 200 in 208ms (compile: 121ms, render: 87ms)
+ GET /director/planning/6 200 in 121ms (compile: 80ms, render: 41ms)
+ GET /director/planning/4 200 in 21ms (compile: 4ms, render: 17ms)
+ GET /director/planning/6 200 in 70ms (compile: 30ms, render: 40ms)
+ GET /director/planning/4 200 in 24ms (compile: 7ms, render: 17ms)
+ GET /director/planning/6 200 in 21ms (compile: 7ms, render: 14ms)
+ GET /director/planning/4 200 in 31ms (compile: 8ms, render: 23ms)
+ GET /director/planning/4 200 in 348ms (compile: 14ms, render: 334ms)
+ GET /director/planning/6 200 in 60ms (compile: 23ms, render: 37ms)
+ GET /director/planning/4 200 in 57ms (compile: 17ms, render: 41ms)
+ GET /director/planning/3 200 in 41ms (compile: 11ms, render: 30ms)
+ GET /director/planning/4 200 in 33ms (compile: 9ms, render: 24ms)
+ GET /director/planning/6 200 in 31ms (compile: 7ms, render: 24ms)
+ GET /director/planning/6 200 in 191ms (compile: 133ms, render: 58ms)
+ GET /director/planning/6 200 in 35ms (compile: 12ms, render: 24ms)
+ GET /director/planning/6 200 in 149ms (compile: 100ms, render: 50ms)
+ GET /director/planning/6 200 in 128ms (compile: 92ms, render: 36ms)
+ GET /director/planning/6 200 in 392ms (compile: 332ms, render: 61ms)
+ GET /director/planning/6 200 in 388ms (compile: 298ms, render: 90ms)
+ GET /director/planning/6 200 in 232ms (compile: 106ms, render: 127ms)
+ GET /director/planning/6 200 in 372ms (compile: 107ms, render: 266ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/6 200 in 193ms (compile: 152ms, render: 41ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/6 200 in 773ms (compile: 244ms, render: 529ms)
+ GET /director/planning/6 200 in 379ms (compile: 298ms, render: 81ms)
+ GET /director/planning/4 200 in 60ms (compile: 20ms, render: 40ms)
+ GET /director/planning/6 200 in 124ms (compile: 38ms, render: 87ms)
+ GET /director/planning/4 200 in 58ms (compile: 16ms, render: 41ms)
+ GET /director/planning/6 200 in 40ms (compile: 22ms, render: 19ms)
+ GET /director/planning/4 200 in 46ms (compile: 9ms, render: 36ms)
+ GET /director/planning/6 200 in 32ms (compile: 9ms, render: 22ms)
+ GET /director/planning/4 200 in 485ms (compile: 61ms, render: 423ms)
+ GET /director/planning/6 200 in 44ms (compile: 10ms, render: 34ms)
+ GET /director/planning/4 200 in 145ms (compile: 34ms, render: 111ms)
+ GET /director/planning/4 200 in 356ms (compile: 304ms, render: 52ms)
+ GET /director/planning/4 200 in 358ms (compile: 241ms, render: 117ms)
+ GET /director/planning/4 200 in 157ms (compile: 110ms, render: 47ms)
+ GET /director/planning/4 200 in 91ms (compile: 62ms, render: 29ms)
+ GET /director/planning/6 200 in 1622ms (compile: 1598ms, render: 24ms)
+ GET /director/planning/6 200 in 23ms (compile: 4ms, render: 19ms)
+ GET /director/planning/4 200 in 29ms (compile: 9ms, render: 20ms)
+ GET /director/planning/3 200 in 76ms (compile: 23ms, render: 53ms)
+ GET /director/planning/4 200 in 31ms (compile: 12ms, render: 19ms)
+ GET /director/planning/6 200 in 26ms (compile: 8ms, render: 18ms)
+ GET /director/planning/4 200 in 121ms (compile: 37ms, render: 83ms)
+ GET /director/planning/4 200 in 274ms (compile: 216ms, render: 58ms)
+ GET /director/planning/4 200 in 243ms (compile: 6ms, render: 237ms)
+ GET /director/planning/4 200 in 410ms (compile: 267ms, render: 142ms)
+ GET /director/planning/6 200 in 85ms (compile: 54ms, render: 31ms)
+ GET /director/planning/4 200 in 29ms (compile: 10ms, render: 18ms)
+ GET /director/planning/6 200 in 28ms (compile: 12ms, render: 15ms)
+ GET /director/planning/6 200 in 185ms (compile: 125ms, render: 60ms)
+ GET /director/planning/6 200 in 306ms (compile: 146ms, render: 160ms)
+ GET /director/planning/6 200 in 98ms (compile: 65ms, render: 33ms)
+ GET /director/planning/4 200 in 1160ms (compile: 1132ms, render: 28ms)
+ GET /director/planning/4 200 in 23ms (compile: 4ms, render: 19ms)
+ GET /director/planning/6 200 in 48ms (compile: 15ms, render: 33ms)
+ GET /director/planning/4 200 in 34ms (compile: 18ms, render: 16ms)
+ GET /director/planning/6 200 in 26ms (compile: 10ms, render: 16ms)
+ GET /director/planning/4 200 in 24ms (compile: 9ms, render: 15ms)
+ GET /director/planning/3 200 in 31ms (compile: 8ms, render: 23ms)
+ GET /director/planning/3 200 in 254ms (compile: 16ms, render: 238ms)
+ GET /director/planning/4 200 in 27ms (compile: 8ms, render: 18ms)
+ GET /director/planning/6 200 in 29ms (compile: 10ms, render: 19ms)
+ GET /director/planning/4 200 in 26ms (compile: 10ms, render: 16ms)
+ GET /director/planning/3 200 in 32ms (compile: 8ms, render: 24ms)
+ GET /director/planning/4 200 in 467ms (compile: 149ms, render: 318ms)
+ GET /director/planning/6 200 in 3.0s (compile: 207ms, render: 2.8s)
+ GET /director/planning/3 200 in 375ms (compile: 294ms, render: 81ms)
+ GET /director/planning/3 200 in 197ms (compile: 22ms, render: 175ms)
+ GET /director/planning/3 200 in 86ms (compile: 6ms, render: 80ms)
+ GET /director/planning/3 200 in 88ms (compile: 16ms, render: 73ms)
+ GET /director/planning/3 200 in 47ms (compile: 8ms, render: 38ms)
+ GET /director/planning/3 200 in 54ms (compile: 6ms, render: 48ms)
+ GET /director/planning/3 200 in 27ms (compile: 7ms, render: 19ms)
+ GET /director/planning/3 200 in 39ms (compile: 5ms, render: 34ms)
+ GET /director/planning/3 200 in 38ms (compile: 5ms, render: 33ms)
+ GET /director/planning/4 200 in 41ms (compile: 8ms, render: 33ms)
+ GET /director/planning/6 200 in 28ms (compile: 10ms, render: 17ms)
+ GET /director/planning/4 200 in 25ms (compile: 8ms, render: 17ms)
+ GET /director/sites 200 in 383ms (compile: 352ms, render: 30ms)
+ GET /director/planning/4 200 in 41ms (compile: 17ms, render: 24ms)
+ GET /director/planning/6 200 in 38ms (compile: 17ms, render: 21ms)
+ GET /director/planning/4 200 in 403ms (compile: 128ms, render: 274ms)
+ GET /director/planning/3 200 in 46ms (compile: 14ms, render: 32ms)
+ GET /director/planning/4 200 in 35ms (compile: 12ms, render: 23ms)
+ GET /director/planning/6 200 in 25ms (compile: 7ms, render: 17ms)
+ GET /director/planning/4 200 in 40ms (compile: 8ms, render: 31ms)
+ GET /director/planning/6 200 in 35ms (compile: 10ms, render: 25ms)
+ GET /director/planning/6 200 in 245ms (compile: 31ms, render: 213ms)
+ GET /director/planning/4 200 in 33ms (compile: 11ms, render: 22ms)
+ GET /director/planning/4 200 in 186ms (compile: 133ms, render: 53ms)
+ GET /director/planning/4 200 in 450ms (compile: 288ms, render: 162ms)
+ GET /director/planning/4 200 in 149ms (compile: 104ms, render: 45ms)
+ GET /director/planning/4 200 in 114ms (compile: 85ms, render: 29ms)
+ GET /director/planning/4 200 in 204ms (compile: 141ms, render: 64ms)
+ GET /director/planning/4 200 in 124ms (compile: 97ms, render: 27ms)
+ GET /director/planning/6 200 in 98ms (compile: 40ms, render: 58ms)
+ GET /director/planning/6 200 in 160ms (compile: 127ms, render: 34ms)
+ GET /director/planning/4 200 in 31ms (compile: 9ms, render: 23ms)
+ GET /director/planning/3 200 in 33ms (compile: 10ms, render: 22ms)
+ GET /director/planning/3 200 in 307ms (compile: 235ms, render: 71ms)
+ GET /director/planning/3 200 in 170ms (compile: 111ms, render: 59ms)
+ GET /director/planning/3 200 in 130ms (compile: 100ms, render: 31ms)
+ GET /director/planning/3 200 in 192ms (compile: 126ms, render: 66ms)
+ GET /director/planning/3 200 in 332ms (compile: 28ms, render: 304ms)
+ GET /director/planning/4 200 in 43ms (compile: 16ms, render: 27ms)
+ GET /director/planning/6 200 in 35ms (compile: 9ms, render: 27ms)
+ GET /director/planning/4 200 in 40ms (compile: 9ms, render: 30ms)
+ GET /director/planning/4 200 in 147ms (compile: 110ms, render: 37ms)
+ GET /director/planning/4 200 in 137ms (compile: 81ms, render: 56ms)
+ GET /director/planning/4 200 in 430ms (compile: 115ms, render: 315ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/4 200 in 109ms (compile: 74ms, render: 35ms)
+ GET /director/planning/3 200 in 73ms (compile: 23ms, render: 51ms)
+ GET /director/planning/4 200 in 31ms (compile: 11ms, render: 20ms)
+ GET /director/planning/6 200 in 39ms (compile: 18ms, render: 21ms)
+ GET /director/planning/4 200 in 124ms (compile: 12ms, render: 112ms)
+ GET /director/planning/6 200 in 672ms (compile: 165ms, render: 507ms)
+ GET /director/planning/6 200 in 393ms (compile: 312ms, render: 81ms)
+ GET /director/planning/6 200 in 288ms (compile: 82ms, render: 206ms)
+ GET /director/planning/6 200 in 298ms (compile: 212ms, render: 85ms)
+ GET /director/planning/4 200 in 32ms (compile: 11ms, render: 21ms)
+ GET /director/planning/3 200 in 34ms (compile: 9ms, render: 26ms)
+ GET /director/planning/3 200 in 189ms (compile: 134ms, render: 55ms)
+ GET /director/planning/3 200 in 233ms (compile: 197ms, render: 36ms)
+ GET /director/planning/3 200 in 210ms (compile: 157ms, render: 53ms)
+ GET /director/planning/4 200 in 193ms (compile: 26ms, render: 168ms)
+ GET /director/planning/6 200 in 40ms (compile: 15ms, render: 25ms)
+ GET /director/planning/4 200 in 49ms (compile: 10ms, render: 39ms)
+ GET /director/planning/6 200 in 30ms (compile: 9ms, render: 21ms)
+ GET /director/planning/4 200 in 39ms (compile: 10ms, render: 29ms)
+ GET /director/planning/6 200 in 32ms (compile: 10ms, render: 23ms)
+ GET /director/planning/4 200 in 204ms (compile: 60ms, render: 144ms)
+ GET /director/planning/6 200 in 75ms (compile: 37ms, render: 39ms)
+ GET /director/planning/4 200 in 43ms (compile: 10ms, render: 33ms)
+ GET /director/planning/6 200 in 43ms (compile: 14ms, render: 29ms)
+ GET /director/planning/4 200 in 37ms (compile: 8ms, render: 29ms)
+ GET /director/planning/6 200 in 35ms (compile: 13ms, render: 22ms)
+ GET /director/planning/4 200 in 30ms (compile: 9ms, render: 21ms)
+ GET /director/planning/6 200 in 32ms (compile: 8ms, render: 24ms)
+ GET /director/planning/6 200 in 377ms (compile: 16ms, render: 361ms)
+ GET /director/planning/1 200 in 47ms (compile: 11ms, render: 35ms)
+ GET /director/planning/6 200 in 38ms (compile: 10ms, render: 28ms)
+ GET /director/planning/1 200 in 41ms (compile: 13ms, render: 27ms)
+ GET /director/planning/6 200 in 35ms (compile: 10ms, render: 25ms)
+ GET /director/planning/1 200 in 209ms (compile: 38ms, render: 171ms)
+ GET /director/planning/6 200 in 207ms (compile: 10ms, render: 197ms)
+ GET /director/planning/1 200 in 40ms (compile: 13ms, render: 27ms)
+ GET /director/sites 200 in 276ms (compile: 228ms, render: 48ms)
+ GET /director/planning/1 200 in 50ms (compile: 19ms, render: 31ms)
+ GET /director/sites 200 in 164ms (compile: 22ms, render: 142ms)
+ GET /director/planning/1 200 in 44ms (compile: 10ms, render: 34ms)
+ GET /director/planning/1 200 in 57ms (compile: 19ms, render: 38ms)
+ GET /director/planning/3 200 in 45ms (compile: 9ms, render: 36ms)
+ GET /director/planning/7 200 in 43ms (compile: 13ms, render: 29ms)
+ GET /director/planning/6 200 in 49ms (compile: 18ms, render: 32ms)
+ GET /director/planning/1 200 in 117ms (compile: 16ms, render: 100ms)
+ GET /director/planning/7 200 in 68ms (compile: 16ms, render: 52ms)
+ GET /director/planning/1 200 in 132ms (compile: 58ms, render: 74ms)
+ GET /director/planning/7 200 in 70ms (compile: 16ms, render: 54ms)
+ GET /director/planning/7 200 in 1080ms (compile: 746ms, render: 334ms)
+ GET /director/planning/7 200 in 1150ms (compile: 712ms, render: 438ms)
+ GET /director/planning/7 200 in 889ms (compile: 7ms, render: 882ms)
+ GET /director/planning/1 200 in 57ms (compile: 19ms, render: 38ms)
+ GET /director/planning/1 200 in 666ms (compile: 175ms, render: 491ms)
+ GET /director/planning/1 200 in 129ms (compile: 71ms, render: 58ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/1 200 in 484ms (compile: 18ms, render: 466ms)
+ GET /director/planning/1 200 in 354ms (compile: 11ms, render: 343ms)
+ GET /director/planning/7 200 in 113ms (compile: 21ms, render: 93ms)
+ GET /director/planning/1 200 in 40ms (compile: 8ms, render: 31ms)
+ GET /director/planning/7 200 in 66ms (compile: 11ms, render: 54ms)
+ GET /director/planning/7 200 in 91ms (compile: 7ms, render: 83ms)
+ GET /director/planning/1 200 in 44ms (compile: 13ms, render: 31ms)
+ GET /director/planning/7 200 in 39ms (compile: 16ms, render: 23ms)
+ GET /director/planning/1 200 in 49ms (compile: 16ms, render: 33ms)
+ GET /director/planning/7 200 in 55ms (compile: 16ms, render: 39ms)
+ GET /director/planning/7 200 in 1900ms (compile: 1295ms, render: 605ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/7 200 in 7.0s (compile: 6.1s, render: 839ms)
+ GET /director/planning/7 200 in 539ms (compile: 269ms, render: 270ms)
+ GET /director/planning/1 200 in 34ms (compile: 14ms, render: 21ms)
+ GET /director/planning/7 200 in 31ms (compile: 9ms, render: 21ms)
+ GET /director/planning/7 200 in 1996ms (compile: 1197ms, render: 799ms)
+ GET /director/planning/1 200 in 37ms (compile: 7ms, render: 31ms)
+ GET /director/planning/7 200 in 122ms (compile: 10ms, render: 112ms)
+ GET /director/planning/1 200 in 55ms (compile: 16ms, render: 39ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /director/planning/1 200 in 2.8s (compile: 2.2s, render: 682ms)
+ GET /director/planning/1 200 in 2.3s (compile: 186ms, render: 2.1s)
+ GET /director/planning/1 200 in 464ms (compile: 57ms, render: 406ms)
+ GET /login 200 in 769ms (compile: 534ms, render: 235ms)
+ ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /login 200 in 493ms (compile: 28ms, render: 465ms)
+ GET /login 200 in 20.9s (compile: 19.8s, render: 1068ms)
+ GET /login 200 in 582ms (compile: 23ms, render: 559ms)
+ GET /login 200 in 928ms (compile: 20ms, render: 908ms)
+ ○ Compiling / ...
+ GET / 200 in 29.1s (compile: 28.2s, render: 950ms)
+ GET /apple-touch-icon-precomposed.png 404 in 28.9s (compile: 28.6s, render: 277ms)
+ GET /apple-touch-icon.png 404 in 28.8s (compile: 28.5s, render: 282ms)

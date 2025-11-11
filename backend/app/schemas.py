@@ -1,11 +1,12 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from typing import Literal
 
 
 class UserBase(BaseModel):
-    email: EmailStr
+    email: str | None = None
     full_name: str
     role: Literal["worker", "director"]
+    phone: str | None = None
 
 
 class UserCreate(UserBase):
@@ -14,9 +15,10 @@ class UserCreate(UserBase):
 
 class UserOut(BaseModel):
     id: int
-    email: EmailStr
+    email: str | None = None
     full_name: str
     role: Literal["worker", "director"]
+    phone: str | None = None
 
     class Config:
         from_attributes = True
@@ -28,8 +30,14 @@ class Token(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str | None = None
     password: str
+    phone: str | None = None
+
+
+class WorkerLoginRequest(BaseModel):
+    name: str
+    phone: str
 
 
 class SiteCreate(BaseModel):
@@ -53,6 +61,7 @@ class WorkerBase(BaseModel):
     max_shifts: int = 5
     roles: list[str] = []
     availability: dict[str, list[str]] = {}
+    phone: str | None = None
 
 
 class WorkerCreate(WorkerBase):
@@ -66,6 +75,11 @@ class WorkerUpdate(WorkerBase):
 class WorkerOut(WorkerBase):
     id: int
     site_id: int
+
+
+class CreateWorkerUserRequest(BaseModel):
+    name: str
+    phone: str
 
 
 class AIPlanningRequest(BaseModel):

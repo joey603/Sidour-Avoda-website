@@ -36,7 +36,7 @@ export default function SitesList() {
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
-      if (!me) return router.replace("/login");
+      if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       try {
         await fetchSites();

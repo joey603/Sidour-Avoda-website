@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 import asyncio
 from fastapi import Body
@@ -6,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .deps import require_role, get_db
-from .models import Site, SiteAssignment, SiteWorker, User
+from .models import Site, SiteAssignment, SiteWorker, User, UserRole
 from .schemas import (
     SiteCreate,
     SiteOut,
@@ -16,10 +17,15 @@ from .schemas import (
     WorkerOut,
     AIPlanningRequest,
     AIPlanningResponse,
+    UserOut,
+    CreateWorkerUserRequest,
 )
 from .ai_solver import solve_schedule, solve_schedule_stream
+from passlib.context import CryptContext
 import logging
 logger = logging.getLogger("ai_solver")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/director/sites", tags=["sites"])
 
@@ -107,7 +113,53 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
         return []
     # Récupérer tous les travailleurs de ces sites
     rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
-    return [WorkerOut(id=r.id, site_id=r.site_id, name=r.name, max_shifts=r.max_shifts, roles=r.roles or [], availability=r.availability or {}) for r in rows]
+    result = []
+    # Récupérer tous les workers users une seule fois pour optimiser
+    all_workers = db.query(User).filter(User.role == UserRole.worker).all()
+    logger.info(f"[all-workers] Found {len(all_workers)} worker users in database")
+    
+    for r in rows:
+        # Chercher le numéro de téléphone dans la table User en cherchant par nom (insensible à la casse)
+        # Nettoyer les noms en enlevant les espaces en début/fin et normaliser
+        worker_name_clean = (r.name or "").strip().lower()
+        
+        user_worker = None
+        
+        # Chercher d'abord par correspondance exacte (après trim et lower)
+        for u in all_workers:
+            user_name_clean = (u.full_name or "").strip().lower()
+            if user_name_clean == worker_name_clean:
+                user_worker = u
+                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Exact match with User '{u.full_name}' (id={u.id})")
+                break
+        
+        # Si pas trouvé, essayer une recherche plus flexible (contient le nom ou le nom contient le user)
+        if not user_worker and worker_name_clean:
+            for u in all_workers:
+                user_name_clean = (u.full_name or "").strip().lower()
+                # Vérifier si l'un contient l'autre (pour gérer les variations)
+                if worker_name_clean in user_name_clean or user_name_clean in worker_name_clean:
+                    # Mais seulement si la différence n'est pas trop grande (éviter les faux positifs)
+                    if abs(len(worker_name_clean) - len(user_name_clean)) <= 2:
+                        user_worker = u
+                        logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Partial match with User '{u.full_name}' (id={u.id})")
+                        break
+        
+        # Si toujours pas trouvé, logger tous les noms pour debug
+        if not user_worker:
+            logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): No matching User found. Available users: {[(u.full_name, u.phone) for u in all_workers]}")
+        
+        phone = user_worker.phone if user_worker else None
+        result.append(WorkerOut(
+            id=r.id,
+            site_id=r.site_id,
+            name=r.name,
+            max_shifts=r.max_shifts,
+            roles=r.roles or [],
+            availability=r.availability or {},
+            phone=phone
+        ))
+    return result
 
 
 @router.get("/{site_id}", response_model=SiteOut)
@@ -159,6 +211,36 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
     return [WorkerOut(id=r.id, site_id=r.site_id, name=r.name, max_shifts=r.max_shifts, roles=r.roles or [], availability=r.availability or {}) for r in rows]
+
+
+@router.post("/{site_id}/create-worker-user", response_model=UserOut, status_code=201)
+def create_worker_user(site_id: int, payload: CreateWorkerUserRequest, db: Session = Depends(get_db), user: User = Depends(require_role("director"))):
+    """Créer un utilisateur worker avec nom et téléphone depuis le directeur"""
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    
+    # Vérifier si le téléphone existe déjà
+    existing_phone = db.query(User).filter(User.phone == payload.phone).first()
+    if existing_phone:
+        raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+    
+    # Générer un mot de passe par défaut (le worker pourra le changer plus tard)
+    default_password = "TempPass123!"  # TODO: générer un mot de passe plus sécurisé ou envoyer un SMS
+    
+    # Créer l'utilisateur worker
+    worker_user = User(
+        email=None,
+        full_name=payload.name,
+        hashed_password=pwd_context.hash(default_password),
+        role=UserRole.worker,
+        phone=payload.phone,
+    )
+    db.add(worker_user)
+    db.commit()
+    db.refresh(worker_user)
+    
+    return UserOut(id=worker_user.id, email=worker_user.email, full_name=worker_user.full_name, role=worker_user.role.value, phone=worker_user.phone)
 
 
 @router.post("/{site_id}/workers", response_model=WorkerOut, status_code=201)
@@ -247,13 +329,24 @@ def ai_generate_planning(
     # Load workers
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
     overrides = (payload.weekly_availability or {}) if payload else {}
+    logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
     workers = []
     for r in rows:
-        avail = r.availability or {}
-        # Apply weekly override by worker name if provided
+        # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
+        # Ignorer la disponibilité de base des workers
         ovr = overrides.get(r.name)
         if isinstance(ovr, dict):
-            avail = ovr
+            # Utiliser uniquement les overrides de la semaine
+            avail = {}
+            for day_key, shifts_list in ovr.items():
+                if isinstance(shifts_list, list):
+                    # Filtrer les valeurs vides
+                    valid_shifts = [s for s in shifts_list if s]
+                    if valid_shifts:
+                        avail[day_key] = valid_shifts
+        else:
+            # Si pas de disponibilité pour cette semaine, utiliser un dict vide
+            avail = {}
         workers.append({
             "id": r.id,
             "name": r.name,
@@ -261,6 +354,10 @@ def ai_generate_planning(
             "roles": r.roles or [],
             "availability": avail,
         })
+    logger.info(f"[AI-GEN] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
+    for w in workers:
+        avail_count = sum(len(shifts) for shifts in w['availability'].values())
+        logger.info(f"[AI-GEN] Worker {w['name']}: availability keys={len(w['availability'])}, total shifts={avail_count}, max_shifts={w['max_shifts']}, roles={w['roles']}")
     if not workers:
         # Return empty structure with days/shifts from config mapping
         from .ai_solver import build_capacities_from_config
@@ -295,9 +392,9 @@ def ai_generate_planning(
 
 
 @router.api_route("/{site_id}/ai-generate/stream", methods=["GET", "POST"])
-def ai_generate_stream(
+async def ai_generate_stream(
     site_id: int,
-    payload: AIPlanningRequest = Body(default=AIPlanningRequest()),
+    request: Request,
     # Allow overriding via query string as EventSource uses GET without body
     q_time_limit_seconds: int | None = Query(default=None, alias="time_limit_seconds"),
     q_max_nights_per_worker: int | None = Query(default=None, alias="max_nights_per_worker"),
@@ -305,17 +402,65 @@ def ai_generate_stream(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
+    # Parser le body manuellement pour éviter les erreurs 422
+    payload = AIPlanningRequest()
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            if body:
+                # Nettoyer weekly_availability si la structure est incorrecte
+                if "weekly_availability" in body and isinstance(body["weekly_availability"], dict):
+                    cleaned_wa = {}
+                    for worker_name, worker_avail in body["weekly_availability"].items():
+                        if isinstance(worker_avail, dict):
+                            # Si la structure est {availability: {...}}, extraire directement
+                            if "availability" in worker_avail and not any(k in worker_avail for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]):
+                                cleaned_wa[worker_name] = worker_avail["availability"]
+                            else:
+                                cleaned_wa[worker_name] = worker_avail
+                    if cleaned_wa:
+                        body["weekly_availability"] = cleaned_wa
+                payload = AIPlanningRequest(**body)
+        except Exception as e:
+            # Si le body est vide ou invalide, utiliser les valeurs par défaut
+            logger.warning(f"Erreur lors du parsing du body: {e}")
+            # Essayer de parser juste weekly_availability manuellement depuis le body déjà lu
+            try:
+                if body and "weekly_availability" in body:
+                    # Nettoyer et reconstruire
+                    cleaned_wa = {}
+                    for worker_name, worker_avail in (body.get("weekly_availability") or {}).items():
+                        if isinstance(worker_avail, dict):
+                            if "availability" in worker_avail and not any(k in worker_avail for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]):
+                                cleaned_wa[worker_name] = worker_avail["availability"]
+                            else:
+                                cleaned_wa[worker_name] = worker_avail
+                    payload.weekly_availability = cleaned_wa if cleaned_wa else None
+            except:
+                pass
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
     overrides = (payload.weekly_availability or {}) if payload else {}
+    logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
     workers = []
     for r in rows:
-        avail = r.availability or {}
+        # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
+        # Ignorer la disponibilité de base des workers
         ovr = overrides.get(r.name)
         if isinstance(ovr, dict):
-            avail = ovr
+            # Utiliser uniquement les overrides de la semaine
+            avail = {}
+            for day_key, shifts_list in ovr.items():
+                if isinstance(shifts_list, list):
+                    # Filtrer les valeurs vides
+                    valid_shifts = [s for s in shifts_list if s]
+                    if valid_shifts:
+                        avail[day_key] = valid_shifts
+        else:
+            # Si pas de disponibilité pour cette semaine, utiliser un dict vide
+            avail = {}
         workers.append({
             "id": r.id,
             "name": r.name,
@@ -323,6 +468,12 @@ def ai_generate_stream(
             "roles": r.roles or [],
             "availability": avail,
         })
+    logger.info(f"[SSE] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
+    for w in workers:
+        avail_count = sum(len(shifts) for shifts in w['availability'].values())
+        logger.info(f"[SSE] Worker {w['name']}: availability keys={len(w['availability'])}, total shifts={avail_count}, max_shifts={w['max_shifts']}, roles={w['roles']}")
+        if avail_count == 0:
+            logger.warning(f"[SSE] Worker {w['name']} has NO availability - this will prevent assignments!")
 
     # Choose effective parameters (query overrides body if provided)
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
