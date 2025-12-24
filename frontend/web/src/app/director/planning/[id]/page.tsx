@@ -33,12 +33,17 @@ export default function PlanningPage() {
     fri: [],
     sat: [],
   });
+  // Snapshot de la disponibilité d'origine (celle fournie par le travailleur) au moment de l'édition
+  const [originalAvailability, setOriginalAvailability] = useState<WorkerAvailability | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState(false);
   const [newWorkerPhone, setNewWorkerPhone] = useState("");
   const [editingWorkerId, setEditingWorkerId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [hiddenWorkerIds, setHiddenWorkerIds] = useState<number[]>([]);
+  // Empêcher qu'une réponse "ancienne" (ancienne semaine) n'écrase l'état quand on navigue vite
+  const loadWorkersReqIdRef = useRef(0);
+  const weekStartRef = useRef<Date | null>(null);
   const [weekStart, setWeekStart] = useState<Date>(() => {
     // Calculer la semaine prochaine (identique à la page worker)
     const today = new Date();
@@ -51,6 +56,9 @@ export default function PlanningPage() {
     
     return nextSunday;
   });
+  useEffect(() => {
+    weekStartRef.current = weekStart;
+  }, [weekStart]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
 
@@ -141,18 +149,19 @@ export default function PlanningPage() {
     wk.setDate(d.getDate() - d.getDay()); // Sunday
     return `avail_${params.id}_${iso(wk)}`;
   }
-  function loadWeeklyAvailability() {
+  function readWeeklyAvailabilityFor(date: Date): Record<string, WorkerAvailability> {
     try {
-      const raw = localStorage.getItem(weekKeyOf(weekStart));
-      if (!raw) {
-        setWeeklyAvailability({});
-        return;
-      }
-      const parsed = JSON.parse(raw || '{}');
-      setWeeklyAvailability(parsed && typeof parsed === 'object' ? parsed : {});
+      if (typeof window === "undefined") return {};
+      const raw = localStorage.getItem(weekKeyOf(date));
+      if (!raw) return {};
+      const parsed = JSON.parse(raw || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
-      setWeeklyAvailability({});
+      return {};
     }
+  }
+  function loadWeeklyAvailability() {
+    setWeeklyAvailability(readWeeklyAvailabilityFor(weekStart));
   }
   function saveWeeklyAvailability(next: Record<string, WorkerAvailability>) {
     try {
@@ -1063,13 +1072,30 @@ export default function PlanningPage() {
   }
 
   async function loadWorkers() {
+    const reqId = ++loadWorkersReqIdRef.current;
+    const weekKeyAtCall = weekStart.getTime();
     try {
       // eslint-disable-next-line no-console
-      console.log("[Planning] loadWorkers: fetching...");
+      console.log("[Planning] loadWorkers: fetching...", { reqId, weekKeyAtCall });
       const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
+      // Si l'utilisateur a déjà changé de semaine/site entre-temps, ignorer cette réponse
+      if (reqId !== loadWorkersReqIdRef.current) {
+        // eslint-disable-next-line no-console
+        console.log("[Planning] loadWorkers: stale response ignored", { reqId, current: loadWorkersReqIdRef.current });
+        return;
+      }
+      if (weekStartRef.current && weekStartRef.current.getTime() !== weekKeyAtCall) {
+        // eslint-disable-next-line no-console
+        console.log("[Planning] loadWorkers: week changed, response ignored", {
+          reqId,
+          weekKeyAtCall,
+          weekKeyNow: weekStartRef.current.getTime(),
+        });
+        return;
+      }
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: fetched", list);
       const mapped: Worker[] = (list || []).map((w: any) => ({
@@ -1085,6 +1111,9 @@ export default function PlanningPage() {
       
       // Si on est sur la semaine prochaine, charger les זמינות depuis la base de données dans weeklyAvailability
       if (isNextWeek(weekStart)) {
+        // IMPORTANT: toujours partir des overrides de LA SEMAINE COURANTE (localStorage),
+        // sinon on risque d'afficher/sauvegarder les données de la semaine précédente.
+        const currentWeekly = readWeeklyAvailabilityFor(weekStart);
         const nextWeekAvail: Record<string, WorkerAvailability> = {};
         mapped.forEach((w) => {
           if (w.availability && Object.keys(w.availability).length > 0) {
@@ -1097,8 +1126,6 @@ export default function PlanningPage() {
           }
         });
         if (Object.keys(nextWeekAvail).length > 0) {
-          // Charger d'abord depuis localStorage pour voir si le directeur a fait des modifications
-          const currentWeekly = weeklyAvailability;
           const merged: Record<string, WorkerAvailability> = { ...currentWeekly };
           
           // Pour chaque worker, utiliser les זמינות de la base de données si le directeur n'a pas fait de modifications
@@ -1109,13 +1136,13 @@ export default function PlanningPage() {
             }
           });
           
-          // Mettre à jour l'état et sauvegarder dans localStorage
+          // Mettre à jour l'état uniquement.
+          // Ne PAS sauvegarder automatiquement pendant le chargement, pour éviter toute contamination entre semaines.
           setWeeklyAvailability(merged);
-          saveWeeklyAvailability(merged);
         }
       } else {
-        // Si ce n'est pas la semaine prochaine, charger depuis localStorage uniquement
-        loadWeeklyAvailability();
+        // Si ce n'est pas la semaine prochaine, utiliser les overrides du localStorage pour CETTE semaine
+        setWeeklyAvailability(readWeeklyAvailabilityFor(weekStart));
       }
     } catch (e: any) {
       toast.error("שגיאה בטעינת עובדים", { description: e?.message || "נסה שוב מאוחר יותר." });
@@ -1123,18 +1150,12 @@ export default function PlanningPage() {
   }
 
   useEffect(() => {
+    // Changement de semaine/site: réinitialiser les états temporaires (ex: masquage optimiste après suppression)
+    setHiddenWorkerIds([]);
+    setDeletingId(null);
     loadWorkers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, weekStart]);
-
-  // Recharger les workers périodiquement pour récupérer les זמינות et max_shifts mises à jour par les travailleurs
-  useEffect(() => {
-    const interval = setInterval(() => {
-      loadWorkers();
-    }, 10000); // Recharger toutes les 10 secondes pour voir les mises à jour plus rapidement
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.id]);
 
   // Charger le plan sauvegardé pour la semaine sélectionnée (si existe)
   useEffect(() => {
@@ -1150,14 +1171,10 @@ export default function PlanningPage() {
         // Charger les workers même si assignments est null (après suppression)
         if (parsed && parsed.assignments) {
           setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
-          // Recharger tous les workers du site pour permettre la réutilisation (ne pas écraser workers)
-          loadWorkers();
         } else if (parsed && Array.isArray(parsed.workers) && parsed.workers.length) {
           // Si assignments est null mais workers existe, ne pas écraser workers
           // Les workers de la semaine sauvegardée sont utilisés uniquement pour l'affichage
           // On garde tous les workers du site dans l'état workers pour permettre la réutilisation
-          // Recharger les workers depuis l'API pour avoir la liste complète
-          loadWorkers();
           setAiPlan(null);
           setManualAssignments(null);
           setAltIndex(0);
@@ -1638,8 +1655,9 @@ export default function PlanningPage() {
                                         setNewWorkerMax(w.maxShifts);
                                         setNewWorkerRoles([...w.roles]);
                                         // Preload weekly availability (or empty) for this worker for this week only
-                                        const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                                        setNewWorkerAvailability({ ...wa });
+                                      const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                                      setOriginalAvailability({ ...wa });
+                                      setNewWorkerAvailability({ ...wa });
                                         setIsAddModalOpen(true);
                                       }}
                                       disabled={isSavedMode}
@@ -1809,23 +1827,52 @@ export default function PlanningPage() {
                           toast.error("נא למלא את כל השדות");
                           return;
                         }
+                        let userCreated = false;
                         try {
                           // Créer l'utilisateur worker
-                          const userResult = await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
-                            method: "POST",
-                            headers: { 
-                              Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-                              "Content-Type": "application/json"
-                            },
-                            body: JSON.stringify({
-                              name: trimmedName,
-                              phone: trimmedPhone,
-                            }),
-                          });
-                          toast.success("עובד נוצר בהצלחה!");
+                          try {
+                            const userResult = await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
+                              method: "POST",
+                              headers: { 
+                                Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+                                "Content-Type": "application/json"
+                              },
+                              body: JSON.stringify({
+                                name: trimmedName,
+                                phone: trimmedPhone,
+                              }),
+                            });
+                            userCreated = true;
+                          } catch (userError: any) {
+                            // Si le User existe déjà (téléphone déjà utilisé - erreur 400), continuer quand même
+                            const errorStatus = userError?.status || 0;
+                            const errorMsg = String(userError?.message || "").toLowerCase();
+                            const isPhoneAlreadyUsed = errorStatus === 400 || 
+                              errorMsg.includes("téléphone") || 
+                              errorMsg.includes("telephone") ||
+                              errorMsg.includes("déjà") || 
+                              errorMsg.includes("deja") ||
+                              errorMsg.includes("déjà enregistré") ||
+                              errorMsg.includes("already");
+                            
+                            if (isPhoneAlreadyUsed) {
+                              console.warn("[Planning] User already exists, continuing to create SiteWorker");
+                              // Ne pas afficher d'erreur, on va quand même créer le SiteWorker
+                            } else {
+                              // Pour les autres erreurs, re-lancer
+                              throw userError;
+                            }
+                          }
+                          
+                          // Continuer à ouvrir le modal des זמינות même si le User existe déjà
                           setIsCreateUserModalOpen(false);
                           // Ouvrir le modal des זמינות avec le nom pré-rempli
                           setIsAddModalOpen(true);
+                          if (userCreated) {
+                            toast.success("עובד נוצר בהצלחה!");
+                          } else {
+                            toast.info("משתמש קיים כבר, הוסף את העובד לאתר");
+                          }
                         } catch (e: any) {
                           const msg = String(e?.message || "");
                           toast.error("שגיאה ביצירת עובד", { description: msg || "נסה שוב מאוחר יותר." });
@@ -1988,6 +2035,60 @@ export default function PlanningPage() {
                     >
                       ביטול
                     </button>
+                    {isNextWeek(weekStart) && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          // Revenir à la disponibilité d'origine (celle soumise par le travailleur pour la semaine prochaine)
+                          const fallback = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+                          try {
+                            // Recharger les workers depuis l'API pour avoir les זמינות à jour
+                            // eslint-disable-next-line no-console
+                            console.log(
+                              "[Planning] Restore: api base =",
+                              process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000",
+                              "siteId =",
+                              params.id,
+                              "editingWorkerId =",
+                              editingWorkerId,
+                              "newWorkerName =",
+                              newWorkerName,
+                            );
+                            const freshWorkers = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
+                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                            });
+                            // eslint-disable-next-line no-console
+                            console.log("[Planning] Fresh workers from API:", freshWorkers);
+                            // eslint-disable-next-line no-console
+                            console.log("[Planning] Fresh workers from API (json):", JSON.stringify(freshWorkers));
+                            const workerFromDb = freshWorkers.find((w: any) =>
+                              editingWorkerId ? Number(w.id) === Number(editingWorkerId) : w.name === newWorkerName,
+                            );
+                            const baseFromDb = workerFromDb?.availability || fallback;
+                            // eslint-disable-next-line no-console
+                            console.log("[Planning] Restore availability from DB for", newWorkerName, ":", baseFromDb);
+                            setNewWorkerAvailability({ ...baseFromDb });
+                            // Mettre à jour le state workers aussi
+                            const mapped = freshWorkers.map((w: any) => ({
+                              id: w.id,
+                              name: String(w.name),
+                              maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+                              roles: Array.isArray(w.roles) ? w.roles : [],
+                              availability: w.availability || fallback,
+                            }));
+                            setWorkers(mapped);
+                            toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
+                          } catch (err) {
+                            // eslint-disable-next-line no-console
+                            console.error("[Planning] Error fetching workers:", err);
+                            toast.error("שגיאה בטעינת הזמינות");
+                          }
+                        }}
+                        className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        שחזר זמינות מהעובד
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={async () => {
@@ -2067,6 +2168,7 @@ export default function PlanningPage() {
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                               body: JSON.stringify({
                                 name: trimmed,
+                                phone: newWorkerPhone.trim() || null, // Passer le téléphone pour lier automatiquement au User
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
                                 availability: newWorkerAvailability, // Sauvegarder la disponibilité dans la base de données

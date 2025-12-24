@@ -116,6 +116,28 @@ def create_app() -> FastAPI:
                             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone)")
                         except Exception:
                             pass
+                
+                # Migration pour la table site_workers: ajouter user_id
+                try:
+                    site_worker_cols = conn.exec_driver_sql("PRAGMA table_info(site_workers)").fetchall()
+                    site_worker_col_names = {c[1] for c in site_worker_cols}
+                    if "user_id" not in site_worker_col_names:
+                        logger.info("Ajout de la colonne user_id à la table site_workers")
+                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN user_id INTEGER")
+                        try:
+                            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_site_workers_user_id ON site_workers(user_id)")
+                        except Exception:
+                            pass
+                    if "phone" not in site_worker_col_names:
+                        logger.info("Ajout de la colonne phone à la table site_workers")
+                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN phone VARCHAR(20)")
+                        try:
+                            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_site_workers_phone ON site_workers(phone)")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    # La table n'existe peut-être pas encore
+                    logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
     except Exception:
         # Safe to ignore in dev if another process handles migration
         pass

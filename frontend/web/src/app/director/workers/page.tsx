@@ -84,13 +84,18 @@ export default function WorkersList() {
   }, [workers, query]);
 
   async function handleAddWorker() {
+    console.log("[handleAddWorker] Function called with:", { selectedSiteId, name: newWorkerName, phone: newWorkerPhone });
     if (!selectedSiteId || !newWorkerName.trim() || !newWorkerPhone.trim()) {
       toast.error("נא למלא את כל השדות");
       return;
     }
     setAddingWorker(true);
+    let userCreated = false;
+    let userErrorOccurred = false;
     try {
       // Créer d'abord le User worker
+      console.log("[handleAddWorker] About to create User worker:", { name: newWorkerName.trim(), phone: newWorkerPhone.trim(), siteId: selectedSiteId });
+      try {
       await apiFetch(`/director/sites/${selectedSiteId}/create-worker-user`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
@@ -99,27 +104,79 @@ export default function WorkersList() {
           phone: newWorkerPhone.trim(),
         }),
       });
+        userCreated = true;
+      } catch (userError: any) {
+        userErrorOccurred = true;
+        const errorStatus = userError?.status || 0;
+        const errorMsg = String(userError?.message || "").toLowerCase();
+        console.log("[handleAddWorker] User creation error - status:", errorStatus, "message:", userError?.message, "errorMsg:", errorMsg);
+        
+        // Si le User existe déjà (téléphone déjà utilisé - erreur 400), continuer quand même pour créer le SiteWorker
+        const isPhoneAlreadyUsed = errorStatus === 400 || 
+          errorMsg.includes("téléphone") || 
+          errorMsg.includes("telephone") ||
+          errorMsg.includes("déjà") || 
+          errorMsg.includes("deja") ||
+          errorMsg.includes("déjà enregistré") ||
+          errorMsg.includes("already") ||
+          errorMsg.includes("400");
+        
+        console.log("[handleAddWorker] isPhoneAlreadyUsed:", isPhoneAlreadyUsed, "errorStatus === 400:", errorStatus === 400);
+        
+        if (isPhoneAlreadyUsed) {
+          console.warn("[handleAddWorker] User already exists (status:", errorStatus, "message:", userError?.message, "), continuing to create SiteWorker");
+          // Ne pas afficher d'erreur, on va quand même créer le SiteWorker
+        } else {
+          // Pour les autres erreurs, re-lancer
+          console.error("[handleAddWorker] Error creating User (status:", errorStatus, "):", userError);
+          throw userError;
+        }
+      }
       
-      // Ensuite créer le SiteWorker
-      await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
+      // Ensuite créer le SiteWorker (même si le User existe déjà)
+      console.log("[handleAddWorker] After User creation attempt - userCreated:", userCreated, "userErrorOccurred:", userErrorOccurred);
+      console.log("[handleAddWorker] Creating SiteWorker for:", newWorkerName.trim(), "site:", selectedSiteId);
+      try {
+        const siteWorkerResult = await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: newWorkerName.trim(),
+          phone: newWorkerPhone.trim(), // Passer le téléphone pour lier automatiquement au User
           max_shifts: 5, // Valeur par défaut
           roles: [],
           availability: {},
         }),
       });
+        console.log("[handleAddWorker] SiteWorker created successfully:", siteWorkerResult);
       
-      toast.success("העובד נוסף בהצלחה");
+        toast.success(userCreated ? "העובד נוסף בהצלחה" : "העובד נוסף לאתר (משתמש קיים כבר)");
       setIsAddModalOpen(false);
       setNewWorkerName("");
       setNewWorkerPhone("");
       setSelectedSiteId(null);
       await fetchWorkers();
+      } catch (siteWorkerError: any) {
+        console.error("[handleAddWorker] Error creating SiteWorker (status:", siteWorkerError?.status, "):", siteWorkerError);
+        // Si le User a été créé mais pas le SiteWorker, c'est un problème
+        if (userCreated) {
+          toast.error("שגיאה בהוספת עובד לאתר", { 
+            description: `המשתמש נוצר אבל העובד לא נוסף לאתר: ${siteWorkerError?.message || "נסה שוב מאוחר יותר"}` 
+          });
+        } else {
+          // Si le User n'a pas été créé (existe déjà), on affiche l'erreur du SiteWorker
+          // mais on ne re-lance pas l'erreur pour éviter le catch général
+          toast.error("שגיאה בהוספת עובד לאתר", { 
+            description: `${siteWorkerError?.message || "נסה שוב מאוחר יותר"}` 
+          });
+        }
+      }
     } catch (e: any) {
-      toast.error("שגיאה בהוספת עובד", { description: e?.message || "נסה שוב מאוחר יותר." });
+      console.error("[handleAddWorker] Unexpected error:", e);
+      const errorMsg = String(e?.message || "");
+      toast.error("שגיאה בהוספת עובד", { 
+        description: errorMsg || "נסה שוב מאוחר יותר." 
+      });
     } finally {
       setAddingWorker(false);
     }

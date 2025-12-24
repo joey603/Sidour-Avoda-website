@@ -80,12 +80,14 @@ export default function WorkerDetailsPage() {
           }),
         ]);
         setSites(sitesList || []);
+        // eslint-disable-next-line no-console
+        console.log("[WorkerDetails] All workers from API:", workers);
         const found = (workers || []).find((w) => String(w.id) === String(params.id));
         if (!found) {
           setError("עובד לא נמצא");
         }
         // eslint-disable-next-line no-console
-        console.log("[WorkerDetails] Found worker:", found);
+        console.log("[WorkerDetails] Found worker:", found, "phone field:", found?.phone);
         setWorker(found || null);
       } catch (e: any) {
         setError("שגיאה בטעינת עובד");

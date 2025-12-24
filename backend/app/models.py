@@ -47,7 +47,9 @@ class SiteWorker(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     max_shifts: Mapped[int] = mapped_column(Integer, default=5)
     roles: Mapped[dict] = mapped_column(JSON, default=list)  # list[str]
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}

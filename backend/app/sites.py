@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 import asyncio
-from fastapi import Body
+from fastapi import Body, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+import re
 
 from .deps import require_role, get_db
 from .models import Site, SiteAssignment, SiteWorker, User, UserRole
@@ -109,48 +110,70 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
     # Récupérer tous les sites du directeur
     sites = db.query(Site.id).filter(Site.director_id == user.id).all()
     site_ids = [s.id for s in sites]
+    logger.info(f"[all-workers] Director {user.id} has {len(site_ids)} sites: {site_ids}")
     if not site_ids:
         return []
     # Récupérer tous les travailleurs de ces sites
     rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+    logger.info(f"[all-workers] Found {len(rows)} SiteWorkers: {[(r.id, r.name, r.site_id) for r in rows]}")
     result = []
     # Récupérer tous les workers users une seule fois pour optimiser
     all_workers = db.query(User).filter(User.role == UserRole.worker).all()
     logger.info(f"[all-workers] Found {len(all_workers)} worker users in database")
     
     for r in rows:
-        # Chercher le numéro de téléphone dans la table User en cherchant par nom (insensible à la casse)
-        # Nettoyer les noms en enlevant les espaces en début/fin et normaliser
-        worker_name_clean = (r.name or "").strip().lower()
-        
         user_worker = None
+        phone = None
         
-        # Chercher d'abord par correspondance exacte (après trim et lower)
-        for u in all_workers:
-            user_name_clean = (u.full_name or "").strip().lower()
-            if user_name_clean == worker_name_clean:
-                user_worker = u
-                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Exact match with User '{u.full_name}' (id={u.id})")
-                break
+        # PRIORITÉ 1: Utiliser user_id si disponible (lien direct)
+        if r.user_id:
+            user_worker = db.get(User, r.user_id)
+            if user_worker:
+                phone = user_worker.phone
+                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by user_id={r.user_id}: '{user_worker.full_name}' (phone={phone})")
+            else:
+                logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
         
-        # Si pas trouvé, essayer une recherche plus flexible (contient le nom ou le nom contient le user)
-        if not user_worker and worker_name_clean:
-            for u in all_workers:
-                user_name_clean = (u.full_name or "").strip().lower()
-                # Vérifier si l'un contient l'autre (pour gérer les variations)
-                if worker_name_clean in user_name_clean or user_name_clean in worker_name_clean:
-                    # Mais seulement si la différence n'est pas trop grande (éviter les faux positifs)
-                    if abs(len(worker_name_clean) - len(user_name_clean)) <= 2:
-                        user_worker = u
-                        logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Partial match with User '{u.full_name}' (id={u.id})")
-                        break
-        
-        # Si toujours pas trouvé, logger tous les noms pour debug
+        # PRIORITÉ 2: si pas de user_id mais phone présent dans SiteWorker, chercher par téléphone
+        if not user_worker and r.phone:
+            user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == r.phone).first()
+            if user_worker:
+                phone = user_worker.phone
+                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by phone in SiteWorker {r.phone}: '{user_worker.full_name}' (id={user_worker.id})")
+
+        # PRIORITÉ 2: Si pas de user_id, chercher par nom ET téléphone (si disponible dans un autre SiteWorker)
         if not user_worker:
-            logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): No matching User found. Available users: {[(u.full_name, u.phone) for u in all_workers]}")
+            worker_name_clean = re.sub(r'\s+', ' ', (r.name or "").strip()).lower()
+            
+            # Chercher d'abord par correspondance exacte du nom
+            for u in all_workers:
+                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
+                if user_name_clean == worker_name_clean:
+                    # Vérifier si ce User est déjà lié à un autre SiteWorker du même site avec le même nom
+                    # Si oui, c'est probablement le bon
+                    user_worker = u
+                    phone = u.phone
+                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Exact name match with User '{u.full_name}' (id={u.id}, phone={phone})")
+                    break
+            
+            # Si pas trouvé, essayer une recherche plus flexible
+            if not user_worker and worker_name_clean:
+                for u in all_workers:
+                    user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
+                    if worker_name_clean in user_name_clean or user_name_clean in worker_name_clean:
+                        if abs(len(worker_name_clean) - len(user_name_clean)) <= 2:
+                            user_worker = u
+                            phone = u.phone
+                            logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Partial name match with User '{u.full_name}' (id={u.id}, phone={phone})")
+                            break
         
-        phone = user_worker.phone if user_worker else None
-        result.append(WorkerOut(
+        # Si toujours pas trouvé, logger pour debug
+        if not user_worker:
+            logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): No matching User found. Available users: {[(u.id, u.full_name, u.phone) for u in all_workers]}")
+        if not phone:
+            phone = r.phone
+        logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): phone={phone}, user_worker found={user_worker is not None}")
+        worker_out = WorkerOut(
             id=r.id,
             site_id=r.site_id,
             name=r.name,
@@ -158,7 +181,10 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
             roles=r.roles or [],
             availability=r.availability or {},
             phone=phone
-        ))
+        )
+        logger.info(f"[all-workers] WorkerOut created for '{r.name}': phone field = {worker_out.phone}")
+        result.append(worker_out)
+    logger.info(f"[all-workers] Returning {len(result)} workers. Sample worker phone: {result[0].phone if result else 'N/A'}")
     return result
 
 
@@ -210,7 +236,50 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
-    return [WorkerOut(id=r.id, site_id=r.site_id, name=r.name, max_shifts=r.max_shifts, roles=r.roles or [], availability=r.availability or {}) for r in rows]
+    # Récupérer tous les workers users pour trouver les numéros de téléphone
+    all_workers = db.query(User).filter(User.role == UserRole.worker).all()
+    result = []
+    for r in rows:
+        user_worker = None
+        phone = None
+        
+        # PRIORITÉ 1: Utiliser user_id si disponible (lien direct)
+        if r.user_id:
+            user_worker = db.get(User, r.user_id)
+            if user_worker:
+                phone = user_worker.phone
+            else:
+                logger.warning(f"[list_workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
+        
+        # PRIORITÉ 2: si pas de user_id mais phone présent dans SiteWorker, chercher par téléphone
+        if not user_worker and r.phone:
+            user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == r.phone).first()
+            if user_worker:
+                phone = user_worker.phone
+
+        # PRIORITÉ 3: Si pas de user_id, chercher par nom
+        if not user_worker:
+            worker_name_clean = re.sub(r'\s+', ' ', (r.name or "").strip()).lower()
+            for u in all_workers:
+                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
+                if user_name_clean == worker_name_clean:
+                    user_worker = u
+                    phone = u.phone
+                    break
+
+        if not phone:
+            phone = r.phone
+        
+        result.append(WorkerOut(
+            id=r.id,
+            site_id=r.site_id,
+            name=r.name,
+            max_shifts=r.max_shifts,
+            roles=r.roles or [],
+            availability=r.availability or {},
+            phone=phone
+        ))
+    return result
 
 
 @router.post("/{site_id}/create-worker-user", response_model=UserOut, status_code=201)
@@ -223,6 +292,7 @@ def create_worker_user(site_id: int, payload: CreateWorkerUserRequest, db: Sessi
     # Vérifier si le téléphone existe déjà
     existing_phone = db.query(User).filter(User.phone == payload.phone).first()
     if existing_phone:
+        logger.warning(f"[create-worker-user] Phone {payload.phone} already exists for user '{existing_phone.full_name}' (id={existing_phone.id})")
         raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
     
     # Générer un mot de passe par défaut (le worker pourra le changer plus tard)
@@ -239,38 +309,97 @@ def create_worker_user(site_id: int, payload: CreateWorkerUserRequest, db: Sessi
     db.add(worker_user)
     db.commit()
     db.refresh(worker_user)
+    logger.info(f"[create-worker-user] Created User worker '{payload.name}' (id={worker_user.id}, phone={payload.phone}) for site {site_id}")
     
     return UserOut(id=worker_user.id, email=worker_user.email, full_name=worker_user.full_name, role=worker_user.role.value, phone=worker_user.phone)
 
 
 @router.post("/{site_id}/workers", response_model=WorkerOut, status_code=201)
 def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
-    site = db.get(Site, site_id)
-    if not site or site.director_id != user.id:
-        raise HTTPException(status_code=404, detail="Site introuvable")
-    # Vérifier si un worker avec ce nom existe déjà
-    existing = (
-        db.query(SiteWorker)
-        .filter(
-            SiteWorker.site_id == site_id,
-            func.lower(SiteWorker.name) == func.lower(payload.name),
+    try:
+        site = db.get(Site, site_id)
+        if not site or site.director_id != user.id:
+            logger.error(f"[create-worker] Site {site_id} not found or not owned by director {user.id}")
+            raise HTTPException(status_code=404, detail="Site introuvable")
+        logger.info(f"[create-worker] Creating worker '{payload.name}' for site {site_id} (director_id={user.id})")
+        
+        # Chercher le User correspondant par nom ET téléphone (si disponible)
+        user_worker = None
+        if payload.phone:
+            # Chercher d'abord par téléphone (plus fiable)
+            user_worker = db.query(User).filter(
+                User.role == UserRole.worker,
+                User.phone == payload.phone
+            ).first()
+            if user_worker:
+                logger.info(f"[create-worker] Found User by phone '{payload.phone}': '{user_worker.full_name}' (id={user_worker.id})")
+        
+        # Si pas trouvé par téléphone, chercher par nom
+        if not user_worker:
+            worker_name_clean = re.sub(r'\s+', ' ', (payload.name or "").strip()).lower()
+            all_workers = db.query(User).filter(User.role == UserRole.worker).all()
+            for u in all_workers:
+                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
+                if user_name_clean == worker_name_clean:
+                    user_worker = u
+                    logger.info(f"[create-worker] Found User by name '{payload.name}': '{u.full_name}' (id={u.id}, phone={u.phone})")
+                    break
+        
+        # Vérifier si un worker avec ce nom existe déjà
+        existing = (
+            db.query(SiteWorker)
+            .filter(
+                SiteWorker.site_id == site_id,
+                func.lower(SiteWorker.name) == func.lower(payload.name),
+            )
+            .first()
         )
-        .first()
-    )
-    if existing:
-        # Si le worker existe déjà, mettre à jour ses données et le retourner (réutilisation)
-        existing.max_shifts = payload.max_shifts
-        existing.roles = payload.roles or []
-        existing.availability = payload.availability or {}
+        if existing:
+            # Si le worker existe déjà, mettre à jour ses données et le lier au User si nécessaire
+            logger.info(f"[create-worker] Worker '{payload.name}' already exists (id={existing.id}), updating")
+            existing.max_shifts = payload.max_shifts
+            existing.roles = payload.roles or []
+            # IMPORTANT: ne pas écraser les זמינות soumises par le travailleur.
+            # Côté directeur, on n'envoie souvent pas "availability" (ou un dict vide),
+            # ce qui ne doit pas reset la disponibilité globale.
+            if payload.availability is not None and len(payload.availability) > 0:
+                existing.availability = payload.availability
+            if payload.phone:
+                existing.phone = payload.phone
+            # Lier au User si pas déjà lié et qu'on a trouvé un User
+            if user_worker and not existing.user_id:
+                existing.user_id = user_worker.id
+                logger.info(f"[create-worker] Linked existing worker '{payload.name}' to User id={user_worker.id}")
+            db.commit()
+            db.refresh(existing)
+            # Récupérer le téléphone du User lié
+            phone = None
+            if existing.user_id:
+                linked_user = db.get(User, existing.user_id)
+                phone = linked_user.phone if linked_user else None
+            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, phone=phone)
+        
+        # Créer un nouveau worker avec le lien au User si trouvé
+        w = SiteWorker(
+            site_id=site_id, 
+            name=payload.name, 
+            phone=payload.phone,
+            max_shifts=payload.max_shifts, 
+            roles=payload.roles or [], 
+            availability=payload.availability or {},
+            user_id=user_worker.id if user_worker else None
+        )
+        db.add(w)
         db.commit()
-        db.refresh(existing)
-        return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {})
-    # Créer un nouveau worker
-    w = SiteWorker(site_id=site_id, name=payload.name, max_shifts=payload.max_shifts, roles=payload.roles or [], availability=payload.availability or {})
-    db.add(w)
-    db.commit()
-    db.refresh(w)
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {})
+        db.refresh(w)
+        logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
+        phone = user_worker.phone if user_worker else None
+        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, phone=phone)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[create-worker] Unexpected error creating worker '{payload.name}' for site {site_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la création du travailleur: {str(e)}")
 
 
 @router.put("/{site_id}/workers/{worker_id}", response_model=WorkerOut)
@@ -297,7 +426,10 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
     w.name = payload.name
     w.max_shifts = payload.max_shifts
     w.roles = payload.roles or []
-    w.availability = payload.availability or {}
+    # Ne mettre à jour availability que si elle est explicitement fournie et non vide
+    # Pour éviter d'écraser les זמינות soumises par le travailleur
+    if payload.availability is not None and len(payload.availability) > 0:
+        w.availability = payload.availability
     db.commit()
     db.refresh(w)
     return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {})
@@ -305,15 +437,23 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)
 def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    """
+    Supprime définitivement un travailleur d'un site :
+    - il disparaît des listes,
+    - il n'est plus rattaché au site à partir d'aujourd'hui.
+    """
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     w: SiteWorker | None = db.get(SiteWorker, worker_id)
     if not w or w.site_id != site_id:
-        raise HTTPException(status_code=404, detail="Worker introuvable")
+        raise HTTPException(status_code=404, detail="Travailleur introuvable sur ce site")
+
     db.delete(w)
     db.commit()
-    return None
+    logger.info(f"[delete-worker] Deleted worker '{w.name}' (id={worker_id}) from site {site_id}")
+
+    return Response(status_code=204)
 
 
 @router.post("/{site_id}/ai-generate", response_model=AIPlanningResponse)
