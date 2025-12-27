@@ -24,6 +24,7 @@ from .schemas import (
 from .ai_solver import solve_schedule, solve_schedule_stream
 from passlib.context import CryptContext
 import logging
+import secrets
 logger = logging.getLogger("ai_solver")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -125,21 +126,34 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
         user_worker = None
         phone = None
         
-        # PRIORITÉ 1: Utiliser user_id si disponible (lien direct)
+        # PRIORITÉ 1: Utiliser user_id si disponible (lien direct) MAIS seulement si le nom correspond
         if r.user_id:
             user_worker = db.get(User, r.user_id)
             if user_worker:
-                phone = user_worker.phone
-                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by user_id={r.user_id}: '{user_worker.full_name}' (phone={phone})")
+                # Si le lien est incohérent (mauvais user_id), ignorer et continuer la recherche
+                if (user_worker.full_name or "").strip().lower() != (r.name or "").strip().lower():
+                    logger.warning(
+                        f"[all-workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to '{user_worker.full_name}' -> mismatch, ignoring link"
+                    )
+                    user_worker = None
+                else:
+                    phone = user_worker.phone
+                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by user_id={r.user_id}: '{user_worker.full_name}' (phone={phone})")
             else:
                 logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
         
-        # PRIORITÉ 2: si pas de user_id mais phone présent dans SiteWorker, chercher par téléphone
+        # PRIORITÉ 2: si pas de user_id valide mais phone présent dans SiteWorker, chercher par téléphone (et vérifier nom)
         if not user_worker and r.phone:
             user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == r.phone).first()
             if user_worker:
-                phone = user_worker.phone
-                logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by phone in SiteWorker {r.phone}: '{user_worker.full_name}' (id={user_worker.id})")
+                if (user_worker.full_name or "").strip().lower() != (r.name or "").strip().lower():
+                    logger.warning(
+                        f"[all-workers] Worker '{r.name}' (id={r.id}): phone {r.phone} belongs to '{user_worker.full_name}' -> mismatch, ignoring"
+                    )
+                    user_worker = None
+                else:
+                    phone = user_worker.phone
+                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by phone in SiteWorker {r.phone}: '{user_worker.full_name}' (id={user_worker.id})")
 
         # PRIORITÉ 2: Si pas de user_id, chercher par nom ET téléphone (si disponible dans un autre SiteWorker)
         if not user_worker:
@@ -297,8 +311,8 @@ def create_worker_user(site_id: int, payload: CreateWorkerUserRequest, db: Sessi
         logger.warning(f"[create-worker-user] Phone {payload.phone} already exists for user '{existing_phone.full_name}' (id={existing_phone.id})")
         raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
     
-    # Générer un mot de passe par défaut (le worker pourra le changer plus tard)
-    default_password = "TempPass123!"  # TODO: générer un mot de passe plus sécurisé ou envoyer un SMS
+    # Générer un mot de passe aléatoire (ce compte n'est pas censé se connecter par password)
+    default_password = secrets.token_urlsafe(24)
     
     # Créer l'utilisateur worker
     worker_user = User(
@@ -428,7 +442,68 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         )
         if exists:
             raise HTTPException(status_code=400, detail="שם עובד כבר קיים באתר")
+    # --- Update identity (name/phone) ---
+    old_name = w.name
+    old_phone = w.phone
+    old_user_id = w.user_id
     w.name = payload.name
+
+    # Trouver le User worker "source of truth" via les anciennes infos (important quand on renomme)
+    user_worker: User | None = None
+    if old_user_id:
+        cand = db.get(User, old_user_id)
+        if cand and cand.role == UserRole.worker:
+            user_worker = cand
+    if not user_worker and old_phone:
+        user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == old_phone).first()
+    if not user_worker and old_name:
+        user_worker = db.query(User).filter(User.role == UserRole.worker, func.lower(User.full_name) == func.lower(old_name)).first()
+
+    # Mettre à jour le téléphone si fourni (et propager au User worker pour que la connexion change aussi)
+    if payload.phone is not None:
+        new_phone = (payload.phone or "").strip() or None
+
+        # Si on ne change pas réellement de téléphone, ne pas lever d'erreur
+        if new_phone and user_worker and user_worker.phone == new_phone:
+            pass
+        elif new_phone:
+            conflict = db.query(User).filter(
+                User.phone == new_phone,
+                User.role == UserRole.worker,
+                User.id != (user_worker.id if user_worker else -1),
+            ).first()
+            if conflict:
+                raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+
+        # Si aucun user worker n'existe et qu'on a un phone, en créer un (pour permettre login worker)
+        if not user_worker and new_phone:
+            default_password = secrets.token_urlsafe(24)
+            user_worker = User(
+                email=None,
+                full_name=payload.name,
+                hashed_password=pwd_context.hash(default_password),
+                role=UserRole.worker,
+                phone=new_phone,
+            )
+            db.add(user_worker)
+            db.commit()
+            db.refresh(user_worker)
+
+        # Propager au user si trouvé/créé
+        if user_worker:
+            user_worker.full_name = payload.name
+            if new_phone is not None:
+                user_worker.phone = new_phone
+            w.user_id = user_worker.id
+        # Mettre à jour aussi la colonne phone du SiteWorker (fallback / lien)
+        w.phone = new_phone
+    else:
+        # Changement de nom uniquement: propager au User pour que la connexion (nom+tel) utilise le nouveau nom
+        if user_worker:
+            user_worker.full_name = payload.name
+            w.user_id = user_worker.id
+
+    # --- Update the rest ---
     w.max_shifts = payload.max_shifts
     w.roles = payload.roles or []
     # Ne mettre à jour availability que si elle est explicitement fournie et non vide
@@ -439,7 +514,13 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         w.answers = payload.answers
     db.commit()
     db.refresh(w)
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {})
+    phone = None
+    if w.user_id:
+        linked_user = db.get(User, w.user_id)
+        phone = linked_user.phone if linked_user else None
+    if not phone:
+        phone = w.phone
+    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone)
 
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)

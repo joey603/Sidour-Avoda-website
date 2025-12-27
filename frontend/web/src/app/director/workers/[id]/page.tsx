@@ -52,6 +52,10 @@ export default function WorkerDetailsPage() {
   }>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
+  const [isEditingIdentity, setIsEditingIdentity] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [savingIdentity, setSavingIdentity] = useState(false);
 
   function addDays(d: Date, days: number): Date {
     const n = new Date(d);
@@ -147,7 +151,8 @@ export default function WorkerDetailsPage() {
       return {
         id: worker.id,
         site_id: worker.site_id,
-        name: String((snap as any).name ?? worker.name),
+        // IMPORTANT: toujours afficher l'identité depuis la DB (sinon un plan sauvegardé peut réafficher l'ancien nom)
+        name: String(worker.name),
         max_shifts: typeof (snap as any).max_shifts === "number" ? (snap as any).max_shifts : worker.max_shifts,
         roles: Array.isArray((snap as any).roles) ? (snap as any).roles : worker.roles,
         availability: (snap as any).availability || worker.availability,
@@ -156,6 +161,12 @@ export default function WorkerDetailsPage() {
     }
     return worker;
   }, [weekPlan?.workers, worker]);
+
+  useEffect(() => {
+    if (!worker) return;
+    setEditName(worker.name || "");
+    setEditPhone(worker.phone || "");
+  }, [worker]);
 
   const siteName = useMemo(() => {
     if (!worker) return "";
@@ -369,7 +380,32 @@ export default function WorkerDetailsPage() {
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div>
                   <div className="text-sm text-zinc-500">שם עובד</div>
-                  <div className="text-base font-medium">{effectiveWorker?.name}</div>
+                  <div className="flex items-center gap-2">
+                    {isEditingIdentity ? (
+                      <input
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      />
+                    ) : (
+                      <div className="text-base font-medium">{effectiveWorker?.name}</div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditingIdentity(true);
+                        setEditName(effectiveWorker?.name || "");
+                        setEditPhone(effectiveWorker?.phone || "");
+                      }}
+                      className="inline-flex items-center rounded-md border px-2 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      aria-label="ערוך שם עובד"
+                      title="ערוך"
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <div className="text-sm text-zinc-500">אתר</div>
@@ -377,13 +413,87 @@ export default function WorkerDetailsPage() {
                 </div>
                 <div>
                   <div className="text-sm text-zinc-500">מספר טלפון</div>
-                  <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
+                  <div className="flex items-center gap-2">
+                    {isEditingIdentity ? (
+                      <input
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      />
+                    ) : (
+                      <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditingIdentity(true);
+                        setEditName(effectiveWorker?.name || "");
+                        setEditPhone(effectiveWorker?.phone || "");
+                      }}
+                      className="inline-flex items-center rounded-md border px-2 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      aria-label="ערוך מספר טלפון"
+                      title="ערוך"
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <div className="text-sm text-zinc-500">תפקידים</div>
                   <div className="text-base font-medium">{effectiveWorker?.roles && effectiveWorker.roles.length ? effectiveWorker.roles.join(", ") : "—"}</div>
                 </div>
               </div>
+              {isEditingIdentity && (
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingIdentity(false);
+                      setEditName(worker?.name || "");
+                      setEditPhone(worker?.phone || "");
+                    }}
+                    className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    disabled={savingIdentity}
+                  >
+                    ביטול
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!worker) return;
+                      const name = editName.trim();
+                      const phone = editPhone.trim();
+                      if (!name) return;
+                      setSavingIdentity(true);
+                      try {
+                        const updated = await apiFetch<Worker>(`/director/sites/${worker.site_id}/workers/${worker.id}`, {
+                          method: "PUT",
+                          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                          body: JSON.stringify({
+                            name,
+                            phone,
+                            max_shifts: worker.max_shifts,
+                            roles: worker.roles || [],
+                            // ne pas envoyer availability/answers pour éviter tout overwrite
+                          }),
+                        });
+                        setWorker(updated as any);
+                        setIsEditingIdentity(false);
+                      } catch (e: any) {
+                        setError(String(e?.message || "שגיאה בעדכון עובד"));
+                      } finally {
+                        setSavingIdentity(false);
+                      }
+                    }}
+                    className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:opacity-60"
+                    disabled={savingIdentity}
+                  >
+                    שמור
+                  </button>
+                </div>
+              )}
             </section>
 
             {/* Grille hebdomadaire avec surlignage du travailleur */}

@@ -22,6 +22,10 @@ export default function PlanningPage() {
     answers: Record<string, any>;
   };
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const workersRef = useRef<Worker[]>([]);
+  useEffect(() => {
+    workersRef.current = workers;
+  }, [workers]);
   const [newWorkerName, setNewWorkerName] = useState("");
   const [newWorkerMax, setNewWorkerMax] = useState<number>(5);
   const [newWorkerRoles, setNewWorkerRoles] = useState<string[]>([]);
@@ -1176,6 +1180,89 @@ export default function PlanningPage() {
         availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
         answers: w.answers || {},
       }));
+
+      // --- Handle renames (worker name changed outside planning) ---
+      // Build id->previousName map from current workers + saved snapshot
+      const prevNameById = new Map<number, string>();
+      (workersRef.current || []).forEach((w) => prevNameById.set(Number(w.id), String(w.name || "")));
+      (savedWeekPlan?.workers || []).forEach((rw: any) => {
+        const id = Number(rw?.id);
+        if (!Number.isFinite(id)) return;
+        if (!prevNameById.has(id)) prevNameById.set(id, String(rw?.name || ""));
+      });
+      const renames: Array<{ id: number; from: string; to: string }> = [];
+      mapped.forEach((w) => {
+        const prev = (prevNameById.get(Number(w.id)) || "").trim();
+        const next = (w.name || "").trim();
+        if (prev && next && prev !== next) renames.push({ id: Number(w.id), from: prev, to: next });
+      });
+      const renameMap = new Map<string, string>();
+      renames.forEach((r) => renameMap.set(r.from, r.to));
+
+      function replaceNamesInAssignments(assignments: any): any {
+        if (!assignments || typeof assignments !== "object") return assignments;
+        const next = JSON.parse(JSON.stringify(assignments));
+        for (const dayKey of Object.keys(next)) {
+          const shifts = next[dayKey] || {};
+          for (const shiftName of Object.keys(shifts)) {
+            const perStation = shifts[shiftName] || [];
+            if (!Array.isArray(perStation)) continue;
+            for (let si = 0; si < perStation.length; si++) {
+              const arr = perStation[si];
+              if (!Array.isArray(arr)) continue;
+              perStation[si] = arr.map((nm: any) => {
+                const s = String(nm || "");
+                return renameMap.get(s) || s;
+              });
+            }
+          }
+        }
+        return next;
+      }
+
+      if (renames.length > 0) {
+        // Migrate weeklyAvailability + overlays keys for the displayed week (localStorage is source of truth)
+        const currentWeekly = readWeeklyAvailabilityFor(weekStart);
+        let changedWeekly = false;
+        renames.forEach(({ from, to }) => {
+          if (Object.prototype.hasOwnProperty.call(currentWeekly, from) && !Object.prototype.hasOwnProperty.call(currentWeekly, to)) {
+            (currentWeekly as any)[to] = (currentWeekly as any)[from];
+            delete (currentWeekly as any)[from];
+            changedWeekly = true;
+          }
+          setAvailabilityOverlays((prev) => {
+            if (!prev || typeof prev !== "object") return prev;
+            if (!Object.prototype.hasOwnProperty.call(prev, from)) return prev;
+            if (Object.prototype.hasOwnProperty.call(prev, to)) return prev;
+            const cp: any = { ...prev };
+            cp[to] = cp[from];
+            delete cp[from];
+            return cp;
+          });
+        });
+        if (changedWeekly) {
+          setWeeklyAvailability(currentWeekly as any);
+          try { localStorage.setItem(weekKeyOf(weekStart), JSON.stringify(currentWeekly)); } catch {}
+        }
+
+        // Update saved plan snapshot (workers + assignments) so UI shows new names
+        setSavedWeekPlan((prev) => {
+          if (!prev) return prev;
+          const nextWorkers = Array.isArray(prev.workers)
+            ? prev.workers.map((rw: any) => {
+                const apiW = mapped.find((mw) => Number(mw.id) === Number(rw?.id));
+                if (!apiW) return rw;
+                return { ...rw, name: apiW.name };
+              })
+            : prev.workers;
+          const nextAssignments = replaceNamesInAssignments(prev.assignments);
+          return { ...prev, workers: nextWorkers as any, assignments: nextAssignments };
+        });
+
+        // Update current in-memory planning maps too
+        setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: replaceNamesInAssignments(prev.assignments) } : prev));
+        setManualAssignments((prev) => (prev ? (replaceNamesInAssignments(prev) as any) : prev));
+      }
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: mapped", mapped);
       setWorkers(mapped);
@@ -1629,10 +1716,16 @@ export default function PlanningPage() {
                             // S'assurer d'avoir les answers à jour (sans dépendre de "שחזור זמינות")
                             void refreshWorkersAnswersFromApi();
                           }}
-                          className="inline-flex items-center gap-2 rounded-md border border-orange-600 bg-white px-3 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-zinc-800"
+                          disabled={!Array.isArray(site?.config?.questions) || site.config.questions.length === 0}
+                          className={
+                            "inline-flex items-center gap-2 rounded-md border border-orange-600 bg-white px-3 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-zinc-800 " +
+                            (!Array.isArray(site?.config?.questions) || site.config.questions.length === 0
+                              ? "opacity-50 cursor-not-allowed"
+                              : "")
+                          }
                         >
                           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>
-                          סינון עובדים
+                          סינון תשובות
                         </button>
                       <button
                         type="button"
@@ -1699,11 +1792,11 @@ export default function PlanningPage() {
                                     }
                                   });
                                   // Utiliser le maxShifts de l'état workers (mis à jour toutes les 10 secondes) au lieu de celui sauvegardé
-                                  const currentWorker = workers.find((w) => w.name === rw.name);
+                                  const currentWorker = workers.find((w) => Number(w.id) === Number(rw.id));
                                   const currentMaxShifts = currentWorker?.maxShifts ?? rw.max_shifts ?? rw.maxShifts ?? 0;
                                   return ({
                                   id: rw.id,
-                                  name: rw.name,
+                                  name: currentWorker?.name || rw.name,
                                   maxShifts: currentMaxShifts,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
                                     availability: merged,
@@ -2536,7 +2629,7 @@ export default function PlanningPage() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
                 <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-lg border bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                   <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900">
-                    <h3 className="text-lg font-semibold">סינון עובדים לפי תשובות לשאלות</h3>
+                    <h3 className="text-lg font-semibold">סינון תשובות לשאלות</h3>
                     <button
                       type="button"
                       onClick={() => {
