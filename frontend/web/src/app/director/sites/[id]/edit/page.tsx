@@ -14,6 +14,15 @@ export default function EditSitePage() {
   type StationRole = { name: string; enabled: boolean; count: number };
   type StationShift = { name: string; enabled: boolean; start: string; end: string; workers: number; roles: StationRole[] };
   type StationDays = Record<string, boolean>;
+  type QuestionType = "text" | "dropdown" | "yesno" | "slider";
+  type SiteQuestion = {
+    id: string;
+    label: string;
+    type: QuestionType;
+    perDay?: boolean; // poser la question pour chaque jour
+    options?: string[]; // dropdown
+    slider?: { min: number; max: number; step: number }; // slider
+  };
   type Station = {
     name: string;
     workers: number;
@@ -50,6 +59,15 @@ export default function EditSitePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [showPreview, setShowPreview] = useState(false);
+  const [questions, setQuestions] = useState<SiteQuestion[]>([]);
+
+  function newId(): string {
+    try {
+      if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+    } catch {}
+    return `q_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
 
   useEffect(() => {
     (async () => {
@@ -81,6 +99,8 @@ export default function EditSitePage() {
             }];
         setStations(st);
         setNumStations(st.length);
+        const qs = site?.config?.questions;
+        if (Array.isArray(qs)) setQuestions(qs as SiteQuestion[]);
       } catch (e) {
         setError("שגיאה בטעינת אתר");
       } finally {
@@ -99,7 +119,7 @@ export default function EditSitePage() {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: name.trim(),
-          config: { stations },
+          config: { stations, questions },
         }),
       });
       router.replace(`/director/planning/${params.id}`);
@@ -848,6 +868,216 @@ export default function EditSitePage() {
             </section>
           )}
 
+          {/* שאלות אופציונליות */}
+          <section className="rounded-md border p-4 space-y-4 dark:border-zinc-700">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">שאלות אופציונליות</h2>
+              <button
+                type="button"
+                onClick={() =>
+                  setQuestions((prev) => [
+                    ...prev,
+                    { id: newId(), label: "", type: "text", perDay: false, options: [], slider: { min: 0, max: 10, step: 1 } },
+                  ])
+                }
+                className="inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-1.5 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:text-green-300 dark:hover:bg-green-900/30"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                  <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
+                </svg>
+                הוסף שאלה
+              </button>
+            </div>
+
+            {questions.length === 0 ? (
+              <p className="text-sm text-zinc-500">אין שאלות</p>
+            ) : (
+              <div className="space-y-3">
+                {questions.map((q, qIdx) => (
+                  <div key={q.id} className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 space-y-2">
+                        <label className="block text-sm font-semibold">שאלה</label>
+                        <input
+                          type="text"
+                          value={q.label}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setQuestions((prev) => prev.map((x, i) => (i === qIdx ? { ...x, label: v } : x)));
+                          }}
+                          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                          placeholder="הזן שאלה"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setQuestions((prev) => prev.filter((_, i) => i !== qIdx))}
+                        className="mt-7 inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-2 text-sm text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30"
+                      >
+                        מחק
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="block text-sm font-semibold">סוג שדה</label>
+                        <select
+                          value={q.type}
+                          onChange={(e) => {
+                            const t = e.target.value as QuestionType;
+                            setQuestions((prev) =>
+                              prev.map((x, i) =>
+                                i === qIdx
+                                  ? {
+                                      ...x,
+                                      type: t,
+                                      options: t === "dropdown" ? (x.options?.length ? x.options : [""]) : [],
+                                      slider: t === "slider" ? (x.slider || { min: 0, max: 10, step: 1 }) : undefined,
+                                    }
+                                  : x,
+                              ),
+                            );
+                          }}
+                          className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        >
+                          <option value="text">טקסט</option>
+                          <option value="dropdown">רשימה (Dropdown)</option>
+                          <option value="yesno">כן / לא</option>
+                          <option value="slider">סליידר</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="block text-sm font-semibold">שאלה לכל יום</label>
+                        <label className="inline-flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={!!q.perDay}
+                            onChange={(e) => {
+                              const checked = e.target.checked;
+                              setQuestions((prev) => prev.map((x, i) => (i === qIdx ? { ...x, perDay: checked } : x)));
+                            }}
+                          />
+                          הצג לכל יום
+                        </label>
+                      </div>
+                    </div>
+
+                    {q.type === "dropdown" && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-sm font-semibold">אפשרויות</label>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setQuestions((prev) =>
+                                prev.map((x, i) => (i === qIdx ? { ...x, options: [...(x.options || []), ""] } : x)),
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                          >
+                            הוסף אפשרות
+                          </button>
+                        </div>
+                        <div className="space-y-2">
+                          {(q.options || []).map((opt, oi) => (
+                            <div key={oi} className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={opt}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setQuestions((prev) =>
+                                    prev.map((x, i) => {
+                                      if (i !== qIdx) return x;
+                                      const next = [...(x.options || [])];
+                                      next[oi] = v;
+                                      return { ...x, options: next };
+                                    }),
+                                  );
+                                }}
+                                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                                placeholder={`אפשרות ${oi + 1}`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setQuestions((prev) =>
+                                    prev.map((x, i) => {
+                                      if (i !== qIdx) return x;
+                                      const next = (x.options || []).filter((_, j) => j !== oi);
+                                      return { ...x, options: next };
+                                    }),
+                                  )
+                                }
+                                className="rounded-md border px-2 py-2 text-sm hover:bg-red-50 dark:border-zinc-700 dark:hover:bg-red-900/30"
+                                aria-label="מחק אפשרות"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {q.type === "slider" && (
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <div className="space-y-2">
+                          <label className="block text-sm font-semibold">מינימום</label>
+                          <input
+                            type="number"
+                            value={q.slider?.min ?? 0}
+                            onChange={(e) => {
+                              const v = Number(e.target.value || 0);
+                              setQuestions((prev) =>
+                                prev.map((x, i) =>
+                                  i === qIdx ? { ...x, slider: { ...(x.slider || { min: 0, max: 10, step: 1 }), min: v } } : x,
+                                ),
+                              );
+                            }}
+                            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="block text-sm font-semibold">מקסימום</label>
+                          <input
+                            type="number"
+                            value={q.slider?.max ?? 10}
+                            onChange={(e) => {
+                              const v = Number(e.target.value || 10);
+                              setQuestions((prev) =>
+                                prev.map((x, i) =>
+                                  i === qIdx ? { ...x, slider: { ...(x.slider || { min: 0, max: 10, step: 1 }), max: v } } : x,
+                                ),
+                              );
+                            }}
+                            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="block text-sm font-semibold">צעד</label>
+                          <input
+                            type="number"
+                            value={q.slider?.step ?? 1}
+                            onChange={(e) => {
+                              const v = Number(e.target.value || 1);
+                              setQuestions((prev) =>
+                                prev.map((x, i) =>
+                                  i === qIdx ? { ...x, slider: { ...(x.slider || { min: 0, max: 10, step: 1 }), step: v } } : x,
+                                ),
+                              );
+                            }}
+                            className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {error && <p className="text-sm text-red-600">{error}</p>}
           <div className="sticky bottom-0 z-10 -mx-6 border-t bg-white/80 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-zinc-800 dark:bg-zinc-900/80">
           <div className="flex items-center gap-2">
@@ -861,6 +1091,14 @@ export default function EditSitePage() {
             </button>
             <button
               type="button"
+              onClick={() => setShowPreview(true)}
+              className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+              תצוגה מקדימה
+            </button>
+            <button
+              type="button"
               onClick={() => router.back()}
               className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
@@ -871,6 +1109,118 @@ export default function EditSitePage() {
           </div>
         </form>
       </div>
+
+      {/* Modal Preview */}
+      {showPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowPreview(false)}>
+          <div className="w-full max-w-6xl max-h-[90vh] overflow-auto rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <h2 className="text-xl font-semibold">תצוגה מקדימה: {name || "אתר"}</h2>
+              <button
+                type="button"
+                onClick={() => setShowPreview(false)}
+                className="rounded-md border px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-6">
+              {stations.length === 0 ? (
+                <p className="text-center text-zinc-500 py-8">אין עמדות להצגה</p>
+              ) : (
+                stations.map((station, stIdx) => {
+                  const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+                  const dayLabels = { sun: "א'", mon: "ב'", tue: "ג'", wed: "ד'", thu: "ה'", fri: "ו'", sat: "ש'" };
+                  
+                  // Collecter tous les shifts uniques (depuis shifts uniformes ou dayOverrides)
+                  const allShifts = new Set<string>();
+                  if (!station.perDayCustom && station.shifts) {
+                    station.shifts.filter((s) => s.enabled).forEach((s) => allShifts.add(s.name));
+                  } else if (station.perDayCustom && station.dayOverrides) {
+                    Object.values(station.dayOverrides).forEach((dayCfg) => {
+                      if (dayCfg.active) {
+                        dayCfg.shifts.filter((s) => s.enabled).forEach((s) => allShifts.add(s.name));
+                      }
+                    });
+                  }
+                  const shiftNames = Array.from(allShifts);
+
+                  return (
+                    <div key={stIdx} className="mb-8 last:mb-0">
+                      <h3 className="mb-4 text-lg font-semibold border-b pb-2">{station.name}</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-sm">
+                          <thead>
+                            <tr className="border-b dark:border-zinc-800">
+                              <th className="px-2 py-2 text-center border-r dark:border-zinc-800">עמדה / יום</th>
+                              {shiftNames.map((sn) => (
+                                <th key={sn} className="px-2 py-2 text-center border-r dark:border-zinc-800 last:border-r-0">
+                                  {sn}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dayKeys.map((dayKey) => {
+                              const isDayActive = station.perDayCustom
+                                ? station.dayOverrides?.[dayKey]?.active ?? true
+                                : station.days?.[dayKey] ?? true;
+                              
+                              if (!isDayActive) return null;
+
+                              const dayShifts = station.perDayCustom
+                                ? station.dayOverrides?.[dayKey]?.shifts || []
+                                : station.shifts || [];
+
+                              return (
+                                <tr key={dayKey} className="border-b dark:border-zinc-800">
+                                  <td className="px-2 py-2 text-center font-medium border-r dark:border-zinc-800">
+                                    {dayLabels[dayKey]}
+                                  </td>
+                                  {shiftNames.map((sn) => {
+                                    const shift = dayShifts.find((s) => s.name === sn && s.enabled);
+                                    if (!shift) {
+                                      return (
+                                        <td key={sn} className="px-2 py-2 text-center border-r dark:border-zinc-800 last:border-r-0">
+                                          <span className="text-zinc-400">—</span>
+                                        </td>
+                                      );
+                                    }
+                                    const workersCount = shift.workers || 0;
+                                    const activeRoles = shift.roles?.filter((r) => r.enabled) || [];
+                                    const rolesText = activeRoles.length > 0
+                                      ? activeRoles.map((r) => `${r.name}${r.count > 0 ? ` (${r.count})` : ""}`).join(", ")
+                                      : "ללא תפקידים";
+                                    return (
+                                      <td key={sn} className="px-2 py-2 text-center border-r dark:border-zinc-800 last:border-r-0">
+                                        <div className="space-y-1">
+                                          <div className="font-medium">{shift.start} - {shift.end}</div>
+                                          <div className="text-xs text-zinc-600 dark:text-zinc-400">
+                                            {workersCount} עובד{workersCount !== 1 ? "ים" : ""}
+                                          </div>
+                                          {activeRoles.length > 0 && (
+                                            <div className="text-xs text-zinc-500 dark:text-zinc-500">
+                                              {rolesText}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -180,6 +180,7 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
             max_shifts=r.max_shifts,
             roles=r.roles or [],
             availability=r.availability or {},
+            answers=r.answers or {},
             phone=phone
         )
         logger.info(f"[all-workers] WorkerOut created for '{r.name}': phone field = {worker_out.phone}")
@@ -277,6 +278,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
             max_shifts=r.max_shifts,
             roles=r.roles or [],
             availability=r.availability or {},
+            answers=r.answers or {},
             phone=phone
         ))
     return result
@@ -364,6 +366,8 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             # ce qui ne doit pas reset la disponibilité globale.
             if payload.availability is not None and len(payload.availability) > 0:
                 existing.availability = payload.availability
+            if payload.answers is not None and len(payload.answers) > 0:
+                existing.answers = payload.answers
             if payload.phone:
                 existing.phone = payload.phone
             # Lier au User si pas déjà lié et qu'on a trouvé un User
@@ -377,7 +381,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             if existing.user_id:
                 linked_user = db.get(User, existing.user_id)
                 phone = linked_user.phone if linked_user else None
-            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, phone=phone)
+            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone)
         
         # Créer un nouveau worker avec le lien au User si trouvé
         w = SiteWorker(
@@ -387,6 +391,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             max_shifts=payload.max_shifts, 
             roles=payload.roles or [], 
             availability=payload.availability or {},
+            answers=payload.answers or {},
             user_id=user_worker.id if user_worker else None
         )
         db.add(w)
@@ -394,7 +399,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
         db.refresh(w)
         logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
         phone = user_worker.phone if user_worker else None
-        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, phone=phone)
+        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone)
     except HTTPException:
         raise
     except Exception as e:
@@ -430,9 +435,11 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
     # Pour éviter d'écraser les זמינות soumises par le travailleur
     if payload.availability is not None and len(payload.availability) > 0:
         w.availability = payload.availability
+    if payload.answers is not None and len(payload.answers) > 0:
+        w.answers = payload.answers
     db.commit()
     db.refresh(w)
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {})
+    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {})
 
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Any
 
 
 class UserBase(BaseModel):
@@ -61,6 +61,7 @@ class WorkerBase(BaseModel):
     max_shifts: int = 5
     roles: list[str] = []
     availability: dict[str, list[str]] = {}
+    answers: dict[str, Any] = {}
     phone: str | None = None
 
 

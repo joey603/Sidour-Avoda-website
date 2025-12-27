@@ -135,6 +135,9 @@ def create_app() -> FastAPI:
                             conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_site_workers_phone ON site_workers(phone)")
                         except Exception:
                             pass
+                    if "answers" not in site_worker_col_names:
+                        logger.info("Ajout de la colonne answers à la table site_workers")
+                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN answers JSON")
                 except Exception as e:
                     # La table n'existe peut-être pas encore
                     logger.info(f"Table site_workers pas encore créée ou erreur: {e}")

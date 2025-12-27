@@ -53,4 +53,5 @@ class SiteWorker(Base):
     max_shifts: Mapped[int] = mapped_column(Integer, default=5)
     roles: Mapped[dict] = mapped_column(JSON, default=list)  # list[str]
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}
+    answers: Mapped[dict] = mapped_column(JSON, default=dict)  # {questionId: answer}
 

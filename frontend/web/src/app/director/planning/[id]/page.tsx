@@ -19,6 +19,7 @@ export default function PlanningPage() {
     maxShifts: number;
     roles: string[];
     availability: WorkerAvailability;
+    answers: Record<string, any>;
   };
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [newWorkerName, setNewWorkerName] = useState("");
@@ -37,13 +38,22 @@ export default function PlanningPage() {
   const [originalAvailability, setOriginalAvailability] = useState<WorkerAvailability | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState(false);
+  const [isFilterWorkersModalOpen, setIsFilterWorkersModalOpen] = useState(false);
   const [newWorkerPhone, setNewWorkerPhone] = useState("");
   const [editingWorkerId, setEditingWorkerId] = useState<number | null>(null);
+  // Filtres pour les questions optionnelles
+  const [questionFilters, setQuestionFilters] = useState<Record<string, any>>({});
+  // Filtre pour n'afficher que les jours travaillés (si planning sauvegardé)
+  const [filterByWorkDays, setFilterByWorkDays] = useState(false);
+  // Visibilité des réponses par question (par défaut toutes visibles)
+  const [questionVisibility, setQuestionVisibility] = useState<Record<string, boolean>>({});
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [hiddenWorkerIds, setHiddenWorkerIds] = useState<number[]>([]);
   // Empêcher qu'une réponse "ancienne" (ancienne semaine) n'écrase l'état quand on navigue vite
   const loadWorkersReqIdRef = useRef(0);
   const weekStartRef = useRef<Date | null>(null);
+  // Éviter de re-fetch les réponses en boucle dans le modal
+  const answersRefreshKeyRef = useRef<string | null>(null);
   const [weekStart, setWeekStart] = useState<Date>(() => {
     // Calculer la semaine prochaine (identique à la page worker)
     const today = new Date();
@@ -59,6 +69,23 @@ export default function PlanningPage() {
   useEffect(() => {
     weekStartRef.current = weekStart;
   }, [weekStart]);
+
+  // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
+  useEffect(() => {
+    if (!isAddModalOpen || !editingWorkerId) return;
+    try {
+      const wk = getWeekKeyISO(weekStart);
+      const key = `${editingWorkerId}_${wk}`;
+      if (answersRefreshKeyRef.current === key) return;
+      const w = workers.find((x) => Number(x.id) === Number(editingWorkerId));
+      const raw = (w as any)?.answers || {};
+      const weekAnswers = getAnswersForWeek(raw, weekStart);
+      if (weekAnswers) return;
+      answersRefreshKeyRef.current = key;
+      void refreshWorkersAnswersFromApi();
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAddModalOpen, editingWorkerId, weekStart]);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
 
@@ -85,7 +112,7 @@ export default function PlanningPage() {
   const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
     assignments: Record<string, Record<string, string[][]>>,
     isManual?: boolean,
-    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>
+    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]>; answers?: Record<string, any> }>
   }>(null);
   const isSavedMode = !!savedWeekPlan?.assignments;
   // Mode édition après chargement d'une grille sauvegardée
@@ -829,6 +856,49 @@ export default function PlanningPage() {
     return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" });
   }
 
+  // Fonction pour obtenir la clé de semaine au format ISO (pour filtrer les réponses)
+  function getWeekKeyISO(date: Date): string {
+    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  }
+
+  // Fonction pour extraire les réponses de la semaine actuelle
+  function getAnswersForWeek(rawAnswers: any, weekStart: Date): { general: any; perDay: any } | null {
+    if (!rawAnswers || typeof rawAnswers !== "object") return null;
+    
+    const weekKey = getWeekKeyISO(weekStart);
+    
+    // Si les réponses sont stockées par semaine
+    if (weekKey in rawAnswers) {
+      const weekAnswers = rawAnswers[weekKey];
+      if (weekAnswers && typeof weekAnswers === "object") {
+        const general = (weekAnswers.general && typeof weekAnswers.general === "object") ? weekAnswers.general : {};
+        const perDay = (weekAnswers.perDay && typeof weekAnswers.perDay === "object") ? weekAnswers.perDay : {};
+        return { general, perDay };
+      }
+    }
+    
+    // Compatibilité ascendante : si pas de structure par semaine, vérifier si c'est l'ancien format
+    if ("general" in rawAnswers || "perDay" in rawAnswers) {
+      // C'est l'ancien format, mais on ne l'affiche que si c'est pour la semaine prochaine (où les workers répondent)
+      const today = new Date();
+      const currentDay = today.getDay();
+      const daysUntilNextSunday = currentDay === 0 ? 7 : 7 - currentDay;
+      const nextSunday = new Date(today);
+      nextSunday.setDate(today.getDate() + daysUntilNextSunday);
+      nextSunday.setHours(0, 0, 0, 0);
+      
+      // Si la semaine actuelle est la semaine prochaine, afficher les réponses
+      if (weekStart.getTime() === nextSunday.getTime()) {
+        const general = (rawAnswers.general && typeof rawAnswers.general === "object") ? rawAnswers.general : rawAnswers;
+        const perDay = (rawAnswers.perDay && typeof rawAnswers.perDay === "object") ? rawAnswers.perDay : {};
+        return { general, perDay };
+      }
+    }
+    
+    // Pas de réponses pour cette semaine
+    return null;
+  }
+
   useEffect(() => {
     // Debug: workers/hiddenIds
     // eslint-disable-next-line no-console
@@ -1104,6 +1174,7 @@ export default function PlanningPage() {
         maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
         roles: Array.isArray(w.roles) ? w.roles : [],
         availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+        answers: w.answers || {},
       }));
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: mapped", mapped);
@@ -1146,6 +1217,38 @@ export default function PlanningPage() {
       }
     } catch (e: any) {
       toast.error("שגיאה בטעינת עובדים", { description: e?.message || "נסה שוב מאוחר יותר." });
+    }
+  }
+
+  // Rafraîchir uniquement les answers depuis l'API (utile en mode plan sauvegardé/ערוך)
+  async function refreshWorkersAnswersFromApi() {
+    try {
+      const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+      const byId = new Map<number, any>((list || []).map((w: any) => [Number(w.id), w]));
+      // Mettre à jour le state workers
+      setWorkers((prev) =>
+        (prev || []).map((w) => {
+          const apiW = byId.get(Number(w.id));
+          if (!apiW) return w;
+          return { ...w, answers: apiW.answers || {} };
+        }),
+      );
+      // Mettre à jour aussi le snapshot du planning sauvegardé si présent
+      setSavedWeekPlan((prev) => {
+        if (!prev || !Array.isArray(prev.workers) || prev.workers.length === 0) return prev;
+        const nextWorkers = prev.workers.map((w: any) => {
+          const apiW = byId.get(Number(w.id));
+          if (!apiW) return w;
+          return { ...w, answers: apiW.answers || {} };
+        });
+        return { ...prev, workers: nextWorkers };
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("[Planning] refreshWorkersAnswersFromApi failed", e);
     }
   }
 
@@ -1302,6 +1405,8 @@ export default function PlanningPage() {
           max_shifts: typeof (w as any).max_shifts === "number" ? (w as any).max_shifts : (w.maxShifts ?? 0),
           roles: Array.isArray(w.roles) ? w.roles : [],
           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+          // IMPORTANT: garder un snapshot des réponses pour le mode ערוך d'un planning sauvegardé
+          answers: ((w as any).answers && typeof (w as any).answers === "object") ? (w as any).answers : {},
         })),
       };
       if (typeof window !== "undefined") {
@@ -1378,6 +1483,7 @@ export default function PlanningPage() {
           maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
           roles: Array.isArray(w.roles) ? w.roles : [],
           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+          answers: w.answers || {},
         }));
         setWorkers(mapped);
       } else {
@@ -1515,6 +1621,19 @@ export default function PlanningPage() {
                   <div className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
                     <div className="flex items-center justify-between">
                       <div className="text-sm text-zinc-500">רשימת עובדים</div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsFilterWorkersModalOpen(true);
+                            // S'assurer d'avoir les answers à jour (sans dépendre de "שחזור זמינות")
+                            void refreshWorkersAnswersFromApi();
+                          }}
+                          className="inline-flex items-center gap-2 rounded-md border border-orange-600 bg-white px-3 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-zinc-800"
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>
+                          סינון עובדים
+                        </button>
                       <button
                         type="button"
                         onClick={() => {
@@ -1527,10 +1646,10 @@ export default function PlanningPage() {
                           setNewWorkerAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
                           setIsCreateUserModalOpen(true);
                         }}
-                        disabled={isSavedMode}
+                        disabled={isSavedMode && !editingSaved}
                         className={
                           "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm " +
-                          (isSavedMode
+                          ((isSavedMode && !editingSaved)
                             ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
                             : "border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30")
                         }
@@ -1538,6 +1657,7 @@ export default function PlanningPage() {
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                         הוסף עובד
                       </button>
+                      </div>
                     </div>
                       <div className="overflow-x-auto">
                         <table className="w-full border-collapse text-sm">
@@ -1552,20 +1672,30 @@ export default function PlanningPage() {
                           </thead>
                           <tbody>
                           {(() => {
+                            // IMPORTANT: en mode ערוך, `weeklyAvailability` peut être stale.
+                            // Toujours lire les overrides depuis le localStorage pour la semaine affichée.
+                            const currentWeekly = readWeeklyAvailabilityFor(weekStart);
                             const displayWorkers: Worker[] = (savedWeekPlan?.workers || []).length
                               ? (savedWeekPlan!.workers as any[]).map((rw: any) => {
-                                  // Utiliser les זמינות de la base de données comme base
+                                  // Pour la semaine prochaine, utiliser la base (snapshot) OU weeklyAvailability
+                                  // Pour les autres semaines, afficher uniquement weeklyAvailability (sinon vide)
+                                  const isNextWeekDisplay = isNextWeek(weekStart);
+                                  // Utiliser les זמינות sauvegardées comme base (snapshot)
                                   const baseAvail = (rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
                                   // weeklyAvailability sert d'override pour cette semaine
-                                  const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
+                                  const weekOverride = (currentWeekly[rw.name] || {}) as Record<string, string[]>;
                                   const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
                                   const merged: Record<string, string[]> = {} as any;
                                   daysK.forEach((dk) => {
-                                    // Si un override existe pour ce jour, l'utiliser, sinon utiliser la base
-                                    if (weekOverride[dk] && Array.isArray(weekOverride[dk]) && weekOverride[dk].length > 0) {
-                                      merged[dk] = weekOverride[dk];
-                                    } else {
+                                    // Si un override existe pour ce jour, l'utiliser (même si vide => modification explicite)
+                                    if (Object.prototype.hasOwnProperty.call(weekOverride, dk) && Array.isArray(weekOverride[dk])) {
+                                      merged[dk] = weekOverride[dk] as any;
+                                    } else if (isNextWeekDisplay) {
+                                      // Pour la semaine prochaine uniquement, utiliser la base
                                       merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
+                                    } else {
+                                      // Pour les autres semaines, ne pas afficher la base
+                                      merged[dk] = [];
                                     }
                                   });
                                   // Utiliser le maxShifts de l'état workers (mis à jour toutes les 10 secondes) au lieu de celui sauvegardé
@@ -1577,6 +1707,7 @@ export default function PlanningPage() {
                                   maxShifts: currentMaxShifts,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
                                     availability: merged,
+                                    answers: currentWorker?.answers || rw.answers || {},
                                   });
                                 })
                               : workers.map((bw) => {
@@ -1584,13 +1715,13 @@ export default function PlanningPage() {
                                   // Pour les autres semaines, utiliser uniquement weeklyAvailability (pas les זמינות de la base de données)
                                   const isNextWeekDisplay = isNextWeek(weekStart);
                                   const baseAvail = (bw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
-                                  const weekOverride = (weeklyAvailability[bw.name] || {}) as Record<string, string[]>;
+                                  const weekOverride = (currentWeekly[bw.name] || {}) as Record<string, string[]>;
                                   const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
                                   const merged: Record<string, string[]> = {} as any;
                                   daysK.forEach((dk) => {
                                     // Si un override existe pour ce jour, l'utiliser
-                                    if (weekOverride[dk] && Array.isArray(weekOverride[dk]) && weekOverride[dk].length > 0) {
-                                      merged[dk] = weekOverride[dk];
+                                    if (Object.prototype.hasOwnProperty.call(weekOverride, dk) && Array.isArray(weekOverride[dk])) {
+                                      merged[dk] = weekOverride[dk] as any;
                                     } else if (isNextWeekDisplay) {
                                       // Pour la semaine prochaine uniquement, utiliser les זמינות de la base de données
                                       merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
@@ -1655,15 +1786,17 @@ export default function PlanningPage() {
                                         setNewWorkerMax(w.maxShifts);
                                         setNewWorkerRoles([...w.roles]);
                                         // Preload weekly availability (or empty) for this worker for this week only
-                                      const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                                        const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
                                       setOriginalAvailability({ ...wa });
-                                      setNewWorkerAvailability({ ...wa });
+                                        setNewWorkerAvailability({ ...wa });
                                         setIsAddModalOpen(true);
+                                        // S'assurer d'avoir les réponses à jour dans le modal
+                                        void refreshWorkersAnswersFromApi();
                                       }}
-                                      disabled={isSavedMode}
+                                      disabled={isSavedMode && !editingSaved}
                                       className={
                                         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
-                                        (isSavedMode ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600" : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                                        ((isSavedMode && !editingSaved) ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600" : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
                                       }
                                     >
                                       <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
@@ -1709,6 +1842,7 @@ export default function PlanningPage() {
                                                   maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
                                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
                                                   availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                                                  answers: rw.answers || {},
                                                 }));
                                                 setWorkers(mapped);
                                                 setHiddenWorkerIds((prev) => prev.filter((id) => id !== w.id));
@@ -1749,10 +1883,10 @@ export default function PlanningPage() {
                                           setDeletingId(null);
                                         }
                                       }}
-                                      disabled={isSavedMode || deletingId === w.id}
+                                      disabled={(isSavedMode && !editingSaved) || deletingId === w.id}
                                       className={
                                         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
-                                        ((isSavedMode || deletingId === w.id)
+                                        (((isSavedMode && !editingSaved) || deletingId === w.id)
                                           ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
                                           : "border-red-600 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40")
                                       }
@@ -1829,19 +1963,36 @@ export default function PlanningPage() {
                         }
                         let userCreated = false;
                         try {
+                          // Si un worker avec ce téléphone existe déjà sur ce site, ne rien faire
+                          try {
+                            const existingWorkers = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
+                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                              cache: "no-store" as any,
+                            });
+                            const normalizePhone = (p: any) => String(p || "").replace(/\s+/g, "").trim();
+                            const phoneN = normalizePhone(trimmedPhone);
+                            const alreadyOnSite = (existingWorkers || []).some((w: any) => normalizePhone(w?.phone) === phoneN);
+                            if (alreadyOnSite) {
+                              toast.error("העובד כבר קיים באתר");
+                              return;
+                            }
+                          } catch {
+                            // Si on n'arrive pas à vérifier, on continue le flux normal
+                          }
+
                           // Créer l'utilisateur worker
                           try {
-                            const userResult = await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
-                              method: "POST",
-                              headers: { 
-                                Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-                                "Content-Type": "application/json"
-                              },
-                              body: JSON.stringify({
-                                name: trimmedName,
-                                phone: trimmedPhone,
-                              }),
-                            });
+                            await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
+                            method: "POST",
+                            headers: { 
+                              Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+                              "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                              name: trimmedName,
+                              phone: trimmedPhone,
+                            }),
+                          });
                             userCreated = true;
                           } catch (userError: any) {
                             // Si le User existe déjà (téléphone déjà utilisé - erreur 400), continuer quand même
@@ -1864,6 +2015,45 @@ export default function PlanningPage() {
                             }
                           }
                           
+                          // Créer immédiatement le SiteWorker avec זמינות vide.
+                          // Ainsi, si on clique sur "ביטול" dans הוספת עובד, le worker reste dans le site (sans זמינות).
+                          const createdWorker = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
+                            method: "POST",
+                            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                            body: JSON.stringify({
+                              name: trimmedName,
+                              phone: trimmedPhone,
+                              max_shifts: 5,
+                              roles: [],
+                              availability: {},
+                            }),
+                          });
+
+                          // Mettre à jour la liste localement pour afficher le worker tout de suite
+                          setWorkers((prev) => {
+                            const fallbackAvail = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+                            const mapped: Worker = {
+                              id: createdWorker.id,
+                              name: String(createdWorker.name),
+                              maxShifts: createdWorker.max_shifts ?? createdWorker.maxShifts ?? 5,
+                              roles: Array.isArray(createdWorker.roles) ? createdWorker.roles : [],
+                              availability: createdWorker.availability || fallbackAvail,
+                              answers: createdWorker.answers || {},
+                            };
+                            const idx = prev.findIndex((w) => w.id === mapped.id);
+                            if (idx >= 0) return prev.map((w) => (w.id === mapped.id ? mapped : w));
+                            return [...prev, mapped];
+                          });
+
+                          // Préparer la modale d'édition des זמינות pour ce nouveau worker
+                          setEditingWorkerId(createdWorker.id);
+                          setNewWorkerName(trimmedName);
+                          setNewWorkerPhone(trimmedPhone);
+                          setNewWorkerMax(5);
+                          setNewWorkerRoles([]);
+                          setOriginalAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                          setNewWorkerAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+
                           // Continuer à ouvrir le modal des זמינות même si le User existe déjà
                           setIsCreateUserModalOpen(false);
                           // Ouvrir le modal des זמינות avec le nom pré-rempli
@@ -2027,6 +2217,117 @@ export default function PlanningPage() {
                       ))}
                     </div>
                   </div>
+
+                  {/* Réponses aux questions optionnelles (du worker) */}
+                  {(() => {
+                    if (!editingWorkerId) return null;
+                    const w = workers.find((x) => Number(x.id) === Number(editingWorkerId));
+                    const rawAnswers = (w as any)?.answers || {};
+                    
+                    // Extraire les réponses de la semaine actuelle
+                    const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                    if (!weekAnswers) {
+                      return (
+                        <div className="mt-4 rounded-md border border-zinc-200 p-3 text-sm text-center text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                          אין תשובות לשאלות עבור השבוע הנוכחי
+                        </div>
+                      );
+                    }
+                    
+                    const qs: any[] = (site?.config?.questions || []) as any[];
+                    const labelById = new Map<string, string>();
+                    const perDayById = new Map<string, boolean>();
+                    qs.forEach((q: any) => {
+                      if (q && q.id) {
+                        labelById.set(String(q.id), String(q.label || q.question || q.text || q.id));
+                        perDayById.set(String(q.id), !!q.perDay);
+                      }
+                    });
+
+                    const answersGeneral = weekAnswers.general;
+                    const answersPerDay = weekAnswers.perDay;
+
+                    const qsOrdered: any[] = (qs || []).filter((q) => q && q.id && String(q.label || "").trim());
+                    const qsGeneral = qsOrdered.filter((q) => !q.perDay);
+                    const qsPerDay = qsOrdered.filter((q) => !!q.perDay);
+
+                    const hasGeneral = qsGeneral.some((q) => {
+                      const v = (answersGeneral || {})[q.id];
+                      return !(v === undefined || v === null || String(v).trim() === "");
+                    });
+                    const hasPerDay = qsPerDay.some((q) => {
+                      const per = (answersPerDay || {})[q.id] || {};
+                      return dayDefs.some((d) => {
+                        const v = (per as any)[d.key];
+                        return !(v === undefined || v === null || String(v).trim() === "");
+                      });
+                    });
+                    if (!hasGeneral && !hasPerDay) return null;
+
+                    const dayKeyToDate = new Map<string, string>();
+                    try {
+                      dayDefs.forEach((d, idx) => {
+                        const dt = addDays(weekStart, idx);
+                        dayKeyToDate.set(d.key, `${d.label} (${formatHebDate(dt)})`);
+                      });
+                    } catch {}
+
+                    return (
+                      <div className="mt-4 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-700">
+                        <div className="mb-2 font-semibold">שאלות נוספות</div>
+                        <div className="space-y-2">
+                          {/* Questions générales dans l'ordre de création */}
+                          {qsGeneral.map((q) => {
+                            const qid = String(q.id);
+                            const v = (answersGeneral || {})[qid];
+                            if (v === undefined || v === null || String(v).trim() === "") return null;
+                            return (
+                              <div key={`g_${qid}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                <div className="text-zinc-700 dark:text-zinc-200">{labelById.get(qid) || qid}</div>
+                                <div className="font-medium text-zinc-900 dark:text-zinc-100">
+                                  {typeof v === "boolean" ? (v ? "כן" : "לא") : String(v)}
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          {/* Questions par jour dans l'ordre de création */}
+                          {qsPerDay.map((q) => {
+                            const qid = String(q.id);
+                            const perObj = ((answersPerDay || {})[qid] || {}) as Record<string, any>;
+                            const hasAny = dayDefs.some((d) => {
+                              const v = perObj?.[d.key];
+                              return !(v === undefined || v === null || String(v).trim() === "");
+                            });
+                            if (!hasAny) return null;
+                            return (
+                              <div key={`p_${qid}`} className="rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
+                                <div className="mb-1 font-medium text-zinc-800 dark:text-zinc-200">
+                                  {labelById.get(qid) || qid}
+                                </div>
+                                <div className="space-y-1">
+                                  {dayDefs.map((d) => {
+                                    const v = perObj?.[d.key];
+                                    return (
+                                      <div key={`${qid}_${d.key}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                        <div className="text-zinc-600 dark:text-zinc-300">
+                                          {dayKeyToDate.get(d.key) || d.key}
+                                        </div>
+                                        <div className="font-medium text-zinc-900 dark:text-zinc-100">
+                                          {v === undefined || v === null || String(v).trim() === "" ? "—" : (typeof v === "boolean" ? (v ? "כן" : "לא") : String(v))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="mt-4 flex items-center justify-center gap-2">
                     <button
                       type="button"
@@ -2075,6 +2376,7 @@ export default function PlanningPage() {
                               maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
                               roles: Array.isArray(w.roles) ? w.roles : [],
                               availability: w.availability || fallback,
+                              answers: w.answers || {},
                             }));
                             setWorkers(mapped);
                             toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
@@ -2105,6 +2407,7 @@ export default function PlanningPage() {
                               maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
                               roles: Array.isArray(rw.roles) ? rw.roles : [],
                               availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                              answers: rw.answers || {},
                             }))
                           : workers;
                         // Pré-vérification côté client pour éviter un aller-retour inutile
@@ -2156,6 +2459,7 @@ export default function PlanningPage() {
                               maxShifts: updated.max_shifts ?? updated.maxShifts ?? 0,
                               roles: Array.isArray(updated.roles) ? updated.roles : [],
                               availability: updated.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                              answers: updated.answers || {},
                             };
                             setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
                             toast.success("עובד עודכן בהצלחה!");
@@ -2182,6 +2486,7 @@ export default function PlanningPage() {
                               maxShifts: result.max_shifts ?? result.maxShifts ?? 0,
                               roles: Array.isArray(result.roles) ? result.roles : [],
                               availability: result.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                              answers: result.answers || {},
                             };
                             // Vérifier si le worker existe déjà dans la liste (réutilisé)
                             const existingIndex = workers.findIndex((w) => w.id === result.id);
@@ -2221,6 +2526,804 @@ export default function PlanningPage() {
                     >
                       שמור
                     </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Popup de filtrage des travailleurs */}
+            {isFilterWorkersModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-lg border bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900">
+                    <h3 className="text-lg font-semibold">סינון עובדים לפי תשובות לשאלות</h3>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsFilterWorkersModalOpen(false);
+                        setQuestionFilters({});
+                        setFilterByWorkDays(false);
+                        setQuestionVisibility({}); // Réinitialiser la visibilité
+                      }}
+                      className="rounded-md p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden>
+                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-6">
+                    {/* Section de filtrage */}
+                    {(() => {
+                      const qs: any[] = (site?.config?.questions || []) as any[];
+                      if (qs.length === 0) {
+                        return (
+                          <div className="text-center text-zinc-500 py-8">
+                            אין שאלות אופציונליות מוגדרות
+                          </div>
+                        );
+                      }
+
+                      const qsOrdered = qs.filter((q) => q && q.id && String(q.label || "").trim());
+                      
+                      return (
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <h4 className="font-semibold text-zinc-800 dark:text-zinc-200">פילטרים</h4>
+                            {isSavedMode && savedWeekPlan?.assignments && (
+                              <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={filterByWorkDays}
+                                  onChange={(e) => setFilterByWorkDays(e.target.checked)}
+                                  className="rounded"
+                                />
+                                <span className="text-sm text-zinc-700 dark:text-zinc-300">
+                                  הצג רק ימים שעובדים
+                                </span>
+                              </label>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {qsOrdered.map((q: any) => {
+                              const qid = String(q.id);
+                              const label = String(q.label || q.question || q.text || qid);
+                              const type = String(q.type || "text");
+                              const isPerDay = !!q.perDay;
+
+                              // Collecter toutes les valeurs possibles pour cette question depuis tous les workers (pour la semaine actuelle)
+                              const allValues = new Set<string>();
+                              workers.forEach((w) => {
+                                const rawAnswers = (w as any)?.answers || {};
+                                const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                                if (!weekAnswers) return; // Pas de réponses pour cette semaine
+                                
+                                const answersGeneral = weekAnswers.general;
+                                const answersPerDay = weekAnswers.perDay;
+                                
+                                if (isPerDay) {
+                                  const perObj = (answersPerDay || {})[qid] || {};
+                                  Object.values(perObj).forEach((v: any) => {
+                                    if (v !== undefined && v !== null && String(v).trim() !== "") {
+                                      allValues.add(String(v));
+                                    }
+                                  });
+                                } else {
+                                  const v = (answersGeneral || {})[qid];
+                                  if (v !== undefined && v !== null && String(v).trim() !== "") {
+                                    allValues.add(String(v));
+                                  }
+                                }
+                              });
+
+                              const uniqueValues = Array.from(allValues).sort();
+
+                              // Initialiser la visibilité par défaut à true si pas encore définie
+                              const isVisible = questionVisibility[qid] !== false; // true par défaut
+                              
+                              return (
+                                <div key={qid} className="rounded-md border p-3 dark:border-zinc-700">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                                      {label} {isPerDay && <span className="text-xs text-zinc-500">(לכל יום)</span>}
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={isVisible}
+                                        onChange={(e) => {
+                                          setQuestionVisibility((prev) => ({
+                                            ...prev,
+                                            [qid]: e.target.checked,
+                                          }));
+                                        }}
+                                        className="rounded"
+                                      />
+                                      <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                                        הצג תשובות
+                                      </span>
+                                    </label>
+                                  </div>
+                                  {type === "dropdown" && q.options && Array.isArray(q.options) ? (
+                                    <select
+                                      value={questionFilters[qid] || ""}
+                                      onChange={(e) => {
+                                        setQuestionFilters((prev) => ({
+                                          ...prev,
+                                          [qid]: e.target.value || undefined,
+                                        }));
+                                      }}
+                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                    >
+                                      <option value="">כל התשובות</option>
+                                      {q.options.map((opt: string) => (
+                                        <option key={opt} value={opt}>{opt}</option>
+                                      ))}
+                                    </select>
+                                  ) : type === "yesno" || type === "yes_no" ? (
+                                    <select
+                                      value={questionFilters[qid] || ""}
+                                      onChange={(e) => {
+                                        setQuestionFilters((prev) => ({
+                                          ...prev,
+                                          [qid]: e.target.value || undefined,
+                                        }));
+                                      }}
+                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                    >
+                                      <option value="">כל התשובות</option>
+                                      <option value="true">כן</option>
+                                      <option value="false">לא</option>
+                                    </select>
+                                  ) : uniqueValues.length > 0 ? (
+                                    <select
+                                      value={questionFilters[qid] || ""}
+                                      onChange={(e) => {
+                                        setQuestionFilters((prev) => ({
+                                          ...prev,
+                                          [qid]: e.target.value || undefined,
+                                        }));
+                                      }}
+                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                    >
+                                      <option value="">כל התשובות</option>
+                                      {uniqueValues.map((val) => (
+                                        <option key={val} value={val}>{val}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={questionFilters[qid] || ""}
+                                      onChange={(e) => {
+                                        setQuestionFilters((prev) => ({
+                                          ...prev,
+                                          [qid]: e.target.value.trim() || undefined,
+                                        }));
+                                      }}
+                                      placeholder="הזן ערך לחיפוש..."
+                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Liste des travailleurs filtrés */}
+                    <div className="space-y-4">
+                      <h4 className="font-semibold text-zinc-800 dark:text-zinc-200">
+                        רשימת עובדים ({(() => {
+                          // Filtrer les workers selon les filtres et qui ont des réponses pour cette semaine
+                          const filtered = workers.filter((w) => {
+                            const rawAnswers = (w as any)?.answers || {};
+                            const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                            if (!weekAnswers) return false; // Exclure les workers sans réponses pour cette semaine
+                            
+                            const answersGeneral = weekAnswers.general;
+                            const answersPerDay = weekAnswers.perDay;
+                            
+                            const qs: any[] = (site?.config?.questions || []) as any[];
+                            
+                            // Vérifier chaque filtre
+                            for (const [qid, filterValue] of Object.entries(questionFilters)) {
+                              if (!filterValue) continue; // Pas de filtre pour cette question
+                              
+                              const q = qs.find((q) => String(q.id) === qid);
+                              if (!q) continue;
+                              
+                              const isPerDay = !!q.perDay;
+                              
+                              if (isPerDay) {
+                                const perObj = (answersPerDay || {})[qid] || {};
+                                const hasMatch = Object.values(perObj).some((v: any) => {
+                                  const strVal = String(v);
+                                  const filterStr = String(filterValue);
+                                  if (q.type === "yesno" || q.type === "yes_no") {
+                                    return (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                           (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  }
+                                  return strVal.toLowerCase().includes(filterStr.toLowerCase()) || strVal === filterStr;
+                                });
+                                if (!hasMatch) return false;
+                              } else {
+                                const v = (answersGeneral || {})[qid];
+                                const strVal = v !== undefined && v !== null ? String(v) : "";
+                                const filterStr = String(filterValue);
+                                if (q.type === "yesno" || q.type === "yes_no") {
+                                  const matches = (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                                 (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  if (!matches) return false;
+                                } else {
+                                  if (!strVal.toLowerCase().includes(filterStr.toLowerCase()) && strVal !== filterStr) {
+                                    return false;
+                                  }
+                                }
+                              }
+                            }
+                            return true;
+                          });
+                          return filtered.length;
+                        })()})
+                      </h4>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {(() => {
+                          // Filtrer les workers selon les filtres et qui ont des réponses pour cette semaine
+                          const filtered = workers.filter((w) => {
+                            const rawAnswers = (w as any)?.answers || {};
+                            const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                            if (!weekAnswers) return false; // Exclure les workers sans réponses pour cette semaine
+                            
+                            const answersGeneral = weekAnswers.general;
+                            const answersPerDay = weekAnswers.perDay;
+                            
+                            const qs: any[] = (site?.config?.questions || []) as any[];
+                            
+                            // Vérifier chaque filtre
+                            for (const [qid, filterValue] of Object.entries(questionFilters)) {
+                              if (!filterValue) continue; // Pas de filtre pour cette question
+                              
+                              const q = qs.find((q) => String(q.id) === qid);
+                              if (!q) continue;
+                              
+                              const isPerDay = !!q.perDay;
+                              
+                              if (isPerDay) {
+                                const perObj = (answersPerDay || {})[qid] || {};
+                                const hasMatch = Object.values(perObj).some((v: any) => {
+                                  const strVal = String(v);
+                                  const filterStr = String(filterValue);
+                                  if (q.type === "yesno" || q.type === "yes_no") {
+                                    return (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                           (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  }
+                                  return strVal.toLowerCase().includes(filterStr.toLowerCase()) || strVal === filterStr;
+                                });
+                                if (!hasMatch) return false;
+                              } else {
+                                const v = (answersGeneral || {})[qid];
+                                const strVal = v !== undefined && v !== null ? String(v) : "";
+                                const filterStr = String(filterValue);
+                                if (q.type === "yesno" || q.type === "yes_no") {
+                                  const matches = (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                                 (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  if (!matches) return false;
+                                } else {
+                                  if (!strVal.toLowerCase().includes(filterStr.toLowerCase()) && strVal !== filterStr) {
+                                    return false;
+                                  }
+                                }
+                              }
+                            }
+                            return true;
+                          });
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="text-center text-zinc-500 py-8">
+                                אין עובדים התואמים לפילטרים
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((w) => {
+                            const rawAnswers = (w as any)?.answers || {};
+                            // Extraire les réponses de la semaine actuelle
+                            const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                            if (!weekAnswers) return null; // Pas de réponses pour cette semaine
+                            
+                            const answersGeneral = weekAnswers.general;
+                            const answersPerDay = weekAnswers.perDay;
+                            const qs: any[] = (site?.config?.questions || []) as any[];
+                            const labelById = new Map<string, string>();
+                            qs.forEach((q: any) => {
+                              if (q && q.id) {
+                                labelById.set(String(q.id), String(q.label || q.question || q.text || q.id));
+                              }
+                            });
+
+                            return (
+                              <div key={w.id} className="rounded-md border p-4 dark:border-zinc-700">
+                                <div className="font-semibold text-zinc-900 dark:text-zinc-100 mb-3">{w.name}</div>
+                                <div className="space-y-2 text-sm">
+                                  {qs.filter((q) => q && q.id).map((q: any) => {
+                                    const qid = String(q.id);
+                                    // Vérifier si la question est visible (par défaut true)
+                                    const isVisible = questionVisibility[qid] !== false;
+                                    if (!isVisible) return null; // Ne pas afficher si le toggle est désactivé
+                                    
+                                    const label = labelById.get(qid) || qid;
+                                    const isPerDay = !!q.perDay;
+                                    
+                                    if (isPerDay) {
+                                      const perObj = (answersPerDay || {})[qid] || {};
+                                      const hasAny = Object.values(perObj).some((v: any) => v !== undefined && v !== null && String(v).trim() !== "");
+                                      if (!hasAny) return null;
+                                      
+                                      // Fonction pour extraire l'horaire depuis le nom du shift
+                                      const hoursOf = (sn: string): string | null => {
+                                        const s = String(sn || "");
+                                        // direct numeric pattern like 06-14 or 14:22
+                                        const m = s.match(/(\d{1,2})\s*[-:–]\s*(\d{1,2})/);
+                                        if (m) {
+                                          const a = m[1].padStart(2, "0");
+                                          const b = m[2].padStart(2, "0");
+                                          return `${a}-${b}`;
+                                        }
+                                        // Hebrew/english names
+                                        if (/בוקר/i.test(s)) return "06-14";
+                                        if (/צהר(יים|י)ם?/i.test(s)) return "14-22";
+                                        if (/לילה|night/i.test(s)) return "22-06";
+                                        return null;
+                                      };
+                                      
+                                      // Fonction pour extraire l'horaire depuis la config de la station
+                                      const hoursFromConfig = (station: any, shiftName: string): string | null => {
+                                        if (!station) return null;
+                                        function fmt(start?: string, end?: string): string | null {
+                                          if (!start || !end) return null;
+                                          return `${start}-${end}`;
+                                        }
+                                        if (station.perDayCustom && station.dayOverrides) {
+                                          const order = ["sun","mon","tue","wed","thu","fri","sat"];
+                                          for (const key of order) {
+                                            const dcfg = station.dayOverrides?.[key];
+                                            if (!dcfg || dcfg.active === false) continue;
+                                            const sh = (dcfg.shifts || []).find((x: any) => x?.name === shiftName);
+                                            const f = fmt(sh?.start, sh?.end);
+                                            if (f) return f;
+                                          }
+                                        }
+                                        const base = (station.shifts || []).find((x: any) => x?.name === shiftName);
+                                        return fmt(base?.start, base?.end);
+                                      };
+                                      
+                                      // Extraire les jours travaillés avec station, shift et horaire si le filtre est activé
+                                      const getWorkDays = (): Array<{ dayKey: string; station: string; shift: string; hours: string | null }> => {
+                                        if (!filterByWorkDays || !isSavedMode || !savedWeekPlan?.assignments) return [];
+                                        
+                                        const assignments = savedWeekPlan.assignments;
+                                        const stations = (site?.config?.stations || []) as any[];
+                                        const workDays: Array<{ dayKey: string; station: string; shift: string; hours: string | null }> = [];
+                                        const workerNameTrimmed = (w.name || "").trim();
+                                        
+                                        const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                                        dayKeys.forEach((dayKey) => {
+                                          const dayAssignments = assignments[dayKey] || {};
+                                          Object.entries(dayAssignments).forEach(([shiftName, stationArray]) => {
+                                            if (!Array.isArray(stationArray)) return;
+                                            stationArray.forEach((workerArray, stationIndex) => {
+                                              if (!Array.isArray(workerArray)) return;
+                                              // Vérifier si le worker est dans ce tableau
+                                              const hasWorker = workerArray.some((wn: any) => String(wn || "").trim() === workerNameTrimmed);
+                                              if (hasWorker) {
+                                                const stationConfig = stations[stationIndex];
+                                                const stationName = stationConfig?.name || `עמדה ${stationIndex + 1}`;
+                                                // Extraire l'horaire depuis la config ou depuis le nom du shift
+                                                const hours = hoursFromConfig(stationConfig, shiftName) || hoursOf(shiftName) || shiftName;
+                                                // Ajouter chaque assignation (même jour peut avoir plusieurs shifts/stations)
+                                                workDays.push({ dayKey, station: stationName, shift: shiftName, hours });
+                                              }
+                                            });
+                                          });
+                                        });
+                                        
+                                        return workDays;
+                                      };
+                                      
+                                      const workDays = getWorkDays();
+                                      
+                                      // Si le filtre est activé mais qu'il n'y a pas de jours travaillés, ne rien afficher
+                                      if (filterByWorkDays && workDays.length === 0) {
+                                        return null;
+                                      }
+                                      
+                                      const dayKeysToShow = filterByWorkDays && workDays.length > 0
+                                        ? workDays.map(wd => wd.dayKey)
+                                        : ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                                      
+                                      return (
+                                        <div key={qid} className="rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
+                                          <div className="font-medium text-zinc-800 dark:text-zinc-200 mb-1">{label}</div>
+                                          <div className="space-y-1 text-xs">
+                                            {dayKeysToShow.map((dayKey) => {
+                                              const v = perObj[dayKey];
+                                              // Si le filtre est activé, on n'affiche que si il y a une réponse ET une assignation
+                                              if (filterByWorkDays) {
+                                                const workDayInfos = workDays.filter(wd => wd.dayKey === dayKey);
+                                                if (workDayInfos.length === 0) return null; // Pas d'assignation pour ce jour
+                                                if (v === undefined || v === null || String(v).trim() === "") return null; // Pas de réponse
+                                              } else {
+                                                // Sans filtre, on affiche seulement si il y a une réponse
+                                                if (v === undefined || v === null || String(v).trim() === "") return null;
+                                              }
+                                              
+                                              const dayLabels: Record<string, string> = { sun: "א'", mon: "ב'", tue: "ג'", wed: "ד'", thu: "ה'", fri: "ו'", sat: "ש'" };
+                                              
+                                              // Trouver toutes les stations et shifts pour ce jour si le filtre est activé
+                                              const workDayInfos = filterByWorkDays ? workDays.filter(wd => wd.dayKey === dayKey) : [];
+                                              
+                                              return (
+                                                <div key={dayKey} className="flex justify-between items-start gap-2">
+                                                  <div className="flex flex-col flex-1">
+                                                    <span className="text-zinc-600 dark:text-zinc-300">{dayLabels[dayKey]}</span>
+                                                    {workDayInfos.length > 0 && (
+                                                      <div className="mt-1 space-y-0.5">
+                                                        {workDayInfos.map((wdi, idx) => (
+                                                          <span key={idx} className="block text-xs text-zinc-500 dark:text-zinc-400">
+                                                            {wdi.station} - {wdi.shift} {wdi.hours && `(${wdi.hours})`}
+                                                          </span>
+                                                        ))}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                  <span className="font-medium text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                                                    {typeof v === "boolean" ? (v ? "כן" : "לא") : String(v)}
+                                                  </span>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      );
+                                    } else {
+                                      const v = (answersGeneral || {})[qid];
+                                      if (v === undefined || v === null || String(v).trim() === "") return null;
+                                      
+                                      return (
+                                        <div key={qid} className="flex justify-between">
+                                          <span className="text-zinc-700 dark:text-zinc-200">{label}</span>
+                                          <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                                            {typeof v === "boolean" ? (v ? "כן" : "לא") : String(v)}
+                                          </span>
+                                        </div>
+                                      );
+                                    }
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="sticky bottom-0 flex items-center gap-2 border-t bg-white px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900">
+                    {/* Section gauche : סגור */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsFilterWorkersModalOpen(false);
+                          setQuestionFilters({});
+                          setFilterByWorkDays(false);
+                          setQuestionVisibility({}); // Réinitialiser la visibilité
+                        }}
+                        className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                      >
+                        סגור
+                      </button>
+                    </div>
+                    
+                    {/* Section milieu : boutons de téléchargement et partage (centrés) */}
+                    <div className="flex-1 flex items-center justify-center gap-2">
+                      {/* Fonction pour générer le contenu des travailleurs avec leurs réponses */}
+                      {(() => {
+                        const generateWorkersContent = () => {
+                          // Filtrer les workers selon les filtres actifs
+                          const filtered = workers.filter((w) => {
+                            const rawAnswers = (w as any)?.answers || {};
+                            // Extraire les réponses de la semaine actuelle
+                            const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                            if (!weekAnswers) return false; // Pas de réponses pour cette semaine
+                            
+                            const answersGeneral = weekAnswers.general;
+                            const answersPerDay = weekAnswers.perDay;
+                            
+                            const qs: any[] = (site?.config?.questions || []) as any[];
+                            
+                            // Vérifier chaque filtre
+                            for (const [qid, filterValue] of Object.entries(questionFilters)) {
+                              if (!filterValue) continue;
+                              
+                              const q = qs.find((q) => String(q.id) === qid);
+                              if (!q) continue;
+                              
+                              const isPerDay = !!q.perDay;
+                              
+                              if (isPerDay) {
+                                const perObj = (answersPerDay || {})[qid] || {};
+                                const hasMatch = Object.values(perObj).some((v: any) => {
+                                  const strVal = String(v);
+                                  const filterStr = String(filterValue);
+                                  if (q.type === "yesno" || q.type === "yes_no") {
+                                    return (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                           (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  }
+                                  return strVal.toLowerCase().includes(filterStr.toLowerCase()) || strVal === filterStr;
+                                });
+                                if (!hasMatch) return false;
+                              } else {
+                                const v = (answersGeneral || {})[qid];
+                                const strVal = v !== undefined && v !== null ? String(v) : "";
+                                const filterStr = String(filterValue);
+                                if (q.type === "yesno" || q.type === "yes_no") {
+                                  const matches = (filterStr === "true" && (v === true || strVal === "true" || strVal === "כן")) ||
+                                                 (filterStr === "false" && (v === false || strVal === "false" || strVal === "לא"));
+                                  if (!matches) return false;
+                                } else {
+                                  if (!strVal.toLowerCase().includes(filterStr.toLowerCase()) && strVal !== filterStr) {
+                                    return false;
+                                  }
+                                }
+                              }
+                            }
+                            return true;
+                          });
+
+                          const qs: any[] = (site?.config?.questions || []) as any[];
+                          const labelById = new Map<string, string>();
+                          qs.forEach((q: any) => {
+                            if (q && q.id) {
+                              labelById.set(String(q.id), String(q.label || q.question || q.text || q.id));
+                            }
+                          });
+
+                          // Fonctions pour extraire les horaires (réutilisées)
+                          const hoursOf = (sn: string): string | null => {
+                            const s = String(sn || "");
+                            const m = s.match(/(\d{1,2})\s*[-:–]\s*(\d{1,2})/);
+                            if (m) {
+                              const a = m[1].padStart(2, "0");
+                              const b = m[2].padStart(2, "0");
+                              return `${a}-${b}`;
+                            }
+                            if (/בוקר/i.test(s)) return "06-14";
+                            if (/צהר(יים|י)ם?/i.test(s)) return "14-22";
+                            if (/לילה|night/i.test(s)) return "22-06";
+                            return null;
+                          };
+                          
+                          const hoursFromConfig = (station: any, shiftName: string): string | null => {
+                            if (!station) return null;
+                            function fmt(start?: string, end?: string): string | null {
+                              if (!start || !end) return null;
+                              return `${start}-${end}`;
+                            }
+                            if (station.perDayCustom && station.dayOverrides) {
+                              const order = ["sun","mon","tue","wed","thu","fri","sat"];
+                              for (const key of order) {
+                                const dcfg = station.dayOverrides?.[key];
+                                if (!dcfg || dcfg.active === false) continue;
+                                const sh = (dcfg.shifts || []).find((x: any) => x?.name === shiftName);
+                                const f = fmt(sh?.start, sh?.end);
+                                if (f) return f;
+                              }
+                            }
+                            const base = (station.shifts || []).find((x: any) => x?.name === shiftName);
+                            return fmt(base?.start, base?.end);
+                          };
+
+                          const getWorkDays = (w: Worker) => {
+                            if (!filterByWorkDays || !isSavedMode || !savedWeekPlan?.assignments) return [];
+                            
+                            const assignments = savedWeekPlan.assignments;
+                            const stations = (site?.config?.stations || []) as any[];
+                            const workDays: Array<{ dayKey: string; station: string; shift: string; hours: string | null }> = [];
+                            const workerNameTrimmed = (w.name || "").trim();
+                            
+                            const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                            dayKeys.forEach((dayKey) => {
+                              const dayAssignments = assignments[dayKey] || {};
+                              Object.entries(dayAssignments).forEach(([shiftName, stationArray]) => {
+                                if (!Array.isArray(stationArray)) return;
+                                stationArray.forEach((workerArray, stationIndex) => {
+                                  if (!Array.isArray(workerArray)) return;
+                                  const hasWorker = workerArray.some((wn: any) => String(wn || "").trim() === workerNameTrimmed);
+                                  if (hasWorker) {
+                                    const stationConfig = stations[stationIndex];
+                                    const stationName = stationConfig?.name || `עמדה ${stationIndex + 1}`;
+                                    const hours = hoursFromConfig(stationConfig, shiftName) || hoursOf(shiftName) || shiftName;
+                                    workDays.push({ dayKey, station: stationName, shift: shiftName, hours });
+                                  }
+                                });
+                              });
+                            });
+                            
+                            return workDays;
+                          };
+
+                          // Générer le contenu texte
+                          let content = `רשימת עובדים - ${site?.name || "אתר"}\n`;
+                          content += `תאריך: ${new Date().toLocaleDateString('he-IL')}\n`;
+                          content += `\n${"=".repeat(50)}\n\n`;
+
+                          filtered.forEach((w) => {
+                            content += `עובד: ${w.name}\n`;
+                            content += `מקס' משמרות: ${w.maxShifts}\n`;
+                            if (w.roles && w.roles.length > 0) {
+                              content += `תפקידים: ${w.roles.join(", ")}\n`;
+                            }
+                            content += `\n`;
+
+                            const rawAnswers = (w as any)?.answers || {};
+                            // Extraire les réponses de la semaine actuelle
+                            const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+                            if (!weekAnswers) return; // Pas de réponses pour cette semaine, ne pas inclure dans le contenu
+                            
+                            const answersGeneral = weekAnswers.general;
+                            const answersPerDay = weekAnswers.perDay;
+
+                            // Questions visibles uniquement
+                            const visibleQuestions = qs.filter((q) => {
+                              const qid = String(q.id);
+                              return questionVisibility[qid] !== false; // true par défaut
+                            });
+
+                            visibleQuestions.forEach((q: any) => {
+                              const qid = String(q.id);
+                              const label = labelById.get(qid) || qid;
+                              const isPerDay = !!q.perDay;
+
+                              if (isPerDay) {
+                                const perObj = (answersPerDay || {})[qid] || {};
+                                const workDays = getWorkDays(w);
+                                const dayKeysToShow = filterByWorkDays && workDays.length > 0
+                                  ? workDays.map(wd => wd.dayKey)
+                                  : ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+                                const dayLabels: Record<string, string> = { sun: "א'", mon: "ב'", tue: "ג'", wed: "ד'", thu: "ה'", fri: "ו'", sat: "ש'" };
+                                
+                                let hasAnswer = false;
+                                let answerText = `${label}:\n`;
+                                
+                                dayKeysToShow.forEach((dayKey) => {
+                                  const v = perObj[dayKey];
+                                  if (filterByWorkDays) {
+                                    const workDayInfos = workDays.filter(wd => wd.dayKey === dayKey);
+                                    if (workDayInfos.length === 0) return;
+                                    if (v === undefined || v === null || String(v).trim() === "") return;
+                                  } else {
+                                    if (v === undefined || v === null || String(v).trim() === "") return;
+                                  }
+                                  
+                                  hasAnswer = true;
+                                  const dayLabel = dayLabels[dayKey];
+                                  const answerValue = typeof v === "boolean" ? (v ? "כן" : "לא") : String(v);
+                                  
+                                  if (filterByWorkDays) {
+                                    const workDayInfos = workDays.filter(wd => wd.dayKey === dayKey);
+                                    workDayInfos.forEach((wdi) => {
+                                      answerText += `  ${dayLabel}: ${answerValue} (${wdi.station} - ${wdi.shift}${wdi.hours ? ` ${wdi.hours}` : ""})\n`;
+                                    });
+                                  } else {
+                                    answerText += `  ${dayLabel}: ${answerValue}\n`;
+                                  }
+                                });
+
+                                if (hasAnswer) {
+                                  content += answerText + "\n";
+                                }
+                              } else {
+                                const v = (answersGeneral || {})[qid];
+                                if (v !== undefined && v !== null && String(v).trim() !== "") {
+                                  const answerValue = typeof v === "boolean" ? (v ? "כן" : "לא") : String(v);
+                                  content += `${label}: ${answerValue}\n`;
+                                }
+                              }
+                            });
+
+                            content += `\n${"-".repeat(50)}\n\n`;
+                          });
+
+                          return content;
+                        };
+
+                        const handleDownload = () => {
+                          const content = generateWorkersContent();
+                          const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `רשימת_עובדים_${new Date().toISOString().split('T')[0]}.txt`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        };
+
+                        const handleShareEmail = () => {
+                          const content = generateWorkersContent();
+                          const subject = encodeURIComponent(`רשימת עובדים - ${site?.name || "אתר"}`);
+                          const body = encodeURIComponent(content);
+                          window.location.href = `mailto:?subject=${subject}&body=${body}`;
+                        };
+
+                        const handleShareWhatsApp = () => {
+                          const content = generateWorkersContent();
+                          // Limiter la longueur pour WhatsApp (environ 4096 caractères)
+                          const maxLength = 4000;
+                          const truncatedContent = content.length > maxLength 
+                            ? content.substring(0, maxLength) + "\n\n... (תוכן מקוצר)"
+                            : content;
+                          const text = encodeURIComponent(truncatedContent);
+                          window.open(`https://wa.me/?text=${text}`, '_blank');
+                        };
+
+                        return (
+                          <>
+                            <button
+                              type="button"
+                              onClick={handleDownload}
+                              className="inline-flex items-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 dark:border-blue-500 dark:bg-blue-500 dark:hover:bg-blue-600"
+                            >
+                              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                              </svg>
+                              הורד
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleShareEmail}
+                              className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:border-green-500 dark:bg-green-500 dark:hover:bg-green-600"
+                            >
+                              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                                <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
+                              </svg>
+                              אימייל
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleShareWhatsApp}
+                              className="inline-flex items-center gap-2 rounded-md border border-[#25D366] bg-[#25D366] px-3 py-2 text-sm text-white hover:bg-[#20BA5A] dark:bg-[#25D366] dark:hover:bg-[#20BA5A]"
+                            >
+                              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
+                              </svg>
+                              WhatsApp
+                            </button>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    
+                    {/* Section droite : נקה פילטרים */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuestionFilters({});
+                          setFilterByWorkDays(false);
+                          setQuestionVisibility({}); // Réinitialiser la visibilité
+                        }}
+                        className="rounded-md border border-orange-600 bg-orange-600 px-4 py-2 text-sm text-white hover:bg-orange-700 dark:border-orange-500 dark:bg-orange-500 dark:hover:bg-orange-600"
+                      >
+                        נקה פילטרים
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2834,10 +3937,10 @@ export default function PlanningPage() {
                                 });
                               }
                             }}
-                            disabled={isSavedMode}
+                            disabled={isSavedMode && !editingSaved}
                             className={
                               "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
-                              (isSavedMode
+                              ((isSavedMode && !editingSaved)
                                 ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
                                 : "border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20")
                             }
@@ -3657,6 +4760,7 @@ export default function PlanningPage() {
                           maxShifts: Number(w.maxShifts || 0),
                           roles: Array.isArray(w.roles) ? w.roles : [],
                           availability: w.availability || {},
+                          answers: w.answers || {},
                         }))
                       : workers;
                     workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
@@ -4132,11 +5236,11 @@ export default function PlanningPage() {
                   }}
                   className={
                     "inline-flex items-center rounded-md px-6 py-2 text-white disabled:opacity-60 " +
-                    (isSavedMode
+                    ((isSavedMode && !editingSaved)
                       ? "bg-zinc-300 cursor-not-allowed dark:bg-zinc-700"
                       : "bg-[#00A8E0] hover:bg-[#0092c6]")
                   }
-                  disabled={isSavedMode || aiLoading}
+                  disabled={(isSavedMode && !editingSaved) || aiLoading}
                 >
                   {aiLoading ? "יוצר..." : "יצירת תכנון"}
                 </button>
@@ -4389,6 +5493,7 @@ export default function PlanningPage() {
                           maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
                           roles: Array.isArray(w.roles) ? w.roles : [],
                           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                          answers: w.answers || {},
                         }));
                         setWorkers(mapped);
                       // Précharger les זמינות hebdomadaires avec celles du planning sauvegardé (fusion avec overrides existants)
@@ -4455,10 +5560,10 @@ export default function PlanningPage() {
                 <button
                   type="button"
                   onClick={() => { try { triggerGenerateButton(); } catch {} }}
-                  disabled={aiLoading || isSavedMode || isManual}
+                  disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
                   className={
                     "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 " +
-                    ((aiLoading || isSavedMode || isManual)
+                    ((aiLoading || (isSavedMode && !editingSaved) || isManual)
                       ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
                       : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
                   }

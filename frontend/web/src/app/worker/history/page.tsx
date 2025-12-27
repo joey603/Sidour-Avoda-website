@@ -43,6 +43,7 @@ export default function WorkerHistoryPage() {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
   const [workerName, setWorkerName] = useState<string>("");
+  const [workerId, setWorkerId] = useState<number | null>(null);
   const [workerData, setWorkerData] = useState<{
     max_shifts?: number;
     roles?: string[];
@@ -50,9 +51,10 @@ export default function WorkerHistoryPage() {
   } | null>(null);
 
   // Fonction pour obtenir la clé de semaine (comme dans רישום זמינות)
-  function getWeekKey(siteId: number, date: Date): string {
+  function getWeekKey(siteId: number, date: Date, wid?: number | null): string {
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    return `worker_avail_${siteId}_${iso(date)}`;
+    const suffix = wid ? `_w${wid}` : "";
+    return `worker_avail_${siteId}_${iso(date)}${suffix}`;
   }
 
   // Calculer la semaine prochaine (dimanche prochain à samedi prochain)
@@ -70,9 +72,10 @@ export default function WorkerHistoryPage() {
 
   // Fonction pour charger les זמינות depuis localStorage
   function loadAvailabilityFromStorage(siteId: number, weekDate: Date) {
-    const key = getWeekKey(siteId, weekDate);
+    const keyNew = getWeekKey(siteId, weekDate, workerId);
+    const keyOld = getWeekKey(siteId, weekDate);
     try {
-      const saved = localStorage.getItem(key);
+      const saved = localStorage.getItem(keyNew) ?? localStorage.getItem(keyOld);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object') {
@@ -112,6 +115,7 @@ export default function WorkerHistoryPage() {
       if (!me) return router.replace("/login/worker");
       if (me.role !== "worker") return router.replace("/director");
       setWorkerName(me.full_name || "");
+      setWorkerId(typeof (me as any).id === "number" ? (me as any).id : null);
       
       try {
         // Charger les sites où le travailleur est enregistré
@@ -142,32 +146,28 @@ export default function WorkerHistoryPage() {
       });
       setSiteConfig(site?.config || null);
       
-      // Charger les données du worker pour ce site depuis l'endpoint public
+      // Charger les données du worker depuis le serveur (source de vérité)
       try {
-        const workerInfo = await apiFetch<any>(`/public/sites/${siteId}/register`, {
-          method: "POST",
+        const workerInfo = await apiFetch<{
+          id: number;
+          name: string;
+          max_shifts: number;
+          roles: string[];
+          availability: Record<string, string[]>;
+          answers: { general?: Record<string, any>; perDay?: Record<string, any> } | Record<string, any>;
+        }>(`/public/sites/${siteId}/worker-availability`, {
           headers: { 
             Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-            "Content-Type": "application/json"
           },
-          body: JSON.stringify({
-            name: workerName,
-            max_shifts: 5,
-            roles: [],
-            availability: {},
-          }),
         });
         
         if (workerInfo) {
-          // Charger les זמינות depuis localStorage pour la semaine sélectionnée
-          const storedData = loadAvailabilityFromStorage(siteId, weekToUse);
-          
-          // Utiliser les זמינות de localStorage si disponibles, sinon celles de la base de données
+          // Utiliser les זמינות depuis le serveur (source de vérité)
           // Note: les זמינות de la base de données sont pour la semaine prochaine uniquement
           const nextWeekStart = calculateNextWeek();
           const isNextWeek = weekToUse.getTime() === nextWeekStart.getTime();
-          const finalAvailability = storedData?.availability || (isNextWeek ? workerInfo.availability : {}) || {};
-          const finalMaxShifts = storedData?.max_shifts || workerInfo.max_shifts;
+          const finalAvailability = (isNextWeek ? workerInfo.availability : {}) || {};
+          const finalMaxShifts = workerInfo.max_shifts;
           
           setWorkerData({
             max_shifts: finalMaxShifts,
@@ -176,7 +176,8 @@ export default function WorkerHistoryPage() {
           });
         }
       } catch (e2: any) {
-        // Si l'endpoint register échoue, essayer de charger depuis localStorage uniquement
+        // Si le serveur échoue, essayer de charger depuis localStorage comme fallback
+        console.warn("Erreur lors du chargement depuis le serveur, tentative avec localStorage:", e2);
         const storedData = loadAvailabilityFromStorage(siteId, weekToUse);
         if (storedData) {
           setWorkerData({
@@ -185,7 +186,6 @@ export default function WorkerHistoryPage() {
             availability: storedData.availability || {},
           });
         }
-        console.error("Error loading worker data:", e2);
       }
     } catch (e: any) {
       console.error("Error loading site info:", e);
@@ -202,18 +202,8 @@ export default function WorkerHistoryPage() {
   useEffect(() => {
     if (!selectedSiteId || !workerName) return;
     
-    // Charger les זמינות depuis localStorage pour la semaine sélectionnée
-    const storedData = loadAvailabilityFromStorage(selectedSiteId, weekStart);
-    if (storedData) {
-      setWorkerData((prev) => ({
-        ...prev,
-        availability: storedData.availability || prev?.availability || {},
-        max_shifts: storedData.max_shifts || prev?.max_shifts,
-      }));
-    } else {
-      // Si pas de données dans localStorage, recharger depuis la base de données
-      loadSiteInfo(selectedSiteId, weekStart);
-    }
+    // Recharger depuis le serveur (source de vérité)
+    loadSiteInfo(selectedSiteId, weekStart);
   }, [weekStart, selectedSiteId, workerName]);
 
   useEffect(() => {
