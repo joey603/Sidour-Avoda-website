@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 
-export default function DirectorRegisterPage() {
+function DirectorRegisterInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
@@ -115,6 +115,14 @@ export default function DirectorRegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DirectorRegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><p className="text-lg">טוען...</p></div>}>
+      <DirectorRegisterInner />
+    </Suspense>
   );
 }
 

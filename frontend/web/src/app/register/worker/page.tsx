@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 
-export default function WorkerRegisterPage() {
+function WorkerRegisterInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [phone, setPhone] = useState("");
@@ -115,6 +115,14 @@ export default function WorkerRegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function WorkerRegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><p className="text-lg">טוען...</p></div>}>
+      <WorkerRegisterInner />
+    </Suspense>
   );
 }
 

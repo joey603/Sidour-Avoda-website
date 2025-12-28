@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe, setToken, getToken, clearToken } from "@/lib/auth";
 
-export default function WorkerLoginPage() {
+function WorkerLoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [name, setName] = useState("");
@@ -122,6 +122,14 @@ export default function WorkerLoginPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function WorkerLoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><p className="text-lg">טוען...</p></div>}>
+      <WorkerLoginInner />
+    </Suspense>
   );
 }
 

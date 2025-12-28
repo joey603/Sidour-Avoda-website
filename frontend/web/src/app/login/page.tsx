@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -21,6 +21,14 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center">
       <p>מעביר...</p>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><p>מעביר...</p></div>}>
+      <LoginInner />
+    </Suspense>
   );
 }
 

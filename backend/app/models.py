@@ -55,3 +55,19 @@ class SiteWorker(Base):
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}
     answers: Mapped[dict] = mapped_column(JSON, default=dict)  # {questionId: answer}
 
+
+class SiteMessage(Base):
+    __tablename__ = "site_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    # "global" => visible for all weeks from created_week_iso until stopped_week_iso (exclusive)
+    # "week" => visible only for created_week_iso
+    scope: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(String(4000), nullable=False)
+    created_week_iso: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # YYYY-MM-DD (week start)
+    stopped_week_iso: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)  # YYYY-MM-DD (exclusive)
+    origin_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # reference to global message id when cloned
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # epoch ms
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # epoch ms
+

@@ -42,7 +42,6 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   if (contentType && contentType.includes("application/json")) {
     return (await res.json()) as T;
   }
-  // @ts-expect-error allow text responses
   return (await res.text()) as T;
 }
 

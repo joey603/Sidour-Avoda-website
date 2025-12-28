@@ -39,6 +39,7 @@ export default function WorkerHistoryPage() {
     assignments: Record<string, Record<string, string[][]>>;
     isManual: boolean;
     workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>;
+    pulls?: Record<string, { before: { name: string; start: string; end: string }; after: { name: string; start: string; end: string } }>;
   }>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
@@ -49,6 +50,24 @@ export default function WorkerHistoryPage() {
     roles?: string[];
     availability?: Record<string, string[]>;
   } | null>(null);
+
+  // Nombre de עובדים requis (comme sur le planning directeur)
+  function getRequiredFor(st: any, shiftName: string, dayKey: string): number {
+    if (!st) return 0;
+    if (st.perDayCustom) {
+      const dayCfg = st.dayOverrides?.[dayKey];
+      if (!dayCfg || dayCfg.active === false) return 0;
+      if (st.uniformRoles) return Number(st.workers || 0);
+      const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+      if (!sh || !sh.enabled) return 0;
+      return Number(sh.workers || 0);
+    }
+    if (st.days && st.days[dayKey] === false) return 0;
+    if (st.uniformRoles) return Number(st.workers || 0);
+    const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+    if (!sh || !sh.enabled) return 0;
+    return Number(sh.workers || 0);
+  }
 
   // Fonction pour obtenir la clé de semaine (comme dans רישום זמינות)
   function getWeekKey(siteId: number, date: Date, wid?: number | null): string {
@@ -203,7 +222,7 @@ export default function WorkerHistoryPage() {
     if (!selectedSiteId || !workerName) return;
     
     // Recharger depuis le serveur (source de vérité)
-    loadSiteInfo(selectedSiteId, weekStart);
+      loadSiteInfo(selectedSiteId, weekStart);
   }, [weekStart, selectedSiteId, workerName]);
 
   useEffect(() => {
@@ -218,7 +237,12 @@ export default function WorkerHistoryPage() {
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && parsed.assignments) {
-          setWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+          setWeekPlan({
+            assignments: parsed.assignments,
+            isManual: !!parsed.isManual,
+            workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+            pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+          });
         } else {
           setWeekPlan(null);
         }
@@ -435,21 +459,57 @@ export default function WorkerHistoryPage() {
                               <div className="text-xs font-medium flex items-center">{sh?.name}</div>
                               {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => {
                                 const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
+                                const pulls = (weekPlan as any)?.pulls || {};
+                                const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                const required = getRequiredFor(st, sh?.name, dk);
+                                const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
+                                const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
                                 return (
-                                  <div key={`cell-${stationIndex}-${sIdx}-${dk}`} className="rounded-md border p-1 min-h-10 dark:border-zinc-700">
+                                  <div
+                                    key={`cell-${stationIndex}-${sIdx}-${dk}`}
+                                    className={
+                                      "rounded-md border p-1 min-h-10 dark:border-zinc-700 " +
+                                      (cleanNames.length === 0 ? "bg-zinc-100 dark:bg-zinc-900/40" : "")
+                                    }
+                                  >
                                     <div className="flex flex-col gap-1">
-                                      {(names || []).length === 0 ? (
-                                        <span className="text-xs text-zinc-400">—</span>
-                                      ) : (
-                                        names.map((nm, i) => (
+                                      {Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                        const nm = cleanNames[slotIdx];
+                                        if (!nm) {
+                                          return (
+                                            <span
+                                              key={`empty-${slotIdx}`}
+                                              className="inline-flex h-6 items-center justify-center rounded-full border px-2 text-xs text-zinc-500 bg-white dark:bg-zinc-900 dark:border-zinc-700"
+                                            >
+                                              —
+                                            </span>
+                                          );
+                                        }
+                                        const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                          if (!String(k).startsWith(cellPrefix)) return false;
+                                          const e: any = entry;
+                                          return e?.before?.name === nm || e?.after?.name === nm;
+                                        });
+                                        const pullTxt = match
+                                          ? (((match as any)[1]?.before?.name === nm)
+                                            ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                            : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                          : null;
+                                        return (
                                           <span
-                                            key={i}
-                                            className={`text-xs inline-flex items-center rounded px-1 ${nm === workerName ? "bg-green-500 text-white" : "text-zinc-700 dark:text-zinc-200"}`}
+                                            key={`nm-${nm}-${slotIdx}`}
+                                            className={
+                                              "text-xs inline-flex flex-col items-center rounded px-1 " +
+                                              (nm === workerName ? "bg-green-500 text-white " : "text-zinc-700 dark:text-zinc-200 ") +
+                                              (pullTxt ? "ring-2 ring-orange-400 " : "")
+                                            }
                                           >
-                                            {nm || ""}
+                                            <span>{nm}</span>
+                                            {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight opacity-90">{pullTxt}</span> : null}
                                           </span>
-                                        ))
-                                      )}
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 );

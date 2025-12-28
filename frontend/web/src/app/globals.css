@@ -119,3 +119,38 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* TipTap editor basic typography (Tailwind preflight resets lists/headings) */
+.tiptap-editor :where(p) {
+  margin: 0 0 0.5rem 0;
+}
+.tiptap-editor :where(p:last-child) {
+  margin-bottom: 0;
+}
+.tiptap-editor :where(h2) {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 700;
+  margin: 0.75rem 0 0.5rem 0;
+}
+.tiptap-editor :where(ul) {
+  list-style: disc;
+  padding-right: 1.25rem;
+  margin: 0.5rem 0;
+}
+.tiptap-editor :where(ol) {
+  list-style: decimal;
+  padding-right: 1.25rem;
+  margin: 0.5rem 0;
+}
+.tiptap-editor :where(li) {
+  margin: 0.25rem 0;
+}
+.tiptap-editor :where(a) {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+.tiptap-editor :where(mark) {
+  padding: 0 0.1em;
+  border-radius: 0.15em;
+}

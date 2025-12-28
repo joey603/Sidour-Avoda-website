@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import DOMPurify from "dompurify";
 
 interface Site {
   id: number;
@@ -26,10 +29,23 @@ export default function WorkerDashboard() {
   const [name, setName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
+  type SiteMessage = {
+    id: number;
+    site_id: number;
+    text: string;
+    scope: "global" | "week";
+    created_week_iso: string;
+    stopped_week_iso?: string | null;
+    origin_id?: number | null;
+    created_at: number;
+    updated_at: number;
+  };
   const [sitePlans, setSitePlans] = useState<Record<number, {
     currentWeek: any | null;
     nextWeek: any | null;
     config: any | null;
+    messagesCurrent: SiteMessage[];
+    messagesNext: SiteMessage[];
   }>>({});
 
   type NameColor = { bg: string; border: string; text: string };
@@ -307,6 +323,8 @@ export default function WorkerDashboard() {
           currentWeek: any | null;
           nextWeek: any | null;
           config: any | null;
+          messagesCurrent: SiteMessage[];
+          messagesNext: SiteMessage[];
         }> = {};
 
         for (const site of sitesList || []) {
@@ -321,11 +339,20 @@ export default function WorkerDashboard() {
             const nextWeekStart = getNextWeekStart();
             const currentPlan = loadWeekPlan(site.id, currentWeekStart);
             const nextPlan = loadWeekPlan(site.id, nextWeekStart);
+            const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+            const messagesCurrent = await apiFetch<SiteMessage[]>(`/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(currentWeekStart))}`, {
+              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            });
+            const messagesNext = await apiFetch<SiteMessage[]>(`/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(nextWeekStart))}`, {
+              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            });
 
             plans[site.id] = {
               currentWeek: currentPlan,
               nextWeek: nextPlan,
               config: siteConfig?.config || null,
+              messagesCurrent: Array.isArray(messagesCurrent) ? messagesCurrent : [],
+              messagesNext: Array.isArray(messagesNext) ? messagesNext : [],
             };
           } catch (e) {
             console.error(`Error loading site ${site.id}:`, e);
@@ -333,6 +360,8 @@ export default function WorkerDashboard() {
               currentWeek: null,
               nextWeek: null,
               config: null,
+              messagesCurrent: [],
+              messagesNext: [],
             };
           }
         }
@@ -597,6 +626,7 @@ export default function WorkerDashboard() {
                                           const today0 = new Date(); today0.setHours(0,0,0,0);
                                           const isPastDay = dateCell < today0;
                                           const names: string[] = (plan.currentWeek.assignments?.[d.key]?.[sn]?.[idx] || []) as any;
+                                          const pulls = (plan.currentWeek as any)?.pulls || {};
                                           const roleMap = assignRoles(names, workersList, st, sn, d.key);
                                           const activeDay = isDayActive(st, d.key);
                                           return (
@@ -614,31 +644,56 @@ export default function WorkerDashboard() {
                                                   {required > 0 && (
                                                     <div className="mb-1 flex flex-col items-center gap-1 min-w-full">
                                                       <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
-                                                        {names.length === 0 ? (
-                                                          <span className="text-xs text-zinc-400">—</span>
-                                                        ) : (
-                                                          names.map((nm, i) => {
-                                                            if (!nm) return null;
+                                                        {(() => {
+                                                          const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                                          const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                          const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                                          const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                                          return Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                                            const nm = cleanNames[slotIdx];
+                                                            if (!nm) {
+                                                              return (
+                                                                <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
+                                                                  <span className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
+                                                                    —
+                                                                  </span>
+                                                                </div>
+                                                              );
+                                                            }
                                                             const c = getColorForName(nm, nameColorMap);
                                                             const rn = roleMap.get(nm) || null;
                                                             const rc = rn ? getColorForRole(rn, roleColorMap) : null;
+                                                            const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                                              if (!String(k).startsWith(cellPrefix)) return false;
+                                                              const e: any = entry;
+                                                              return e?.before?.name === nm || e?.after?.name === nm;
+                                                            });
+                                                            const pullTxt = match
+                                                              ? (((match as any)[1]?.before?.name === nm)
+                                                                ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                                                : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                                              : null;
                                                             return (
-                                                              <div key={i} className="w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className="inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2"
+                                                                  className={
+                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                                    (pullTxt ? "ring-2 ring-orange-400 " : "")
+                                                                  }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
-                                                                  <span className="flex flex-col items-start leading-tight flex-1 min-w-0">
+                                                                  <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
                                                                 </span>
                                                               </div>
                                                             );
-                                                          })
-                                                        )}
+                                                          });
+                                                        })()}
                                                       </div>
                                                     </div>
                                                   )}
@@ -705,6 +760,52 @@ export default function WorkerDashboard() {
                       )}
                     </div>
                   )}
+                  <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                    <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">הודעות</div>
+                    {(plan?.messagesCurrent || []).length === 0 ? (
+                      <div className="text-sm text-zinc-500">אין הודעות</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(plan?.messagesCurrent || []).map((m) => (
+                          <div key={m.id} className="rounded-md border p-3 dark:border-zinc-700" dir="rtl">
+                            {(() => {
+                              const raw = String(m.text || "");
+                              const isHtml = /<\/?[a-z][\s\S]*>/i.test(raw);
+                              if (isHtml) {
+                                const clean = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true }, ADD_TAGS: ["mark"], ADD_ATTR: ["style", "data-color"] });
+                                return <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: clean }} />;
+                              }
+                              return (
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                    ul: ({ children }) => <ul className="mb-2 list-disc pr-5">{children}</ul>,
+                                    ol: ({ children }) => <ol className="mb-2 list-decimal pr-5">{children}</ol>,
+                                    li: ({ children }) => <li className="mb-1 last:mb-0">{children}</li>,
+                                    a: ({ children, href }) => (
+                                      <a className="underline decoration-dotted" href={href} target="_blank" rel="noreferrer">
+                                        {children}
+                                      </a>
+                                    ),
+                                    table: ({ children }) => (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full border-collapse text-sm">{children}</table>
+                                      </div>
+                                    ),
+                                    th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
+                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
+                                  }}
+                                >
+                                  {raw}
+                                </ReactMarkdown>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </section>
 
                 {/* Semaine prochaine */}
@@ -784,6 +885,7 @@ export default function WorkerDashboard() {
                                           const today0 = new Date(); today0.setHours(0,0,0,0);
                                           const isPastDay = dateCell < today0;
                                           const names: string[] = (plan.nextWeek.assignments?.[d.key]?.[sn]?.[idx] || []) as any;
+                                          const pulls = (plan.nextWeek as any)?.pulls || {};
                                           const roleMap = assignRoles(names, workersList, st, sn, d.key);
                                           const activeDay = isDayActive(st, d.key);
                                           return (
@@ -801,31 +903,56 @@ export default function WorkerDashboard() {
                                                   {required > 0 && (
                                                     <div className="mb-1 flex flex-col items-center gap-1 min-w-full">
                                                       <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
-                                                        {names.length === 0 ? (
-                                                          <span className="text-xs text-zinc-400">—</span>
-                                                        ) : (
-                                                          names.map((nm, i) => {
-                                                            if (!nm) return null;
+                                                        {(() => {
+                                                          const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                                          const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                          const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                                          const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                                          return Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                                            const nm = cleanNames[slotIdx];
+                                                            if (!nm) {
+                                                              return (
+                                                                <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
+                                                                  <span className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
+                                                                    —
+                                                                  </span>
+                                                                </div>
+                                                              );
+                                                            }
                                                             const c = getColorForName(nm, nameColorMap);
                                                             const rn = roleMap.get(nm) || null;
                                                             const rc = rn ? getColorForRole(rn, roleColorMap) : null;
+                                                            const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                                              if (!String(k).startsWith(cellPrefix)) return false;
+                                                              const e: any = entry;
+                                                              return e?.before?.name === nm || e?.after?.name === nm;
+                                                            });
+                                                            const pullTxt = match
+                                                              ? (((match as any)[1]?.before?.name === nm)
+                                                                ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                                                : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                                              : null;
                                                             return (
-                                                              <div key={i} className="w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className="inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2"
+                                                                  className={
+                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                                    (pullTxt ? "ring-2 ring-orange-400 " : "")
+                                                                  }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
-                                                                  <span className="flex flex-col items-start leading-tight flex-1 min-w-0">
+                                                                  <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
                                                                 </span>
                                                               </div>
                                                             );
-                                                          })
-                                                        )}
+                                                          });
+                                                        })()}
                                                       </div>
                                                     </div>
                                                   )}
@@ -892,6 +1019,52 @@ export default function WorkerDashboard() {
                       )}
                     </div>
                   )}
+                  <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                    <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">הודעות</div>
+                    {(plan?.messagesNext || []).length === 0 ? (
+                      <div className="text-sm text-zinc-500">אין הודעות</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(plan?.messagesNext || []).map((m) => (
+                          <div key={m.id} className="rounded-md border p-3 dark:border-zinc-700" dir="rtl">
+                            {(() => {
+                              const raw = String(m.text || "");
+                              const isHtml = /<\/?[a-z][\s\S]*>/i.test(raw);
+                              if (isHtml) {
+                                const clean = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true }, ADD_TAGS: ["mark"], ADD_ATTR: ["style", "data-color"] });
+                                return <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: clean }} />;
+                              }
+                              return (
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                    ul: ({ children }) => <ul className="mb-2 list-disc pr-5">{children}</ul>,
+                                    ol: ({ children }) => <ol className="mb-2 list-decimal pr-5">{children}</ol>,
+                                    li: ({ children }) => <li className="mb-1 last:mb-0">{children}</li>,
+                                    a: ({ children, href }) => (
+                                      <a className="underline decoration-dotted" href={href} target="_blank" rel="noreferrer">
+                                        {children}
+                                      </a>
+                                    ),
+                                    table: ({ children }) => (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full border-collapse text-sm">{children}</table>
+                                      </div>
+                                    ),
+                                    th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
+                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
+                                  }}
+                                >
+                                  {raw}
+                                </ReactMarkdown>
+                              );
+                            })()}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </section>
         </div>
             );

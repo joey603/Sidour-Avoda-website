@@ -2,10 +2,20 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from .deps import get_db, get_current_user
-from .models import Site, SiteWorker, User
-from .schemas import WorkerCreate, WorkerOut
+from .models import Site, SiteWorker, SiteMessage, User
+from .schemas import WorkerCreate, WorkerOut, SiteMessageOut
+import re
 
 router = APIRouter(prefix="/public/sites", tags=["public-workers"])
+
+_WEEK_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_week_iso(week_iso: str) -> str:
+    wk = (week_iso or "").strip()
+    if not _WEEK_ISO_RE.match(wk):
+        raise HTTPException(status_code=400, detail="week invalide (YYYY-MM-DD)")
+    return wk
 
 
 @router.get("/worker-sites")
@@ -139,6 +149,51 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
         availability=worker.availability or {},
         answers=answers,
     )
+
+
+@router.get("/{site_id}/messages", response_model=list[SiteMessageOut])
+def get_site_messages_for_worker(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+
+    wk = _validate_week_iso(week)
+
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+
+    # Vérifier que le worker est enregistré sur ce site
+    worker = (
+        db.query(SiteWorker)
+        .filter(
+            SiteWorker.site_id == site_id,
+            func.lower(SiteWorker.name) == func.lower(user.full_name)
+        )
+        .first()
+    )
+    if not worker:
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas enregistré sur ce site")
+
+    rows = (
+        db.query(SiteMessage)
+        .filter(SiteMessage.site_id == site_id)
+        .filter(
+            (SiteMessage.scope == "week") & (SiteMessage.created_week_iso == wk)
+            | (
+                (SiteMessage.scope == "global")
+                & (SiteMessage.created_week_iso <= wk)
+                & ((SiteMessage.stopped_week_iso.is_(None)) | (wk < SiteMessage.stopped_week_iso))
+            )
+        )
+        .order_by(SiteMessage.created_at.asc(), SiteMessage.id.asc())
+        .all()
+    )
+    return rows
 
 
 @router.post("/{site_id}/register", response_model=WorkerOut, status_code=201)

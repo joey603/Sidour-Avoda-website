@@ -388,7 +388,7 @@ export default function WorkerDetailsPage() {
                         className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
                       />
                     ) : (
-                      <div className="text-base font-medium">{effectiveWorker?.name}</div>
+                  <div className="text-base font-medium">{effectiveWorker?.name}</div>
                     )}
                     <button
                       type="button"
@@ -421,7 +421,7 @@ export default function WorkerDetailsPage() {
                         className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
                       />
                     ) : (
-                      <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
+                  <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
                     )}
                     <button
                       type="button"

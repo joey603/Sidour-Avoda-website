@@ -110,3 +110,34 @@ class AIPlanningResponse(BaseModel):
     status: str
     objective: float
 
+
+class SiteMessageBase(BaseModel):
+    text: str
+    scope: Literal["global", "week"]
+    week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
+
+
+class SiteMessageCreate(SiteMessageBase):
+    pass
+
+
+class SiteMessageUpdate(BaseModel):
+    text: str | None = None
+    scope: Literal["global", "week"] | None = None
+    week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
+
+
+class SiteMessageOut(BaseModel):
+    id: int
+    site_id: int
+    text: str
+    scope: Literal["global", "week"]
+    created_week_iso: str
+    stopped_week_iso: str | None = None
+    origin_id: int | None = None
+    created_at: int
+    updated_at: int
+
+    class Config:
+        from_attributes = True
+

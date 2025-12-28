@@ -5,6 +5,16 @@ import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import DOMPurify from "dompurify";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import Underline from "@tiptap/extension-underline";
+import Link from "@tiptap/extension-link";
+import Highlight from "@tiptap/extension-highlight";
+import { TextStyle } from "@tiptap/extension-text-style";
+import Color from "@tiptap/extension-color";
 
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
@@ -116,11 +126,180 @@ export default function PlanningPage() {
   const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
     assignments: Record<string, Record<string, string[][]>>,
     isManual?: boolean,
-    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]>; answers?: Record<string, any> }>
+    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]>; answers?: Record<string, any> }>,
+    pulls?: Record<
+      string,
+      {
+        before: { name: string; start: string; end: string };
+        after: { name: string; start: string; end: string };
+      }
+    >
   }>(null);
   const isSavedMode = !!savedWeekPlan?.assignments;
   // Mode édition après chargement d'une grille sauvegardée
   const [editingSaved, setEditingSaved] = useState(false);
+
+  // --- Pulls ("משיכות") ---
+  type PullEntry = {
+    before: { name: string; start: string; end: string };
+    after: { name: string; start: string; end: string };
+  };
+  const [pullsByHoleKey, setPullsByHoleKey] = useState<Record<string, PullEntry>>({});
+  const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
+  const [pullsEditor, setPullsEditor] = useState<null | {
+    key: string;
+    stationIdx: number;
+    dayKey: string;
+    shiftName: string;
+    required: number;
+    beforeOptions: string[]; // liste des travailleurs possibles (case "avant")
+    afterOptions: string[]; // liste des travailleurs possibles (case "après")
+    beforeName: string;
+    afterName: string;
+    beforeStart: string;
+    beforeEnd: string;
+    afterStart: string;
+    afterEnd: string;
+    shiftStart: string; // Heure de début de la garde (pour min)
+    shiftEnd: string; // Heure de fin de la garde (pour max)
+  }>(null);
+
+  // --- Messages optionnels ---
+  type OptionalMessage = {
+    id: number;
+    site_id: number;
+    text: string;
+    scope: "global" | "week"; // global => toutes les semaines suivantes, week => uniquement cette semaine
+    created_week_iso: string; // YYYY-MM-DD
+    stopped_week_iso?: string | null; // YYYY-MM-DD (exclusive)
+    origin_id?: number | null;
+    created_at: number;
+    updated_at: number;
+  };
+  const [messages, setMessages] = useState<OptionalMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [isAddMessageOpen, setIsAddMessageOpen] = useState(false);
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null);
+  const [newMessageText, setNewMessageText] = useState("");
+  const [newMessagePermanent, setNewMessagePermanent] = useState(true);
+  const [messageEditorInitialHtml, setMessageEditorInitialHtml] = useState<string>("");
+  const [messageTextColor, setMessageTextColor] = useState<string>("#111827");
+  const [messageHighlightColor, setMessageHighlightColor] = useState<string>("#fde047");
+
+  function isProbablyHtml(input: string): boolean {
+    return /<\/?[a-z][\s\S]*>/i.test(input || "");
+  }
+
+  function sanitizeMessageHtml(rawHtml: string): string {
+    return DOMPurify.sanitize(rawHtml, {
+      USE_PROFILES: { html: true },
+      ADD_TAGS: ["mark"],
+      ADD_ATTR: ["style", "data-color"],
+    });
+  }
+
+  function escapeHtml(s: string): string {
+    return (s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function toEditorHtml(raw: string): string {
+    const s = String(raw || "");
+    if (isProbablyHtml(s)) return s;
+    const escaped = escapeHtml(s).replace(/\n/g, "<br/>");
+    return `<p>${escaped || "<br/>"}</p>`;
+  }
+
+  function isoYMD(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function closeMessageModal() {
+    setIsAddMessageOpen(false);
+    setEditingMessageId(null);
+    setNewMessageText("");
+    setNewMessagePermanent(true);
+    setMessageEditorInitialHtml("");
+  }
+
+  const messageEditor = useEditor({
+    immediatelyRender: false,
+    extensions: [
+      StarterKit,
+      TextStyle,
+      Color,
+      Underline,
+      Link.configure({ openOnClick: true }),
+      Highlight.configure({ multicolor: true }),
+    ],
+    content: messageEditorInitialHtml || "<p><br/></p>",
+    editorProps: {
+      attributes: {
+        class:
+          "tiptap-editor min-h-32 rounded-b-md bg-white px-3 py-2 text-sm outline-none dark:bg-zinc-900",
+        dir: "rtl",
+      },
+    },
+    onUpdate: ({ editor }) => {
+      setNewMessageText(editor.getHTML());
+    },
+  });
+
+  useEffect(() => {
+    if (!isAddMessageOpen) return;
+    if (!messageEditor) return;
+    try {
+      messageEditor.commands.setContent(messageEditorInitialHtml || "<p><br/></p>", { emitUpdate: false });
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAddMessageOpen, messageEditorInitialHtml, messageEditor]);
+
+  async function refreshMessages() {
+    const siteId = Number(params.id);
+    if (!siteId) return;
+    const wk = isoYMD(weekStart);
+    try {
+      setMessagesLoading(true);
+      const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+      });
+      setMessages(Array.isArray(res) ? res : []);
+    } catch {
+      setMessages([]);
+    } finally {
+      setMessagesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const siteId = Number(params.id);
+    if (!siteId) return;
+    const wk = isoYMD(weekStart);
+    let alive = true;
+    (async () => {
+      try {
+        setMessagesLoading(true);
+        const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        });
+        if (!alive) return;
+        setMessages(Array.isArray(res) ? res : []);
+      } catch {
+        if (!alive) return;
+        setMessages([]);
+      } finally {
+        if (!alive) return;
+        setMessagesLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [params.id, weekStart]);
+
+  const visibleMessages = useMemo(() => messages, [messages]);
 
   // Logs de debug pour l'état du bouton
   useEffect(() => {
@@ -1256,12 +1435,47 @@ export default function PlanningPage() {
               })
             : prev.workers;
           const nextAssignments = replaceNamesInAssignments(prev.assignments);
-          return { ...prev, workers: nextWorkers as any, assignments: nextAssignments };
+          const nextPulls: any = (() => {
+            const cur = (prev as any).pulls;
+            if (!cur || typeof cur !== "object") return cur;
+            const out: any = { ...cur };
+            for (const k of Object.keys(out)) {
+              const entry = out[k];
+              if (!entry) continue;
+              const b = entry.before;
+              const a = entry.after;
+              if (b?.name) b.name = renameMap.get(String(b.name)) || b.name;
+              if (a?.name) a.name = renameMap.get(String(a.name)) || a.name;
+              out[k] = { ...entry, before: { ...b }, after: { ...a } };
+            }
+            return out;
+          })();
+          return { ...prev, workers: nextWorkers as any, assignments: nextAssignments, pulls: nextPulls };
         });
 
         // Update current in-memory planning maps too
         setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: replaceNamesInAssignments(prev.assignments) } : prev));
         setManualAssignments((prev) => (prev ? (replaceNamesInAssignments(prev) as any) : prev));
+
+        // Update pulls entries too
+        setPullsByHoleKey((prev) => {
+          if (!prev || typeof prev !== "object") return prev;
+          const out: any = { ...prev };
+          for (const k of Object.keys(out)) {
+            const entry = out[k];
+            if (!entry) continue;
+            const b = entry.before;
+            const a = entry.after;
+            const bn = b?.name ? (renameMap.get(String(b.name)) || b.name) : b?.name;
+            const an = a?.name ? (renameMap.get(String(a.name)) || a.name) : a?.name;
+            out[k] = {
+              ...entry,
+              before: { ...b, name: bn },
+              after: { ...a, name: an },
+            };
+          }
+          return out;
+        });
       }
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: mapped", mapped);
@@ -1355,12 +1569,17 @@ export default function PlanningPage() {
     try {
       setSavedWeekPlan(null);
       setEditingSaved(false);
+      setPullsByHoleKey({});
+      setPullsModeStationIdx(null);
+      setPullsEditor(null);
       const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
       if (raw) {
         const parsed = JSON.parse(raw);
         // Charger les workers même si assignments est null (après suppression)
         if (parsed && parsed.assignments) {
-          setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+          const pulls = (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined;
+          setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined, pulls });
+          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
         } else if (parsed && Array.isArray(parsed.workers) && parsed.workers.length) {
           // Si assignments est null mais workers existe, ne pas écraser workers
           // Les workers de la semaine sauvegardée sont utilisés uniquement pour l'affichage
@@ -1385,6 +1604,9 @@ export default function PlanningPage() {
       }
     } catch {
       setSavedWeekPlan(null);
+      setPullsByHoleKey({});
+      setPullsModeStationIdx(null);
+      setPullsEditor(null);
       // En cas d'erreur, réinitialiser aussi les états actifs
       setAiPlan(null);
       setManualAssignments(null);
@@ -1486,6 +1708,7 @@ export default function PlanningPage() {
         week: { startISO: iso(start), endISO: iso(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
         isManual,
         assignments: effective,
+        pulls: pullsByHoleKey,
         workers: (workers || []).map((w) => ({
           id: w.id,
           name: w.name,
@@ -1501,7 +1724,7 @@ export default function PlanningPage() {
       }
       // Recharger le plan sauvegardé et sortir du mode ערוך
       if (editingSaved) {
-        setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers });
+        setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
         setEditingSaved(false);
       }
       toast.success("התכנון נשמר בהצלחה");
@@ -1536,6 +1759,7 @@ export default function PlanningPage() {
         loadWorkers();
         return;
       }
+      const pulls = (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : {};
       // Restaurer le plan sauvegardé
       const assignmentsAny: any = parsed.assignments;
       const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
@@ -1577,7 +1801,8 @@ export default function PlanningPage() {
         loadWorkers();
       }
       // Restaurer savedWeekPlan et sortir du mode ערוך
-      setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+      setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined, pulls });
+      setPullsByHoleKey(pulls || {});
       setEditingSaved(false);
       toast.success("השינויים בוטלו");
     } catch (e: any) {
@@ -1606,6 +1831,7 @@ export default function PlanningPage() {
           week: parsed.week,
           isManual: false,
           assignments: null,
+          pulls: {},
           workers: parsed.workers || [],
         };
         if (typeof window !== "undefined") {
@@ -1622,6 +1848,9 @@ export default function PlanningPage() {
       setEditingSaved(false);
       setAiPlan(null);
       setManualAssignments(null);
+      setPullsByHoleKey({});
+      setPullsModeStationIdx(null);
+      setPullsEditor(null);
       toast.success("התכנון נמחק בהצלחה");
     } catch (e: any) {
       toast.error("מחיקה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
@@ -3787,7 +4016,8 @@ export default function PlanningPage() {
                   if (!station) return null;
                   function fmt(start?: string, end?: string): string | null {
                     if (!start || !end) return null;
-                    return `${start}–${end}`;
+                    // IMPORTANT: utiliser un tiret simple pour uniformiser l'affichage
+                    return `${start}-${end}`;
                   }
                   if (station.perDayCustom && station.dayOverrides) {
                     const order = ["sun","mon","tue","wed","thu","fri","sat"];
@@ -3801,6 +4031,66 @@ export default function PlanningPage() {
                   }
                   const base = (station.shifts || []).find((x: any) => x?.name === shiftName);
                   return fmt(base?.start, base?.end);
+                }
+
+                function parseHoursRange(range: string | null): { start: string; end: string } | null {
+                  if (!range) return null;
+                  const clean = String(range).trim().replace("–", "-");
+                  const parts = clean.split("-");
+                  if (parts.length < 2) return null;
+                  const start = parts[0]?.trim();
+                  const end = parts.slice(1).join("-").trim();
+                  if (!start || !end) return null;
+                  return { start, end };
+                }
+
+                function toMinutes(t: string): number | null {
+                  const m = String(t).trim().match(/^(\d{1,2}):(\d{2})$/);
+                  if (!m) return null;
+                  const hh = Number(m[1]);
+                  const mm = Number(m[2]);
+                  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+                  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+                  return hh * 60 + mm;
+                }
+
+                function fromMinutes(mins: number): string {
+                  let m = Math.round(mins);
+                  m = ((m % (24 * 60)) + (24 * 60)) % (24 * 60);
+                  const hh = Math.floor(m / 60);
+                  const mm = m % 60;
+                  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+                }
+
+                function splitRangeHalf(start: string, end: string): { before: { start: string; end: string }; after: { start: string; end: string } } {
+                  const s = toMinutes(start);
+                  const e0 = toMinutes(end);
+                  if (s == null || e0 == null) {
+                    // fallback: 00:00-12:00 / 12:00-00:00
+                    return { before: { start: "00:00", end: "12:00" }, after: { start: "12:00", end: "00:00" } };
+                  }
+                  let e = e0;
+                  if (e <= s) e += 24 * 60; // overnight
+                  const mid = s + (e - s) / 2;
+                  return { before: { start: fromMinutes(s), end: fromMinutes(mid) }, after: { start: fromMinutes(mid), end: fromMinutes(e) } };
+                }
+
+                // Par défaut pour "משיכות": limiter chaque part à maxEachMinutes (ex: 4h)
+                function splitRangeForPulls(start: string, end: string, maxEachMinutes: number): { before: { start: string; end: string }; after: { start: string; end: string } } {
+                  const s = toMinutes(start);
+                  const e0 = toMinutes(end);
+                  if (s == null || e0 == null) return splitRangeHalf(start, end);
+                  let e = e0;
+                  if (e <= s) e += 24 * 60; // overnight
+                  const duration = e - s;
+                  const half = duration / 2;
+                  const each = Math.min(maxEachMinutes, half);
+                  const beforeEnd = s + each;
+                  const afterStart = e - each;
+                  return {
+                    before: { start: fromMinutes(s), end: fromMinutes(beforeEnd) },
+                    after: { start: fromMinutes(afterStart), end: fromMinutes(e) },
+                  };
                 }
                 function roleRequirements(st: any, shiftName: string, dayKey: string): Record<string, number> {
                   const out: Record<string, number> = {};
@@ -3868,6 +4158,78 @@ export default function PlanningPage() {
                       <div key={idx} className="rounded-xl border p-3 dark:border-zinc-800">
                         <div className="mb-2 flex items-center justify-between">
                           <div className="text-base font-medium">{st.name}</div>
+                          <div className="flex items-center gap-1">
+                            {(!!aiPlan?.assignments || !!manualAssignments) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isSavedMode && !editingSaved) return;
+                                  const effective = (isManual && manualAssignments) ? manualAssignments : (aiPlan?.assignments || null);
+                                  if (!effective) {
+                                    toast.error("אין תכנון פעיל", { description: "צור תכנון כדי להשתמש במשיכות" });
+                                    return;
+                                  }
+                                  // Vérifier qu'il existe au moins un "trou" ISOLÉ (vide entre deux gardes remplies),
+                                  // y compris à cheval sur 2 jours (dim -> lun). Si 2 trous ou plus d'affilée: ignorer.
+                                  const shiftsCount = shiftNamesAll.length;
+                                  const cellCount = (dayIdx: number, shiftIdx: number): number => {
+                                    if (dayIdx < 0 || dayIdx > 6) return 0;
+                                    if (shiftIdx < 0 || shiftIdx >= shiftsCount) return 0;
+                                    const dayKey = dayCols[dayIdx]?.key;
+                                    const shiftName = shiftNamesAll[shiftIdx];
+                                    const required = getRequiredFor(st, shiftName, dayKey);
+                                    if (!required || required <= 0) return 0;
+                                    const activeDay = isDayActive(st, dayKey);
+                                    if (!activeDay) return 0;
+                                    const stationShift = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                                    const enabled = !!stationShift?.enabled;
+                                    if (!enabled) return 0;
+                                    const cell = (effective as any)?.[dayKey]?.[shiftName]?.[idx];
+                                    const names = Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
+                                    return names.length;
+                                  };
+                                  let hasHole = false;
+                                  for (let dayIdx = 0; dayIdx < dayCols.length; dayIdx++) {
+                                    for (let sIdx = 0; sIdx < shiftsCount; sIdx++) {
+                                      const dayKey = dayCols[dayIdx]?.key;
+                                      const shiftName = shiftNamesAll[sIdx];
+                                      const required = getRequiredFor(st, shiftName, dayKey);
+                                      if (!required || required <= 0) continue;
+                                      const stationShift = (st.shifts || []).find((x: any) => x?.name === shiftName);
+                                      const enabled = !!stationShift?.enabled;
+                                      const activeDay = isDayActive(st, dayKey);
+                                      if (!enabled || !activeDay) continue;
+                                      const cur = cellCount(dayIdx, sIdx);
+                                      if (cur !== 0) continue;
+                                      // prev / next in timeline (跨日)
+                                      const prev = (dayIdx === 0 && sIdx === 0) ? null : (sIdx === 0 ? { dayIdx: dayIdx - 1, sIdx: shiftsCount - 1 } : { dayIdx, sIdx: sIdx - 1 });
+                                      const next = (dayIdx === 6 && sIdx === shiftsCount - 1) ? null : (sIdx === shiftsCount - 1 ? { dayIdx: dayIdx + 1, sIdx: 0 } : { dayIdx, sIdx: sIdx + 1 });
+                                      if (!prev || !next) continue;
+                                      const prevCount = cellCount(prev.dayIdx, prev.sIdx);
+                                      const nextCount = cellCount(next.dayIdx, next.sIdx);
+                                      // Trou isolé: les deux côtés sont remplis (=> pas de trous consécutifs)
+                                      if (prevCount > 0 && nextCount > 0) { hasHole = true; break; }
+                                    }
+                                    if (hasHole) break;
+                                  }
+                                  if (!hasHole) {
+                                    toast("אין חורים בעמדה זו", { description: "לא נמצאה משמרת ריקה בין שתי משמרות" });
+                                    return;
+                                  }
+                                  setPullsEditor(null);
+                                  setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
+                                }}
+                                disabled={isSavedMode && !editingSaved}
+                                className={
+                                  "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
+                                  ((isSavedMode && !editingSaved)
+                                    ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                                    : "border-orange-400 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/20")
+                                }
+                              >
+                                משיכות
+                              </button>
+                            )}
                           <button
                             type="button"
                             onClick={() => {
@@ -4040,6 +4402,7 @@ export default function PlanningPage() {
                           >
                             איפוס עמדה
                           </button>
+                          </div>
                         </div>
                         <div className="overflow-x-auto">
                           <table className="w-full border-collapse text-sm table-fixed">
@@ -4081,43 +4444,139 @@ export default function PlanningPage() {
                                       const dateCell = addDays(weekStart, dayIdx);
                                       const today0 = new Date(); today0.setHours(0,0,0,0);
                                       const isPastDay = dateCell < today0; // Jours passés (sans le jour actuel), toujours grisés
-                                      const assignedNames: string[] = (() => {
+                                      const getCellNames = (dayKey: string, shiftName: string): string[] => {
                                         // En mode ערוך, utiliser les assignations en cours d'édition, sinon utiliser savedWeekPlan
                                         if (editingSaved) {
                                           if (isManual && manualAssignments) {
-                                            const cell = (manualAssignments as any)[d.key]?.[sn]?.[idx];
-                                            if (Array.isArray(cell) && cell.length > 0) return cell;
+                                            const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
+                                            return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                           }
                                           if (aiPlan?.assignments) {
-                                            const cell = aiPlan.assignments[d.key]?.[sn]?.[idx];
-                                            if (Array.isArray(cell) && cell.length > 0) return cell;
+                                            const cell = (aiPlan.assignments as any)[dayKey]?.[shiftName]?.[idx];
+                                            return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                           }
                                           // Fallback: utiliser savedWeekPlan si les assignations en cours d'édition ne sont pas encore chargées
                                           if (savedWeekPlan?.assignments) {
-                                            const savedCell = (savedWeekPlan as any).assignments[d.key]?.[sn]?.[idx];
-                                        if (Array.isArray(savedCell)) return savedCell as string[];
+                                            const savedCell = (savedWeekPlan as any).assignments?.[dayKey]?.[shiftName]?.[idx];
+                                            return Array.isArray(savedCell) ? (savedCell as any[]).filter((x) => x && String(x).trim()) : [];
                                           }
                                           return [];
                                         }
                                         // Mode normal: priorité au plan sauvegardé
                                         if (savedWeekPlan?.assignments) {
-                                          const savedCell = (savedWeekPlan as any).assignments[d.key]?.[sn]?.[idx];
-                                          if (Array.isArray(savedCell)) return savedCell as string[];
+                                          const savedCell = (savedWeekPlan as any).assignments?.[dayKey]?.[shiftName]?.[idx];
+                                          if (Array.isArray(savedCell)) return (savedCell as any[]).filter((x) => x && String(x).trim());
                                         }
                                         if (isManual && manualAssignments) {
-                                          const cell = (manualAssignments as any)[d.key]?.[sn]?.[idx];
-                                          return Array.isArray(cell) ? cell : [];
+                                          const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
+                                          return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                         }
                                         if (aiPlan?.assignments) {
-                                          const cell = aiPlan.assignments[d.key]?.[sn]?.[idx];
-                                          if (Array.isArray(cell)) return cell;
+                                          const cell = (aiPlan.assignments as any)[dayKey]?.[shiftName]?.[idx];
+                                          return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                         }
                                         return [];
-                                      })();
+                                      };
+                                      const assignedNames: string[] = getCellNames(d.key, sn);
                                       const roleMap = assignRoles(assignedNames, st, sn, d.key);
-                                      // Filtrer les valeurs vides/falsy pour compter uniquement les assignations réelles
-                                      const assignedCount = assignedNames.filter(Boolean).length;
+                                      // Comptage: une "משיכה" (2 personnes) doit compter comme 1 seule place.
+                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                      const pullsInCell = Object.keys(pullsByHoleKey || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                      const personsCount = assignedNames.length;
+                                      const assignedCount = Math.max(0, personsCount - pullsInCell); // places prises
                                       const activeDay = isDayActive(st, d.key);
+                                      const pullsActiveHere = pullsModeStationIdx === idx;
+                                      // "Trou pullable": la garde (shift) est entre 2 gardes remplies dans la timeline
+                                      // (y compris dim->lun). On ne surligne QUE les slots vides.
+                                      const shiftsCount = shiftNamesAll.length;
+                                      const shiftIdx = shiftNamesAll.indexOf(sn);
+                                      const prevCoord = (dayIdx === 0 && shiftIdx === 0)
+                                        ? null
+                                        : (shiftIdx === 0 ? { dayIdx: dayIdx - 1, shiftIdx: shiftsCount - 1 } : { dayIdx, shiftIdx: shiftIdx - 1 });
+                                      const nextCoord = (dayIdx === 6 && shiftIdx === shiftsCount - 1)
+                                        ? null
+                                        : (shiftIdx === shiftsCount - 1 ? { dayIdx: dayIdx + 1, shiftIdx: 0 } : { dayIdx, shiftIdx: shiftIdx + 1 });
+                                      // IMPORTANT: ne pas considérer comme "voisins" les travailleurs ajoutés via משיכות
+                                      // dans la garde d'avant/d'après (sinon ils permettent d'enchaîner des משיכות).
+                                      // Ensemble des travailleurs impliqués dans une משיכה pour un (jour, shift),
+                                      // toutes עמדות confondues (fatigue globale).
+                                      const pulledNamesFor = (dayKey: string, shiftName: string): Set<string> => {
+                                        const out = new Set<string>();
+                                        const prefix = `${dayKey}|${shiftName}|`;
+                                        Object.entries(pullsByHoleKey || {}).forEach(([k, e]) => {
+                                          if (!String(k).startsWith(prefix)) return;
+                                          const pe: any = e;
+                                          if (pe?.before?.name) out.add(String(pe.before.name).trim());
+                                          if (pe?.after?.name) out.add(String(pe.after.name).trim());
+                                        });
+                                        return out;
+                                      };
+                                      const neighborNames = (dayKey: string, shiftName: string): string[] => {
+                                        const base = getCellNames(dayKey, shiftName);
+                                        const pulled = pulledNamesFor(dayKey, shiftName);
+                                        // Ne pas utiliser comme "voisin" quelqu'un déjà impliqué dans une משיכה sur ce shift
+                                        return (base || []).filter((nm) => !pulled.has(String(nm).trim()));
+                                      };
+                                      const prevNames = prevCoord ? neighborNames(dayCols[prevCoord.dayIdx]?.key, shiftNamesAll[prevCoord.shiftIdx]) : [];
+                                      const nextNames = nextCoord ? neighborNames(dayCols[nextCoord.dayIdx]?.key, shiftNamesAll[nextCoord.shiftIdx]) : [];
+                                      const remainingCapacity = Math.max(0, required - assignedCount);
+                                      // Pull possible seulement si on a AU MOINS un candidat "avant" et un candidat "après"
+                                      // qui ne sont pas déjà utilisés dans la case, et que l'on peut former une paire de 2 noms différents.
+                                      const usedInCell = new Set<string>(assignedNames.map((x) => String(x).trim()).filter(Boolean));
+                                      // Règle "fatigue": si un travailleur a participé à une משיכה sur la garde juste avant/juste après,
+                                      // il ne peut pas être réutilisé pour une nouvelle משיכה sur la garde suivante (ex: dim soir pull + lun matin => pas pull lun midi via lun matin).
+                                      const prevOf = (c: { dayIdx: number; shiftIdx: number } | null) => {
+                                        if (!c) return null;
+                                        if (c.dayIdx === 0 && c.shiftIdx === 0) return null;
+                                        return c.shiftIdx === 0 ? { dayIdx: c.dayIdx - 1, shiftIdx: shiftsCount - 1 } : { dayIdx: c.dayIdx, shiftIdx: c.shiftIdx - 1 };
+                                      };
+                                      const nextOf = (c: { dayIdx: number; shiftIdx: number } | null) => {
+                                        if (!c) return null;
+                                        if (c.dayIdx === 6 && c.shiftIdx === shiftsCount - 1) return null;
+                                        return c.shiftIdx === shiftsCount - 1 ? { dayIdx: c.dayIdx + 1, shiftIdx: 0 } : { dayIdx: c.dayIdx, shiftIdx: c.shiftIdx + 1 };
+                                      };
+                                      const prevPrevCoord = prevOf(prevCoord);
+                                      const nextNextCoord = nextOf(nextCoord);
+                                      const pulledBeforePrevShift = prevPrevCoord
+                                        ? pulledNamesFor(dayCols[prevPrevCoord.dayIdx]?.key, shiftNamesAll[prevPrevCoord.shiftIdx])
+                                        : new Set<string>();
+                                      const pulledAfterNextShift = nextNextCoord
+                                        ? pulledNamesFor(dayCols[nextNextCoord.dayIdx]?.key, shiftNamesAll[nextNextCoord.shiftIdx])
+                                        : new Set<string>();
+
+                                      const beforeCandidates = (prevNames || [])
+                                        .map((x) => String(x).trim())
+                                        .filter(Boolean)
+                                        .filter((x) => !usedInCell.has(x))
+                                        .filter((x) => !pulledBeforePrevShift.has(x));
+                                      const afterCandidates = (nextNames || [])
+                                        .map((x) => String(x).trim())
+                                        .filter(Boolean)
+                                        .filter((x) => !usedInCell.has(x))
+                                        .filter((x) => !pulledAfterNextShift.has(x));
+                                      // Règle: si un travailleur est dans les DEUX gardes voisines (ex: dim nuit ET lun midi),
+                                      // il ne peut pas participer à la משיכה du trou entre les deux.
+                                      const bothSides = new Set<string>();
+                                      beforeCandidates.forEach((nm) => {
+                                        const n = String(nm).trim();
+                                        if (!n) return;
+                                        if (afterCandidates.some((x) => String(x).trim() === n)) bothSides.add(n);
+                                      });
+                                      const beforeCandidates2 = beforeCandidates.filter((x) => !bothSides.has(String(x).trim()));
+                                      const afterCandidates2 = afterCandidates.filter((x) => !bothSides.has(String(x).trim()));
+                                      const canPickTwoDifferent =
+                                        beforeCandidates2.length > 0 &&
+                                        afterCandidates2.length > 0 &&
+                                        !(beforeCandidates2.length === 1 && afterCandidates2.length === 1 && beforeCandidates2[0] === afterCandidates2[0]);
+                                      const isPullable =
+                                        enabled &&
+                                        activeDay &&
+                                        !isPastDay &&
+                                        required > 0 &&
+                                        !!prevCoord &&
+                                        !!nextCoord &&
+                                        remainingCapacity >= 1 &&
+                                        canPickTwoDifferent;
                                       return (
                                         <td
                                           key={d.key}
@@ -4130,7 +4589,7 @@ export default function PlanningPage() {
                                         >
                                         {enabled ? (
                                             <div
-                                              className="flex flex-col items-center"
+                                              className="flex flex-col items-center rounded-md"
                                               onDragOver={isManual ? (e) => { e.preventDefault(); try { (e as any).dataTransfer.dropEffect = "copy"; } catch {} } : undefined}
                                               onDrop={isManual ? (e) => onCellContainerDrop(e, d.key, sn, idx) : undefined}
                                             >
@@ -4162,7 +4621,8 @@ export default function PlanningPage() {
                                                       const deficit = Math.max(0, (rCount || 0) - have);
                                                           for (let i = 0; i < deficit; i++) roleHints.push(rName);
                                                         });
-                                                        const slots = Math.max(required, assignedNames.length, roleHints.length, 1);
+                                                        // +pullsInCell: pour afficher 2 bulles pour une seule place (משיכה)
+                                                        const slots = Math.max(required + pullsInCell, assignedNames.length, roleHints.length, 1);
                                                         return Array.from({ length: slots }).map((_, slotIdx) => {
                                                           const nm = assignedNames[slotIdx];
                                                           if (nm) {
@@ -4200,10 +4660,69 @@ export default function PlanningPage() {
                                                                   key={"slot-nm-" + slotIdx}
                                                                   className={
                                                                     "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none transition-transform " +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (() => {
+                                                                      if (pullsModeStationIdx !== idx) return "";
+                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                        if (!k.startsWith(cellPrefix)) return false;
+                                                                        const e: any = entry;
+                                                                        return e?.before?.name === nm || e?.after?.name === nm;
+                                                                      });
+                                                                      return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
+                                                                    })()
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                   draggable
+                                                                  onClick={(e) => {
+                                                                    // Si cette bulle fait partie d'une משיכה, permettre d'ouvrir la popup en cliquant sur la bulle
+                                                                    if (pullsModeStationIdx !== idx) return;
+                                                                    if (isSavedMode && !editingSaved) return;
+                                                                    const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                    const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                      if (!String(k).startsWith(cellPrefix)) return false;
+                                                                      const pe: any = entry;
+                                                                      return pe?.before?.name === nm || pe?.after?.name === nm;
+                                                                    });
+                                                                    if (!match) return;
+                                                                    e.stopPropagation();
+                                                                    const [k, entryAny] = match as any;
+                                                                    const entry = entryAny as any;
+                                                                    const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                    const parsed = parseHoursRange(hours);
+                                                                    const shiftStart = parsed ? parsed.start : "00:00";
+                                                                    const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                    const used = new Set(getCellNames(d.key, sn));
+                                                                    const prevDayKey = prevCoord ? dayCols[prevCoord.dayIdx]?.key : null;
+                                                                    const prevShiftName = prevCoord ? shiftNamesAll[prevCoord.shiftIdx] : null;
+                                                                    const nextDayKey = nextCoord ? dayCols[nextCoord.dayIdx]?.key : null;
+                                                                    const nextShiftName = nextCoord ? shiftNamesAll[nextCoord.shiftIdx] : null;
+                                                                    const prevOptsRaw = (prevDayKey && prevShiftName) ? neighborNames(prevDayKey, prevShiftName) : [];
+                                                                    const nextOptsRaw = (nextDayKey && nextShiftName) ? neighborNames(nextDayKey, nextShiftName) : [];
+                                                                    const beforeOptions = Array.from(
+                                                                      new Set<string>([...prevOptsRaw, String(entry?.before?.name || "").trim()].filter(Boolean)),
+                                                                    ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                    const afterOptions = Array.from(
+                                                                      new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
+                                                                    ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                    setPullsEditor({
+                                                                      key: String(k),
+                                                                      stationIdx: idx,
+                                                                      dayKey: d.key,
+                                                                      shiftName: sn,
+                                                                      required,
+                                                                      beforeOptions,
+                                                                      afterOptions,
+                                                                      beforeName: entry.before.name,
+                                                                      afterName: entry.after.name,
+                                                                      beforeStart: entry.before.start,
+                                                                      beforeEnd: entry.before.end,
+                                                                      afterStart: entry.after.start,
+                                                                      afterEnd: entry.after.end,
+                                                                      shiftStart,
+                                                                      shiftEnd,
+                                                                    });
+                                                                  }}
                                                                   onDragStart={(e) => onWorkerDragStart(e, nm)}
                                                                   data-slot="1"
                                                                   data-dkey={d.key}
@@ -4211,11 +4730,81 @@ export default function PlanningPage() {
                                                                   data-stidx={idx}
                                                                   data-slotidx={slotIdx}
                                                                 >
-                                                                  <span className="flex flex-col items-start flex-1 min-w-0">
+                                                                  <span className="flex flex-col items-center text-center flex-1 min-w-0">
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    {(() => {
+                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                        if (!k.startsWith(cellPrefix)) return false;
+                                                                        const e: any = entry;
+                                                                        return e?.before?.name === nm || e?.after?.name === nm;
+                                                                      });
+                                                                      if (!match) return null;
+                                                                      const [k, entryAny] = match as any;
+                                                                      const entry = entryAny as any;
+                                                                      const txt =
+                                                                        entry?.before?.name === nm
+                                                                          ? `${entry.before.start}-${entry.before.end}`
+                                                                          : `${entry.after.start}-${entry.after.end}`;
+                                                                      return (
+                                                                        <button
+                                                                          type="button"
+                                                                          dir="ltr"
+                                                                          className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                          onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                            const parsed = parseHoursRange(hours);
+                                                                            const shiftStart = parsed ? parsed.start : "00:00";
+                                                                            const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                            // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                            const used = new Set(getCellNames(d.key, sn));
+                                                                            const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                            Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                              if (!String(kk).startsWith(cellPrefix)) return;
+                                                                              if (String(kk) === String(k)) return; // ne pas compter l'entrée en cours d'édition
+                                                                              const e: any = ee;
+                                                                              if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                              if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                            });
+                                                                            const prevDayKey = prevCoord ? dayCols[prevCoord.dayIdx]?.key : null;
+                                                                            const prevShiftName = prevCoord ? shiftNamesAll[prevCoord.shiftIdx] : null;
+                                                                            const nextDayKey = nextCoord ? dayCols[nextCoord.dayIdx]?.key : null;
+                                                                            const nextShiftName = nextCoord ? shiftNamesAll[nextCoord.shiftIdx] : null;
+                                                                            const prevOptsRaw = (prevDayKey && prevShiftName) ? neighborNames(prevDayKey, prevShiftName) : [];
+                                                                            const nextOptsRaw = (nextDayKey && nextShiftName) ? neighborNames(nextDayKey, nextShiftName) : [];
+                                                                            const beforeOptions = Array.from(
+                                                                              new Set<string>([...prevOptsRaw, String(entry?.before?.name || "").trim()].filter(Boolean)),
+                                                                            ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                            const afterOptions = Array.from(
+                                                                              new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
+                                                                            ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                            setPullsEditor({
+                                                                              key: k,
+                                                                              stationIdx: idx,
+                                                                              dayKey: d.key,
+                                                                              shiftName: sn,
+                                                                              required,
+                                                                              beforeOptions,
+                                                                              afterOptions,
+                                                                              beforeName: entry.before.name,
+                                                                              afterName: entry.after.name,
+                                                                              beforeStart: entry.before.start,
+                                                                              beforeEnd: entry.before.end,
+                                                                              afterStart: entry.after.start,
+                                                                              afterEnd: entry.after.end,
+                                                                              shiftStart,
+                                                                              shiftEnd,
+                                                                            });
+                                                                          }}
+                                                                        >
+                                                                          {txt}
+                                                                        </button>
+                                                                      );
+                                                                    })()}
                                                                   </span>
                                                                   <button
                                                                     type="button"
@@ -4298,6 +4887,50 @@ export default function PlanningPage() {
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
                                                                   }
                                                                   style={{ borderColor: rc.border }}
+                                                                  onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (!pullsActiveHere || !isPullable) return;
+                                                                    if (isSavedMode && !editingSaved) return;
+                                                                    // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                    const used = new Set(getCellNames(d.key, sn));
+                                                                    const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                    Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                      if (!String(kk).startsWith(cellPrefix)) return;
+                                                                      const e: any = ee;
+                                                                      if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                      if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                    });
+                                                                    const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const beforeName = String(beforeOptions[0] || "").trim();
+                                                                    const afterName = String(afterOptions[0] || "").trim();
+                                                                    if (!beforeName || !afterName) {
+                                                                      toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                      return;
+                                                                    }
+                                                                    const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                    const parsed = parseHoursRange(hours);
+                                                                    const split = parsed ? splitRangeForPulls(parsed.start, parsed.end, 4 * 60) : splitRangeForPulls("00:00", "00:00", 4 * 60);
+                                                                    const shiftStart = parsed ? parsed.start : "00:00";
+                                                                    const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                    setPullsEditor({
+                                                                      key: `${d.key}|${sn}|${idx}|${slotIdx}`,
+                                                                      stationIdx: idx,
+                                                                      dayKey: d.key,
+                                                                      shiftName: sn,
+                                                                      required,
+                                                                      beforeOptions,
+                                                                      afterOptions,
+                                                                      beforeName,
+                                                                      afterName,
+                                                                      beforeStart: split.before.start,
+                                                                      beforeEnd: split.before.end,
+                                                                      afterStart: split.after.start,
+                                                                      afterEnd: split.after.end,
+                                                                      shiftStart,
+                                                                      shiftEnd,
+                                                                    });
+                                                                  }}
                       >
                                                                   <span className="text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
                         <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
@@ -4336,6 +4969,51 @@ export default function PlanningPage() {
                                                                     "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-transform cursor-pointer " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
                                                                   }
+                                                                  onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (!pullsActiveHere || !isPullable) return;
+                                                                    if (isSavedMode && !editingSaved) return;
+                                                                    // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                    const used = new Set(getCellNames(d.key, sn));
+                                                                    const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                    Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                      if (!String(kk).startsWith(cellPrefix)) return;
+                                                                      const e: any = ee;
+                                                                      if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                      if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                    });
+                                                                    const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const beforeName = String(beforeOptions[0] || "").trim();
+                                                                    const afterName = String(afterOptions[0] || "").trim();
+                                                                    if (!beforeName || !afterName) {
+                                                                      toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                      return;
+                                                                    }
+                                                                    const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                    const parsed = parseHoursRange(hours);
+                                                                    const split = parsed ? splitRangeForPulls(parsed.start, parsed.end, 4 * 60) : splitRangeForPulls("00:00", "00:00", 4 * 60);
+                                                                    const shiftStart = parsed ? parsed.start : "00:00";
+                                                                    const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                    setPullsEditor({
+                                                                      key: `${d.key}|${sn}|${idx}|${slotIdx}`,
+                                                                      stationIdx: idx,
+                                                                      dayKey: d.key,
+                                                                      shiftName: sn,
+                                                                      required,
+                                                                      beforeOptions,
+                                                                      afterOptions,
+                                                                      beforeName,
+                                                                      afterName,
+                                                                      beforeStart: split.before.start,
+                                                                      beforeEnd: split.before.end,
+                                                                      afterStart: split.after.start,
+                                                                      afterEnd: split.after.end,
+                                                                      shiftStart,
+                                                                      shiftEnd,
+                                                                    });
+                                                                  }}
+                                                                  style={pullsActiveHere && isPullable ? { outline: "2px solid #fb923c", outlineOffset: "2px" } : undefined}
                                                       >
                                                         —
                                                       </span>
@@ -4390,9 +5068,13 @@ export default function PlanningPage() {
                                                         }
                                                       });
                                                       
-                                                      // Ajouter les slots sans rôle pour les assignations restantes
+                                                      // Ajouter les slots sans rôle.
+                                                      // IMPORTANT: si on a plus d'assignés que "required" (ex: משיכות => 2 personnes sur une garde),
+                                                      // il faut afficher 2 bulles (et pas couper à required).
                                                       const totalRoleSlots = slots.length;
-                                                      const remainingRequired = Math.max(0, required - totalRoleSlots);
+                                                      // +pullsInCell: pour afficher 2 bulles pour une seule place (משיכה)
+                                                      const targetSlots = Math.max(required + pullsInCell, assignedNames.filter(Boolean).length);
+                                                      const remainingRequired = Math.max(0, targetSlots - totalRoleSlots);
                                                       for (let i = 0; i < remainingRequired; i++) {
                                                         slots.push({ type: 'neutral-empty' });
                                                       }
@@ -4416,14 +5098,143 @@ export default function PlanningPage() {
                                                             >
                                                             <span
                                                               key={"nm-" + i}
-                                                                className="inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2"
+                                                                className={
+                                                                  "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                                  (() => {
+                                                                    if (pullsModeStationIdx !== idx) return "";
+                                                                    const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                    const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                      if (!k.startsWith(cellPrefix)) return false;
+                                                                      const e: any = entry;
+                                                                      return e?.before?.name === nm || e?.after?.name === nm;
+                                                                    });
+                                                                    return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
+                                                                  })()
+                                                                }
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                              onClick={(e) => {
+                                                                if (pullsModeStationIdx !== idx) return;
+                                                                if (isSavedMode && !editingSaved) return;
+                                                                const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                  if (!String(k).startsWith(cellPrefix)) return false;
+                                                                  const pe: any = entry;
+                                                                  return pe?.before?.name === nm || pe?.after?.name === nm;
+                                                                });
+                                                                if (!match) return;
+                                                                e.stopPropagation();
+                                                                const [k, entryAny] = match as any;
+                                                                const entry = entryAny as any;
+                                                                const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                const parsed = parseHoursRange(hours);
+                                                                const shiftStart = parsed ? parsed.start : "00:00";
+                                                                const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                const used = new Set(getCellNames(d.key, sn));
+                                                                const prevDayKey = prevCoord ? dayCols[prevCoord.dayIdx]?.key : null;
+                                                                const prevShiftName = prevCoord ? shiftNamesAll[prevCoord.shiftIdx] : null;
+                                                                const nextDayKey = nextCoord ? dayCols[nextCoord.dayIdx]?.key : null;
+                                                                const nextShiftName = nextCoord ? shiftNamesAll[nextCoord.shiftIdx] : null;
+                                                                const prevOptsRaw = (prevDayKey && prevShiftName) ? neighborNames(prevDayKey, prevShiftName) : [];
+                                                                const nextOptsRaw = (nextDayKey && nextShiftName) ? neighborNames(nextDayKey, nextShiftName) : [];
+                                                                const beforeOptions = Array.from(
+                                                                  new Set<string>([...prevOptsRaw, String(entry?.before?.name || "").trim()].filter(Boolean)),
+                                                                ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                const afterOptions = Array.from(
+                                                                  new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
+                                                                ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                setPullsEditor({
+                                                                  key: String(k),
+                                                                  stationIdx: idx,
+                                                                  dayKey: d.key,
+                                                                  shiftName: sn,
+                                                                  required,
+                                                                  beforeOptions,
+                                                                  afterOptions,
+                                                                  beforeName: entry.before.name,
+                                                                  afterName: entry.after.name,
+                                                                  beforeStart: entry.before.start,
+                                                                  beforeEnd: entry.before.end,
+                                                                  afterStart: entry.after.start,
+                                                                  afterEnd: entry.after.end,
+                                                                  shiftStart,
+                                                                  shiftEnd,
+                                                                });
+                                                              }}
                                                             >
-                                                              <span className="flex flex-col items-start leading-tight flex-1 min-w-0">
+                                                              <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                 {rn ? (
                                                                   <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                 ) : null}
                                                                 <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                {(() => {
+                                                                  const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                  const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                    if (!k.startsWith(cellPrefix)) return false;
+                                                                    const e: any = entry;
+                                                                    return e?.before?.name === nm || e?.after?.name === nm;
+                                                                  });
+                                                                  if (!match) return null;
+                                                                  const [k, entryAny] = match as any;
+                                                                  const entry = entryAny as any;
+                                                                  const txt =
+                                                                    entry?.before?.name === nm
+                                                                      ? `${entry.before.start}-${entry.before.end}`
+                                                                      : `${entry.after.start}-${entry.after.end}`;
+                                                                  return (
+                                                                    <button
+                                                                      type="button"
+                                                                      dir="ltr"
+                                                                      className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                      onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                        const parsed = parseHoursRange(hours);
+                                                                        const shiftStart = parsed ? parsed.start : "00:00";
+                                                                        const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                        // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                        const used = new Set(getCellNames(d.key, sn));
+                                                                        const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                        Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                          if (!String(kk).startsWith(cellPrefix)) return;
+                                                                          const e: any = ee;
+                                                                          if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                          if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                        });
+                                                                        const prevDayKey = prevCoord ? dayCols[prevCoord.dayIdx]?.key : null;
+                                                                        const prevShiftName = prevCoord ? shiftNamesAll[prevCoord.shiftIdx] : null;
+                                                                        const nextDayKey = nextCoord ? dayCols[nextCoord.dayIdx]?.key : null;
+                                                                        const nextShiftName = nextCoord ? shiftNamesAll[nextCoord.shiftIdx] : null;
+                                                                        const prevOptsRaw = (prevDayKey && prevShiftName) ? neighborNames(prevDayKey, prevShiftName) : [];
+                                                                        const nextOptsRaw = (nextDayKey && nextShiftName) ? neighborNames(nextDayKey, nextShiftName) : [];
+                                                                        const beforeOptions = Array.from(
+                                                                          new Set<string>([...prevOptsRaw, String(entry?.before?.name || "").trim()].filter(Boolean)),
+                                                                        ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                        const afterOptions = Array.from(
+                                                                          new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
+                                                                        ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                        setPullsEditor({
+                                                                          key: k,
+                                                                          stationIdx: idx,
+                                                                          dayKey: d.key,
+                                                                          shiftName: sn,
+                                                                          required,
+                                                                          beforeOptions,
+                                                                          afterOptions,
+                                                                          beforeName: entry.before.name,
+                                                                          afterName: entry.after.name,
+                                                                          beforeStart: entry.before.start,
+                                                                          beforeEnd: entry.before.end,
+                                                                          afterStart: entry.after.start,
+                                                                          afterEnd: entry.after.end,
+                                                                          shiftStart,
+                                                                          shiftEnd,
+                                                                        });
+                                                                      }}
+                                                                    >
+                                                                      {txt}
+                                                                    </button>
+                                                                  );
+                                                                })()}
                                                               </span>
                                                             </span>
                                                             </div>
@@ -4432,20 +5243,67 @@ export default function PlanningPage() {
                                                       
                                                       return (
                                                         <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
-                                                          {slots.map((slot, idx) => {
+                                                          {slots.map((slot, slotIdx) => {
                                                             if (slot.type === 'assigned' && slot.name) {
-                                                              return renderChip(slot.name, idx, slot.role ?? null);
+                                                              return renderChip(slot.name, slotIdx, slot.role ?? null);
                                                             } else if (slot.type === 'role-empty' && slot.roleHint) {
                                                               const c = colorForRole(slot.roleHint);
                                                               return (
                                                                 <div
-                                                                  key={`roleph-wrapper-${slot.roleHint}-${idx}`}
+                                                                  key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
                                                                   className="w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
-                                                                    key={`roleph-${slot.roleHint}-${idx}`}
-                                                                    className="inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900"
+                                                                    key={`roleph-${slot.roleHint}-${slotIdx}`}
+                                                                    className={
+                                                                      "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 cursor-pointer " +
+                                                                      (pullsActiveHere && isPullable ? "ring-2 ring-orange-400" : "")
+                                                                    }
                                                                     style={{ borderColor: c.border }}
+                                                                    onClick={(e) => {
+                                                                      e.stopPropagation();
+                                                                      if (!pullsActiveHere || !isPullable) return;
+                                                                      if (isSavedMode && !editingSaved) return;
+                                                                      // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                      const used = new Set(getCellNames(d.key, sn));
+                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                        if (!String(kk).startsWith(cellPrefix)) return;
+                                                                        const e: any = ee;
+                                                                        if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                        if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                      });
+                                                                      const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const beforeName = String(beforeOptions[0] || "").trim();
+                                                                      const afterName = String(afterOptions[0] || "").trim();
+                                                                      if (!beforeName || !afterName) {
+                                                                        toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                        return;
+                                                                      }
+                                                                      const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                      const parsed = parseHoursRange(hours);
+                                                                      const split = parsed ? splitRangeForPulls(parsed.start, parsed.end, 4 * 60) : splitRangeForPulls("00:00", "00:00", 4 * 60);
+                                                                      const shiftStart = parsed ? parsed.start : "00:00";
+                                                                      const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                      setPullsEditor({
+                                                                        key: `${d.key}|${sn}|${idx}|${slotIdx}`,
+                                                                        stationIdx: idx,
+                                                                        dayKey: d.key,
+                                                                        shiftName: sn,
+                                                                        required,
+                                                                        beforeOptions,
+                                                                        afterOptions,
+                                                                        beforeName,
+                                                                        afterName,
+                                                                        beforeStart: split.before.start,
+                                                                        beforeEnd: split.before.end,
+                                                                        afterStart: split.after.start,
+                                                                        afterEnd: split.after.end,
+                                                                        shiftStart,
+                                                                        shiftEnd,
+                                                                      });
+                                                                    }}
                                                                   >
                                                                     <span className="text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
                                                                     <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
@@ -4455,12 +5313,59 @@ export default function PlanningPage() {
                                                             } else {
                                                               return (
                                                                 <div
-                                                                  key={"empty-wrapper-" + idx}
+                                                                  key={"empty-wrapper-" + slotIdx}
                                                                   className="w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
-                                                                    key={"empty-" + idx}
-                                                                    className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                                                                    key={"empty-" + slotIdx}
+                                                                    className={
+                                                                      "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-pointer " +
+                                                                      (pullsActiveHere && isPullable ? "ring-2 ring-orange-400" : "")
+                                                                    }
+                                                                    onClick={(e) => {
+                                                                      e.stopPropagation();
+                                                                      if (!pullsActiveHere || !isPullable) return;
+                                                                      if (isSavedMode && !editingSaved) return;
+                                                                      // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
+                                                                      const used = new Set(getCellNames(d.key, sn));
+                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                        if (!String(kk).startsWith(cellPrefix)) return;
+                                                                        const e: any = ee;
+                                                                        if (e?.before?.name) used.add(String(e.before.name).trim());
+                                                                        if (e?.after?.name) used.add(String(e.after.name).trim());
+                                                                      });
+                                                                      const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const beforeName = String(beforeOptions[0] || "").trim();
+                                                                      const afterName = String(afterOptions[0] || "").trim();
+                                                                      if (!beforeName || !afterName) {
+                                                                        toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                        return;
+                                                                      }
+                                                                      const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                                                      const parsed = parseHoursRange(hours);
+                                                                      const split = parsed ? splitRangeForPulls(parsed.start, parsed.end, 4 * 60) : splitRangeForPulls("00:00", "00:00", 4 * 60);
+                                                                      const shiftStart = parsed ? parsed.start : "00:00";
+                                                                      const shiftEnd = parsed ? parsed.end : "23:59";
+                                                                      setPullsEditor({
+                                                                        key: `${d.key}|${sn}|${idx}|${slotIdx}`,
+                                                                        stationIdx: idx,
+                                                                        dayKey: d.key,
+                                                                        shiftName: sn,
+                                                                        required,
+                                                                        beforeOptions,
+                                                                        afterOptions,
+                                                                        beforeName,
+                                                                        afterName,
+                                                                        beforeStart: split.before.start,
+                                                                        beforeEnd: split.before.end,
+                                                                        afterStart: split.after.start,
+                                                                        afterEnd: split.after.end,
+                                                                        shiftStart,
+                                                                        shiftEnd,
+                                                                      });
+                                                                    }}
                                                                   >
                                                                     —
                                                                   </span>
@@ -5033,6 +5938,322 @@ export default function PlanningPage() {
                       </>
                     );
                   })()}
+                </div>
+              )}
+
+              {/* Messages optionnels (sous le récap) */}
+              {/** En mode planning sauvegardé (lecture seule), désactiver édition des messages */}
+              {/** isSavedMode = savedWeekPlan?.assignments; editingSaved = mode ערוך */}
+              <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-sm text-zinc-600 dark:text-zinc-300">הודעה אופציונלית</div>
+                  <button
+                    type="button"
+                    disabled={isSavedMode && !editingSaved}
+                    className={
+                      "inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-sm font-medium " +
+                      ((isSavedMode && !editingSaved)
+                        ? "border-zinc-300 text-zinc-400 cursor-not-allowed dark:border-zinc-700 dark:text-zinc-500"
+                        : "border-green-600 text-green-700 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-500/10")
+                    }
+                    onClick={() => {
+                      if (isSavedMode && !editingSaved) return;
+                      setEditingMessageId(null);
+                      const initial = "<p><br/></p>";
+                      setMessageEditorInitialHtml(initial);
+                      setNewMessageText(initial);
+                      setNewMessagePermanent(true);
+                      setIsAddMessageOpen(true);
+                    }}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                      <path d="M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z" />
+                    </svg>
+                    הוסף הודעה
+                  </button>
+                </div>
+
+                {messagesLoading ? (
+                  <div className="text-sm text-zinc-500">טוען...</div>
+                ) : visibleMessages.length === 0 ? (
+                  <div className="text-sm text-zinc-500">אין הודעות</div>
+                ) : (
+                  <div className="space-y-2">
+                    {visibleMessages.map((m) => (
+                      <div key={m.id} className="rounded-md border p-3 dark:border-zinc-700">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="text-sm text-zinc-800 dark:text-zinc-100" dir="rtl">
+                            {(() => {
+                              const raw = String(m.text || "");
+                              if (isProbablyHtml(raw)) {
+                                const clean = sanitizeMessageHtml(raw);
+                                return <div className="prose prose-sm max-w-none dark:prose-invert" dangerouslySetInnerHTML={{ __html: clean }} />;
+                              }
+                              return (
+                                <ReactMarkdown
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                    ul: ({ children }) => <ul className="mb-2 list-disc pr-5">{children}</ul>,
+                                    ol: ({ children }) => <ol className="mb-2 list-decimal pr-5">{children}</ol>,
+                                    li: ({ children }) => <li className="mb-1 last:mb-0">{children}</li>,
+                                    a: ({ children, href }) => (
+                                      <a className="underline decoration-dotted" href={href} target="_blank" rel="noreferrer">
+                                        {children}
+                                      </a>
+                                    ),
+                                    table: ({ children }) => (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full border-collapse text-sm">{children}</table>
+                                      </div>
+                                    ),
+                                    th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
+                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
+                                  }}
+                                >
+                                  {raw}
+                                </ReactMarkdown>
+                              );
+                            })()}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={isSavedMode && !editingSaved}
+                              className={
+                                "rounded-md border px-3 py-1 text-sm " +
+                                ((isSavedMode && !editingSaved)
+                                  ? "cursor-not-allowed opacity-50 dark:border-zinc-700"
+                                  : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                              }
+                              onClick={() => {
+                                if (isSavedMode && !editingSaved) return;
+                                setEditingMessageId(m.id);
+                                const initial = toEditorHtml(String(m.text || ""));
+                                setMessageEditorInitialHtml(initial);
+                                setNewMessageText(initial);
+                                setNewMessagePermanent(m.scope === "global");
+                                setIsAddMessageOpen(true);
+                              }}
+                            >
+                              ערוך
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavedMode && !editingSaved}
+                              className={
+                                "rounded-md px-3 py-1 text-sm text-white " +
+                                ((isSavedMode && !editingSaved) ? "bg-red-300 cursor-not-allowed" : "bg-red-600 hover:bg-red-700")
+                              }
+                              onClick={async () => {
+                                if (isSavedMode && !editingSaved) return;
+                                const siteId = Number(params.id);
+                                const wk = isoYMD(weekStart);
+                                if (!siteId) return;
+                                try {
+                                  await apiFetch<string>(`/director/sites/${siteId}/messages/${m.id}?week=${encodeURIComponent(wk)}`, {
+                                    method: "DELETE",
+                                    headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                                  });
+                                } catch {}
+                                await refreshMessages();
+                              }}
+                            >
+                              מחק
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-3">
+                          <label className="inline-flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
+                            <input
+                              type="checkbox"
+                              checked={m.scope === "global"}
+                              disabled={isSavedMode && !editingSaved}
+                              onChange={async (e) => {
+                                if (isSavedMode && !editingSaved) return;
+                                const siteId = Number(params.id);
+                                const wk = isoYMD(weekStart);
+                                if (!siteId) return;
+                                const scope = e.target.checked ? "global" : "week";
+                                try {
+                                  const res = await apiFetch<OptionalMessage[]>(
+                                    `/director/sites/${siteId}/messages/${m.id}`,
+                                    {
+                                      method: "PATCH",
+                                      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                                      body: JSON.stringify({ scope, week_iso: wk }),
+                                    }
+                                  );
+                                  setMessages(Array.isArray(res) ? res : []);
+                                } catch {}
+                              }}
+                            />
+                            קבוע
+                          </label>
+                          <span className="text-xs text-zinc-500">
+                            {m.scope === "global" ? "לכל השבועות הבאים" : "לשבוע זה בלבד"}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {isAddMessageOpen && !(isSavedMode && !editingSaved) && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeMessageModal}>
+                  <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-lg font-semibold">{editingMessageId ? "עריכת הודעה" : "הוסף הודעה"}</div>
+                      <button
+                        type="button"
+                        className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                        onClick={closeMessageModal}
+                        aria-label="סגור"
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="rounded-md border dark:border-zinc-700">
+                      <div className="flex flex-wrap items-center gap-2 border-b p-2 dark:border-zinc-700">
+                        {(() => {
+                          const btn = (active: boolean) =>
+                            "rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800 " +
+                            (active ? "border-2 font-bold text-zinc-900 dark:text-zinc-100" : "text-zinc-700 dark:text-zinc-200");
+                          const md = (fn: () => void) => (e: any) => { e.preventDefault(); e.stopPropagation(); fn(); };
+                          const isBold = !!messageEditor?.isActive("bold");
+                          const isItalic = !!messageEditor?.isActive("italic");
+                          const isUnderline = !!messageEditor?.isActive("underline");
+                          const isH2 = !!messageEditor?.isActive("heading", { level: 2 });
+                          const isBullet = !!messageEditor?.isActive("bulletList");
+                          const isOrdered = !!messageEditor?.isActive("orderedList");
+                          const isLink = !!messageEditor?.isActive("link");
+                          const isHighlight = !!messageEditor?.isActive("highlight");
+                          return (
+                            <>
+                              <button type="button" className={btn(isBold)} onMouseDown={md(() => messageEditor?.chain().focus().toggleBold().run())}>B</button>
+                              <button type="button" className={btn(isItalic) + " italic"} onMouseDown={md(() => messageEditor?.chain().focus().toggleItalic().run())}>I</button>
+                              <button type="button" className={btn(isUnderline) + " underline"} onMouseDown={md(() => messageEditor?.chain().focus().toggleUnderline().run())}>U</button>
+                              <button type="button" className={btn(isH2)} onMouseDown={md(() => messageEditor?.chain().focus().toggleHeading({ level: 2 }).run())}>H2</button>
+                              <button type="button" className={btn(isBullet)} onMouseDown={md(() => messageEditor?.chain().focus().toggleBulletList().run())}>•</button>
+                              <button type="button" className={btn(isOrdered)} onMouseDown={md(() => messageEditor?.chain().focus().toggleOrderedList().run())}>1.</button>
+
+                              <div className="mx-1 h-6 w-px bg-zinc-200 dark:bg-zinc-700" />
+
+                              <button
+                                type="button"
+                                className={btn(isLink)}
+                                onMouseDown={md(() => {
+                                  const url = window.prompt("כתובת קישור (URL):", "https://");
+                                  if (!url) return;
+                                  messageEditor?.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
+                                })}
+                              >
+                                🔗
+                              </button>
+
+                              <div className="mx-1 h-6 w-px bg-zinc-200 dark:bg-zinc-700" />
+
+                              <button
+                                type="button"
+                                className={btn(isHighlight)}
+                                style={{ borderColor: messageHighlightColor, color: messageHighlightColor }}
+                                onMouseDown={md(() => messageEditor?.chain().focus().toggleHighlight({ color: messageHighlightColor }).run())}
+                              >
+                                HL
+                              </button>
+                              <input
+                                type="color"
+                                value={messageHighlightColor}
+                                onChange={(e) => setMessageHighlightColor(e.target.value)}
+                                className="h-8 w-10 cursor-pointer rounded-md border dark:border-zinc-700"
+                                title="צבע סימון"
+                              />
+
+                              <button
+                                type="button"
+                                className={btn(false)}
+                                style={{ borderColor: messageTextColor, color: messageTextColor }}
+                                onMouseDown={md(() => messageEditor?.chain().focus().setColor(messageTextColor).run())}
+                              >
+                                A
+                              </button>
+                              <input
+                                type="color"
+                                value={messageTextColor}
+                                onChange={(e) => setMessageTextColor(e.target.value)}
+                                className="h-8 w-10 cursor-pointer rounded-md border dark:border-zinc-700"
+                                title="צבע טקסט"
+                              />
+                            </>
+                          );
+                        })()}
+                      </div>
+                      {messageEditor ? (
+                        <EditorContent editor={messageEditor} />
+                      ) : (
+                        <div className="min-h-32 bg-white px-3 py-2 text-sm text-zinc-500 dark:bg-zinc-900">טוען...</div>
+                      )}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3">
+                      <label className="inline-flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
+                        <input type="checkbox" checked={newMessagePermanent} onChange={(e) => setNewMessagePermanent(e.target.checked)} />
+                        קבוע (לכל השבועות הבאים)
+                      </label>
+                      <span className="text-xs text-zinc-500">{newMessagePermanent ? "קבוע" : "לשבוע זה בלבד"}</span>
+                    </div>
+                    <div className="mt-4 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                        onClick={closeMessageModal}
+                      >
+                        ביטול
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                        onClick={async () => {
+                          const txt = newMessageText.trim();
+                          if (!txt) return;
+                          const siteId = Number(params.id);
+                          if (!siteId) return;
+                          const wk = isoYMD(weekStart);
+
+                          const targetScope: OptionalMessage["scope"] = newMessagePermanent ? "global" : "week";
+                          try {
+                            if (editingMessageId) {
+                              const res = await apiFetch<OptionalMessage[]>(
+                                `/director/sites/${siteId}/messages/${editingMessageId}`,
+                                {
+                                  method: "PATCH",
+                                  headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                                  body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
+                                }
+                              );
+                              setMessages(Array.isArray(res) ? res : []);
+                              closeMessageModal();
+                              return;
+                            }
+                            await apiFetch<OptionalMessage>(
+                              `/director/sites/${siteId}/messages`,
+                              {
+                                method: "POST",
+                                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                                body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
+                              }
+                            );
+                          } catch {}
+                          closeMessageModal();
+                          await refreshMessages();
+                        }}
+                      >
+                        {editingMessageId ? "שמור" : "הוסף"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
               {!isManual && (
@@ -5748,6 +6969,9 @@ export default function PlanningPage() {
                     onClick={() => {
                       const next = (altIndex - 1 + total) % total;
                       setAltIndex(next);
+                      // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
+                      setPullsByHoleKey({});
+                      setPullsEditor(null);
                       if (next === 0) {
                         setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
                       } else {
@@ -5771,6 +6995,9 @@ export default function PlanningPage() {
                     onClick={() => {
                       const next = (altIndex + 1) % total;
                       setAltIndex(next);
+                      // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
+                      setPullsByHoleKey({});
+                      setPullsEditor(null);
                       if (next === 0) {
                         setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
                       } else {
@@ -5792,6 +7019,321 @@ export default function PlanningPage() {
           </div>
         );
       })()}
+
+      {/* Pulls editor (משיכות) */}
+      {pullsEditor && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setPullsEditor(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-lg font-semibold">משיכות</div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setPullsEditor(null)}
+                aria-label="סגור"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+              </button>
+            </div>
+
+            <div className="text-sm text-zinc-600 dark:text-zinc-300 mb-3">
+              {(() => {
+                const dayLabels: Record<string, string> = {
+                  sun: "א'",
+                  mon: "ב'",
+                  tue: "ג'",
+                  wed: "ד'",
+                  thu: "ה'",
+                  fri: "ו'",
+                  sat: "ש'",
+                };
+                const dayLabel = dayLabels[pullsEditor.dayKey] || pullsEditor.dayKey;
+                return `${dayLabel} • ${pullsEditor.shiftName} • עמדה ${pullsEditor.stationIdx + 1}`;
+              })()}
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-md border p-3 dark:border-zinc-700">
+                <div className="mb-2 text-sm font-medium">{pullsEditor.beforeName}</div>
+                {(pullsEditor.beforeOptions || []).length > 1 && (
+                  <div className="mb-3">
+                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (לפני)</div>
+                    <select
+                      value={pullsEditor.beforeName}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeName: e.target.value } : p))}
+                      size={Math.min(4, Math.max(2, (pullsEditor.beforeOptions || []).length))}
+                      className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
+                    >
+                      {(pullsEditor.beforeOptions || []).map((nm) => (
+                        <option key={nm} value={nm}>
+                          {nm}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-xs text-zinc-500">
+                    התחלה
+                    <input
+                      type="time"
+                      step="60"
+                      dir="ltr"
+                      inputMode="numeric"
+                      value={pullsEditor.beforeStart}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeStart: e.target.value } : p))}
+                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-500">
+                    סיום
+                    <input
+                      type="time"
+                      step="60"
+                      dir="ltr"
+                      inputMode="numeric"
+                      value={pullsEditor.beforeEnd}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeEnd: e.target.value } : p))}
+                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="rounded-md border p-3 dark:border-zinc-700">
+                <div className="mb-2 text-sm font-medium">{pullsEditor.afterName}</div>
+                {(pullsEditor.afterOptions || []).length > 1 && (
+                  <div className="mb-3">
+                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (אחרי)</div>
+                    <select
+                      value={pullsEditor.afterName}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterName: e.target.value } : p))}
+                      size={Math.min(4, Math.max(2, (pullsEditor.afterOptions || []).length))}
+                      className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
+                    >
+                      {(pullsEditor.afterOptions || []).map((nm) => (
+                        <option key={nm} value={nm}>
+                          {nm}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-xs text-zinc-500">
+                    התחלה
+                    <input
+                      type="time"
+                      step="60"
+                      dir="ltr"
+                      inputMode="numeric"
+                      value={pullsEditor.afterStart}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterStart: e.target.value } : p))}
+                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                    />
+                  </label>
+                  <label className="text-xs text-zinc-500">
+                    סיום
+                    <input
+                      type="time"
+                      step="60"
+                      dir="ltr"
+                      inputMode="numeric"
+                      value={pullsEditor.afterEnd}
+                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterEnd: e.target.value } : p))}
+                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                onClick={() => {
+                  const p = pullsEditor;
+                  if (!p) return;
+                  const existing: any = (pullsByHoleKey as any)?.[p.key];
+                  if (!existing) {
+                    setPullsEditor(null);
+                    return;
+                  }
+
+                  // Retirer l'entrée de pulls
+                  setPullsByHoleKey((prev) => {
+                    const next: any = { ...(prev || {}) };
+                    delete next[p.key];
+                    return next;
+                  });
+
+                  // Retirer aussi les noms de la case (si pas utilisés par d'autres משיכות de la même case)
+                  const cellPrefix = `${p.dayKey}|${p.shiftName}|${p.stationIdx}|`;
+                  const others: any[] = Object.entries(pullsByHoleKey || {})
+                    .filter(([k]) => String(k).startsWith(cellPrefix) && String(k) !== String(p.key))
+                    .map(([, e]) => e as any);
+                  const keep = new Set<string>();
+                  others.forEach((e) => {
+                    if (e?.before?.name) keep.add(String(e.before.name).trim());
+                    if (e?.after?.name) keep.add(String(e.after.name).trim());
+                  });
+                  const removeNames = [
+                    String(existing?.before?.name || "").trim(),
+                    String(existing?.after?.name || "").trim(),
+                  ].filter(Boolean);
+
+                  const baseAssignments: any = isManual ? (manualAssignments || {}) : (aiPlan?.assignments || {});
+                  const existingCell: any = baseAssignments?.[p.dayKey]?.[p.shiftName]?.[p.stationIdx];
+                  const curNames: string[] = Array.isArray(existingCell)
+                    ? (existingCell as any[]).map((x) => String(x || "").trim()).filter(Boolean)
+                    : [];
+                  const nextNames = curNames.filter((nm) => !removeNames.includes(nm) || keep.has(nm));
+
+                  const nextAssignments = JSON.parse(JSON.stringify(baseAssignments || {}));
+                  nextAssignments[p.dayKey] = nextAssignments[p.dayKey] || {};
+                  nextAssignments[p.dayKey][p.shiftName] = Array.isArray(nextAssignments[p.dayKey][p.shiftName]) ? nextAssignments[p.dayKey][p.shiftName] : [];
+                  while (nextAssignments[p.dayKey][p.shiftName].length <= p.stationIdx) nextAssignments[p.dayKey][p.shiftName].push([]);
+                  nextAssignments[p.dayKey][p.shiftName][p.stationIdx] = nextNames;
+                  if (isManual) {
+                    setManualAssignments(nextAssignments);
+                  } else {
+                    setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: nextAssignments } : prev));
+                  }
+
+                  setPullsEditor(null);
+                }}
+              >
+                מחק
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setPullsEditor(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  const p = pullsEditor;
+                  if (!p) return;
+                  // Valider que les horaires restent dans la plage de la garde (gère aussi les gardes qui traversent minuit)
+                  const toMinutesLocal = (t: string): number | null => {
+                    const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+                    if (!m) return null;
+                    const hh = Number(m[1]);
+                    const mm = Number(m[2]);
+                    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+                    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+                    return hh * 60 + mm;
+                  };
+                  const s0 = toMinutesLocal(p.shiftStart);
+                  const e0 = toMinutesLocal(p.shiftEnd);
+                  const bS0 = toMinutesLocal(p.beforeStart);
+                  const bE0 = toMinutesLocal(p.beforeEnd);
+                  const aS0 = toMinutesLocal(p.afterStart);
+                  const aE0 = toMinutesLocal(p.afterEnd);
+                  if ([s0, e0, bS0, bE0, aS0, aE0].some((x) => x == null)) {
+                    toast.error("שעות לא תקינות", { description: "פורמט השעה חייב להיות HH:MM" });
+                    return;
+                  }
+                  const s = s0 as number;
+                  let e = e0 as number;
+                  const crossesMidnight = e <= s;
+                  if (crossesMidnight) e += 24 * 60;
+                  const abs = (m: number) => (crossesMidnight && m < s ? m + 24 * 60 : m);
+                  const within = (m: number) => {
+                    const am = abs(m);
+                    return am >= s && am <= e;
+                  };
+                  const okRange = (startM: number, endM: number) => within(startM) && within(endM) && abs(startM) <= abs(endM);
+                  if (!okRange(bS0 as number, bE0 as number) || !okRange(aS0 as number, aE0 as number)) {
+                    toast.error("שעות לא תקינות", { description: "השעות חייבות להיות בתוך טווח המשמרת" });
+                    return;
+                  }
+                  const maxEach = 4 * 60;
+                  const durBefore = abs(bE0 as number) - abs(bS0 as number);
+                  const durAfter = abs(aE0 as number) - abs(aS0 as number);
+                  if (durBefore > maxEach || durAfter > maxEach) {
+                    toast.error("שעות לא תקינות", { description: "מקסימום 4 שעות לכל עובד במשיכה" });
+                    return;
+                  }
+                  // Appliquer l'assignation: on AJOUTE une paire (avant+après) sans écraser le reste,
+                  // pour permettre plusieurs משיכות dans une même case (si slots vides disponibles).
+                  if ((p.beforeName || "").trim() === (p.afterName || "").trim()) {
+                    toast.error("שעות לא תקינות", { description: "בחר שני עובדים שונים" });
+                    return;
+                  }
+                  const req = Number((p as any).required || 0);
+                  if (!req || req <= 0) {
+                    toast.error("לא ניתן ליצור משיכות", { description: "המשמרת לא פעילה / לא נדרש" });
+                    return;
+                  }
+                  const baseAssignments: any = isManual ? (manualAssignments || {}) : (aiPlan?.assignments || {});
+                  const existingCell: any = baseAssignments?.[p.dayKey]?.[p.shiftName]?.[p.stationIdx];
+                  let names: string[] = Array.isArray(existingCell) ? (existingCell as any[]).map((x) => String(x || "").trim()).filter(Boolean) : [];
+                  const cellPrefix = `${p.dayKey}|${p.shiftName}|${p.stationIdx}|`;
+                  const oldEntry: any = (pullsByHoleKey as any)?.[p.key] || null;
+                  const othersEntries: Array<[string, any]> = Object.entries(pullsByHoleKey || {})
+                    .filter(([k]) => String(k).startsWith(cellPrefix) && String(k) !== String(p.key))
+                    .map(([k, e]) => [String(k), e as any]);
+                  const others: any[] = othersEntries.map(([, e]) => e);
+                  const usedElsewhere = (nm: string) => others.some((e) => e?.before?.name === nm || e?.after?.name === nm);
+                  const pullsCountOther = othersEntries.length;
+                  const pullsCountCurrent = oldEntry ? 1 : 0;
+                  const pullsCountNew = oldEntry ? pullsCountOther + 1 : pullsCountOther + 1; // après save, cette clé existera
+                  if (oldEntry?.before?.name || oldEntry?.after?.name) {
+                    const oldBefore = String(oldEntry?.before?.name || "").trim();
+                    const oldAfter = String(oldEntry?.after?.name || "").trim();
+                    const keep = new Set<string>([String(p.beforeName || "").trim(), String(p.afterName || "").trim()]);
+                    // Si on modifie une משיכה existante, retirer les anciens noms (si pas utilisés ailleurs)
+                    if (oldBefore && !keep.has(oldBefore) && !usedElsewhere(oldBefore)) names = names.filter((x) => x !== oldBefore);
+                    if (oldAfter && !keep.has(oldAfter) && !usedElsewhere(oldAfter)) names = names.filter((x) => x !== oldAfter);
+                  }
+                  const toAdd = [String(p.beforeName || "").trim(), String(p.afterName || "").trim()].filter(Boolean).filter((x) => !names.includes(x));
+                  const nextNames = [...names, ...toAdd];
+                  // Capacité: une משיכה (2 personnes) compte comme 1 place => max noms = req + pullsCount
+                  const maxNamesAllowed = req + pullsCountNew;
+                  if (nextNames.length > maxNamesAllowed) {
+                    toast.error("לא ניתן ליצור משיכות", { description: "אין מספיק מקום בעמדה" });
+                    return;
+                  }
+                  const nextAssignments = JSON.parse(JSON.stringify(baseAssignments || {}));
+                  nextAssignments[p.dayKey] = nextAssignments[p.dayKey] || {};
+                  nextAssignments[p.dayKey][p.shiftName] = Array.isArray(nextAssignments[p.dayKey][p.shiftName]) ? nextAssignments[p.dayKey][p.shiftName] : [];
+                  while (nextAssignments[p.dayKey][p.shiftName].length <= p.stationIdx) nextAssignments[p.dayKey][p.shiftName].push([]);
+                  nextAssignments[p.dayKey][p.shiftName][p.stationIdx] = nextNames;
+                  if (isManual) {
+                    setManualAssignments(nextAssignments);
+                  } else {
+                    setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: nextAssignments } : prev));
+                  }
+                  setPullsByHoleKey((prev) => ({
+                    ...(prev || {}),
+                    [p.key]: {
+                      before: { name: p.beforeName, start: p.beforeStart, end: p.beforeEnd },
+                      after: { name: p.afterName, start: p.afterStart, end: p.afterEnd },
+                    },
+                  }));
+                  setPullsEditor(null);
+                }}
+              >
+                שמור
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

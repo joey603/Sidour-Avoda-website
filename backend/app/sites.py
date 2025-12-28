@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import re
 
 from .deps import require_role, get_db
-from .models import Site, SiteAssignment, SiteWorker, User, UserRole
+from .models import Site, SiteAssignment, SiteWorker, SiteMessage, User, UserRole
 from .schemas import (
     SiteCreate,
     SiteOut,
@@ -20,6 +20,9 @@ from .schemas import (
     AIPlanningResponse,
     UserOut,
     CreateWorkerUserRequest,
+    SiteMessageCreate,
+    SiteMessageUpdate,
+    SiteMessageOut,
 )
 from .ai_solver import solve_schedule, solve_schedule_stream
 from passlib.context import CryptContext
@@ -30,6 +33,217 @@ logger = logging.getLogger("ai_solver")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/director/sites", tags=["sites"])
+
+
+_WEEK_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_week_iso(week_iso: str) -> str:
+    wk = (week_iso or "").strip()
+    if not _WEEK_ISO_RE.match(wk):
+        raise HTTPException(status_code=400, detail="week_iso invalide (YYYY-MM-DD)")
+    return wk
+
+
+def _now_ms() -> int:
+    import time
+    return int(time.time() * 1000)
+
+
+def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    if site.director_id != director_id:
+        raise HTTPException(status_code=403, detail="Accès interdit")
+    return site
+
+
+@router.get("/{site_id}/messages", response_model=list[SiteMessageOut])
+def list_site_messages(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(week)
+    rows = (
+        db.query(SiteMessage)
+        .filter(SiteMessage.site_id == site_id)
+        .filter(
+            (SiteMessage.scope == "week") & (SiteMessage.created_week_iso == wk)
+            | (
+                (SiteMessage.scope == "global")
+                & (SiteMessage.created_week_iso <= wk)
+                & ((SiteMessage.stopped_week_iso.is_(None)) | (wk < SiteMessage.stopped_week_iso))
+            )
+        )
+        .order_by(SiteMessage.created_at.asc(), SiteMessage.id.asc())
+        .all()
+    )
+    return rows
+
+
+@router.post("/{site_id}/messages", response_model=SiteMessageOut, status_code=201)
+def create_site_message(
+    site_id: int,
+    payload: SiteMessageCreate,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(payload.week_iso)
+    now = _now_ms()
+    msg = SiteMessage(
+        site_id=site_id,
+        scope=payload.scope,
+        text=(payload.text or "").strip(),
+        created_week_iso=wk,
+        stopped_week_iso=None,
+        origin_id=None,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+@router.patch("/{site_id}/messages/{message_id}", response_model=list[SiteMessageOut])
+def update_site_message(
+    site_id: int,
+    message_id: int,
+    payload: SiteMessageUpdate,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(payload.week_iso)
+    now = _now_ms()
+    msg = db.get(SiteMessage, message_id)
+    if not msg or msg.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Message introuvable")
+
+    new_text = (payload.text.strip() if isinstance(payload.text, str) else None)
+    new_scope = payload.scope
+
+    # Week message updates: only this week.
+    if msg.scope == "week":
+        if new_scope is None or new_scope == "week":
+            if new_text is not None:
+                msg.text = new_text
+                msg.updated_at = now
+            db.commit()
+        else:
+            # week -> global: start global from this week, remove week msg to avoid duplicates
+            text_for_global = new_text if new_text is not None else msg.text
+            db.delete(msg)
+            db.add(
+                SiteMessage(
+                    site_id=site_id,
+                    scope="global",
+                    text=text_for_global,
+                    created_week_iso=wk,
+                    stopped_week_iso=None,
+                    origin_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+
+        return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+    # Global message updates: non retroactive.
+    if msg.scope == "global":
+        target_scope = new_scope or "global"
+
+        if target_scope == "week":
+            # Stop global at this week (exclusive), and create/update a week clone for this week
+            cur_stop = (msg.stopped_week_iso or "").strip()
+            msg.stopped_week_iso = (cur_stop if (cur_stop and cur_stop < wk) else wk) if cur_stop else wk
+            msg.updated_at = now
+
+            # Upsert week clone (origin_id=global id, created_week_iso=wk)
+            clone = (
+                db.query(SiteMessage)
+                .filter(SiteMessage.site_id == site_id)
+                .filter(SiteMessage.scope == "week")
+                .filter(SiteMessage.created_week_iso == wk)
+                .filter(SiteMessage.origin_id == msg.id)
+                .first()
+            )
+            clone_text = new_text if new_text is not None else msg.text
+            if clone:
+                clone.text = clone_text
+                clone.updated_at = now
+            else:
+                db.add(
+                    SiteMessage(
+                        site_id=site_id,
+                        scope="week",
+                        text=clone_text,
+                        created_week_iso=wk,
+                        stopped_week_iso=None,
+                        origin_id=msg.id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            db.commit()
+            return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+        # target_scope == global
+        if new_text is None:
+            return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+        # If editing a future week relative to creation, create a new version from this week.
+        if (msg.created_week_iso or "") < wk:
+            cur_stop = (msg.stopped_week_iso or "").strip()
+            msg.stopped_week_iso = (cur_stop if (cur_stop and cur_stop < wk) else wk) if cur_stop else wk
+            msg.updated_at = now
+            db.add(
+                SiteMessage(
+                    site_id=site_id,
+                    scope="global",
+                    text=new_text,
+                    created_week_iso=wk,
+                    stopped_week_iso=None,
+                    origin_id=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+            return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+        # Same week creation -> update in place
+        msg.text = new_text
+        msg.updated_at = now
+        db.commit()
+        return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+    return list_site_messages(site_id=site_id, week=wk, user=user, db=db)  # type: ignore[arg-type]
+
+
+@router.delete("/{site_id}/messages/{message_id}", status_code=204)
+def delete_site_message(
+    site_id: int,
+    message_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    _validate_week_iso(week)
+    msg = db.get(SiteMessage, message_id)
+    if not msg or msg.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Message introuvable")
+    db.delete(msg)
+    db.commit()
+    return Response(status_code=204)
 
 
 def validate_site_config(config: dict):
@@ -169,7 +383,7 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
                     phone = u.phone
                     logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Exact name match with User '{u.full_name}' (id={u.id}, phone={phone})")
                     break
-            
+        
             # Si pas trouvé, essayer une recherche plus flexible
             if not user_worker and worker_name_clean:
                 for u in all_workers:
