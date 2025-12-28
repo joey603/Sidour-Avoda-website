@@ -4233,6 +4233,18 @@ export default function PlanningPage() {
                           <button
                             type="button"
                             onClick={() => {
+                              // Si une משיכה a été enregistrée sur cette עמדה, la supprimer lors de l'איפוס עמדה
+                              setPullsByHoleKey((prev) => {
+                                const next: Record<string, PullEntry> = {};
+                                Object.entries(prev || {}).forEach(([k, v]) => {
+                                  const parts = String(k).split("|");
+                                  const stationIdx = parts.length >= 3 ? parts[2] : "";
+                                  if (String(stationIdx) !== String(idx)) next[k] = v as any;
+                                });
+                                return next;
+                              });
+                              setPullsEditor(null);
+
                               if (isManual) {
                                 setManualAssignments((prev) => {
                                   if (!prev) return prev;
@@ -6601,6 +6613,8 @@ export default function PlanningPage() {
                             setGenUseFixed(false);
                             setShowGenDialog(false);
                             // Vider la grille puis lancer
+                            setPullsByHoleKey({});
+                            setPullsEditor(null);
                             setManualAssignments(null);
                             setAiPlan(null);
                             // Ensure the generate button exists (auto mode)
@@ -6725,6 +6739,8 @@ export default function PlanningPage() {
                 className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                             onClick={() => {
                   // Reset grid when switching
+                  setPullsByHoleKey({});
+                  setPullsEditor(null);
                   if (modeSwitchTarget === "auto") {
                     setAiPlan(null);
                     setIsManual(false);
