@@ -356,7 +356,8 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         db.query(Site.id, Site.name, Site.config, func.count(SiteWorker.id).label("workers_count"))
         .outerjoin(SiteWorker, SiteWorker.site_id == Site.id)
         .filter(Site.director_id == user.id)
-        .group_by(Site.id)
+        # Postgres exige que toutes les colonnes non agrégées soient dans le GROUP BY
+        .group_by(Site.id, Site.name, Site.config)
         .all()
     )
     return [SiteOut(id=r.id, name=r.name, workers_count=r.workers_count, config=r.config) for r in rows]
