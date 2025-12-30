@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
@@ -4014,7 +4015,7 @@ export default function PlanningPage() {
                         const lastDay = new Date(year, month + 1, 0);
                         const startDate = new Date(firstDay);
                         startDate.setDate(startDate.getDate() - firstDay.getDay()); // Start from Sunday
-                        const days: JSX.Element[] = [];
+                        const days: ReactElement[] = [];
                         const today = new Date();
                         today.setHours(0, 0, 0, 0);
                         
