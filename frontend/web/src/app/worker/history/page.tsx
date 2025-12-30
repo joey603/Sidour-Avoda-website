@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, Fragment } from "react";
+import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -373,7 +374,7 @@ export default function WorkerHistoryPage() {
                   const firstDay = new Date(year, month, 1);
                   const startDate = new Date(firstDay);
                   startDate.setDate(startDate.getDate() - firstDay.getDay());
-                  const days: JSX.Element[] = [];
+                  const days: ReactElement[] = [];
                   const today = new Date();
                   today.setHours(0, 0, 0, 0);
                   
