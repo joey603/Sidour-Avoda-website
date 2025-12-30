@@ -352,15 +352,21 @@ def normalize_site_config(config: dict) -> dict:
 
 @router.get("/", response_model=list[SiteOut])
 def list_sites(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
-    rows = (
-        db.query(Site.id, Site.name, Site.config, func.count(SiteWorker.id).label("workers_count"))
-        .outerjoin(SiteWorker, SiteWorker.site_id == Site.id)
+    # En Postgres, le type JSON n'a pas d'opérateur d'égalité → impossible de GROUP BY sur sites.config.
+    # On fait donc 2 requêtes simples et on assemble côté Python.
+    sites = db.query(Site).filter(Site.director_id == user.id).all()
+    counts_rows = (
+        db.query(SiteWorker.site_id, func.count(SiteWorker.id).label("workers_count"))
+        .join(Site, Site.id == SiteWorker.site_id)
         .filter(Site.director_id == user.id)
-        # Postgres exige que toutes les colonnes non agrégées soient dans le GROUP BY
-        .group_by(Site.id, Site.name, Site.config)
+        .group_by(SiteWorker.site_id)
         .all()
     )
-    return [SiteOut(id=r.id, name=r.name, workers_count=r.workers_count, config=r.config) for r in rows]
+    counts = {r.site_id: int(r.workers_count or 0) for r in counts_rows}
+    return [
+        SiteOut(id=s.id, name=s.name, workers_count=counts.get(s.id, 0), config=s.config)
+        for s in sites
+    ]
 
 
 @router.post("/", response_model=SiteOut, status_code=201)
