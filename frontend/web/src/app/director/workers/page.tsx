@@ -10,6 +10,7 @@ interface Worker {
   id: number;
   site_id: number;
   name: string;
+  phone?: string | null;
   max_shifts: number;
   roles: string[];
   availability: Record<string, string[]>;
@@ -77,11 +78,18 @@ export default function WorkersList() {
     return site?.name || `אתר #${siteId}`;
   };
 
+  const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
+
   const filteredWorkers = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
     if (!q) return workers;
-    return (workers || []).filter((w) => (w?.name || "").toLowerCase().includes(q));
-  }, [workers, query]);
+    return (workers || []).filter((w) => {
+      const name = String(w?.name || "").toLowerCase();
+      const phone = String((w as any)?.phone || "").toLowerCase();
+      const siteName = String(getSiteName(Number(w?.site_id))).toLowerCase();
+      return name.includes(q) || phone.includes(q) || siteName.includes(q);
+    });
+  }, [workers, query, sites]);
 
   async function handleAddWorker() {
     console.log("[handleAddWorker] Function called with:", { selectedSiteId, name: newWorkerName, phone: newWorkerPhone });
@@ -211,8 +219,8 @@ export default function WorkersList() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="חיפוש עובד לפי שם"
-                aria-label="חיפוש עובד"
+                placeholder="חיפוש לפי שם / טלפון / אתר"
+                aria-label="חיפוש עובד לפי שם, טלפון או אתר"
                   className="h-9 w-full rounded-md border pl-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
               />
               </div>
@@ -264,8 +272,14 @@ export default function WorkersList() {
                 <div className="divide-y">
                   {filteredWorkers.map((worker) => (
                     <div key={worker.id} className="flex items-center justify-between py-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="font-medium">{worker.name}</span>
+                      <div className="flex flex-col gap-1 flex-1 min-w-0">
+                        <span
+                          className={"font-medium block w-full truncate text-right self-end"}
+                          dir={isRtlName(worker.name) ? "rtl" : "ltr"}
+                          title={worker.name}
+                        >
+                          {worker.name}
+                        </span>
                         <span className="text-sm text-zinc-500">אתר: {getSiteName(worker.site_id)}</span>
                         {worker.roles && worker.roles.length > 0 && (
                           <span className="text-sm text-zinc-500">תפקידים: {worker.roles.join(", ")}</span>
@@ -291,9 +305,17 @@ export default function WorkersList() {
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {filteredWorkers.map((worker) => (
                     <div key={worker.id} className="rounded-xl border p-4 dark:border-zinc-800">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="text-base font-semibold">{worker.name}</span>
-                        <span className="text-sm text-zinc-500">{getSiteName(worker.site_id)}</span>
+                      <div className="mb-2 min-w-0">
+                        <div className="flex justify-end min-w-0">
+                          <span
+                            className="text-base font-semibold truncate min-w-0 w-full text-right"
+                            dir={isRtlName(worker.name) ? "rtl" : "ltr"}
+                            title={worker.name}
+                          >
+                            {worker.name}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 text-sm text-zinc-500 text-right">{getSiteName(worker.site_id)}</div>
                       </div>
                       {worker.roles && worker.roles.length > 0 && (
                         <div className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">תפקידים: {worker.roles.join(", ")}</div>

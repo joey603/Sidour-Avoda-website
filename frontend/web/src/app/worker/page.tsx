@@ -24,6 +24,8 @@ const dayLabels: Record<string, string> = {
   sat: "שבת",
 };
 
+const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
+
 export default function WorkerDashboard() {
   const router = useRouter();
   const [name, setName] = useState<string>("");
@@ -673,23 +675,56 @@ export default function WorkerDashboard() {
                                                                 ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
+                                                            const chipClass =
+                                                              "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                              (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className={
-                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
-                                                                    (pullTxt ? "ring-2 ring-orange-400 " : "")
-                                                                  }
+                                                                  className={chipClass}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
-                                                                    <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    <span
+                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                    >
+                                                                      {nm}
+                                                                    </span>
                                                                     {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
                                                                 </span>
+
+                                                                {/* Expansion animée au survol (menu worker) */}
+                                                                <div
+                                                                  aria-hidden
+                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                                >
+                                                                  <span
+                                                                    className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
+                                                                    style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  >
+                                                                    <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
+                                                                      {rn ? (
+                                                                        <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                      ) : null}
+                                                                      <span
+                                                                        className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                        dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                      >
+                                                                        {nm}
+                                                                      </span>
+                                                                      {pullTxt ? (
+                                                                        <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
+                                                                          {pullTxt}
+                                                                        </span>
+                                                                      ) : null}
+                                                                    </span>
+                                                                  </span>
+                                                                </div>
                                                               </div>
                                                             );
                                                           });
@@ -742,8 +777,17 @@ export default function WorkerDashboard() {
                                         return (
                                           <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
                                             <td className="px-2 py-2 w-64">
-                                              <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                                {nm}
+                                              <span
+                                                className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm max-w-full min-w-0"
+                                                style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
+                                              >
+                                                <span
+                                                  className={"truncate min-w-0 " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                  title={nm}
+                                                >
+                                                  {nm}
+                                                </span>
                                               </span>
                                             </td>
                                             <td className="px-2 py-2 w-28">{c}</td>
@@ -932,23 +976,56 @@ export default function WorkerDashboard() {
                                                                 ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
+                                                            const chipClass =
+                                                              "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                              (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className={
-                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
-                                                                    (pullTxt ? "ring-2 ring-orange-400 " : "")
-                                                                  }
+                                                                  className={chipClass}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
-                                                                    <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    <span
+                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                    >
+                                                                      {nm}
+                                                                    </span>
                                                                     {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
                                                                 </span>
+
+                                                                {/* Expansion animée au survol (menu worker) */}
+                                                                <div
+                                                                  aria-hidden
+                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                                >
+                                                                  <span
+                                                                    className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
+                                                                    style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  >
+                                                                    <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
+                                                                      {rn ? (
+                                                                        <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                      ) : null}
+                                                                      <span
+                                                                        className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                        dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                      >
+                                                                        {nm}
+                                                                      </span>
+                                                                      {pullTxt ? (
+                                                                        <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
+                                                                          {pullTxt}
+                                                                        </span>
+                                                                      ) : null}
+                                                                    </span>
+                                                                  </span>
+                                                                </div>
                                                               </div>
                                                             );
                                                           });
@@ -1001,8 +1078,17 @@ export default function WorkerDashboard() {
                                         return (
                                           <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
                                             <td className="px-2 py-2 w-64">
-                                              <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                                {nm}
+                                              <span
+                                                className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm max-w-full min-w-0"
+                                                style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
+                                              >
+                                                <span
+                                                  className={"truncate min-w-0 " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                  title={nm}
+                                                >
+                                                  {nm}
+                                                </span>
                                               </span>
                                             </td>
                                             <td className="px-2 py-2 w-28">{c}</td>

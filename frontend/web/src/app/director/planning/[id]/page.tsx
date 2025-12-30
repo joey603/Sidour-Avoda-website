@@ -132,6 +132,7 @@ export default function PlanningPage() {
       {
         before: { name: string; start: string; end: string };
         after: { name: string; start: string; end: string };
+        roleName?: string | null;
       }
     >
   }>(null);
@@ -139,10 +140,19 @@ export default function PlanningPage() {
   // Mode édition après chargement d'une grille sauvegardée
   const [editingSaved, setEditingSaved] = useState(false);
 
+  // --- Clés de sauvegarde planning ---
+  // Shared => visible côté עובדים (WorkerDashboard / History)
+  // DirectorOnly => brouillon visible uniquement côté directeur
+  const isoPlanKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const planKeyShared = (siteId: string | number, start: Date) => `plan_${siteId}_${isoPlanKey(start)}`;
+  const planKeyDirectorOnly = (siteId: string | number, start: Date) => `plan_director_${siteId}_${isoPlanKey(start)}`;
+  const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
+
   // --- Pulls ("משיכות") ---
   type PullEntry = {
     before: { name: string; start: string; end: string };
     after: { name: string; start: string; end: string };
+    roleName?: string | null; // si roles: les 2 travailleurs doivent partager ce rôle
   };
   const [pullsByHoleKey, setPullsByHoleKey] = useState<Record<string, PullEntry>>({});
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
@@ -162,6 +172,7 @@ export default function PlanningPage() {
     afterEnd: string;
     shiftStart: string; // Heure de début de la garde (pour min)
     shiftEnd: string; // Heure de fin de la garde (pour max)
+    roleName: string | null;
   }>(null);
 
   // --- Messages optionnels ---
@@ -433,6 +444,7 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, params.id]);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
+  const [draggingWorkerName, setDraggingWorkerName] = useState<string | null>(null);
   const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
   const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
 
@@ -440,6 +452,7 @@ export default function PlanningPage() {
   const dayOrder = ["sun","mon","tue","wed","thu","fri","sat"] as const;
   const prevDayKeyOf = (key: string) => dayOrder[(dayOrder.indexOf(key as any) + 6) % 7];
   const nextDayKeyOf = (key: string) => dayOrder[(dayOrder.indexOf(key as any) + 1) % 7];
+  const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
   function detectShiftKind(sn: string): "morning" | "noon" | "night" | "other" {
     const s = String(sn || "");
     if (/בוקר|^0?6|06-14/i.test(s)) return "morning";
@@ -485,6 +498,103 @@ export default function PlanningPage() {
     return list.find((w) => (w.name || "").trim() === trimmed);
   }
 
+  function isWorkerAvailableForSlot(workerName: string, dayKey: string, shiftName: string): boolean {
+    const trimmed = (workerName || "").trim();
+    if (!trimmed) return false;
+    const w = findWorkerByName(trimmed);
+    // Effective availability: weekly override first, else worker base availability
+    const effAvail = (() => {
+      const wk = (weeklyAvailability as any)?.[trimmed] || null;
+      if (wk && typeof wk === "object") {
+        // Handle both shapes: {sun:...} and {availability:{sun:...}}
+        if ("sun" in wk || "mon" in wk || "tue" in wk || "wed" in wk || "thu" in wk || "fri" in wk || "sat" in wk) {
+          return wk as Record<string, string[]>;
+        }
+        if ("availability" in wk && wk.availability && typeof wk.availability === "object") {
+          return wk.availability as Record<string, string[]>;
+        }
+      }
+      return (w?.availability || {}) as Record<string, string[]>;
+    })();
+
+    const dayList = (Array.isArray((effAvail as any)?.[dayKey]) ? (effAvail as any)[dayKey] : []) as string[];
+    if (dayList.includes(shiftName)) return true;
+
+    const targetKind = detectShiftKind(shiftName);
+    if (targetKind === "other") return false;
+    return dayList.some((sn) => detectShiftKind(String(sn || "")) === targetKind);
+  }
+
+  function canHighlightDropTarget(
+    workerName: string,
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number,
+    roleHint?: string | null
+  ): boolean {
+    const trimmed = (workerName || "").trim();
+    if (!trimmed) return false;
+    if (!isWorkerAvailableForSlot(trimmed, dayKey, shiftName)) return false;
+    if (roleHint && !workerHasRole(trimmed, roleHint)) return false;
+
+    // same day+shift elsewhere
+    try {
+      const perStationSame: string[][] = (((manualAssignments as any)?.[dayKey]?.[shiftName] || []) as any) || [];
+      let existsElsewhere = false;
+      perStationSame.forEach((namesArr: string[], sIdx: number) => {
+        if (sIdx === stationIndex) return;
+        if ((namesArr || []).some((nm) => (nm || "").trim() === trimmed)) existsElsewhere = true;
+      });
+      if (existsElsewhere) return false;
+    } catch {}
+
+    // night limit (max 3 per week)
+    try {
+      const isNightTarget = detectShiftKind(shiftName) === "night";
+      if (isNightTarget) {
+        let nightCount = 0;
+        const dayKeysAll = Object.keys(manualAssignments || {});
+        for (const dKey of dayKeysAll) {
+          const shiftsMap = (manualAssignments as any)?.[dKey] || {};
+          for (const sn of Object.keys(shiftsMap)) {
+            if (detectShiftKind(sn) !== "night") continue;
+            const perStation: string[][] = shiftsMap[sn] || [];
+            for (const namesHere of perStation) if ((namesHere || []).some((nm) => (nm || "").trim() === trimmed)) nightCount++;
+          }
+        }
+        // Would become +1 night if dropped here
+        if (nightCount + 1 > 3) return false;
+      }
+    } catch {}
+
+    // adjacent shifts rule (including day boundary)
+    try {
+      const kind = detectShiftKind(shiftName);
+      const hasInShift = (dKey: string, kindWanted: "morning" | "noon" | "night") => {
+        const shiftsMap = (manualAssignments as any)?.[dKey] || {};
+        const sn = Object.keys(shiftsMap).find((x) => detectShiftKind(x) === kindWanted);
+        if (!sn) return false;
+        const perStation: string[][] = shiftsMap[sn] || [];
+        return perStation.some((arr: string[]) => (arr || []).some((nm) => (nm || "").trim() === trimmed));
+      };
+      const prevCheck = () => {
+        if (kind === "morning") return hasInShift(prevDayKeyOf(dayKey), "night");
+        if (kind === "noon") return hasInShift(dayKey, "morning");
+        if (kind === "night") return hasInShift(dayKey, "noon");
+        return false;
+      };
+      const nextCheck = () => {
+        if (kind === "morning") return hasInShift(dayKey, "noon");
+        if (kind === "noon") return hasInShift(dayKey, "night");
+        if (kind === "night") return hasInShift(nextDayKeyOf(dayKey), "morning");
+        return false;
+      };
+      if (prevCheck() || nextCheck()) return false;
+    } catch {}
+
+    return true;
+  }
+
   function ensureOverlay(name: string, dayKey: string, shiftName: string) {
     setAvailabilityOverlays((prev) => {
       const next = { ...prev } as any;
@@ -502,6 +612,7 @@ export default function PlanningPage() {
       e.dataTransfer.setData("text/plain", workerName);
       e.dataTransfer.effectAllowed = "copy";
     } catch {}
+    setDraggingWorkerName((workerName || "").trim() || null);
     // debug
     try { console.log("[DND] dragstart worker:", workerName); } catch {}
   }
@@ -834,6 +945,7 @@ export default function PlanningPage() {
     }
     dropIntoSlot(dayKey, shiftName, stationIndex, slotIndex, name, roleHintAttr, true);
     setHoverSlotKey(null);
+    setDraggingWorkerName(null);
   }
 
   function onCellContainerDrop(
@@ -1564,15 +1676,18 @@ export default function PlanningPage() {
   // Charger le plan sauvegardé pour la semaine sélectionnée (si existe)
   useEffect(() => {
     const start = new Date(weekStart);
-    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    const key = `plan_${params.id}_${iso(start)}`;
+    const keyDirector = planKeyDirectorOnly(params.id, start);
+    const keyShared = planKeyShared(params.id, start);
     try {
       setSavedWeekPlan(null);
       setEditingSaved(false);
       setPullsByHoleKey({});
       setPullsModeStationIdx(null);
       setPullsEditor(null);
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      const raw = typeof window !== "undefined" ? (localStorage.getItem(keyDirector) || localStorage.getItem(keyShared)) : null;
+      if (typeof window !== "undefined") {
+        try { setActiveSavedPlanKey(localStorage.getItem(keyDirector) ? keyDirector : (localStorage.getItem(keyShared) ? keyShared : null)); } catch {}
+      }
       if (raw) {
         const parsed = JSON.parse(raw);
         // Charger les workers même si assignments est null (après suppression)
@@ -1689,24 +1804,26 @@ export default function PlanningPage() {
       console.log('[DBG] triggerGenerateButton: error', e);
     }
   }
-
-  function onSavePlan() {
+  function onSavePlan(publishToWorkers: boolean) {
     try {
-      const effective = isManual && manualAssignments ? manualAssignments : aiPlan?.assignments;
+      const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+      // Si on n'est pas en train d'éditer, on autorise la sauvegarde d'un plan déjà chargé (savedWeekPlan)
+      const fallbackAssignments = savedWeekPlan?.assignments;
+      const effective = currentAssignments || fallbackAssignments;
       if (!effective) {
         toast.error("אין מה לשמור", { description: "לא נמצא תכנון קיים לשמירה" });
         return;
       }
+      const effectiveIsManual = currentAssignments ? isManual : !!savedWeekPlan?.isManual;
       // Range de semaine
       const start = new Date(weekStart);
       const end = new Date(start);
       end.setDate(start.getDate() + 6);
-      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-      const key = `plan_${params.id}_${iso(start)}`;
+      const key = publishToWorkers ? planKeyShared(params.id, start) : planKeyDirectorOnly(params.id, start);
       const payload = {
         siteId: Number(params.id),
-        week: { startISO: iso(start), endISO: iso(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
-        isManual,
+        week: { startISO: isoPlanKey(start), endISO: isoPlanKey(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
+        isManual: effectiveIsManual,
         assignments: effective,
         pulls: pullsByHoleKey,
         workers: (workers || []).map((w) => ({
@@ -1721,13 +1838,16 @@ export default function PlanningPage() {
       };
       if (typeof window !== "undefined") {
         localStorage.setItem(key, JSON.stringify(payload));
+        setActiveSavedPlanKey(key);
+        // Si on publie vers les עובדים, nettoyer le brouillon directeur pour éviter de recharger un ancien draft
+        if (publishToWorkers) {
+          try { localStorage.removeItem(planKeyDirectorOnly(params.id, start)); } catch {}
+        }
       }
-      // Recharger le plan sauvegardé et sortir du mode ערוך
-      if (editingSaved) {
-        setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
-        setEditingSaved(false);
-      }
-      toast.success("התכנון נשמר בהצלחה");
+      // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
+      setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
+      setEditingSaved(false);
+      toast.success(publishToWorkers ? "התכנון נשמר ונשלח" : "התכנון נשמר (למנהל בלבד)");
     } catch (e: any) {
       toast.error("שמירה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
     }
@@ -1737,8 +1857,15 @@ export default function PlanningPage() {
     try {
       // Recharger le plan sauvegardé depuis localStorage
       const start = new Date(weekStart);
-      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-      const key = `plan_${params.id}_${iso(start)}`;
+      const keyFallback = (() => {
+        const dk = planKeyDirectorOnly(params.id, start);
+        const sk = planKeyShared(params.id, start);
+        try {
+          if (typeof window !== "undefined" && localStorage.getItem(dk)) return dk;
+        } catch {}
+        return sk;
+      })();
+      const key = activeSavedPlanKey || keyFallback;
       const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
       if (!raw) {
         // Pas de plan sauvegardé, réinitialiser tout
@@ -1819,10 +1946,10 @@ export default function PlanningPage() {
       const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי? זה ימחק את כל השיבוצים אך ישמור את רשימת העובדים והזמינות שלהם.");
       if (!confirmed) return;
       const start = new Date(weekStart);
-      const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-      const key = `plan_${params.id}_${iso(start)}`;
+      const keyShared = planKeyShared(params.id, start);
+      const keyDirector = planKeyDirectorOnly(params.id, start);
       // Charger les données actuelles pour garder les workers
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      const raw = typeof window !== "undefined" ? (localStorage.getItem(keyShared) || localStorage.getItem(keyDirector)) : null;
       if (raw) {
         const parsed = JSON.parse(raw);
         // Garder les workers, supprimer les assignments
@@ -1835,12 +1962,16 @@ export default function PlanningPage() {
           workers: parsed.workers || [],
         };
         if (typeof window !== "undefined") {
-          localStorage.setItem(key, JSON.stringify(payload));
+          localStorage.setItem(keyShared, JSON.stringify(payload));
+          try { localStorage.removeItem(keyDirector); } catch {}
+          setActiveSavedPlanKey(keyShared);
         }
       } else {
         // Si aucune donnée n'existe, supprimer complètement
         if (typeof window !== "undefined") {
-          localStorage.removeItem(key);
+          localStorage.removeItem(keyShared);
+          try { localStorage.removeItem(keyDirector); } catch {}
+          setActiveSavedPlanKey(null);
         }
       }
       // Réinitialiser les états
@@ -1859,7 +1990,16 @@ export default function PlanningPage() {
 
   return (
     <div className="min-h-screen p-6 pb-24">
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div
+        className={
+          "mx-auto max-w-5xl space-y-6 rounded-xl " +
+          (editingSaved
+            ? "ring-2 ring-[#00A8E0] ring-offset-4 ring-offset-white dark:ring-offset-zinc-950"
+            : (isSavedMode
+              ? "ring-2 ring-green-500 ring-offset-4 ring-offset-white dark:ring-offset-zinc-950"
+              : ""))
+        }
+      >
         <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
           <button
@@ -1947,10 +2087,10 @@ export default function PlanningPage() {
                           }}
                           disabled={!Array.isArray(site?.config?.questions) || site.config.questions.length === 0}
                           className={
-                            "inline-flex items-center gap-2 rounded-md border border-orange-600 bg-white px-3 py-2 text-sm text-orange-600 hover:bg-orange-50 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-zinc-800 " +
+                            "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm " +
                             (!Array.isArray(site?.config?.questions) || site.config.questions.length === 0
-                              ? "opacity-50 cursor-not-allowed"
-                              : "")
+                              ? "border-zinc-200 bg-white text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-600"
+                              : "border-orange-600 bg-white text-orange-600 hover:bg-orange-50 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-zinc-800")
                           }
                         >
                           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>
@@ -1982,10 +2122,10 @@ export default function PlanningPage() {
                       </div>
                     </div>
                       <div className="overflow-x-auto">
-                        <table className="w-full border-collapse text-sm">
+                        <table className="w-full table-fixed border-collapse text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-3 py-2 text-center">שם</th>
+                              <th className="px-3 py-2 text-center w-40">שם</th>
                               <th className="px-3 py-2 text-center">מקס' משמרות</th>
                               <th className="px-3 py-2 text-center">תפקידים</th>
                               <th className="px-3 py-2 text-center">זמינות</th>
@@ -2067,7 +2207,15 @@ export default function PlanningPage() {
                             }
                             return rows.map((w) => (
                               <tr key={w.id} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-3 py-2 text-center">{w.name}</td>
+                                <td className="px-3 py-2 text-center w-40 overflow-hidden">
+                                  <span
+                                    className="block w-full truncate text-center"
+                                    dir={isRtlName(w.name) ? "rtl" : "ltr"}
+                                    title={w.name}
+                                  >
+                                    {w.name}
+                                  </span>
+                                </td>
                                 <td className="px-3 py-2 text-center">{w.maxShifts}</td>
                                 <td className="px-3 py-2 text-center">{w.roles.join(", ") || "—"}</td>
                                 <td className="px-3 py-2 text-center">
@@ -4160,9 +4308,9 @@ export default function PlanningPage() {
                           <div className="text-base font-medium">{st.name}</div>
                           <div className="flex items-center gap-1">
                             {(!!aiPlan?.assignments || !!manualAssignments) && (
-                              <button
-                                type="button"
-                                onClick={() => {
+                          <button
+                            type="button"
+                            onClick={() => {
                                   if (isSavedMode && !editingSaved) return;
                                   const effective = (isManual && manualAssignments) ? manualAssignments : (aiPlan?.assignments || null);
                                   if (!effective) {
@@ -4224,7 +4372,9 @@ export default function PlanningPage() {
                                   "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
                                   ((isSavedMode && !editingSaved)
                                     ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
-                                    : "border-orange-400 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/20")
+                                    : (pullsModeStationIdx === idx
+                                      ? "border-orange-500 bg-orange-500 text-white hover:bg-orange-600 dark:border-orange-600 dark:bg-orange-600 dark:hover:bg-orange-700"
+                                      : "border-orange-400 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/20"))
                                 }
                               >
                                 משיכות
@@ -4474,7 +4624,12 @@ export default function PlanningPage() {
                                           }
                                           return [];
                                         }
-                                        // Mode normal: priorité au plan sauvegardé
+                                        // Mode normal: si on est en manuel avec une grille chargée, elle prime (sinon on peut afficher l'ancien plan sauvegardé)
+                                        if (isManual && manualAssignments) {
+                                          const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
+                                          return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
+                                        }
+                                        // Sinon: priorité au plan sauvegardé (lecture)
                                         if (savedWeekPlan?.assignments) {
                                           const savedCell = (savedWeekPlan as any).assignments?.[dayKey]?.[shiftName]?.[idx];
                                           if (Array.isArray(savedCell)) return (savedCell as any[]).filter((x) => x && String(x).trim());
@@ -4489,11 +4644,74 @@ export default function PlanningPage() {
                                         }
                                         return [];
                                       };
-                                      const assignedNames: string[] = getCellNames(d.key, sn);
-                                      const roleMap = assignRoles(assignedNames, st, sn, d.key);
-                                      // Comptage: une "משיכה" (2 personnes) doit compter comme 1 seule place.
+                                      let assignedNames: string[] = getCellNames(d.key, sn);
+                                      // Garantir l'affichage des 2 personnes d'une משיכה même si l'assignation n'a qu'1 nom
+                                      // (ex: après switch auto->manual, ou si l'utilisateur a modifié la cellule)
                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                      const pullsInCell = Object.keys(pullsByHoleKey || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                      const pullEntriesHere: any[] = Object.entries(pullsByHoleKey || {})
+                                        .filter(([k]) => String(k).startsWith(cellPrefix))
+                                        .map(([, e]) => e as any);
+                                      const pullRoleMap = new Map<string, string>();
+                                      pullEntriesHere.forEach((e) => {
+                                        const rn = String(e?.roleName || "").trim();
+                                        if (!rn) return;
+                                        const b = String(e?.before?.name || "").trim();
+                                        const a = String(e?.after?.name || "").trim();
+                                        if (b) pullRoleMap.set(b, rn);
+                                        if (a) pullRoleMap.set(a, rn);
+                                      });
+                                      // Forcer l'affichage "avant puis après" l'un sous l'autre (la case "ajoutée" par la משיכה)
+                                      const orderNamesByPullPairs = (namesIn: string[], entries: any[]): string[] => {
+                                        const base = (namesIn || []).map((x) => String(x || "").trim()).filter(Boolean);
+                                        const uniq: string[] = [];
+                                        const seen = new Set<string>();
+                                        base.forEach((n) => { if (!seen.has(n)) { seen.add(n); uniq.push(n); } });
+                                        const pair = new Map<string, string>();
+                                        (entries || []).forEach((e) => {
+                                          const b = String(e?.before?.name || "").trim();
+                                          const a = String(e?.after?.name || "").trim();
+                                          if (b && a) pair.set(b, a);
+                                        });
+                                        // Déplacer "after" juste après "before"
+                                        for (let i = 0; i < uniq.length; i++) {
+                                          const b = uniq[i];
+                                          const a = pair.get(b);
+                                          if (!a) continue;
+                                          const j = uniq.indexOf(a);
+                                          if (j === -1) continue;
+                                          if (j === i + 1) continue;
+                                          uniq.splice(j, 1);
+                                          uniq.splice(i + 1, 0, a);
+                                        }
+                                        return uniq;
+                                      };
+                                      if (pullEntriesHere.length > 0) {
+                                        const wanted = new Set<string>();
+                                        pullEntriesHere.forEach((e) => {
+                                          const b = String(e?.before?.name || "").trim();
+                                          const a = String(e?.after?.name || "").trim();
+                                          if (b) wanted.add(b);
+                                          if (a) wanted.add(a);
+                                        });
+                                        const have = new Set<string>(assignedNames.map((x) => String(x || "").trim()).filter(Boolean));
+                                        wanted.forEach((nm) => { if (!have.has(nm)) assignedNames.push(nm); });
+                                      }
+                                      // Après avoir garanti la présence des 2 noms, les mettre l'un sous l'autre
+                                      assignedNames = orderNamesByPullPairs(assignedNames, pullEntriesHere);
+
+                                      const roleMap = assignRoles(assignedNames, st, sn, d.key);
+                                      // Pour les משיכות avec rôle: forcer le rôle sur les 2 travailleurs,
+                                      // sinon le 2e peut être classé "sans rôle" et ne pas être affiché.
+                                      try {
+                                        pullRoleMap.forEach((rName, nm) => {
+                                          const n = String(nm || "").trim();
+                                          const r = String(rName || "").trim();
+                                          if (!n || !r) return;
+                                          (roleMap as any).set(n, r);
+                                        });
+                                      } catch {}
+                                      // Comptage: une "משיכה" (2 personnes) doit compter comme 1 seule place.
+                                      const pullsInCell = pullEntriesHere.length;
                                       const personsCount = assignedNames.length;
                                       const assignedCount = Math.max(0, personsCount - pullsInCell); // places prises
                                       const activeDay = isDayActive(st, d.key);
@@ -4576,10 +4794,31 @@ export default function PlanningPage() {
                                       });
                                       const beforeCandidates2 = beforeCandidates.filter((x) => !bothSides.has(String(x).trim()));
                                       const afterCandidates2 = afterCandidates.filter((x) => !bothSides.has(String(x).trim()));
-                                      const canPickTwoDifferent =
-                                        beforeCandidates2.length > 0 &&
-                                        afterCandidates2.length > 0 &&
-                                        !(beforeCandidates2.length === 1 && afterCandidates2.length === 1 && beforeCandidates2[0] === afterCandidates2[0]);
+                                      // Si des rôles existent sur cette garde, il faut 2 עובדים avec le même rôle (un avant + un après)
+                                      const reqRolesNow = roleRequirements(st, sn, d.key);
+                                      const roleKeysNow = Object.keys(reqRolesNow || {});
+                                      const canPullForRole = (roleName: string): boolean => {
+                                        const r = String(roleName || "").trim();
+                                        if (!r) return false;
+                                        const b = beforeCandidates2.filter((nm) => nameHasRole(nm, r));
+                                        const a = afterCandidates2.filter((nm) => nameHasRole(nm, r));
+                                        if (b.length === 0 || a.length === 0) return false;
+                                        if (b.length === 1 && a.length === 1 && b[0] === a[0]) return false;
+                                        return true;
+                                      };
+                                      const canPickTwoDifferent = (() => {
+                                        if (beforeCandidates2.length === 0 || afterCandidates2.length === 0) return false;
+                                        // Aucun rôle => règle originale
+                                        if (roleKeysNow.length === 0) {
+                                          return !(
+                                            beforeCandidates2.length === 1 &&
+                                            afterCandidates2.length === 1 &&
+                                            beforeCandidates2[0] === afterCandidates2[0]
+                                          );
+                                        }
+                                        // Rôles => il doit exister au moins un rôle commun possible
+                                        return roleKeysNow.some((rName) => canPullForRole(rName));
+                                      })();
                                       const isPullable =
                                         enabled &&
                                         activeDay &&
@@ -4611,28 +4850,47 @@ export default function PlanningPage() {
                                                     <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
                                                   {(() => {
                                                     const reqRoles = roleRequirements(st, sn, d.key);
-                                                        // Count only roles actually matched by slot hint and worker capability
-                                                    const assignedPerRole = new Map<string, number>();
-                                                        // We'll construct roleHints after seeing how many are already fulfilled
-                                                        // First pass: determine which assigned names satisfy a hinted role
-                                                        // roleHints will be filled by remaining deficits below
+
+                                                    // Construire la liste de slots "rôles" (toujours basée sur la config, pas sur des déficits)
                                                         const roleHints: string[] = [];
-                                                        // Compute deficits based on current satisfied roles
-                                                        assignedNames.forEach((nm, i) => {
-                                                          const hint = roleHints[i];
-                                                          // roleHints not yet filled; we need to compute satisfied counts against reqRoles; use worker capability and station reqRoles keys
-                                                          const workerHasRole = (rName: string) => nameHasRole(nm, rName);
-                                                          // If there is an existing hint array not built yet, skip; instead, we consider only explicit matching when hint exists; since not built yet, we can't rely.
-                                                        });
-                                                        // Build role hints list by deficits relative to satisfied counts
-                                                        const satisfiedPerRole = new Map<string, number>();
-                                                        // satisfiedPerRole: count matches at slots that explicitly carry that role hint and worker can fill it
-                                                        // Since we haven't built slot hints yet at this point, we consider current assigned names contribute nothing to satisfied; hints will represent deficits entirely.
-                                                    Object.entries(reqRoles).forEach(([rName, rCount]) => {
-                                                          const have = satisfiedPerRole.get(rName) || 0;
-                                                      const deficit = Math.max(0, (rCount || 0) - have);
-                                                          for (let i = 0; i < deficit; i++) roleHints.push(rName);
-                                                        });
+                                                    Object.entries(reqRoles || {}).forEach(([rName, rCount]) => {
+                                                      const n = Number(rCount || 0);
+                                                      for (let i = 0; i < n; i++) roleHints.push(String(rName));
+                                                    });
+
+                                                    // Déduire un rôle à afficher pour chaque nom (utile après auto -> manuel "שמור מיקומים")
+                                                    const roleForName = new Map<string, string>();
+                                                    const remaining = new Map<string, number>(
+                                                      Object.entries(reqRoles || {}).map(([rName, rCount]) => [String(rName), Number(rCount || 0)]),
+                                                    );
+
+                                                    // Priorité: si un nom provient d'une משיכה avec roleName, afficher ce rôle.
+                                                    // On décrémente seulement si ce rôle est effectivement requis et encore disponible.
+                                                    (assignedNames || []).forEach((nm) => {
+                                                      const nameTrimmed = String(nm || "").trim();
+                                                      const pr = pullRoleMap.get(nameTrimmed) || null;
+                                                      if (!pr) return;
+                                                      if (!nameHasRole(nameTrimmed, pr)) return;
+                                                      roleForName.set(nameTrimmed, pr);
+                                                      if (remaining.has(pr) && (remaining.get(pr) || 0) > 0) {
+                                                        remaining.set(pr, (remaining.get(pr) || 0) - 1);
+                                                      }
+                                                    });
+
+                                                    // Allocation simple des rôles restants par déficit
+                                                    (assignedNames || []).forEach((nm) => {
+                                                      const nameTrimmed = String(nm || "").trim();
+                                                      if (!nameTrimmed) return;
+                                                      if (roleForName.has(nameTrimmed)) return;
+                                                      for (const [rName, cnt] of Array.from(remaining.entries())) {
+                                                        if ((cnt || 0) <= 0) continue;
+                                                        if (!nameHasRole(nameTrimmed, rName)) continue;
+                                                        roleForName.set(nameTrimmed, rName);
+                                                        remaining.set(rName, (cnt || 0) - 1);
+                                                        break;
+                                                      }
+                                                    });
+
                                                         // +pullsInCell: pour afficher 2 bulles pour une seule place (משיכה)
                                                         const slots = Math.max(required + pullsInCell, assignedNames.length, roleHints.length, 1);
                                                         return Array.from({ length: slots }).map((_, slotIdx) => {
@@ -4640,13 +4898,17 @@ export default function PlanningPage() {
                                                           if (nm) {
                                                             const c = colorForName(nm);
                                                             const hintedStored = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? null) as (string | null);
-                                                            const hinted = (hintedStored ?? roleHints[slotIdx] ?? null) as (string | null);
-                                                            const rn = hinted && nameHasRole(nm, hinted) ? hinted : null;
+                                                            const pullRn = pullRoleMap.get(String(nm || "").trim()) || null;
+                                                            const hintedOk = hintedStored && nameHasRole(nm, hintedStored) ? hintedStored : null;
+                                                            const rn =
+                                                              hintedOk ||
+                                                              (pullRn && nameHasRole(nm, pullRn) ? pullRn : null) ||
+                                                              (roleForName.get(String(nm || "").trim()) || null);
                                                             const rc = rn ? colorForRole(rn) : null;
                                                             return (
                                                               <div
                                                                 key={"slot-nm-wrapper-" + slotIdx}
-                                                                className="w-full flex justify-center py-0.5"
+                                                                className="group relative w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -4671,7 +4933,7 @@ export default function PlanningPage() {
                       <span
                                                                   key={"slot-nm-" + slotIdx}
                                                                   className={
-                                                                    "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none transition-transform " +
+                                                                    "relative inline-flex min-h-9 max-w-[6rem] group-hover:max-w-[18rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none group-hover:z-50 transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (() => {
                                                                       if (pullsModeStationIdx !== idx) return "";
@@ -4717,14 +4979,21 @@ export default function PlanningPage() {
                                                                     const afterOptions = Array.from(
                                                                       new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
                                                                     ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                    const roleName = String(entry?.roleName || "").trim() || null;
+                                                                    const beforeOptionsRole = roleName
+                                                                      ? Array.from(new Set<string>([...beforeOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.before?.name || "").trim()].filter(Boolean)))
+                                                                      : beforeOptions;
+                                                                    const afterOptionsRole = roleName
+                                                                      ? Array.from(new Set<string>([...afterOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.after?.name || "").trim()].filter(Boolean)))
+                                                                      : afterOptions;
                                                                     setPullsEditor({
                                                                       key: String(k),
                                                                       stationIdx: idx,
                                                                       dayKey: d.key,
                                                                       shiftName: sn,
                                                                       required,
-                                                                      beforeOptions,
-                                                                      afterOptions,
+                                                                      beforeOptions: beforeOptionsRole,
+                                                                      afterOptions: afterOptionsRole,
                                                                       beforeName: entry.before.name,
                                                                       afterName: entry.after.name,
                                                                       beforeStart: entry.before.start,
@@ -4733,9 +5002,11 @@ export default function PlanningPage() {
                                                                       afterEnd: entry.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
+                                                                      roleName,
                                                                     });
                                                                   }}
                                                                   onDragStart={(e) => onWorkerDragStart(e, nm)}
+                                                                  onDragEnd={() => setDraggingWorkerName(null)}
                                                                   data-slot="1"
                                                                   data-dkey={d.key}
                                                                   data-sname={sn}
@@ -4746,7 +5017,12 @@ export default function PlanningPage() {
                                                                     {rn ? (
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
-                                                                    <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                    <span
+                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                    >
+                                                                      {nm}
+                                                                    </span>
                                                                     {(() => {
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
                                                                       const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
@@ -4794,14 +5070,21 @@ export default function PlanningPage() {
                                                                             const afterOptions = Array.from(
                                                                               new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
                                                                             ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                            const roleName = String(entry?.roleName || "").trim() || null;
+                                                                            const beforeOptionsRole = roleName
+                                                                              ? Array.from(new Set<string>([...beforeOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.before?.name || "").trim()].filter(Boolean)))
+                                                                              : beforeOptions;
+                                                                            const afterOptionsRole = roleName
+                                                                              ? Array.from(new Set<string>([...afterOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.after?.name || "").trim()].filter(Boolean)))
+                                                                              : afterOptions;
                                                                             setPullsEditor({
                                                                               key: k,
                                                                               stationIdx: idx,
                                                                               dayKey: d.key,
                                                                               shiftName: sn,
                                                                               required,
-                                                                              beforeOptions,
-                                                                              afterOptions,
+                                                                              beforeOptions: beforeOptionsRole,
+                                                                              afterOptions: afterOptionsRole,
                                                                               beforeName: entry.before.name,
                                                                               afterName: entry.after.name,
                                                                               beforeStart: entry.before.start,
@@ -4810,6 +5093,7 @@ export default function PlanningPage() {
                                                                               afterEnd: entry.after.end,
                                                                               shiftStart,
                                                                               shiftEnd,
+                                                                              roleName,
                                                                             });
                                                                           }}
                                                                         >
@@ -4867,6 +5151,7 @@ export default function PlanningPage() {
                                                           const hint = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? roleHints[slotIdx] ?? null) as (string | null);
                                                           if (hint) {
                                                             const rc = colorForRole(hint);
+                                                            const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(hint);
                                                             return (
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
@@ -4896,12 +5181,13 @@ export default function PlanningPage() {
                                                                 <span
                                                                   className={
                                                                     "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-transform cursor-pointer " +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
                                                                   style={{ borderColor: rc.border }}
                                                                   onClick={(e) => {
                                                                     e.stopPropagation();
-                                                                    if (!pullsActiveHere || !isPullable) return;
+                                                                    if (!canPullThisRole) return;
                                                                     if (isSavedMode && !editingSaved) return;
                                                                     // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                     const used = new Set(getCellNames(d.key, sn));
@@ -4912,12 +5198,17 @@ export default function PlanningPage() {
                                                                       if (e?.before?.name) used.add(String(e.before.name).trim());
                                                                       if (e?.after?.name) used.add(String(e.after.name).trim());
                                                                     });
-                                                                    const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
-                                                                    const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const roleName = String(hint || "").trim() || null;
+                                                                    const beforeOptions = (beforeCandidates2 || [])
+                                                                      .filter((x) => !used.has(x))
+                                                                      .filter((x) => !roleName || nameHasRole(x, roleName));
+                                                                    const afterOptions = (afterCandidates2 || [])
+                                                                      .filter((x) => !used.has(x))
+                                                                      .filter((x) => !roleName || nameHasRole(x, roleName));
                                                                     const beforeName = String(beforeOptions[0] || "").trim();
                                                                     const afterName = String(afterOptions[0] || "").trim();
                                                                     if (!beforeName || !afterName) {
-                                                                      toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                      toast.error("לא ניתן ליצור משיכות", { description: roleName ? "אין שני עובדים עם אותו תפקיד לפני/אחרי" : "אין עובדים זמינים לפני/אחרי" });
                                                                       return;
                                                                     }
                                                                     const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -4941,6 +5232,7 @@ export default function PlanningPage() {
                                                                       afterEnd: split.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
+                                                                      roleName,
                                                                     });
                                                                   }}
                       >
@@ -4979,7 +5271,8 @@ export default function PlanningPage() {
                                                                   key={"slot-empty-" + slotIdx}
                                                                   className={
                                                                     "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-transform cursor-pointer " +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "")
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
                                                                   onClick={(e) => {
                                                                     e.stopPropagation();
@@ -4994,12 +5287,20 @@ export default function PlanningPage() {
                                                                       if (e?.before?.name) used.add(String(e.before.name).trim());
                                                                       if (e?.after?.name) used.add(String(e.after.name).trim());
                                                                     });
-                                                                    const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
-                                                                    const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const beforeOptionsBase = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                    const afterOptionsBase = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                    // Si des rôles sont définis pour cette garde: imposer même rôle pour les 2 travailleurs
+                                                                    const reqRolesNow = roleRequirements(st, sn, d.key);
+                                                                    const roleKeys = Object.keys(reqRolesNow || {});
+                                                                    const roleName = roleKeys.length > 0
+                                                                      ? (roleKeys.find((rName) => beforeOptionsBase.some((nm) => nameHasRole(nm, rName)) && afterOptionsBase.some((nm) => nameHasRole(nm, rName))) || null)
+                                                                      : null;
+                                                                    const beforeOptions = roleName ? beforeOptionsBase.filter((nm) => nameHasRole(nm, roleName)) : beforeOptionsBase;
+                                                                    const afterOptions = roleName ? afterOptionsBase.filter((nm) => nameHasRole(nm, roleName)) : afterOptionsBase;
                                                                     const beforeName = String(beforeOptions[0] || "").trim();
                                                                     const afterName = String(afterOptions[0] || "").trim();
                                                                     if (!beforeName || !afterName) {
-                                                                      toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                      toast.error("לא ניתן ליצור משיכות", { description: roleKeys.length > 0 ? "אין שני עובדים עם אותו תפקיד לפני/אחרי" : "אין עובדים זמינים לפני/אחרי" });
                                                                       return;
                                                                     }
                                                                     const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -5023,6 +5324,7 @@ export default function PlanningPage() {
                                                                       afterEnd: split.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
+                                                                      roleName,
                                                                     });
                                                                   }}
                                                                   style={pullsActiveHere && isPullable ? { outline: "2px solid #fb923c", outlineOffset: "2px" } : undefined}
@@ -5041,10 +5343,19 @@ export default function PlanningPage() {
                                                       // Chaque rôle requis a un slot fixe, même s'il est vide
                                                       type SlotType = { type: 'assigned' | 'role-empty' | 'neutral-empty', name?: string, role?: string | null, roleHint?: string };
                                                       const slots: SlotType[] = [];
+                                                      // Si une משיכה existe avec un roleName, on ajoute 1 slot supplémentaire dans CE rôle
+                                                      // (pour que before/after soient collés, sans être séparés par d'autres rôles).
+                                                      const pullsExtraByRole: Record<string, number> = {};
+                                                      (pullEntriesHere || []).forEach((e: any) => {
+                                                        const rn = String(e?.roleName || "").trim();
+                                                        if (!rn) return;
+                                                        pullsExtraByRole[rn] = (pullsExtraByRole[rn] || 0) + 1;
+                                                      });
                                                       
                                                       // Créer un slot pour chaque rôle requis (dans l'ordre des rôles)
                                                       Object.entries(reqRoles).forEach(([rName, rCount]) => {
-                                                        for (let i = 0; i < (rCount || 0); i++) {
+                                                        const extra = pullsExtraByRole[String(rName || "").trim()] || 0;
+                                                        for (let i = 0; i < ((rCount || 0) + extra); i++) {
                                                           slots.push({ type: 'role-empty', roleHint: rName });
                                                         }
                                                       });
@@ -5102,27 +5413,41 @@ export default function PlanningPage() {
                                                       
                                                       const renderChip = (nm: string, i: number, rn: string | null) => {
                                                           const c = colorForName(nm);
-                                                          const rc = rn ? colorForRole(rn) : null;
+                                                          // Si ce nom fait partie d'une משיכה avec roleName, afficher aussi le rôle sur la bulle "ajoutée"
+                                                          const pullRoleName = (() => {
+                                                            const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                            const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                              if (!String(k).startsWith(cellPrefix)) return false;
+                                                              const e: any = entry;
+                                                              return e?.before?.name === nm || e?.after?.name === nm;
+                                                            });
+                                                            if (!match) return null;
+                                                            const [, entryAny] = match as any;
+                                                            const e: any = entryAny;
+                                                            return String(e?.roleName || "").trim() || null;
+                                                          })();
+                                                          const roleToShow = rn || pullRoleName || null;
+                                                          const rc = roleToShow ? colorForRole(roleToShow) : null;
+                                                          const chipClass =
+                                                            "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                            (() => {
+                                                              if (pullsModeStationIdx !== idx) return "";
+                                                              const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                              const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                if (!k.startsWith(cellPrefix)) return false;
+                                                                const e: any = entry;
+                                                                return e?.before?.name === nm || e?.after?.name === nm;
+                                                              });
+                                                              return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
+                                                            })();
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
-                                                              className="w-full flex justify-center py-0.5"
+                                                              className="group relative w-full flex justify-center py-0.5"
                                                             >
                                                             <span
                                                               key={"nm-" + i}
-                                                                className={
-                                                                  "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
-                                                                  (() => {
-                                                                    if (pullsModeStationIdx !== idx) return "";
-                                                                    const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                    const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
-                                                                      if (!k.startsWith(cellPrefix)) return false;
-                                                                      const e: any = entry;
-                                                                      return e?.before?.name === nm || e?.after?.name === nm;
-                                                                    });
-                                                                    return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
-                                                                  })()
-                                                                }
+                                                              className={chipClass}
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                               onClick={(e) => {
                                                                 if (pullsModeStationIdx !== idx) return;
@@ -5154,14 +5479,21 @@ export default function PlanningPage() {
                                                                 const afterOptions = Array.from(
                                                                   new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
                                                                 ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                const roleName = String(entry?.roleName || "").trim() || null;
+                                                                const beforeOptionsRole = roleName
+                                                                  ? Array.from(new Set<string>([...beforeOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.before?.name || "").trim()].filter(Boolean)))
+                                                                  : beforeOptions;
+                                                                const afterOptionsRole = roleName
+                                                                  ? Array.from(new Set<string>([...afterOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.after?.name || "").trim()].filter(Boolean)))
+                                                                  : afterOptions;
                                                                 setPullsEditor({
                                                                   key: String(k),
                                                                   stationIdx: idx,
                                                                   dayKey: d.key,
                                                                   shiftName: sn,
                                                                   required,
-                                                                  beforeOptions,
-                                                                  afterOptions,
+                                                                  beforeOptions: beforeOptionsRole,
+                                                                  afterOptions: afterOptionsRole,
                                                                   beforeName: entry.before.name,
                                                                   afterName: entry.after.name,
                                                                   beforeStart: entry.before.start,
@@ -5170,14 +5502,20 @@ export default function PlanningPage() {
                                                                   afterEnd: entry.after.end,
                                                                   shiftStart,
                                                                   shiftEnd,
+                                                                  roleName,
                                                                 });
                                                               }}
                                                             >
                                                               <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
-                                                                {rn ? (
-                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                {roleToShow ? (
+                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
-                                                                <span className="text-sm break-words whitespace-normal leading-tight">{nm}</span>
+                                                                <span
+                                                                  className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                >
+                                                                  {nm}
+                                                                </span>
                                                                 {(() => {
                                                                   const cellPrefix = `${d.key}|${sn}|${idx}|`;
                                                                   const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
@@ -5224,14 +5562,21 @@ export default function PlanningPage() {
                                                                         const afterOptions = Array.from(
                                                                           new Set<string>([...nextOptsRaw, String(entry?.after?.name || "").trim()].filter(Boolean)),
                                                                         ).filter((x) => !used.has(x) || x === entry?.before?.name || x === entry?.after?.name);
+                                                                        const roleName = String(entry?.roleName || "").trim() || null;
+                                                                        const beforeOptionsRole = roleName
+                                                                          ? Array.from(new Set<string>([...beforeOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.before?.name || "").trim()].filter(Boolean)))
+                                                                          : beforeOptions;
+                                                                        const afterOptionsRole = roleName
+                                                                          ? Array.from(new Set<string>([...afterOptions.filter((x) => nameHasRole(x, roleName)), String(entry?.after?.name || "").trim()].filter(Boolean)))
+                                                                          : afterOptions;
                                                                         setPullsEditor({
                                                                           key: k,
                                                                           stationIdx: idx,
                                                                           dayKey: d.key,
                                                                           shiftName: sn,
                                                                           required,
-                                                                          beforeOptions,
-                                                                          afterOptions,
+                                                                          beforeOptions: beforeOptionsRole,
+                                                                          afterOptions: afterOptionsRole,
                                                                           beforeName: entry.before.name,
                                                                           afterName: entry.after.name,
                                                                           beforeStart: entry.before.start,
@@ -5240,6 +5585,7 @@ export default function PlanningPage() {
                                                                           afterEnd: entry.after.end,
                                                                           shiftStart,
                                                                           shiftEnd,
+                                                                          roleName,
                                                                         });
                                                                       }}
                                                                     >
@@ -5249,6 +5595,29 @@ export default function PlanningPage() {
                                                                 })()}
                                                               </span>
                                                             </span>
+
+                                                            {/* Expansion animée au survol (pas de tooltip) */}
+                                                            <div
+                                                              aria-hidden
+                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                            >
+                                                              <span
+                                                                className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
+                                                                style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                              >
+                                                                <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
+                                                                  {roleToShow ? (
+                                                                    <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                  ) : null}
+                                                                  <span
+                                                                    className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                  >
+                                                                    {nm}
+                                                                  </span>
+                                                              </span>
+                                                            </span>
+                                                            </div>
                                                             </div>
                                                           );
                                                       };
@@ -5260,6 +5629,7 @@ export default function PlanningPage() {
                                                               return renderChip(slot.name, slotIdx, slot.role ?? null);
                                                             } else if (slot.type === 'role-empty' && slot.roleHint) {
                                                               const c = colorForRole(slot.roleHint);
+                                                              const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(slot.roleHint);
                                                               return (
                                                                 <div
                                                                   key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
@@ -5269,12 +5639,12 @@ export default function PlanningPage() {
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
                                                                       "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 cursor-pointer " +
-                                                                      (pullsActiveHere && isPullable ? "ring-2 ring-orange-400" : "")
+                                                                      (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     style={{ borderColor: c.border }}
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
-                                                                      if (!pullsActiveHere || !isPullable) return;
+                                                                      if (!canPullThisRole) return;
                                                                       if (isSavedMode && !editingSaved) return;
                                                                       // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                       const used = new Set(getCellNames(d.key, sn));
@@ -5285,12 +5655,17 @@ export default function PlanningPage() {
                                                                         if (e?.before?.name) used.add(String(e.before.name).trim());
                                                                         if (e?.after?.name) used.add(String(e.after.name).trim());
                                                                       });
-                                                                      const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
-                                                                      const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const roleName = String(slot.roleHint || "").trim() || null;
+                                                                      const beforeOptions = (beforeCandidates2 || [])
+                                                                        .filter((x) => !used.has(x))
+                                                                        .filter((x) => !roleName || nameHasRole(x, roleName));
+                                                                      const afterOptions = (afterCandidates2 || [])
+                                                                        .filter((x) => !used.has(x))
+                                                                        .filter((x) => !roleName || nameHasRole(x, roleName));
                                                                       const beforeName = String(beforeOptions[0] || "").trim();
                                                                       const afterName = String(afterOptions[0] || "").trim();
                                                                       if (!beforeName || !afterName) {
-                                                                        toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                        toast.error("לא ניתן ליצור משיכות", { description: roleName ? "אין שני עובדים עם אותו תפקיד לפני/אחרי" : "אין עובדים זמינים לפני/אחרי" });
                                                                         return;
                                                                       }
                                                                       const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -5314,6 +5689,7 @@ export default function PlanningPage() {
                                                                         afterEnd: split.after.end,
                                                                         shiftStart,
                                                                         shiftEnd,
+                                                                        roleName,
                                                                       });
                                                                     }}
                                                                   >
@@ -5323,6 +5699,7 @@ export default function PlanningPage() {
                                                                 </div>
                                                               );
                                                             } else {
+                                                              const neutralIsPullable = pullsActiveHere && isPullable;
                                                               return (
                                                                 <div
                                                                   key={"empty-wrapper-" + slotIdx}
@@ -5332,11 +5709,11 @@ export default function PlanningPage() {
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-pointer " +
-                                                                      (pullsActiveHere && isPullable ? "ring-2 ring-orange-400" : "")
+                                                                      (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
-                                                                      if (!pullsActiveHere || !isPullable) return;
+                                                                      if (!neutralIsPullable) return;
                                                                       if (isSavedMode && !editingSaved) return;
                                                                       // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                       const used = new Set(getCellNames(d.key, sn));
@@ -5347,12 +5724,19 @@ export default function PlanningPage() {
                                                                         if (e?.before?.name) used.add(String(e.before.name).trim());
                                                                         if (e?.after?.name) used.add(String(e.after.name).trim());
                                                                       });
-                                                                      const beforeOptions = (beforeCandidates2 || []).filter((x) => !used.has(x));
-                                                                      const afterOptions = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const beforeOptionsBase = (beforeCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const afterOptionsBase = (afterCandidates2 || []).filter((x) => !used.has(x));
+                                                                      const reqRolesNow = roleRequirements(st, sn, d.key);
+                                                                      const roleKeys = Object.keys(reqRolesNow || {});
+                                                                      const roleName = roleKeys.length > 0
+                                                                        ? (roleKeys.find((rName) => beforeOptionsBase.some((nm) => nameHasRole(nm, rName)) && afterOptionsBase.some((nm) => nameHasRole(nm, rName))) || null)
+                                                                        : null;
+                                                                      const beforeOptions = roleName ? beforeOptionsBase.filter((nm) => nameHasRole(nm, roleName)) : beforeOptionsBase;
+                                                                      const afterOptions = roleName ? afterOptionsBase.filter((nm) => nameHasRole(nm, roleName)) : afterOptionsBase;
                                                                       const beforeName = String(beforeOptions[0] || "").trim();
                                                                       const afterName = String(afterOptions[0] || "").trim();
                                                                       if (!beforeName || !afterName) {
-                                                                        toast.error("לא ניתן ליצור משיכות", { description: "אין עובדים זמינים לפני/אחרי" });
+                                                                        toast.error("לא ניתן ליצור משיכות", { description: roleKeys.length > 0 ? "אין שני עובדים עם אותו תפקיד לפני/אחרי" : "אין עובדים זמינים לפני/אחרי" });
                                                                         return;
                                                                       }
                                                                       const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -5376,6 +5760,7 @@ export default function PlanningPage() {
                                                                         afterEnd: split.after.end,
                                                                         shiftStart,
                                                                         shiftEnd,
+                                                                        roleName,
                                                                       });
                                                                     }}
                                                                   >
@@ -5429,6 +5814,7 @@ export default function PlanningPage() {
                                     key={w.id}
                                     draggable
                                     onDragStart={(e) => onWorkerDragStart(e, w.name)}
+                                    onDragEnd={() => setDraggingWorkerName(null)}
                                     className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm select-none cursor-grab active:cursor-grabbing"
                                     style={{ backgroundColor: c.bg, borderColor: c.border, color: c.text }}
                                   >
@@ -5963,10 +6349,10 @@ export default function PlanningPage() {
                     type="button"
                     disabled={isSavedMode && !editingSaved}
                     className={
-                      "inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-sm font-medium " +
+                      "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm " +
                       ((isSavedMode && !editingSaved)
                         ? "border-zinc-300 text-zinc-400 cursor-not-allowed dark:border-zinc-700 dark:text-zinc-500"
-                        : "border-green-600 text-green-700 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-500/10")
+                        : "border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30")
                     }
                     onClick={() => {
                       if (isSavedMode && !editingSaved) return;
@@ -6033,7 +6419,7 @@ export default function PlanningPage() {
                               type="button"
                               disabled={isSavedMode && !editingSaved}
                               className={
-                                "rounded-md border px-3 py-1 text-sm " +
+                                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
                                 ((isSavedMode && !editingSaved)
                                   ? "cursor-not-allowed opacity-50 dark:border-zinc-700"
                                   : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
@@ -6048,14 +6434,19 @@ export default function PlanningPage() {
                                 setIsAddMessageOpen(true);
                               }}
                             >
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden>
+                                <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
+                              </svg>
                               ערוך
                             </button>
                             <button
                               type="button"
                               disabled={isSavedMode && !editingSaved}
                               className={
-                                "rounded-md px-3 py-1 text-sm text-white " +
-                                ((isSavedMode && !editingSaved) ? "bg-red-300 cursor-not-allowed" : "bg-red-600 hover:bg-red-700")
+                                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
+                                (((isSavedMode && !editingSaved))
+                                  ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                                  : "border-red-600 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40")
                               }
                               onClick={async () => {
                                 if (isSavedMode && !editingSaved) return;
@@ -6071,6 +6462,9 @@ export default function PlanningPage() {
                                 await refreshMessages();
                               }}
                             >
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden>
+                                <path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/>
+                              </svg>
                               מחק
                             </button>
                           </div>
@@ -6724,8 +7118,41 @@ export default function PlanningPage() {
                   } else if (modeSwitchTarget === "manual") {
                     try { stopAiGeneration(); } catch {}
                     if (!isManual && aiPlan?.assignments) {
-                      setManualAssignments(aiPlan.assignments);
+                      // IMPORTANT: deep-clone pour éviter de partager la même référence avec aiPlan,
+                      // et garantir que les משיכות déjà appliquées restent visibles en mode ידני.
+                      const cloned = JSON.parse(JSON.stringify(aiPlan.assignments));
+                      // IMPORTANT: s'assurer que les 2 travailleurs d'une משיכה existent bien dans la cellule,
+                      // sinon l'UI en mode ידני affichera 1 nom + 1 slot vide (pullsCount > noms).
+                      try {
+                        const next = cloned as any;
+                        Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                          const parts = String(k).split("|");
+                          if (parts.length < 3) return;
+                          const dayKey = parts[0];
+                          const shiftName = parts[1];
+                          const stationIdx = Number(parts[2]);
+                          if (!dayKey || !shiftName || !Number.isFinite(stationIdx)) return;
+                          const beforeNm = String((entry as any)?.before?.name || "").trim();
+                          const afterNm = String((entry as any)?.after?.name || "").trim();
+                          if (!beforeNm || !afterNm) return;
+                          next[dayKey] = next[dayKey] || {};
+                          next[dayKey][shiftName] = Array.isArray(next[dayKey][shiftName]) ? next[dayKey][shiftName] : [];
+                          while (next[dayKey][shiftName].length <= stationIdx) next[dayKey][shiftName].push([]);
+                          const cell = Array.isArray(next[dayKey][shiftName][stationIdx]) ? next[dayKey][shiftName][stationIdx] : [];
+                          let names = (cell as any[]).map((x) => String(x || "").trim()).filter(Boolean);
+                          if (!names.includes(beforeNm)) names.push(beforeNm);
+                          if (!names.includes(afterNm)) names.push(afterNm);
+                          next[dayKey][shiftName][stationIdx] = names;
+                        });
+                        setManualAssignments(next);
+                      } catch {
+                        setManualAssignments(cloned);
+                      }
+                      // Repartir sans indices de rôles "stales" lors du passage en ידני
+                      setManualRoleHints(null);
                     }
+                    // Fermer la popup משיכות si ouverte (mais conserver pullsByHoleKey)
+                    setPullsEditor(null);
                     setIsManual(true);
                   }
                   setShowModeSwitchDialog(false);
@@ -6873,16 +7300,28 @@ export default function PlanningPage() {
                     ביטול
                 </button>
               )}
+              <div className="flex items-center gap-2 whitespace-nowrap">
               <button
                 type="button"
-                onClick={onSavePlan}
-                  className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                  onClick={() => onSavePlan(false)}
+                  className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-white px-3 py-1 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                   <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
                 </svg>
                 שמור
               </button>
+                <button
+                  type="button"
+                  onClick={() => onSavePlan(true)}
+                  className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                  </svg>
+                  שמור ואשלח
+                </button>
+              </div>
                 {/* Mode toggle near save removed per request */}
             </div>
               {/* Middle: Generate Plan + Mode toggle on the right */}
@@ -7075,6 +7514,11 @@ export default function PlanningPage() {
                 return `${dayLabel} • ${pullsEditor.shiftName} • עמדה ${pullsEditor.stationIdx + 1}`;
               })()}
             </div>
+            {pullsEditor.roleName ? (
+              <div className="mb-3 text-xs text-zinc-500">
+                תפקיד: <span className="font-medium text-zinc-700 dark:text-zinc-200">{pullsEditor.roleName}</span>
+              </div>
+            ) : null}
 
             <div className="space-y-3">
               <div className="rounded-md border p-3 dark:border-zinc-700">
@@ -7290,6 +7734,13 @@ export default function PlanningPage() {
                     toast.error("שעות לא תקינות", { description: "בחר שני עובדים שונים" });
                     return;
                   }
+                  // Validation rôle (si défini)
+                  if (p.roleName) {
+                    if (!workerHasRole(p.beforeName, p.roleName) || !workerHasRole(p.afterName, p.roleName)) {
+                      toast.error("לא ניתן ליצור משיכות", { description: "שני העובדים חייבים להיות עם אותו תפקיד" });
+                      return;
+                    }
+                  }
                   const req = Number((p as any).required || 0);
                   if (!req || req <= 0) {
                     toast.error("לא ניתן ליצור משיכות", { description: "המשמרת לא פעילה / לא נדרש" });
@@ -7339,6 +7790,7 @@ export default function PlanningPage() {
                     [p.key]: {
                       before: { name: p.beforeName, start: p.beforeStart, end: p.beforeEnd },
                       after: { name: p.afterName, start: p.afterStart, end: p.afterEnd },
+                      roleName: p.roleName,
                     },
                   }));
                   setPullsEditor(null);

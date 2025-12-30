@@ -21,6 +21,8 @@ const dayLabels: Record<string, string> = {
   sat: "שבת",
 };
 
+const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
+
 export default function WorkerHistoryPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -496,17 +498,65 @@ export default function WorkerHistoryPage() {
                                             ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
                                             : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                           : null;
+                                        const baseHours =
+                                          (sh?.start && sh?.end)
+                                            ? `${String(sh.start)}-${String(sh.end)}`
+                                            : null;
+                                        const myHours = pullTxt || baseHours;
                                         return (
                                           <span
                                             key={`nm-${nm}-${slotIdx}`}
                                             className={
-                                              "text-xs inline-flex flex-col items-center rounded px-1 " +
-                                              (nm === workerName ? "bg-green-500 text-white " : "text-zinc-700 dark:text-zinc-200 ") +
-                                              (pullTxt ? "ring-2 ring-orange-400 " : "")
+                                              "group relative text-xs inline-flex flex-col items-center rounded px-1 " +
+                                              (nm === workerName
+                                                ? "bg-green-500 text-white "
+                                                : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 ") +
+                                              ((pullTxt && nm === workerName) ? "ring-2 ring-orange-400 " : "")
                                             }
                                           >
-                                            <span>{nm}</span>
-                                            {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight opacity-90">{pullTxt}</span> : null}
+                                            <span
+                                              className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                              dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                            >
+                                              {nm}
+                                            </span>
+                                            {nm === workerName && myHours ? (
+                                              <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={myHours}>{myHours}</span>
+                                            ) : (
+                                              pullTxt ? <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={pullTxt}>{pullTxt}</span> : null
+                                            )}
+
+                                            {/* Expansion animée au survol (menu worker) */}
+                                            <span
+                                              aria-hidden
+                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                            >
+                                              <span
+                                                className={
+                                                  "inline-flex flex-col items-center rounded px-2 py-1 shadow-lg " +
+                                                  (nm === workerName
+                                                    ? "bg-green-500 text-white "
+                                                    : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
+                                                  ((pullTxt && nm === workerName) ? "ring-2 ring-orange-400 " : "")
+                                                }
+                                              >
+                                                <span
+                                                  className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                >
+                                                  {nm}
+                                                </span>
+                                                {(nm === workerName && myHours) ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {myHours}
+                                                  </span>
+                                                ) : (pullTxt ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {pullTxt}
+                                                  </span>
+                                                ) : null)}
+                                              </span>
+                                            </span>
                                           </span>
                                         );
                                       })}

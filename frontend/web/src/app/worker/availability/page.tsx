@@ -531,12 +531,14 @@ export default function WorkerAvailabilityPage() {
                     {dayDefs.map((day) => (
                       <div key={day.key} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
                         <div className="mb-2 text-sm font-semibold text-zinc-800 dark:text-zinc-200">
-                          {day.label}
-                          {nextWeekStart && (
-                            <span className="ml-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">
-                              {new Date(nextWeekStart.getTime() + dayDefs.findIndex((d) => d.key === day.key) * 24 * 60 * 60 * 1000).toLocaleDateString("he-IL")}
-                            </span>
-                          )}
+                          <div className="flex items-center justify-between gap-3">
+                            <span>{day.label}</span>
+                            {nextWeekStart && (
+                              <span className="text-xs font-normal text-zinc-500 dark:text-zinc-400">
+                                {new Date(nextWeekStart.getTime() + dayDefs.findIndex((d) => d.key === day.key) * 24 * 60 * 60 * 1000).toLocaleDateString("he-IL")}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {sortShifts(shifts).map((shift) => {

@@ -27,6 +27,8 @@ const dayLabels: Record<string, string> = {
   sat: "שבת",
 };
 
+const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
+
 export default function WorkerDetailsPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -49,6 +51,7 @@ export default function WorkerDetailsPage() {
     assignments: Record<string, Record<string, string[][]>>;
     isManual: boolean;
     workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>;
+    pulls?: Record<string, { before: { name: string; start: string; end: string }; after: { name: string; start: string; end: string } }>;
   }>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
@@ -124,7 +127,12 @@ export default function WorkerDetailsPage() {
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed && parsed.assignments) {
-            setWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined });
+            setWeekPlan({
+              assignments: parsed.assignments,
+              isManual: !!parsed.isManual,
+              workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+              pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+            });
           }
         } else {
           setWeekPlan(null);
@@ -517,21 +525,109 @@ export default function WorkerDetailsPage() {
                               <div className="text-xs font-medium flex items-center">{sh?.name}</div>
                               {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => {
                                 const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
+                                const pulls = (weekPlan as any)?.pulls || {};
+                                const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                const required = (() => {
+                                  // similaire à history: fallback au nb de workers config si dispo
+                                  try { return Number(sh?.workers || 0) || 0; } catch { return 0; }
+                                })();
+                                const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
+                                const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
                                 return (
-                                  <div key={`cell-${stationIndex}-${sIdx}-${dk}`} className="rounded-md border p-1 min-h-10 dark:border-zinc-700">
+                                  <div
+                                    key={`cell-${stationIndex}-${sIdx}-${dk}`}
+                                    className={
+                                      "rounded-md border p-1 min-h-10 dark:border-zinc-700 " +
+                                      (cleanNames.length === 0 ? "bg-zinc-100 dark:bg-zinc-900/40" : "")
+                                    }
+                                  >
                                     <div className="flex flex-col gap-1">
-                                      {(names || []).length === 0 ? (
-                                        <span className="text-xs text-zinc-400">—</span>
-                                      ) : (
-                                        names.map((nm, i) => (
+                                      {Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                        const nm = cleanNames[slotIdx];
+                                        if (!nm) {
+                                          return (
+                                            <span
+                                              key={`empty-${slotIdx}`}
+                                              className="inline-flex h-6 items-center justify-center rounded-full border px-2 text-xs text-zinc-500 bg-white dark:bg-zinc-900 dark:border-zinc-700"
+                                            >
+                                              —
+                                            </span>
+                                          );
+                                        }
+                                        const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                          if (!String(k).startsWith(cellPrefix)) return false;
+                                          const e: any = entry;
+                                          return e?.before?.name === nm || e?.after?.name === nm;
+                                        });
+                                        const pullTxt = match
+                                          ? (((match as any)[1]?.before?.name === nm)
+                                            ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                            : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                          : null;
+                                        const baseHours =
+                                          (sh?.start && sh?.end)
+                                            ? `${String(sh.start)}-${String(sh.end)}`
+                                            : null;
+                                        const myHours = pullTxt || baseHours;
+                                        const isTargetWorker = nm === worker?.name;
+                                        return (
                                           <span
-                                            key={i}
-                                            className={`text-xs inline-flex items-center rounded px-1 ${nm === worker.name ? "bg-green-500 text-white" : "text-zinc-700 dark:text-zinc-200"}`}
+                                            key={`nm-${nm}-${slotIdx}`}
+                                            className={
+                                              "group relative text-xs inline-flex flex-col items-center rounded px-1 " +
+                                              (isTargetWorker
+                                                ? "bg-green-500 text-white "
+                                                : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 ") +
+                                              ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
+                                            }
                                           >
-                                            {nm || ""}
+                                            <span
+                                              className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                              dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                          >
+                                              {nm}
+                                            </span>
+                                            {isTargetWorker && myHours ? (
+                                              <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={myHours}>
+                                                {myHours}
+                                              </span>
+                                            ) : null}
+
+                                            {/* Expansion animée au survol (comme historique) */}
+                                            <span
+                                              aria-hidden
+                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                            >
+                                              <span
+                                                className={
+                                                  "inline-flex flex-col items-center rounded px-2 py-1 shadow-lg " +
+                                                  (isTargetWorker
+                                                    ? "bg-green-500 text-white "
+                                                    : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
+                                                  ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
+                                                }
+                                              >
+                                                <span
+                                                  className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                >
+                                                  {nm}
+                                                </span>
+                                                {(isTargetWorker && myHours) ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {myHours}
+                                                  </span>
+                                                ) : (pullTxt ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {pullTxt}
+                                                  </span>
+                                                ) : null)}
+                                              </span>
+                                            </span>
                                           </span>
-                                        ))
-                                      )}
+                                        );
+                                      })}
                                     </div>
                                   </div>
                                 );
