@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, Fragment } from "react";
+import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -299,7 +300,7 @@ export default function WorkerDetailsPage() {
                       const firstDay = new Date(year, month, 1);
                       const startDate = new Date(firstDay);
                       startDate.setDate(startDate.getDate() - firstDay.getDay()); // Start from Sunday
-                      const days: JSX.Element[] = [];
+                      const days: ReactElement[] = [];
                       const today = new Date();
                       today.setHours(0, 0, 0, 0);
                       
