@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Enum, ForeignKey, Integer, JSON, UniqueConstraint
+from sqlalchemy import String, Enum, ForeignKey, Integer, BigInteger, JSON, UniqueConstraint
 import enum
 
 from .database import Base
@@ -18,7 +18,8 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
-    phone: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=True)
+    # Certains numéros peuvent dépasser 20 caractères (préfixes/pays/tests) → marge.
+    phone: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=True)
     # Code unique par directeur, utilisé par les workers pour s’authentifier (code + téléphone)
     director_code: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
 
@@ -51,7 +52,7 @@ class SiteWorker(Base):
     site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     max_shifts: Mapped[int] = mapped_column(Integer, default=5)
     roles: Mapped[dict] = mapped_column(JSON, default=list)  # list[str]
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}
@@ -70,6 +71,7 @@ class SiteMessage(Base):
     created_week_iso: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # YYYY-MM-DD (week start)
     stopped_week_iso: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)  # YYYY-MM-DD (exclusive)
     origin_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # reference to global message id when cloned
-    created_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # epoch ms
-    updated_at: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # epoch ms
+    # epoch ms (dépasse 32-bit) → BIGINT en Postgres
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 

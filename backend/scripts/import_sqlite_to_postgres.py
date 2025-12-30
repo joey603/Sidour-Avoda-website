@@ -18,8 +18,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Any
 
+# Permet d'exécuter le script directement: `python scripts/...`
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
+from sqlalchemy import JSON as SAJSON
 from sqlalchemy import MetaData, Table, create_engine, select, text
 
 from app.database import DEFAULT_SQLITE_URL
@@ -62,8 +69,8 @@ def _reflect_table(meta: MetaData, name: str) -> Table:
     return meta.tables[name]
 
 
-def _count_rows(conn, table: Table) -> int:
-    return int(conn.execute(select(text("count(*)")).select_from(table)).scalar() or 0)
+def _count_rows_name(conn, table_name: str) -> int:
+    return int(conn.execute(text(f'SELECT count(*) FROM "{table_name}"')).scalar() or 0)
 
 
 def _truncate_table(conn, name: str) -> None:
@@ -140,17 +147,33 @@ def main() -> None:
     Base.metadata.create_all(bind=dst_engine)
 
     src_meta = MetaData()
-    dst_meta = MetaData()
     src_meta.reflect(bind=src_engine)
-    dst_meta.reflect(bind=dst_engine)
 
     with src_engine.connect() as src_conn, dst_engine.begin() as dst_conn:
+        # Assurer compatibilité avec les données existantes (ex: phone > 20 chars)
+        try:
+            dst_conn.execute(text('ALTER TABLE "users" ALTER COLUMN "phone" TYPE VARCHAR(32)'))
+        except Exception:
+            pass
+        try:
+            dst_conn.execute(text('ALTER TABLE "site_workers" ALTER COLUMN "phone" TYPE VARCHAR(32)'))
+        except Exception:
+            pass
+        # Epoch ms → BIGINT (Postgres INT32 overflow)
+        try:
+            dst_conn.execute(text('ALTER TABLE "site_messages" ALTER COLUMN "created_at" TYPE BIGINT'))
+        except Exception:
+            pass
+        try:
+            dst_conn.execute(text('ALTER TABLE "site_messages" ALTER COLUMN "updated_at" TYPE BIGINT'))
+        except Exception:
+            pass
+
         # Safety: refuse if not empty unless forced or truncating
         if not args.truncate:
             total_existing = 0
             for t in TABLE_ORDER:
-                if t in dst_meta.tables:
-                    total_existing += _count_rows(dst_conn, _reflect_table(dst_meta, t))
+                total_existing += _count_rows_name(dst_conn, t)
             if total_existing > 0 and not args.force:
                 raise SystemExit(
                     "Base cible non vide. Utilise --truncate (recommandé) ou --force pour continuer."
@@ -164,11 +187,11 @@ def main() -> None:
             if tname not in src_meta.tables:
                 print(f"[SKIP] table source absente: {tname}")
                 continue
-            if tname not in dst_meta.tables:
-                raise SystemExit(f"Table cible absente: {tname} (schema mismatch).")
+            if tname not in Base.metadata.tables:
+                raise SystemExit(f"Table cible absente dans les modèles: {tname} (schema mismatch).")
 
             src_table = _reflect_table(src_meta, tname)
-            dst_table = _reflect_table(dst_meta, tname)
+            dst_table = Base.metadata.tables[tname]
 
             rows = list(src_conn.execute(select(src_table)).mappings().all())
             print(f"[READ] {tname}: {len(rows)} rows")
@@ -177,7 +200,7 @@ def main() -> None:
 
             # Only insert columns that exist on target
             dst_cols = [c.name for c in dst_table.columns]
-            json_cols = {c.name for c in dst_table.columns if str(getattr(c.type, "__class__", "")).endswith("JSON")}
+            json_cols = {c.name for c in dst_table.columns if isinstance(getattr(c, "type", None), SAJSON)}
 
             to_insert: list[dict[str, Any]] = []
             for r in rows:
