@@ -18,6 +18,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Normaliser l'URL Postgres pour utiliser psycopg3 (pas psycopg2)
+# Render/Neon fournissent souvent "postgresql://...", ce qui fait choisir psycopg2 par défaut.
+if isinstance(settings.database_url, str) and settings.database_url.startswith("postgresql://"):
+    settings.database_url = "postgresql+psycopg://" + settings.database_url[len("postgresql://"):]
+
 # Activer connect_args appropriés pour SQLite
 is_sqlite = settings.database_url.startswith("sqlite:")
 engine = create_engine(
