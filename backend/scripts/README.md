@@ -37,3 +37,33 @@ Le script :
 - `--site-id SITE_ID` : Nettoyer uniquement un site spécifique
 - `--dry-run` : Mode simulation, affiche les doublons sans les supprimer
 
+
+## import_sqlite_to_postgres.py (bootstrap prod depuis SQLite local)
+
+Ce script sert à **copier ta base SQLite locale** (dev) vers **Postgres (Neon/Render)**.
+
+### Pré-requis
+
+- Avoir le fichier SQLite local (souvent `backend/dev.db` en local).
+- Avoir l’URL Neon (Postgres) prête.
+
+### Usage recommandé (bootstrap)
+
+Depuis le répertoire `backend/` :
+
+```bash
+# IMPORTANT: remplace DATABASE_URL par l'URL Neon (sans guillemets)
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST/DB?sslmode=require"
+
+# Si ton fichier SQLite est bien backend/dev.db:
+python scripts/import_sqlite_to_postgres.py --truncate
+
+# Si ton SQLite est ailleurs:
+python scripts/import_sqlite_to_postgres.py --sqlite-path "/chemin/vers/ton/dev.db" --truncate
+```
+
+### Notes
+
+- `--truncate` : vide les tables cibles avant import (recommandé si la base Neon est vide ou si tu veux la remplacer).
+- Le script copie les IDs pour conserver les relations entre tables.
+
