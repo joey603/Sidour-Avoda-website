@@ -611,7 +611,7 @@ export default function WorkerDetailsPage() {
                                                 <span
                                                   className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                >
+                                          >
                                                   {nm}
                                                 </span>
                                                 {(isTargetWorker && myHours) ? (

@@ -8,7 +8,7 @@ import { fetchMe, setToken, getToken, clearToken } from "@/lib/auth";
 function WorkerLoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -26,7 +26,9 @@ function WorkerLoginInner() {
             clearToken();
             return;
           }
-          router.replace("/login/director");
+          // IMPORTANT: ne pas rediriger vers le menu directeur.
+          // On reste sur cette page pour laisser l'utilisateur corriger sa connexion.
+          setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
           return;
         }
         // Si le returnUrl nécessite un worker et que l'utilisateur est un worker, rediriger
@@ -44,15 +46,19 @@ function WorkerLoginInner() {
     setError(null);
     setLoading(true);
     try {
+      const prevToken = getToken();
       const data = await apiFetch<{ access_token: string }>("/auth/worker-login", {
         method: "POST",
-        body: JSON.stringify({ name, phone }),
+        body: JSON.stringify({ code, phone }),
       });
       setToken(data.access_token);
       const me = await fetchMe();
       if (me) {
         if (me.role !== "worker") {
           setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
+          // Restaurer le token précédent (ex: directeur déjà connecté), sinon nettoyer
+          if (prevToken) setToken(prevToken);
+          else clearToken();
           setLoading(false);
           return;
         }
@@ -64,7 +70,7 @@ function WorkerLoginInner() {
         }
       }
     } catch (err: any) {
-      setError("שגיאת התחברות. בדקו את השם ומספר הטלפון.");
+      setError("שגיאת התחברות. בדקו את הקוד ומספר הטלפון.");
     } finally {
       setLoading(false);
     }
@@ -73,29 +79,16 @@ function WorkerLoginInner() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות עובד</h1>
-          <button
-            type="button"
-            onClick={() => {
-              const returnUrl = searchParams?.get("returnUrl");
-              const directorUrl = returnUrl 
-                ? `/login/director?returnUrl=${encodeURIComponent(returnUrl)}`
-                : "/login/director";
-              router.push(directorUrl);
-            }}
-            className="text-sm text-blue-600 hover:underline"
-          >
-            התחברות מנהל
-          </button>
         </div>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-sm">שם</label>
+            <label className="block text-sm">קוד מנהל</label>
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
               className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               required
             />

@@ -722,8 +722,8 @@ export default function WorkerDashboard() {
                                                                           {pullTxt}
                                                                         </span>
                                                                       ) : null}
-                                                                    </span>
                                                                   </span>
+                                                                </span>
                                                                 </div>
                                                               </div>
                                                             );
@@ -1023,8 +1023,8 @@ export default function WorkerDashboard() {
                                                                           {pullTxt}
                                                                         </span>
                                                                       ) : null}
-                                                                    </span>
                                                                   </span>
+                                                                </span>
                                                                 </div>
                                                               </div>
                                                             );

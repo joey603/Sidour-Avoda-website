@@ -73,19 +73,20 @@ def create_app() -> FastAPI:
                                 full_name VARCHAR(255) NOT NULL,
                                 hashed_password VARCHAR(255) NOT NULL,
                                 role VARCHAR(20) NOT NULL,
-                                phone VARCHAR(20)
+                                phone VARCHAR(20),
+                                director_code VARCHAR(32)
                             )
                         """)
                         # Copier les données existantes
                         if phone_exists:
                             conn.exec_driver_sql("""
-                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone)
-                                SELECT id, email, full_name, hashed_password, role, phone FROM users
+                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone, director_code)
+                                SELECT id, email, full_name, hashed_password, role, phone, NULL FROM users
                             """)
                         else:
                             conn.exec_driver_sql("""
-                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone)
-                                SELECT id, email, full_name, hashed_password, role, NULL FROM users
+                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone, director_code)
+                                SELECT id, email, full_name, hashed_password, role, NULL, NULL FROM users
                             """)
                         # Supprimer les anciens index avant de supprimer la table
                         try:
@@ -107,6 +108,10 @@ def create_app() -> FastAPI:
                             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone)")
                         except Exception:
                             pass
+                        try:
+                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_director_code ON users(director_code)")
+                        except Exception:
+                            pass
                         logger.info("Table users recréée avec succès")
                     elif not phone_exists:
                         # Si seulement phone manque et email est déjà nullable, on peut juste l'ajouter
@@ -116,6 +121,26 @@ def create_app() -> FastAPI:
                             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone)")
                         except Exception:
                             pass
+
+                    # Ajout du champ director_code si absent (sans recréer toute la table)
+                    user_cols = conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
+                    user_col_names = {c[1] for c in user_cols}
+                    if "director_code" not in user_col_names:
+                        logger.info("Ajout de la colonne director_code à la table users")
+                        conn.exec_driver_sql("ALTER TABLE users ADD COLUMN director_code VARCHAR(32)")
+                        try:
+                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_director_code ON users(director_code)")
+                        except Exception:
+                            pass
+
+                    # Seed code pour un directeur spécifique
+                    try:
+                        conn.exec_driver_sql(
+                            "UPDATE users SET director_code = ? WHERE email = ? AND role = ?",
+                            ("123456789", "yoelibarthel603@gmail.com", "director"),
+                        )
+                    except Exception:
+                        pass
                 
                 # Migration pour la table site_workers: ajouter user_id
                 try:
@@ -152,7 +177,13 @@ def create_app() -> FastAPI:
 
     @app.get("/me")
     def read_me(user=Depends(get_current_user)):
-        return {"id": user.id, "email": user.email, "role": user.role.value, "full_name": user.full_name}
+        return {
+            "id": user.id,
+            "email": user.email,
+            "role": user.role.value,
+            "full_name": user.full_name,
+            "director_code": getattr(user, "director_code", None),
+        }
 
     @app.get("/worker/dashboard")
     def worker_dashboard(user=Depends(require_role("worker"))):

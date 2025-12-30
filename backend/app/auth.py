@@ -6,7 +6,7 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal, settings
-from .models import User, UserRole
+from .models import User, UserRole, SiteWorker, Site
 from .schemas import LoginRequest, Token, UserCreate, UserOut, WorkerLoginRequest
 
 
@@ -74,19 +74,60 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/worker-login", response_model=Token)
 def worker_login(req: WorkerLoginRequest, db: Session = Depends(get_db)):
-    """Authentification des travailleurs avec nom et téléphone (sans mot de passe)"""
-    # Vérifier que le téléphone et le nom correspondent à un utilisateur worker
-    user: User | None = db.query(User).filter(
-        User.phone == req.phone,
-        User.role == UserRole.worker
-    ).first()
-    
+    """Authentification des travailleurs avec code directeur + téléphone (sans mot de passe)"""
+    # 1) Vérifier que le téléphone correspond à un utilisateur worker
+    user: User | None = (
+        db.query(User)
+        .filter(User.phone == req.phone, User.role == UserRole.worker)
+        .first()
+    )
     if not user:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-    
-    # Vérifier que le nom correspond (insensible à la casse)
-    if user.full_name.strip().lower() != req.name.strip().lower():
+
+    # 2) Le "code" identifie le directeur (champ users.director_code)
+    code = (req.code or "").strip()
+    if not code:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
+    director: User | None = (
+        db.query(User)
+        .filter(User.role == UserRole.director, User.director_code == code)
+        .first()
+    )
+    # fallback (optionnel) : si quelqu’un utilise encore l’ancien code numérique (= id)
+    if not director:
+        try:
+            director_id_int = int(code)
+            director = (
+                db.query(User)
+                .filter(User.role == UserRole.director, User.id == director_id_int)
+                .first()
+            )
+        except Exception:
+            director = None
+    if not director:
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    # 3) Vérifier que ce worker appartient à au moins un site du directeur
+    #    (via lien user_id, ou via phone stocké dans SiteWorker)
+    sw: SiteWorker | None = (
+        db.query(SiteWorker)
+        .join(Site, Site.id == SiteWorker.site_id)
+        .filter(
+            Site.director_id == director.id,
+            (SiteWorker.user_id == user.id) | (SiteWorker.phone == req.phone),
+        )
+        .first()
+    )
+    if not sw:
+        raise HTTPException(status_code=401, detail="Identifiants invalides")
+
+    # 4) Si on a trouvé un SiteWorker avec le bon téléphone mais pas encore lié, lier au user
+    if sw.user_id is None:
+        sw.user_id = user.id
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
     return {"access_token": token, "token_type": "bearer"}

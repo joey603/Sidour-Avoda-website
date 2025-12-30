@@ -30,8 +30,28 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     // Redirection globale si non autorisé
     if (res.status === 401) {
       try { clearToken(); } catch {}
+      // IMPORTANT:
+      // - Ne pas rediriger lors des endpoints d'auth (login) : on veut afficher l'erreur sur place.
+      // - Sinon, rediriger vers la page de login adaptée (worker vs director) selon l'URL courante.
       if (typeof window !== "undefined") {
-        try { window.location.href = "/login/director"; } catch {}
+        const p = String(path || "");
+        const isAuthEndpoint = p.startsWith("/auth/");
+        if (!isAuthEndpoint) {
+          try {
+            const cur = window.location.pathname + window.location.search;
+            const isWorkerArea =
+              window.location.pathname.startsWith("/worker") ||
+              window.location.pathname.startsWith("/login/worker") ||
+              window.location.pathname.startsWith("/register/worker") ||
+              window.location.pathname.startsWith("/public/workers");
+            const target = isWorkerArea
+              ? `/login/worker?returnUrl=${encodeURIComponent(cur)}`
+              : `/login/director?returnUrl=${encodeURIComponent(cur)}`;
+            window.location.href = target;
+          } catch {
+            try { window.location.href = "/login/director"; } catch {}
+          }
+        }
       }
     }
     const err: any = new Error(message);

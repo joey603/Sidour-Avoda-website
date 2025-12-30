@@ -59,21 +59,8 @@ function DirectorLoginInner() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות מנהל</h1>
-          <button
-            type="button"
-            onClick={() => {
-              const returnUrl = searchParams?.get("returnUrl");
-              const workerUrl = returnUrl 
-                ? `/login/worker?returnUrl=${encodeURIComponent(returnUrl)}`
-                : "/login/worker";
-              router.push(workerUrl);
-            }}
-            className="text-sm text-blue-600 hover:underline"
-          >
-            התחברות עובד
-          </button>
         </div>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
@@ -108,21 +95,7 @@ function DirectorLoginInner() {
             {loading ? "מתחבר..." : "התחבר"}
           </button>
         </form>
-        <div className="mt-4 text-sm">
-          אין לכם חשבון?{" "}
-          <button
-            onClick={() => {
-              const returnUrl = searchParams?.get("returnUrl");
-              const registerUrl = returnUrl 
-                ? `/register/director?returnUrl=${encodeURIComponent(returnUrl)}`
-                : "/register/director";
-              router.push(registerUrl);
-            }}
-            className="text-blue-600 hover:underline"
-          >
-            הרשמה
-          </button>
-        </div>
+        {/* Inscription désactivée: seuls les directeurs créent les comptes */}
       </div>
     </div>
   );

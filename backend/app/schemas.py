@@ -19,6 +19,7 @@ class UserOut(BaseModel):
     full_name: str
     role: Literal["worker", "director"]
     phone: str | None = None
+    director_code: str | None = None
 
     class Config:
         from_attributes = True
@@ -36,7 +37,7 @@ class LoginRequest(BaseModel):
 
 
 class WorkerLoginRequest(BaseModel):
-    name: str
+    code: str
     phone: str
 
 

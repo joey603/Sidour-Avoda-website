@@ -19,6 +19,8 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
     phone: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=True)
+    # Code unique par directeur, utilisé par les workers pour s’authentifier (code + téléphone)
+    director_code: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, nullable=True)
 
 
 class Site(Base):

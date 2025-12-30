@@ -543,7 +543,7 @@ export default function WorkerHistoryPage() {
                                                 <span
                                                   className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                >
+                                          >
                                                   {nm}
                                                 </span>
                                                 {(nm === workerName && myHours) ? (

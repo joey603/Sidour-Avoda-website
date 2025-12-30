@@ -23,7 +23,7 @@ export async function fetchMe() {
   const token = getToken();
   if (!token) return null;
   try {
-    return await apiFetch<{ id: number; email: string; role: "worker" | "director"; full_name: string }>(
+    return await apiFetch<{ id: number; email: string; role: "worker" | "director"; full_name: string; director_code?: string | null; directorCode?: string | null }>(
       "/me",
       {
         headers: { Authorization: `Bearer ${token}` },

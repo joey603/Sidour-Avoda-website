@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { fetchMe, clearToken } from "@/lib/auth";
 // Remplace Image optimisé pour éviter erreurs avec PNG locaux non valides
@@ -12,12 +12,27 @@ export default function TopNav() {
   const router = useRouter();
   const pathname = usePathname();
   const [userRole, setUserRole] = useState<Role | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const isAuthPage = (pathname || "").startsWith("/login") || (pathname || "").startsWith("/register");
+  const [returnUrl, setReturnUrl] = useState<string>("");
+  useEffect(() => {
+    // Eviter useSearchParams() ici (cause CSR bailout sur /_not-found lors du build).
+    try {
+      if (typeof window === "undefined") return;
+      const ru = new URLSearchParams(window.location.search).get("returnUrl") || "";
+      setReturnUrl(ru);
+    } catch {
+      setReturnUrl("");
+    }
+  }, [pathname]);
+  const authReturnQuery = useMemo(() => (returnUrl ? `?returnUrl=${encodeURIComponent(returnUrl)}` : ""), [returnUrl]);
 
   useEffect(() => {
-    fetchMe().then((me) => {
-      if (me) setUserRole(me.role);
-    });
+    fetchMe()
+      .then((me) => {
+        if (me) setUserRole(me.role);
+      })
+      .finally(() => setAuthChecked(true));
   }, []);
 
   // Recharger le rôle utilisateur à chaque changement de page (ex: après login -> /director)
@@ -34,12 +49,31 @@ export default function TopNav() {
         }
       } catch {
         // ignore
+      } finally {
+        if (!cancelled) setAuthChecked(true);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [pathname]);
+
+  // Redirection globale: si pas connecté, renvoyer vers login automatiquement
+  useEffect(() => {
+    if (!authChecked) return;
+    if (isAuthPage) return;
+    if (userRole) return;
+    if (typeof window === "undefined") return;
+
+    const cur = window.location.pathname + window.location.search;
+    const isWorkerArea =
+      (pathname || "").startsWith("/worker") ||
+      (pathname || "").startsWith("/public/workers");
+    const target = isWorkerArea
+      ? `/login/worker?returnUrl=${encodeURIComponent(cur)}`
+      : `/login/director?returnUrl=${encodeURIComponent(cur)}`;
+    router.replace(target);
+  }, [authChecked, isAuthPage, pathname, router, userRole]);
 
   const baseBtn =
     "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm transition-colors border";
@@ -52,7 +86,26 @@ export default function TopNav() {
     <div className="w-full border-b bg-white/80 backdrop-blur dark:bg-zinc-900/80">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 py-3 pr-3 pl-0">
         <div className="flex items-center gap-2">
-          {!isAuthPage && (
+          {isAuthPage ? (
+            <>
+              <Link
+                href={`/login/worker${authReturnQuery}`}
+                className={`${baseBtn} ${(pathname || "").startsWith("/login/worker") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                aria-label="התחברות עובד"
+                aria-current={(pathname || "").startsWith("/login/worker") ? "page" : undefined}
+              >
+                התחברות עובד
+              </Link>
+              <Link
+                href={`/login/director${authReturnQuery}`}
+                className={`${baseBtn} ${(pathname || "").startsWith("/login/director") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                aria-label="התחברות מנהל"
+                aria-current={(pathname || "").startsWith("/login/director") ? "page" : undefined}
+              >
+                התחברות מנהל
+              </Link>
+            </>
+          ) : (
             <>
               {userRole === "director" ? (
                 <>
