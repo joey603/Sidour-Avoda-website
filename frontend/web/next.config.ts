@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  outputFileTracingRoot: "/Users/yoelibarthel/Sidour Avoda G1/frontend/web",
+  // IMPORTANT: ne pas mettre un chemin absolu local ici (ça casse les builds Vercel/CI).
+  // Laisser Next.js choisir le root correctement en fonction de l'environnement.
 };
 
 export default nextConfig;
