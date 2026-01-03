@@ -21,6 +21,11 @@ import Color from "@tiptap/extension-color";
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const truncateMobile6 = (value: any) => {
+    const s = String(value ?? "");
+    const chars = Array.from(s);
+    return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
+  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [site, setSite] = useState<any>(null);
@@ -449,6 +454,18 @@ export default function PlanningPage() {
   const [draggingWorkerName, setDraggingWorkerName] = useState<string | null>(null);
   const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
   const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
+  const dragSourceRef = useRef<{
+    dayKey: string;
+    shiftName: string;
+    stationIndex: number;
+    slotIndex: number;
+    workerName: string;
+  } | null>(null);
+  const didDropRef = useRef(false);
+  const isPhoneWidth = () =>
+    typeof window !== "undefined" &&
+    !!window.matchMedia &&
+    window.matchMedia("(max-width: 767px)").matches;
 
   // Helpers: day order and shift kind
   const dayOrder = ["sun","mon","tue","wed","thu","fri","sat"] as const;
@@ -610,13 +627,76 @@ export default function PlanningPage() {
   }
 
   function onWorkerDragStart(e: React.DragEvent, workerName: string) {
+    didDropRef.current = false;
+    dragSourceRef.current = null;
     try {
       e.dataTransfer.setData("text/plain", workerName);
       e.dataTransfer.effectAllowed = "copy";
     } catch {}
+    // If drag starts from an existing assigned chip, remember its origin (for mobile "drag out = delete")
+    try {
+      const el = e.currentTarget as HTMLElement | null;
+      const dayKey = el?.getAttribute?.("data-dkey") || "";
+      const shiftName = el?.getAttribute?.("data-sname") || "";
+      const stationIndex = Number(el?.getAttribute?.("data-stidx") || NaN);
+      const slotIndex = Number(el?.getAttribute?.("data-slotidx") || NaN);
+      const nm = (workerName || "").trim();
+      if (dayKey && shiftName && Number.isFinite(stationIndex) && Number.isFinite(slotIndex) && nm) {
+        dragSourceRef.current = { dayKey, shiftName, stationIndex, slotIndex, workerName: nm };
+      }
+    } catch {}
     setDraggingWorkerName((workerName || "").trim() || null);
     // debug
     try { console.log("[DND] dragstart worker:", workerName); } catch {}
+  }
+
+  function onWorkerDragEnd() {
+    // Mobile manual mode: if you dragged an already-assigned worker and didn't drop into any slot => delete it
+    const src = dragSourceRef.current;
+    const shouldDelete = isManual && isPhoneWidth() && !!src && !didDropRef.current;
+    const nm = (src?.workerName || draggingWorkerName || "").trim();
+    setDraggingWorkerName(null);
+    dragSourceRef.current = null;
+    didDropRef.current = false;
+    if (!shouldDelete || !src || !nm) return;
+
+    setManualAssignments((prev) => {
+      if (!prev) return prev;
+      const base = JSON.parse(JSON.stringify(prev));
+      const arr: string[] = base[src.dayKey]?.[src.shiftName]?.[src.stationIndex] || [];
+      base[src.dayKey] = base[src.dayKey] || {};
+      base[src.dayKey][src.shiftName] = base[src.dayKey][src.shiftName] || [];
+      // Remove only the dragged slot (preserve others), then compact
+      base[src.dayKey][src.shiftName][src.stationIndex] = (arr as string[])
+        .map((x: string, i: number) => (i === src.slotIndex ? "" : x))
+        .filter(Boolean);
+
+      // If a red availability overlay was added for this name/day/shift and this was the last occurrence, remove it too
+      try {
+        const nameTrimmed = nm;
+        const stillThere = (base?.[src.dayKey]?.[src.shiftName] || []).some(
+          (cell: string[]) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nameTrimmed),
+        );
+        if (!stillThere) {
+          setAvailabilityOverlays((prevOv) => {
+            const next: any = { ...prevOv };
+            if (next?.[nameTrimmed]?.[src.dayKey]) {
+              const list: string[] = Array.from(next[nameTrimmed][src.dayKey] || []);
+              const filtered = list.filter((s) => s !== src.shiftName);
+              if (filtered.length > 0) {
+                next[nameTrimmed][src.dayKey] = filtered;
+              } else {
+                delete next[nameTrimmed][src.dayKey];
+                if (Object.keys(next[nameTrimmed] || {}).length === 0) delete next[nameTrimmed];
+              }
+            }
+            return next;
+          });
+        }
+      } catch {}
+
+      return base;
+    });
   }
 
   // Slot-level DnD only in manual mode; no cell-level drop
@@ -945,6 +1025,7 @@ export default function PlanningPage() {
         }
       }
     }
+    didDropRef.current = true;
     dropIntoSlot(dayKey, shiftName, stationIndex, slotIndex, name, roleHintAttr, true);
     setHoverSlotKey(null);
     setDraggingWorkerName(null);
@@ -1025,8 +1106,10 @@ export default function PlanningPage() {
       }
     }
     try { console.log("[DND] onCellContainerDrop applying", { targetDay, targetShift, targetStation, targetSlot, name, expectedRole }); } catch {}
+    didDropRef.current = true;
     dropIntoSlot(targetDay, targetShift, targetStation, targetSlot, name, expectedRole, true);
     setHoverSlotKey(null);
+    setDraggingWorkerName(null);
   }
 
   // Construire un mapping nom -> couleur distincte (éviter rouge/vert), stable et réparti (golden angle)
@@ -1991,10 +2074,10 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen p-6 pb-24">
+    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-24">
       <div
         className={
-          "mx-auto max-w-[1800px] space-y-6 rounded-xl " +
+          "mx-auto w-full max-w-none space-y-6 rounded-xl " +
           (editingSaved
             ? "ring-2 ring-[#00A8E0] ring-offset-4 ring-offset-white dark:ring-offset-zinc-950"
             : (isSavedMode
@@ -2019,7 +2102,7 @@ export default function PlanningPage() {
           <p className="text-red-600">{error}</p>
         ) : (
           <>
-          <div className="rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
+          <div className="w-full rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>
               <div className="text-lg font-medium">{site?.name}</div>
@@ -4694,18 +4777,21 @@ export default function PlanningPage() {
                           </button>
                           </div>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full border-collapse text-sm table-fixed">
+                        {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
+                        <div className="overflow-x-hidden md:overflow-x-auto">
+                          <table className="w-full border-collapse table-fixed text-[8px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-right align-bottom w-28">משמרת</th>
+                                <th className="px-0 md:px-2 py-0.5 md:py-2 text-right align-bottom w-10 md:w-28 text-[8px] md:text-sm">משמרת</th>
                                 {dayCols.map((d, i) => {
                                   const date = addDays(weekStart, i);
                                   return (
-                                    <th key={d.key} className="px-2 py-2 text-center align-bottom">
-                                      <div className="flex flex-col items-center leading-tight">
-                                        <span className="text-xs text-zinc-500">{formatHebDate(date)}</span>
-                                        <span className="mt-0.5">{d.label}</span>
+                                    <th key={d.key} className="px-0.5 md:px-2 py-0.5 md:py-2 text-center align-bottom">
+                                      <div className="flex flex-col items-center leading-tight min-w-0">
+                                        <span className="text-[5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
+                                          {formatHebDate(date)}
+                                        </span>
+                                        <span className="mt-0.5 text-[8px] md:text-sm">{d.label}</span>
                                       </div>
                                     </th>
                                   );
@@ -4718,15 +4804,29 @@ export default function PlanningPage() {
                                 const enabled = !!stationShift?.enabled;
                                 return (
                                   <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-2 py-2 w-28">
-                                  <div className="flex flex-col items-start">
+                                <td className="px-0 md:px-2 py-0.5 md:py-2 w-10 md:w-28">
+                                  <div className="flex flex-col items-start min-w-0">
                                     {(() => {
                                       const h = hoursFromConfig(st, sn) || hoursOf(sn);
                                       return h ? (
-                                        <div className="text-[10px] leading-none text-zinc-500 mb-0.5">{h}</div>
+                                        <div className="text-[7px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
+                                          {(() => {
+                                            const s = String(h || "").trim();
+                                            const parts = s.split(/[-–—]/).map((x) => x.trim()).filter(Boolean);
+                                            if (parts.length >= 2) {
+                                              return (
+                                                <span className="flex flex-col">
+                                                  <span>{parts[0]}</span>
+                                                  <span>{parts[1]}</span>
+                                                </span>
+                                              );
+                                            }
+                                            return s;
+                                          })()}
+                                        </div>
                                       ) : null;
                                     })()}
-                                    <div className="font-medium">{sn}</div>
+                                    <div className="font-medium text-[6px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
                                   </div>
                                 </td>
                                     {dayCols.map((d, dayIdx) => {
@@ -5060,8 +5160,9 @@ export default function PlanningPage() {
                                                               >
                       <span
                                                                   key={"slot-nm-" + slotIdx}
+                                                                  tabIndex={0}
                                                                   className={
-                                                                    "relative inline-flex min-h-9 max-w-[6rem] group-hover:max-w-[18rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none group-hover:z-50 transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none group-hover:z-50 focus:z-50 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (() => {
                                                                       if (pullsModeStationIdx !== idx) return "";
@@ -5134,22 +5235,28 @@ export default function PlanningPage() {
                                                                     });
                                                                   }}
                                                                   onDragStart={(e) => onWorkerDragStart(e, nm)}
-                                                                  onDragEnd={() => setDraggingWorkerName(null)}
+                                                                  onDragEnd={onWorkerDragEnd}
                                                                   data-slot="1"
                                                                   data-dkey={d.key}
                                                                   data-sname={sn}
                                                                   data-stidx={idx}
                                                                   data-slotidx={slotIdx}
                                                                 >
-                                                                  <span className="flex flex-col items-center text-center flex-1 min-w-0">
+                                                                  <span className="flex flex-col items-center text-center flex-1 min-w-0 w-full overflow-hidden">
                                                                     {rn ? (
-                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"block w-full min-w-0 max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {nm}
+                                                                      {/* Mobile: tronqué par défaut, complet quand focus/hover */}
+                                                                      <span className="md:hidden">
+                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
+                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                      </span>
+                                                                      {/* Desktop: ellipsis classique */}
+                                                                      <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
                                                                     </span>
                                                                     {(() => {
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5169,7 +5276,7 @@ export default function PlanningPage() {
                                                                         <button
                                                                           type="button"
                                                                           dir="ltr"
-                                                                          className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                          className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                           onClick={(e) => {
                                                                             e.stopPropagation();
                                                                             const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -5267,7 +5374,7 @@ export default function PlanningPage() {
                                                                         return base;
                                                                       });
                                                                     }}
-                                                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60 flex-shrink-0"
+                                                                    className="hidden md:inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60 flex-shrink-0"
                                                                     style={{ borderColor: (rc?.border || c.border), color: c.text }}
                                                                   >
                                                                     ×
@@ -5283,7 +5390,7 @@ export default function PlanningPage() {
                                                             return (
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
-                                                                className="w-full flex justify-center py-0.5"
+                                                                className="group w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -5307,8 +5414,9 @@ export default function PlanningPage() {
                                                                 data-rolehint={hint}
                                                               >
                                                                 <span
+                                                                  tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-transform cursor-pointer " +
+                                                                    "inline-flex h-6 md:h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none focus:z-50 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5364,8 +5472,8 @@ export default function PlanningPage() {
                                                                     });
                                                                   }}
                       >
-                                                                  <span className="text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
-                        <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                  <span className="text-[7px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
+                        <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
                                                               </div>
                     );
@@ -5373,7 +5481,7 @@ export default function PlanningPage() {
                                                           return (
                                                               <div
                                                                 key={"slot-empty-wrapper-" + slotIdx}
-                                                                className="w-full flex justify-center py-0.5"
+                                                                className="group w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -5397,8 +5505,9 @@ export default function PlanningPage() {
                                                               >
                                                       <span
                                                                   key={"slot-empty-" + slotIdx}
+                                                                  tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-transform cursor-pointer " +
+                                                                    "inline-flex h-6 md:h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none focus:z-50 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5557,7 +5666,7 @@ export default function PlanningPage() {
                                                           const roleToShow = rn || pullRoleName || null;
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
-                                                            "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 focus:max-w-[18rem] focus:z-50 focus:outline-none " +
                                                             (() => {
                                                               if (pullsModeStationIdx !== idx) return "";
                                                               const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5577,6 +5686,7 @@ export default function PlanningPage() {
                                                               key={"nm-" + i}
                                                               className={chipClass}
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                              tabIndex={0}
                                                               onClick={(e) => {
                                                                 if (pullsModeStationIdx !== idx) return;
                                                                 if (isSavedMode && !editingSaved) return;
@@ -5634,15 +5744,21 @@ export default function PlanningPage() {
                                                                 });
                                                               }}
                                                             >
-                                                              <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
+                                                              <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0 w-full overflow-hidden">
                                                                 {roleToShow ? (
-                                                                  <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                  <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
                                                                 <span
-                                                                  className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                  className={"block w-full min-w-0 max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
-                                                                  {nm}
+                                                                  {/* Mobile: tronqué par défaut, complet quand focus/hover */}
+                                                                  <span className="md:hidden">
+                                                                    <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
+                                                                    <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                  </span>
+                                                                  {/* Desktop: ellipsis classique */}
+                                                                  <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
                                                                 </span>
                                                                 {(() => {
                                                                   const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5662,7 +5778,7 @@ export default function PlanningPage() {
                                                                     <button
                                                                       type="button"
                                                                       dir="ltr"
-                                                                      className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                      className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                       onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -5727,18 +5843,18 @@ export default function PlanningPage() {
                                                             {/* Expansion animée au survol (pas de tooltip) */}
                                                             <div
                                                               aria-hidden
-                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 group-focus-within:opacity-100 group-focus-within:scale-100 transition-all duration-200 ease-out"
                                                             >
                                                               <span
-                                                                className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
+                                                                className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
                                                                 style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                               >
                                                                 <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                   {roleToShow ? (
-                                                                    <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                    <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                   ) : null}
                                                                   <span
-                                                                    className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                    className={"text-[8px] md:text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                     dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                   >
                                                                     {nm}
@@ -5751,7 +5867,7 @@ export default function PlanningPage() {
                                                       };
                                                       
                                                       return (
-                                                        <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
+                                                        <div className="flex flex-col items-center gap-0.5 md:gap-1 w-full px-1 md:px-2 py-0.5 md:py-1">
                                                           {slots.map((slot, slotIdx) => {
                                                             if (slot.type === 'assigned' && slot.name) {
                                                               return renderChip(slot.name, slotIdx, slot.role ?? null);
@@ -5766,7 +5882,7 @@ export default function PlanningPage() {
                                                                   <span
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
-                                                                      "inline-flex h-9 min-w-[4rem] max-w-[6rem] flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 cursor-pointer " +
+                                                                      "inline-flex h-6 md:h-9 min-w-[3rem] md:min-w-[4rem] max-w-[4rem] md:max-w-[6rem] flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 cursor-pointer " +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     style={{ borderColor: c.border }}
@@ -5821,8 +5937,8 @@ export default function PlanningPage() {
                                                                       });
                                                                     }}
                                                                   >
-                                                                    <span className="text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
-                                                                    <span className="text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                    <span className="text-[7px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
+                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -5836,7 +5952,7 @@ export default function PlanningPage() {
                                                                   <span
                                                                     key={"empty-" + slotIdx}
                                                                     className={
-                                                                      "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-pointer " +
+                                                                      "inline-flex h-6 md:h-9 min-w-[3rem] md:min-w-[4rem] max-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-pointer " +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     onClick={(e) => {
@@ -5906,7 +6022,7 @@ export default function PlanningPage() {
                                               ) : null}
                                               <span
                                                 className={
-                                                "text-xs " + (
+                                                "text-[9px] md:text-xs " + (
                                                     assignedCount < required
                                                     ? "text-red-600 dark:text-red-400"
                                                       : (required > 0 && assignedCount >= required
@@ -5917,10 +6033,10 @@ export default function PlanningPage() {
                                               >
                                                 {"שיבוצים: "}{assignedCount}
                                               </span>
-                                              <span className="text-xs text-zinc-500">נדרש: {required}</span>
+                                              <span className="text-[9px] md:text-xs text-zinc-500">נדרש: {required}</span>
                                           </div>
                                         ) : (
-                                          <span className="text-xs">לא פעיל</span>
+                                          <span className="text-[9px] md:text-xs">לא פעיל</span>
                                         )}
                                       </td>
                                       );
@@ -5942,7 +6058,7 @@ export default function PlanningPage() {
                                     key={w.id}
                                     draggable
                                     onDragStart={(e) => onWorkerDragStart(e, w.name)}
-                                    onDragEnd={() => setDraggingWorkerName(null)}
+                                    onDragEnd={onWorkerDragEnd}
                                     className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm select-none cursor-grab active:cursor-grabbing"
                                     style={{ backgroundColor: c.bg, borderColor: c.border, color: c.text }}
                                   >
@@ -7321,7 +7437,7 @@ export default function PlanningPage() {
         const total = 1 + (alts?.length || 0);
         return (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-zinc-900/90 dark:border-zinc-800">
-            <div className="mx-auto max-w-[1800px] px-3 py-3 md:py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-3 md:gap-4 text-sm">
+            <div className="mx-auto w-full max-w-none px-3 sm:px-6 py-3 md:py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-3 md:gap-4 text-sm">
               {/* Left: Generate Plan + Mode toggle */}
               <div className="flex items-center justify-center md:justify-start gap-2 md:gap-3 flex-wrap order-2 md:order-1">
                 <button
