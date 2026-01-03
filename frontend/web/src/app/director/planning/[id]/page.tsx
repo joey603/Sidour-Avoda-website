@@ -5162,7 +5162,7 @@ export default function PlanningPage() {
                                                                   key={"slot-nm-" + slotIdx}
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none group-hover:z-50 focus:z-50 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none group-hover:z-30 focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (() => {
                                                                       if (pullsModeStationIdx !== idx) return "";
@@ -5416,7 +5416,7 @@ export default function PlanningPage() {
                                                                 <span
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-50 " +
+                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5507,7 +5507,7 @@ export default function PlanningPage() {
                                                                   key={"slot-empty-" + slotIdx}
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-50 " +
+                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5666,7 +5666,7 @@ export default function PlanningPage() {
                                                           const roleToShow = rn || pullRoleName || null;
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
-                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 focus:max-w-[18rem] focus:z-50 focus:outline-none " +
+                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 focus:max-w-[18rem] focus:z-30 focus:outline-none " +
                                                             (() => {
                                                               if (pullsModeStationIdx !== idx) return "";
                                                               const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5843,7 +5843,7 @@ export default function PlanningPage() {
                                                             {/* Expansion animée au survol (pas de tooltip) */}
                                                             <div
                                                               aria-hidden
-                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 group-focus-within:opacity-100 group-focus-within:scale-100 transition-all duration-200 ease-out"
+                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 group-focus-within:opacity-100 group-focus-within:scale-100 transition-all duration-200 ease-out"
                                                             >
                                                               <span
                                                                 className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
