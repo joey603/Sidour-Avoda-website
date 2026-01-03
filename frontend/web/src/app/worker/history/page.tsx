@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import LoadingAnimation from "@/components/loading-animation";
 
 interface Site {
   id: number;
@@ -267,7 +268,7 @@ export default function WorkerHistoryPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-lg">טוען...</p>
+        <LoadingAnimation size={80} />
       </div>
     );
   }
@@ -607,7 +608,7 @@ export default function WorkerHistoryPage() {
                   </table>
                 </div>
               ) : (
-                <p className="text-sm text-zinc-500">טוען נתונים...</p>
+                <LoadingAnimation className="py-4" size={50} />
               )}
             </section>
           </>

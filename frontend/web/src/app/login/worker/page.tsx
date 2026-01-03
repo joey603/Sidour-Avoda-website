@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe, setToken, getToken, clearToken } from "@/lib/auth";
+import LoadingAnimation from "@/components/loading-animation";
 
 function WorkerLoginInner() {
   const router = useRouter();
@@ -120,7 +121,7 @@ function WorkerLoginInner() {
 
 export default function WorkerLoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><p className="text-lg">טוען...</p></div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><LoadingAnimation size={80} /></div>}>
       <WorkerLoginInner />
     </Suspense>
   );

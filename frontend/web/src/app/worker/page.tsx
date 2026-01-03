@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import DOMPurify from "dompurify";
+import LoadingAnimation from "@/components/loading-animation";
 
 interface Site {
   id: number;
@@ -525,7 +526,7 @@ export default function WorkerDashboard() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-lg">טוען...</p>
+        <LoadingAnimation size={80} />
       </div>
     );
   }

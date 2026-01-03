@@ -6,6 +6,7 @@ import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import TimePicker from "@/components/time-picker";
 import NumberPicker from "@/components/number-picker";
+import LoadingAnimation from "@/components/loading-animation";
 
 export default function EditSitePage() {
   const router = useRouter();
@@ -132,7 +133,7 @@ export default function EditSitePage() {
     }
   }
 
-  if (initialLoading) return <div className="p-6 text-center">טוען...</div>;
+  if (initialLoading) return <div className="p-6 text-center"><LoadingAnimation size={80} /></div>;
 
   return (
     <div className="min-h-screen p-6">

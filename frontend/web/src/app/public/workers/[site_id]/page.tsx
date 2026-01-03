@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
+import LoadingAnimation from "@/components/loading-animation";
 
 type WorkerAvailability = Record<string, string[]>; // key: day key (sun..sat) -> enabled shift names
 
@@ -131,7 +132,7 @@ export default function PublicWorkerRegistrationPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-lg">טוען...</p>
+        <LoadingAnimation size={80} />
       </div>
     );
   }

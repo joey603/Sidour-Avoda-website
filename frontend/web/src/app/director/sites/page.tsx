@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import LoadingAnimation from "@/components/loading-animation";
 
 interface Site {
   id: number;
@@ -227,7 +228,7 @@ export default function SitesList() {
           </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
           {loading ? (
-            <p>טוען...</p>
+            <LoadingAnimation className="py-8" size={60} />
           ) : (
             <>
               {filteredSites.length === 0 ? (

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
+import LoadingAnimation from "@/components/loading-animation";
 
 type WorkerAvailability = Record<string, string[]>; // key: day key (sun..sat) -> enabled shift names
 type QuestionType = "text" | "dropdown" | "yesno" | "slider";
@@ -418,7 +419,7 @@ export default function WorkerAvailabilityPage() {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-lg">טוען...</p>
+        <LoadingAnimation size={80} />
       </div>
     );
   }
@@ -798,7 +799,7 @@ export default function WorkerAvailabilityPage() {
 
           {!selectedSiteId && sites.length === 1 && (
             <div className="text-center py-4">
-              <p className="text-sm text-zinc-600 dark:text-zinc-400">טוען פרטי אתר...</p>
+              <LoadingAnimation size={50} />
             </div>
           )}
         </div>

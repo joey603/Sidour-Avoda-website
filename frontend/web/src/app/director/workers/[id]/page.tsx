@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import LoadingAnimation from "@/components/loading-animation";
 
 interface Worker {
   id: number;
@@ -237,7 +238,7 @@ export default function WorkerDetailsPage() {
 
         {error && <p className="text-sm text-red-600">{error}</p>}
         {loading ? (
-          <p>טוען...</p>
+          <LoadingAnimation className="py-8" size={60} />
         ) : worker ? (
           <>
             {isCalendarOpen && (

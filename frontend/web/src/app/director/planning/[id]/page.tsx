@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
 import TimePicker from "@/components/time-picker";
+import LoadingAnimation from "@/components/loading-animation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import DOMPurify from "dompurify";
@@ -2097,7 +2098,7 @@ export default function PlanningPage() {
           </button>
         </div>
         {loading ? (
-          <p>טוען...</p>
+          <LoadingAnimation className="py-8" size={80} />
         ) : error ? (
           <p className="text-red-600">{error}</p>
         ) : (
@@ -6616,7 +6617,7 @@ export default function PlanningPage() {
                 </div>
 
                 {messagesLoading ? (
-                  <div className="text-sm text-zinc-500">טוען...</div>
+                  <LoadingAnimation className="py-4" size={60} />
                 ) : visibleMessages.length === 0 ? (
                   <div className="text-sm text-zinc-500">אין הודעות</div>
                 ) : (
@@ -6844,7 +6845,9 @@ export default function PlanningPage() {
                       {messageEditor ? (
                         <EditorContent editor={messageEditor} />
                       ) : (
-                        <div className="min-h-32 bg-white px-3 py-2 text-sm text-zinc-500 dark:bg-zinc-900">טוען...</div>
+                        <div className="min-h-32 bg-white px-3 py-2 dark:bg-zinc-900 flex items-center justify-center">
+                          <LoadingAnimation size={60} />
+                        </div>
                       )}
                     </div>
                     <div className="mt-3 flex items-center justify-between gap-3">
