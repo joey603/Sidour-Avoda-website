@@ -540,7 +540,7 @@ export default function WorkerAvailabilityPage() {
                             )}
                           </div>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="grid grid-cols-2 gap-2">
                           {sortShifts(shifts).map((shift) => {
                             const isSelected = (availability[day.key] || []).includes(shift);
                             return (

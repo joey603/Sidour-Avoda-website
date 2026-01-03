@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
+import TimePicker from "@/components/time-picker";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import DOMPurify from "dompurify";
@@ -1993,7 +1994,7 @@ export default function PlanningPage() {
     <div className="min-h-screen p-6 pb-24">
       <div
         className={
-          "mx-auto max-w-5xl space-y-6 rounded-xl " +
+          "mx-auto max-w-[1800px] space-y-6 rounded-xl " +
           (editingSaved
             ? "ring-2 ring-[#00A8E0] ring-offset-4 ring-offset-white dark:ring-offset-zinc-950"
             : (isSavedMode
@@ -2122,15 +2123,17 @@ export default function PlanningPage() {
                       </button>
                       </div>
                     </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full table-fixed border-collapse text-sm">
+                      {/* Sur mobile: pas de défilement horizontal (tout doit tenir). Sur desktop: autoriser si besoin. */}
+                      <div className="overflow-x-hidden md:overflow-x-auto">
+                        <table className="w-full table-fixed border-collapse text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-3 py-2 text-center w-40">שם</th>
-                              <th className="px-3 py-2 text-center">מקס' משמרות</th>
-                              <th className="px-3 py-2 text-center">תפקידים</th>
-                              <th className="px-3 py-2 text-center">זמינות</th>
-                              <th className="px-3 py-2"></th>
+                              <th className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 text-[10px] md:text-sm">שם</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-12 md:w-auto text-[10px] md:text-sm">מקס'</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-16 md:w-auto text-[10px] md:text-sm">תפקידים</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-20 md:w-auto text-[10px] md:text-sm">זמינות</th>
+                              {/* Actions: cachées sur mobile (cliquer la ligne ouvre עריכת עובד) */}
+                              <th className="hidden md:table-cell px-1 md:px-3 py-1 md:py-2 w-16 md:w-auto"></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2207,19 +2210,40 @@ export default function PlanningPage() {
                               );
                             }
                             return rows.map((w) => (
-                              <tr key={w.id} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-3 py-2 text-center w-40 overflow-hidden">
+                              <tr
+                                key={w.id}
+                                className="border-b last:border-0 dark:border-zinc-800 cursor-pointer md:cursor-default hover:bg-zinc-50 dark:hover:bg-zinc-800 md:hover:bg-transparent md:dark:hover:bg-transparent"
+                                onClick={() => {
+                                  // Sur mobile: pas de colonne d'actions → cliquer la ligne ouvre עריכת עובד
+                                  if (typeof window !== "undefined" && window.innerWidth < 768) {
+                                    setEditingWorkerId(w.id);
+                                    // eslint-disable-next-line no-console
+                                    console.log("[Planning] edit worker (row click)", w);
+                                    setNewWorkerName(w.name);
+                                    setNewWorkerMax(w.maxShifts);
+                                    setNewWorkerRoles([...w.roles]);
+                                    const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                                    setOriginalAvailability({ ...wa });
+                                    setNewWorkerAvailability({ ...wa });
+                                    setIsAddModalOpen(true);
+                                    void refreshWorkersAnswersFromApi();
+                                  }
+                                }}
+                              >
+                                <td className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 overflow-hidden">
                                   <span
-                                    className="block w-full truncate text-center"
+                                    className="block w-full truncate text-center text-[10px] md:text-sm"
                                     dir={isRtlName(w.name) ? "rtl" : "ltr"}
                                     title={w.name}
                                   >
                                     {w.name}
                                   </span>
                                 </td>
-                                <td className="px-3 py-2 text-center">{w.maxShifts}</td>
-                                <td className="px-3 py-2 text-center">{w.roles.join(", ") || "—"}</td>
-                                <td className="px-3 py-2 text-center">
+                                <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
+                                <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
+                                  {w.roles.join(",") || "—"}
+                                </td>
+                                <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
                                   {dayDefs.map((d, i) => {
                                     const baseRaw = (w.availability[d.key] || []) as string[];
                                     const base = [...baseRaw].sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
@@ -2227,12 +2251,12 @@ export default function PlanningPage() {
                                       .filter((sn) => !baseRaw.includes(sn))
                                       .sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
                                     return (
-                                    <span key={d.key} className="inline-block ltr:mr-2 rtl:ml-2 text-zinc-600 dark:text-zinc-300">
-                                        <span className="font-semibold">{d.label}</span>:{" "}
+                                    <span key={d.key} className="block md:inline-block ltr:mr-0.5 md:ltr:mr-2 rtl:ml-0.5 md:rtl:ml-2 text-zinc-600 dark:text-zinc-300">
+                                        <span className="font-semibold">{d.label}</span>:
                                         {base.length > 0 ? base.join("/") : "—"}
                                         {extra.length > 0 && (
                                           <>
-                                            {base.length > 0 ? " / " : ""}
+                                            {base.length > 0 ? "/" : ""}
                                             {extra.map((sn, idx) => (
                                               <span key={sn + idx} className="text-red-600 dark:text-red-400">
                                                 {sn}{idx < extra.length - 1 ? "/" : ""}
@@ -2240,16 +2264,18 @@ export default function PlanningPage() {
                                   ))}
                                           </>
                                         )}
-                                        {i < dayDefs.length - 1 ? "  " : ""}
+                                        {i < dayDefs.length - 1 ? " " : ""}
                                       </span>
                                     );
                                   })}
                                 </td>
-                                <td className="px-3 py-2 text-left">
-                                  <div className="flex items-center gap-2">
+                                {/* Actions: desktop uniquement */}
+                                <td className="hidden md:table-cell px-1 md:px-3 py-1 md:py-2 text-left">
+                                  <div className="flex flex-col md:flex-row items-center md:items-center gap-0.5 md:gap-2">
                                     <button
                                       type="button"
-                                      onClick={() => {
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         setEditingWorkerId(w.id);
                                         // eslint-disable-next-line no-console
                                         console.log("[Planning] edit worker", w);
@@ -2266,16 +2292,17 @@ export default function PlanningPage() {
                                       }}
                                       disabled={isSavedMode && !editingSaved}
                                       className={
-                                        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
+                                        "inline-flex items-center gap-0.5 md:gap-1 rounded-md border px-1 md:px-2 py-0.5 md:py-1 text-[10px] md:text-xs " +
                                         ((isSavedMode && !editingSaved) ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600" : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
                                       }
                                     >
-                                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
-                                      ערוך
+                                      <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden className="md:w-3 md:h-3"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
+                                      <span className="hidden md:inline">ערוך</span>
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={async () => {
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
                                         // eslint-disable-next-line no-console
                                         console.log("[Planning] delete click worker", w.id, w.name);
                                         if (!confirm(`למחוק את ${w.name}?`)) return;
@@ -2356,14 +2383,14 @@ export default function PlanningPage() {
                                       }}
                                       disabled={(isSavedMode && !editingSaved) || deletingId === w.id}
                                       className={
-                                        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs " +
+                                        "inline-flex items-center gap-0.5 md:gap-1 rounded-md border px-1 md:px-2 py-0.5 md:py-1 text-[10px] md:text-xs " +
                                         (((isSavedMode && !editingSaved) || deletingId === w.id)
                                           ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
                                           : "border-red-600 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40")
                                       }
                                     >
-                                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden><path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/></svg>
-                                      מחק
+                                      <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden className="md:w-3 md:h-3"><path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/></svg>
+                                      <span className="hidden md:inline">מחק</span>
                                     </button>
                                   </div>
                                 </td>
@@ -2799,7 +2826,7 @@ export default function PlanningPage() {
                     );
                   })()}
 
-                  <div className="mt-4 flex items-center justify-center gap-2">
+                  <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
                     <button
                       type="button"
                       onClick={() => setIsAddModalOpen(false)}
@@ -2860,6 +2887,45 @@ export default function PlanningPage() {
                         className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                       >
                         שחזר זמינות מהעובד
+                      </button>
+                    )}
+                    {/* Mobile: suppression depuis la popup "עריכת עובד" (placée ליד שמור) */}
+                    {editingWorkerId && (
+                      <button
+                        type="button"
+                        className="md:hidden rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                        disabled={(isSavedMode && !editingSaved) || deletingId === editingWorkerId}
+                        onClick={async () => {
+                          const wid = editingWorkerId;
+                          if (!wid) return;
+                          if (!confirm(`למחוק את ${newWorkerName}?`)) return;
+                          setDeletingId(wid);
+                          setHiddenWorkerIds((prev) => (prev.includes(wid) ? prev : [...prev, wid]));
+                          const previousWorkers = workers;
+                          setWorkers((prev) => prev.filter((x) => x.id !== wid));
+                          setSavedWeekPlan((prev) => {
+                            if (!prev) return prev;
+                            const prevWorkers = Array.isArray(prev.workers) ? prev.workers : [];
+                            return { ...prev, workers: prevWorkers.filter((rw: any) => Number(rw?.id) !== Number(wid)) };
+                          });
+                          try {
+                            await apiFetch(`/director/sites/${params.id}/workers/${wid}`, {
+                              method: "DELETE",
+                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                            });
+                            toast.success("העובד נמחק בהצלחה");
+                            setIsAddModalOpen(false);
+                            setEditingWorkerId(null);
+                          } catch (e: any) {
+                            setWorkers(previousWorkers);
+                            setHiddenWorkerIds((prev) => prev.filter((id) => id !== wid));
+                            toast.error("שגיאה במחיקה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                          } finally {
+                            setDeletingId(null);
+                          }
+                        }}
+                      >
+                        מחק עובד
                       </button>
                     )}
                     <button
@@ -3892,8 +3958,10 @@ export default function PlanningPage() {
                   ידני
                 </button>
               </div>
+              {/* Date navigation - responsive layout */}
               <div className="flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
-                <div className="flex items-center gap-3">
+                {/* Desktop: inline layout */}
+                <div className="hidden md:flex items-center gap-3">
                 <button
                   type="button"
                   aria-label="שבוע קודם"
@@ -3918,6 +3986,65 @@ export default function PlanningPage() {
                     return `שבוע: ${formatHebDate(weekStart)} — ${formatHebDate(end)}`;
                   })()}
                 </span>
+                <button
+                  type="button"
+                  aria-label="שבוע הבא"
+                  onClick={() => {
+                    if (editingSaved) return;
+                    stopAiGeneration();
+                    setAiPlan(null);
+                    setAltIndex(0);
+                    baseAssignmentsRef.current = null;
+                    // Default to automatic mode on week change
+                    setIsManual(false);
+                    setWeekStart((prev) => addDays(prev, 7));
+                  }}
+                  disabled={editingSaved}
+                  className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                </button>
+                <button
+                  type="button"
+                  aria-label="בחר שבוע מלוח שנה"
+                  onClick={() => { if (!editingSaved) setIsCalendarOpen(true); }}
+                  disabled={editingSaved}
+                  className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                    <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
+                    <path d="M7 14h5v5H7z"/>
+                  </svg>
+                </button>
+              </div>
+                {/* Mobile: centered date with buttons on sides */}
+                <div className="flex md:hidden items-center justify-center gap-3 w-full">
+                  <button
+                    type="button"
+                    aria-label="שבוע קודם"
+                    onClick={() => {
+                      if (editingSaved) return;
+                      stopAiGeneration();
+                      setAiPlan(null);
+                      setAltIndex(0);
+                      baseAssignmentsRef.current = null;
+                      // Default to automatic mode on week change
+                      setIsManual(false);
+                      setWeekStart((prev) => addDays(prev, -7));
+                    }}
+                    disabled={editingSaved}
+                    className={`inline-flex items-center rounded-md border px-2 py-1 dark:border-zinc-700 ${editingSaved ? "opacity-50 cursor-not-allowed" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"}`}
+                  >
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+                  </button>
+                  <div className="flex flex-col items-center gap-1 flex-1">
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">שבוע</span>
+                    <div className="flex flex-col items-center gap-0.5">
+                      <span>{formatHebDate(weekStart)}</span>
+                      <span className="text-zinc-400">—</span>
+                      <span>{formatHebDate(addDays(weekStart, 6))}</span>
+                    </div>
+                  </div>
                 <button
                   type="button"
                   aria-label="שבוע הבא"
@@ -7194,15 +7321,160 @@ export default function PlanningPage() {
         const total = 1 + (alts?.length || 0);
         return (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-zinc-900/90 dark:border-zinc-800">
-            <div className="mx-auto max-w-6xl px-3 py-2 grid grid-cols-3 items-center gap-4 text-sm">
-              {/* Left: Save / Edit / Delete */}
+            <div className="mx-auto max-w-[1800px] px-3 py-3 md:py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-3 md:gap-4 text-sm">
+              {/* Left: Generate Plan + Mode toggle */}
+              <div className="flex items-center justify-center md:justify-start gap-2 md:gap-3 flex-wrap order-2 md:order-1">
+                <button
+                  type="button"
+                  onClick={() => { try { triggerGenerateButton(); } catch {} }}
+                  disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 " +
+                    ((aiLoading || (isSavedMode && !editingSaved) || isManual)
+                      ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
+                      : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
+                  }
+                >
+                  {aiLoading ? (
+                    <>
+                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                      </svg>
+                      יוצר...
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+                      </svg>
+                      יצירת תכנון
+          </>
+        )}
+                </button>
+                {(!isSavedMode || editingSaved) && (
             <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModeSwitchTarget("auto");
+                        setShowModeSwitchDialog(true);
+                      }}
+                      className={
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                         (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94 0 .32.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                      </svg>
+                      אוטומטי
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isManual) return;
+                        const nonEmpty = (assignments: any): boolean => {
+                          if (!assignments || typeof assignments !== "object") return false;
+                          for (const dayKey of Object.keys(assignments)) {
+                            const shiftsMap = (assignments as any)[dayKey];
+                            if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                            for (const shiftName of Object.keys(shiftsMap)) {
+                              const perStation = (shiftsMap as any)[shiftName];
+                              if (!Array.isArray(perStation)) continue;
+                              for (const cell of perStation) {
+                                if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                                  return true;
+                                }
+                              }
+                            }
+                          }
+                          return false;
+                        };
+                        const hasContent = !isManual
+                          ? nonEmpty(aiPlan?.assignments as any)
+                          : (nonEmpty(manualAssignments) || (!!savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments as any)));
+                        if (!hasContent) {
+                          try { stopAiGeneration(); } catch {}
+                          setIsManual(true);
+                          return;
+                        }
+                        setModeSwitchTarget("manual");
+                        setShowModeSwitchDialog(true);
+                      }}
+                      className={
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                         (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
+                      }
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M9 11.24V7.5a2.5 2.5 0 0 1 5 0v3.74c1.21-.81 2-2.18 2-3.74C16 5.01 13.99 3 11.5 3S7 5.01 7 7.5c0 1.56.79 2.93 2 3.74zm9.84 4.63l-4.54-2.26c-.17-.07-.35-.11-.54-.11H13v-6c0-.83-.67-1.5-1.5-1.5S10 6.67 10 7.5v10.74l-3.43-.72c-.08-.01-.15-.03-.24-.03-.31 0-.59.13-.79.33l-.79.8 4.94 4.94c.27.27.65.44 1.06.44h6.79c.75 0 1.33-.55 1.44-1.28l.75-5.27c.01-.07.02-.14.02-.2 0-.62-.38-1.16-.91-1.38z"/>
+                      </svg>
+                      ידני
+                    </button>
+                  </div>
+                )}
+                {/* Alternatives sous les boutons mode */}
+                {!isManual && aiPlan && total > 1 && (
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = (altIndex - 1 + total) % total;
+                        setAltIndex(next);
+                        // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
+                        setPullsByHoleKey({});
+                        setPullsEditor(null);
+                        if (next === 0) {
+                          setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
+                        } else {
+                          const alt = alts[next - 1];
+                          setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
+                        }
+                      }}
+                      disabled={total <= 1 || (altIndex === 0 && aiLoading)}
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
+                      </svg>
+                      חלופה
+                    </button>
+                    <span className="min-w-20 text-center">
+                      {altIndex + 1} / {total}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = (altIndex + 1) % total;
+                        setAltIndex(next);
+                        // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
+                        setPullsByHoleKey({});
+                        setPullsEditor(null);
+                        if (next === 0) {
+                          setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
+                        } else {
+                          const alt = alts[next - 1];
+                          setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
+                        }
+                      }}
+                      disabled={total <= 1}
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    >
+                      חלופה
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/>
+                      </svg>
+                    </button>
+                  </div>
+                )}
+                {/* Save / Edit / Delete sous les alternatives */}
+                <div className="flex items-center justify-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={onDeletePlan}
                 disabled={!isSavedMode}
                 className={
-                  "inline-flex items-center gap-2 rounded-md px-3 py-1 text-sm " +
+                    "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm " +
                   (isSavedMode
                     ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
                     : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
@@ -7273,11 +7545,10 @@ export default function PlanningPage() {
                       } catch {}
                     }
                       setEditingSaved(true);
-                    // Ne pas mettre savedWeekPlan à null ici - on le garde pour préserver les couleurs en mode ערוך
                   }}
                   disabled={!isSavedMode}
                   className={
-                    "inline-flex items-center gap-2 rounded-md px-3 py-1 text-sm " +
+                      "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm " +
                     (isSavedMode
                       ? "bg-[#00A8E0] text-white hover:bg-[#0092c6] border border-[#00A8E0]"
                       : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-700")
@@ -7293,7 +7564,7 @@ export default function PlanningPage() {
                   <button
                     type="button"
                     onClick={onCancelEdit}
-                    className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-1 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
+                    className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
@@ -7301,11 +7572,11 @@ export default function PlanningPage() {
                     ביטול
                 </button>
               )}
-              <div className="flex items-center gap-2 whitespace-nowrap">
+                <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                  onClick={() => onSavePlan(false)}
-                  className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-white px-3 py-1 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
+                    onClick={() => onSavePlan(false)}
+                    className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-white px-3 py-2 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                   <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
@@ -7314,163 +7585,19 @@ export default function PlanningPage() {
               </button>
                 <button
                   type="button"
-                  onClick={() => onSavePlan(true)}
-                  className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-1 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
-                >
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                    <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
-                  </svg>
-                  שמור ואשלח
-                </button>
-              </div>
-                {/* Mode toggle near save removed per request */}
-            </div>
-              {/* Middle: Generate Plan + Mode toggle on the right */}
-              <div className="flex items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => { try { triggerGenerateButton(); } catch {} }}
-                  disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
-                  className={
-                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 " +
-                    ((aiLoading || (isSavedMode && !editingSaved) || isManual)
-                      ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
-                      : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
-                  }
-                >
-                  {aiLoading ? (
-                    <>
-                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
-                      </svg>
-                      יוצר...
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
-                      </svg>
-                      יצירת תכנון
-          </>
-        )}
-                </button>
-                {(!isSavedMode || editingSaved) && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setModeSwitchTarget("auto");
-                        setShowModeSwitchDialog(true);
-                      }}
-                      className={
-                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
-                         (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
-                      }
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94 0 .32.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
-                      </svg>
-                      אוטומטי
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isManual) return;
-                        const nonEmpty = (assignments: any): boolean => {
-                          if (!assignments || typeof assignments !== "object") return false;
-                          for (const dayKey of Object.keys(assignments)) {
-                            const shiftsMap = (assignments as any)[dayKey];
-                            if (!shiftsMap || typeof shiftsMap !== "object") continue;
-                            for (const shiftName of Object.keys(shiftsMap)) {
-                              const perStation = (shiftsMap as any)[shiftName];
-                              if (!Array.isArray(perStation)) continue;
-                              for (const cell of perStation) {
-                                if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
-                                  return true;
-                                }
-                              }
-                            }
-                          }
-                          return false;
-                        };
-                        const hasContent = !isManual
-                          ? nonEmpty(aiPlan?.assignments as any)
-                          : (nonEmpty(manualAssignments) || (!!savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments as any)));
-                        if (!hasContent) {
-                          try { stopAiGeneration(); } catch {}
-                          setIsManual(true);
-                          return;
-                        }
-                        setModeSwitchTarget("manual");
-                        setShowModeSwitchDialog(true);
-                      }}
-                      className={
-                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
-                         (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
-                      }
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M9 11.24V7.5a2.5 2.5 0 0 1 5 0v3.74c1.21-.81 2-2.18 2-3.74C16 5.01 13.99 3 11.5 3S7 5.01 7 7.5c0 1.56.79 2.93 2 3.74zm9.84 4.63l-4.54-2.26c-.17-.07-.35-.11-.54-.11H13v-6c0-.83-.67-1.5-1.5-1.5S10 6.67 10 7.5v10.74l-3.43-.72c-.08-.01-.15-.03-.24-.03-.31 0-.59.13-.79.33l-.79.8 4.94 4.94c.27.27.65.44 1.06.44h6.79c.75 0 1.33-.55 1.44-1.28l.75-5.27c.01-.07.02-.14.02-.2 0-.62-.38-1.16-.91-1.38z"/>
-                      </svg>
-                      ידני
-                    </button>
-      </div>
-        )}
-      </div>
-              {/* Right: Alternatives (only in auto mode) */}
-              {!isManual && aiPlan && total > 1 && (
-                <div className="flex items-center justify-end gap-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = (altIndex - 1 + total) % total;
-                      setAltIndex(next);
-                      // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
-                      setPullsByHoleKey({});
-                      setPullsEditor(null);
-                      if (next === 0) {
-                        setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                      } else {
-                        const alt = alts[next - 1];
-                        setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                      }
-                    }}
-                    disabled={total <= 1 || (altIndex === 0 && aiLoading)}
-                    className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                    onClick={() => onSavePlan(true)}
+                    className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
                   >
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
-                    </svg>
-                    חלופה
-                  </button>
-                  <span className="min-w-20 text-center">
-                    {altIndex + 1} / {total}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = (altIndex + 1) % total;
-                      setAltIndex(next);
-                      // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
-                      setPullsByHoleKey({});
-                      setPullsEditor(null);
-                      if (next === 0) {
-                        setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                      } else {
-                        const alt = alts[next - 1];
-                        setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                      }
-                    }}
-                    disabled={total <= 1}
-                    className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                  >
-                    חלופה
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/>
-                    </svg>
-                  </button>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                      </svg>
+                    שמור ואשלח
+                </button>
                 </div>
-        )}
+              </div>
+      </div>
+              {/* Middle column - now empty, can be removed or used for other content */}
+              <div className="flex items-center justify-center gap-2 flex-wrap order-1 md:order-2"></div>
       </div>
           </div>
         );
@@ -7488,16 +7615,16 @@ export default function PlanningPage() {
           >
             <div className="mb-3 flex items-center justify-between">
               <div className="text-lg font-semibold">משיכות</div>
-              <button
-                type="button"
+                    <button
+                      type="button"
                 className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 onClick={() => setPullsEditor(null)}
                 aria-label="סגור"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                   <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-              </button>
+                      </svg>
+                    </button>
             </div>
 
             <div className="text-sm text-zinc-600 dark:text-zinc-300 mb-3">
@@ -7539,34 +7666,28 @@ export default function PlanningPage() {
                         </option>
                       ))}
                     </select>
-                  </div>
-                )}
+      </div>
+        )}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-xs text-zinc-500">
                     התחלה
-                    <input
-                      type="time"
-                      step="60"
-                      dir="ltr"
-                      inputMode="numeric"
+                    <TimePicker
                       value={pullsEditor.beforeStart}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeStart: e.target.value } : p))}
+                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, beforeStart: v } : p))}
                       className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      dir="ltr"
                     />
                   </label>
                   <label className="text-xs text-zinc-500">
                     סיום
-                    <input
-                      type="time"
-                      step="60"
-                      dir="ltr"
-                      inputMode="numeric"
+                    <TimePicker
                       value={pullsEditor.beforeEnd}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeEnd: e.target.value } : p))}
+                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, beforeEnd: v } : p))}
                       className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      dir="ltr"
                     />
                   </label>
-                </div>
+      </div>
               </div>
 
               <div className="rounded-md border p-3 dark:border-zinc-700">
@@ -7591,26 +7712,20 @@ export default function PlanningPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-xs text-zinc-500">
                     התחלה
-                    <input
-                      type="time"
-                      step="60"
-                      dir="ltr"
-                      inputMode="numeric"
+                    <TimePicker
                       value={pullsEditor.afterStart}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterStart: e.target.value } : p))}
+                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, afterStart: v } : p))}
                       className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      dir="ltr"
                     />
                   </label>
                   <label className="text-xs text-zinc-500">
                     סיום
-                    <input
-                      type="time"
-                      step="60"
-                      dir="ltr"
-                      inputMode="numeric"
+                    <TimePicker
                       value={pullsEditor.afterEnd}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterEnd: e.target.value } : p))}
+                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, afterEnd: v } : p))}
                       className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                      dir="ltr"
                     />
                   </label>
                 </div>
@@ -7618,10 +7733,10 @@ export default function PlanningPage() {
             </div>
 
             <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
+                  <button
+                    type="button"
                 className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
-                onClick={() => {
+                    onClick={() => {
                   const p = pullsEditor;
                   if (!p) return;
                   const existing: any = (pullsByHoleKey as any)?.[p.key];
@@ -7666,17 +7781,17 @@ export default function PlanningPage() {
                   nextAssignments[p.dayKey][p.shiftName][p.stationIdx] = nextNames;
                   if (isManual) {
                     setManualAssignments(nextAssignments);
-                  } else {
+                      } else {
                     setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: nextAssignments } : prev));
-                  }
+                      }
 
                   setPullsEditor(null);
-                }}
-              >
+                    }}
+                  >
                 מחק
-              </button>
-              <button
-                type="button"
+                  </button>
+                  <button
+                    type="button"
                 className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 onClick={() => setPullsEditor(null)}
               >
@@ -7685,7 +7800,7 @@ export default function PlanningPage() {
               <button
                 type="button"
                 className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
-                onClick={() => {
+                    onClick={() => {
                   const p = pullsEditor;
                   if (!p) return;
                   // Valider que les horaires restent dans la plage de la garde (gère aussi les gardes qui traversent minuit)
@@ -7783,9 +7898,9 @@ export default function PlanningPage() {
                   nextAssignments[p.dayKey][p.shiftName][p.stationIdx] = nextNames;
                   if (isManual) {
                     setManualAssignments(nextAssignments);
-                  } else {
+                      } else {
                     setAiPlan((prev) => (prev && prev.assignments ? { ...prev, assignments: nextAssignments } : prev));
-                  }
+                      }
                   setPullsByHoleKey((prev) => ({
                     ...(prev || {}),
                     [p.key]: {
@@ -7798,10 +7913,10 @@ export default function PlanningPage() {
                 }}
               >
                 שמור
-              </button>
-            </div>
+                  </button>
+                </div>
+      </div>
           </div>
-        </div>
       )}
     </div>
   );

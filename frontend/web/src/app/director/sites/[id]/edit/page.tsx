@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import TimePicker from "@/components/time-picker";
+import NumberPicker from "@/components/number-picker";
 
 export default function EditSitePage() {
   const router = useRouter();
@@ -160,12 +162,9 @@ export default function EditSitePage() {
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-semibold">מספר עמדות</label>
-              <input
-                type="number"
-                min={0}
+              <NumberPicker
                 value={numStations}
-                onChange={(e) => {
-                  const n = Math.max(0, parseInt(e.target.value || "0", 10));
+                onChange={(n) => {
                   setNumStations(n);
                   setStations((prev) => {
                     const next = [...prev];
@@ -187,6 +186,8 @@ export default function EditSitePage() {
                     return next;
                   });
                 }}
+                min={0}
+                max={20}
                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
             </div>
@@ -214,12 +215,9 @@ export default function EditSitePage() {
                     {st.uniformRoles && (
                       <div>
                         <label className="block text-sm font-semibold">מספר עובדים לעמדה #{idx + 1}</label>
-                        <input
-                          type="number"
-                          min={0}
+                        <NumberPicker
                           value={st.workers}
-                          onChange={(e) => {
-                            const v = Math.max(0, parseInt(e.target.value || "0", 10));
+                          onChange={(v) => {
                             setStations((prev) => prev.map((x, i) => {
                               if (i !== idx) return x;
                               const clampedRoles = x.roles.map((r) => ({ ...r, count: Math.min(r.count, v) }));
@@ -230,6 +228,8 @@ export default function EditSitePage() {
                               return { ...x, workers: v, roles: clampedRoles, shifts: clampedShiftRoles };
                             }));
                           }}
+                          min={0}
+                          max={100}
                           className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                         />
                       </div>
@@ -495,12 +495,9 @@ export default function EditSitePage() {
                                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                   <div>
                                     <label className="block text-xs text-zinc-600 dark:text-zinc-300 mb-1">שעת התחלה</label>
-                                    <input
-                                      type="time"
-                                      dir="ltr"
+                                    <TimePicker
                                       value={sh.start}
-                                      onChange={(e) => {
-                                        const v = e.target.value;
+                                      onChange={(v) => {
                                         setStations((prev) => prev.map((x, i) => {
                                           if (i !== idx) return x;
                                           const shifts = x.shifts.map((ss, j) => {
@@ -511,16 +508,14 @@ export default function EditSitePage() {
                                         }));
                                       }}
                                       className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                                      dir="ltr"
                                     />
                                   </div>
                                   <div>
                                     <label className="block text-xs text-zinc-600 dark:text-zinc-300 mb-1">שעת סיום</label>
-                                    <input
-                                      type="time"
-                                      dir="ltr"
+                                    <TimePicker
                                       value={sh.end}
-                                      onChange={(e) => {
-                                        const v = e.target.value;
+                                      onChange={(v) => {
                                         setStations((prev) => prev.map((x, i) => {
                                           if (i !== idx) return x;
                                             const isMorning = (name: string) => /בוקר/i.test(name) || /morning/i.test(name);
@@ -537,18 +532,16 @@ export default function EditSitePage() {
                                         }));
                                       }}
                                       className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                                      dir="ltr"
                                     />
                                   </div>
                                 </div>
                                 {!st.uniformRoles && (
                                   <div className="md:col-span-4 grid grid-cols-1 gap-3 md:grid-cols-3 items-center">
                                     <div className="text-sm font-medium">מספר עובדים למשמרת</div>
-                                    <input
-                                      type="number"
-                                      min={0}
+                                    <NumberPicker
                                       value={sh.workers}
-                                      onChange={(e) => {
-                                        const val = Math.max(0, parseInt(e.target.value || "0", 10));
+                                      onChange={(val) => {
                                         setStations((prev) => prev.map((x, i) => {
                                           if (i !== idx) return x;
                                           const shifts = x.shifts.map((ss, j) => {
@@ -559,6 +552,8 @@ export default function EditSitePage() {
                                           return { ...x, shifts };
                                         }));
                                       }}
+                                      min={0}
+                                      max={50}
                                       className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                                     />
                                   </div>
@@ -704,12 +699,9 @@ export default function EditSitePage() {
                                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                               <div>
                                                 <label className="block text-xs text-zinc-600 dark:text-zinc-300 mb-1">שעת התחלה</label>
-                                                <input
-                                                  type="time"
-                                                  dir="ltr"
+                                                <TimePicker
                                                   value={sh.start}
-                                                  onChange={(e) => {
-                                                    const v = e.target.value;
+                                                  onChange={(v) => {
                                                     setStations((prev) => prev.map((x, i) => {
                                                       if (i !== idx) return x;
                                                       const next = { ...(x.dayOverrides || {}) } as Record<string, { active: boolean; shifts: StationShift[] }>;
@@ -720,16 +712,14 @@ export default function EditSitePage() {
                                                     }));
                                                   }}
                                                   className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                                                  dir="ltr"
                                                 />
                                               </div>
                                               <div>
                                                 <label className="block text-xs text-zinc-600 dark:text-zinc-300 mb-1">שעת סיום</label>
-                                                <input
-                                                  type="time"
-                                                  dir="ltr"
+                                                <TimePicker
                                                   value={sh.end}
-                                                  onChange={(e) => {
-                                                    const v = e.target.value;
+                                                  onChange={(v) => {
                                                     setStations((prev) => prev.map((x, i) => {
                                                       if (i !== idx) return x;
                                                       const isMorning = (name: string) => /בוקר/i.test(name) || /morning/i.test(name);
@@ -747,18 +737,16 @@ export default function EditSitePage() {
                                                     }));
                                                   }}
                                                   className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                                                  dir="ltr"
                                                 />
                                               </div>
                                             </div>
                                             {!st.uniformRoles && (
                                               <div className="md:col-span-4 grid grid-cols-1 gap-3 md:grid-cols-3 items-center">
                                                 <div className="text-sm font-medium">מספר עובדים למשמרת</div>
-                                                <input
-                                                  type="number"
-                                                  min={0}
+                                                <NumberPicker
                                                   value={sh.workers}
-                                                  onChange={(e) => {
-                                                    const val = Math.max(0, parseInt(e.target.value || "0", 10));
+                                                  onChange={(val) => {
                                                     setStations((prev) => prev.map((x, i) => {
                                                       if (i !== idx) return x;
                                                       const next = { ...(x.dayOverrides || {}) } as Record<string, { active: boolean; shifts: StationShift[] }>;
@@ -768,6 +756,8 @@ export default function EditSitePage() {
                                                       return { ...x, dayOverrides: next };
                                                     }));
                                                   }}
+                                                  min={0}
+                                                  max={50}
                                                   className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                                                 />
                                               </div>
@@ -1095,7 +1085,7 @@ export default function EditSitePage() {
               className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
               <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
-              תצוגה מקדימה
+              תצוגה
             </button>
             <button
               type="button"
@@ -1115,7 +1105,7 @@ export default function EditSitePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowPreview(false)}>
           <div className="w-full max-w-6xl max-h-[90vh] overflow-auto rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4 dark:border-zinc-800 dark:bg-zinc-900">
-              <h2 className="text-xl font-semibold">תצוגה מקדימה: {name || "אתר"}</h2>
+              <h2 className="text-xl font-semibold">תצוגה: {name || "אתר"}</h2>
               <button
                 type="button"
                 onClick={() => setShowPreview(false)}
