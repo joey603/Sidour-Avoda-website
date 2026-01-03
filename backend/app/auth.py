@@ -83,7 +83,7 @@ def worker_login(req: WorkerLoginRequest, db: Session = Depends(get_db)):
     )
     if not user:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-
+    
     # 2) Le "code" identifie le directeur (champ users.director_code)
     code = (req.code or "").strip()
     if not code:

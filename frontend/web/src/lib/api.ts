@@ -49,7 +49,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
               : `/login/director?returnUrl=${encodeURIComponent(cur)}`;
             window.location.href = target;
           } catch {
-            try { window.location.href = "/login/director"; } catch {}
+        try { window.location.href = "/login/director"; } catch {}
           }
         }
       }

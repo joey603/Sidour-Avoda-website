@@ -24,8 +24,8 @@ export default function Home() {
     <div className="min-h-screen p-6 flex items-center justify-center">
       <div className="text-center space-y-3">
         <h1 className="text-2xl font-semibold">
-          ברוך הבא{ name ? ", " : "" }<span className="font-bold" style={{ color: '#00A8E0' }}>{name}</span>
-        </h1>
+        ברוך הבא{ name ? ", " : "" }<span className="font-bold" style={{ color: '#00A8E0' }}>{name}</span>
+      </h1>
         {role === "director" && directorCode ? (
           <div className="text-sm text-zinc-600 dark:text-zinc-300">
             קוד מנהל: <span className="font-semibold text-zinc-900 dark:text-zinc-100" dir="ltr">{directorCode}</span>

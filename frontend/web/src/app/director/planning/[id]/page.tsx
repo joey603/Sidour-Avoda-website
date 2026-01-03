@@ -1843,7 +1843,7 @@ export default function PlanningPage() {
         // Si on publie vers les עובדים, nettoyer le brouillon directeur pour éviter de recharger un ancien draft
         if (publishToWorkers) {
           try { localStorage.removeItem(planKeyDirectorOnly(params.id, start)); } catch {}
-        }
+      }
       }
       // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
       setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
@@ -5268,7 +5268,7 @@ export default function PlanningPage() {
                                                                 data-stidx={idx}
                                                                 data-slotidx={slotIdx}
                                                               >
-                                                                <span
+                                                      <span
                                                                   key={"slot-empty-" + slotIdx}
                                                                   className={
                                                                     "inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-transform cursor-pointer " +
@@ -5329,9 +5329,9 @@ export default function PlanningPage() {
                                                                     });
                                                                   }}
                                                                   style={pullsActiveHere && isPullable ? { outline: "2px solid #fb923c", outlineOffset: "2px" } : undefined}
-                                                                >
-                                                                  —
-                                                                </span>
+                                                      >
+                                                        —
+                                                      </span>
                                                               </div>
                                                           );
                                                         });
