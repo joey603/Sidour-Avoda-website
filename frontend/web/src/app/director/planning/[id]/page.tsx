@@ -5416,7 +5416,7 @@ export default function PlanningPage() {
                                                                 <span
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none focus:z-50 " +
+                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-50 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5507,7 +5507,7 @@ export default function PlanningPage() {
                                                                   key={"slot-empty-" + slotIdx}
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none focus:z-50 " +
+                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-50 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
