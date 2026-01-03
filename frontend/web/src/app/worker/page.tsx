@@ -26,6 +26,11 @@ const dayLabels: Record<string, string> = {
 };
 
 const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
+const truncateMobile6 = (value: any) => {
+  const s = String(value ?? "");
+  const chars = Array.from(s);
+  return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
+};
 
 export default function WorkerDashboard() {
   const router = useRouter();
@@ -532,8 +537,8 @@ export default function WorkerDashboard() {
   }
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="mx-auto max-w-6xl space-y-6">
+    <div className="min-h-screen overflow-x-hidden px-3 sm:px-4 lg:px-4 py-6">
+      <div className="w-full max-w-none space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">ברוך הבא, <span className="font-bold" style={{ color: '#00A8E0' }}>{name}</span></h1>
         </header>
@@ -588,18 +593,18 @@ export default function WorkerDashboard() {
                             <div className="mb-2 flex items-center justify-between">
                               <div className="text-base font-medium">{st.name}</div>
                             </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full border-collapse text-sm table-fixed">
+                            <div className="overflow-x-hidden md:overflow-x-auto -ml-2 md:ml-0">
+                              <table className="w-full border-collapse text-[8px] md:text-sm table-fixed">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-2 py-2 text-right align-bottom w-28">משמרת</th>
+                                    <th className="px-0.5 md:px-2 py-1 md:py-2 text-right align-bottom w-10 md:w-28">משמרת</th>
                                     {dayCols.map((d, i) => {
                                       const date = addDays(currentWeekStart, i);
                                       return (
-                                        <th key={d.key} className="px-2 py-2 text-center align-bottom">
+                                        <th key={d.key} className="px-0.5 md:px-2 py-1 md:py-2 text-center align-bottom">
                                           <div className="flex flex-col items-center leading-tight">
-                                            <span className="text-xs text-zinc-500">{formatHebDate(date)}</span>
-                                            <span className="mt-0.5">{d.label}</span>
+                                            <span className="text-[5px] md:text-xs text-zinc-500">{formatHebDate(date)}</span>
+                                            <span className="mt-0.5 text-[8px] md:text-sm">{d.label}</span>
                                           </div>
                                         </th>
                                       );
@@ -612,15 +617,29 @@ export default function WorkerDashboard() {
                                     const enabled = !!stationShift?.enabled;
                                     return (
                                       <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-2 py-2 w-28">
+                                        <td className="px-0.5 md:px-2 py-1 md:py-2 w-10 md:w-28">
                                           <div className="flex flex-col items-start">
                                             {(() => {
                                               const h = hoursFromConfig(st, sn) || hoursOf(sn);
                                               return h ? (
-                                                <div className="text-[10px] leading-none text-zinc-500 mb-0.5">{h}</div>
+                                                <div className="text-[7px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
+                                                  {(() => {
+                                                    const s = String(h || "").trim();
+                                                    const parts = s.split(/[-–—]/).map((x) => x.trim()).filter(Boolean);
+                                                    if (parts.length >= 2) {
+                                                      return (
+                                                        <span className="flex flex-col">
+                                                          <span>{parts[0]}</span>
+                                                          <span>{parts[1]}</span>
+                                                        </span>
+                                                      );
+                                                    }
+                                                    return s;
+                                                  })()}
+                                                </div>
                                               ) : null;
                                             })()}
-                                            <div className="font-medium">{sn}</div>
+                                            <div className="font-medium text-[6px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
                                           </div>
                                         </td>
                                         {dayCols.map((d, dayIdx) => {
@@ -636,7 +655,7 @@ export default function WorkerDashboard() {
                                             <td
                                               key={d.key}
                                               className={
-                                                "px-2 py-2 text-center " +
+                                                "px-0.5 md:px-2 py-1 md:py-2 text-center " +
                                                 (enabled ? "" : "text-zinc-400 ") +
                                                 (!activeDay ? "bg-zinc-100 text-zinc-400 dark:bg-zinc-900/40 " : "") +
                                                 (isPastDay ? " bg-zinc-100 dark:bg-zinc-900/40 " : "")
@@ -657,7 +676,7 @@ export default function WorkerDashboard() {
                                                             if (!nm) {
                                                               return (
                                                                 <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
-                                                                  <span className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
+                                                                  <span className="inline-flex h-7 md:h-9 min-w-[2.75rem] max-w-[2.75rem] md:min-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 text-[9px] md:text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
                                                                     —
                                                                   </span>
                                                                 </div>
@@ -677,12 +696,12 @@ export default function WorkerDashboard() {
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
                                                             const chipClass =
-                                                              "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                              "inline-flex min-h-7 md:min-h-9 max-w-[4.5rem] md:max-w-[6rem] items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm gap-2 " +
                                                               (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5" tabIndex={0}>
                                                                 <span
-                                                                  className={chipClass}
+                                                                  className={chipClass + " focus:outline-none"}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
@@ -690,10 +709,16 @@ export default function WorkerDashboard() {
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"text-[9px] md:text-sm truncate max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {nm}
+                                                                      {/* Mobile: tronqué (>6), complet au focus/hover */}
+                                                                      <span className="md:hidden">
+                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
+                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                      </span>
+                                                                      {/* Desktop: ellipsis classique */}
+                                                                      <span className="hidden md:block w-full truncate">{nm}</span>
                                                                     </span>
                                                                     {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
@@ -702,7 +727,7 @@ export default function WorkerDashboard() {
                                                                 {/* Expansion animée au survol (menu worker) */}
                                                                 <div
                                                                   aria-hidden
-                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
                                                                 >
                                                                   <span
                                                                     className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
@@ -713,7 +738,7 @@ export default function WorkerDashboard() {
                                                                         <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                       ) : null}
                                                                       <span
-                                                                        className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"text-[9px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                         dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                       >
                                                                         {nm}
@@ -760,16 +785,16 @@ export default function WorkerDashboard() {
                             const summaryColorMap = buildNameColorMap(plan.currentWeek.assignments, workersList);
                             return (
                               <>
-                                <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                                <div className="mb-2 flex items-center justify-end gap-6 text-[10px] md:text-sm">
                                   <div>סה"כ נדרש: <span className="font-medium">{summary.totalRequired}</span></div>
                                   <div>סה"כ שיבוצים: <span className="font-medium">{summary.totalAssigned}</span></div>
                                 </div>
-                                <div className="overflow-x-auto">
-                                  <table className="w-full border-collapse text-sm table-fixed">
+                                <div className="overflow-x-hidden md:overflow-x-auto">
+                                  <table className="w-full border-collapse text-[10px] md:text-sm table-fixed">
                                     <thead>
                                       <tr className="border-b dark:border-zinc-800">
-                                        <th className="px-2 py-2 text-right w-64">עובד</th>
-                                        <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                                        <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">עובד</th>
+                                        <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -777,9 +802,9 @@ export default function WorkerDashboard() {
                                         const col = getColorForName(nm, summaryColorMap);
                                         return (
                                           <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                            <td className="px-2 py-2 w-64">
+                                            <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64">
                                               <span
-                                                className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm max-w-full min-w-0"
+                                                className="inline-flex items-center rounded-full border px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full min-w-0"
                                                 style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
                                               >
                                                 <span
@@ -791,7 +816,7 @@ export default function WorkerDashboard() {
                                                 </span>
                                               </span>
                                             </td>
-                                            <td className="px-2 py-2 w-28">{c}</td>
+                                            <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28">{c}</td>
                                           </tr>
                                         );
                                       })}
@@ -834,12 +859,12 @@ export default function WorkerDashboard() {
                                       </a>
                                     ),
                                     table: ({ children }) => (
-                                      <div className="overflow-x-auto">
-                                        <table className="w-full border-collapse text-sm">{children}</table>
+                                      <div className="overflow-x-hidden md:overflow-x-auto">
+                                        <table className="w-full border-collapse text-[10px] md:text-sm table-fixed">{children}</table>
                                       </div>
                                     ),
-                                    th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
-                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
+                                    th: ({ children }) => <th className="border px-1 md:px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
+                                    td: ({ children }) => <td className="border px-1 md:px-2 py-1 text-right align-top">{children}</td>,
                                   }}
                                 >
                                   {raw}
@@ -889,18 +914,18 @@ export default function WorkerDashboard() {
                             <div className="mb-2 flex items-center justify-between">
                               <div className="text-base font-medium">{st.name}</div>
                             </div>
-                            <div className="overflow-x-auto">
-                              <table className="w-full border-collapse text-sm table-fixed">
+                            <div className="overflow-x-hidden md:overflow-x-auto -ml-2 md:ml-0">
+                              <table className="w-full border-collapse text-[8px] md:text-sm table-fixed">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-2 py-2 text-right align-bottom w-28">משמרת</th>
+                                    <th className="px-0.5 md:px-2 py-1 md:py-2 text-right align-bottom w-10 md:w-28">משמרת</th>
                                     {dayCols.map((d, i) => {
                                       const date = addDays(nextWeekStart, i);
                                       return (
-                                        <th key={d.key} className="px-2 py-2 text-center align-bottom">
+                                        <th key={d.key} className="px-0.5 md:px-2 py-1 md:py-2 text-center align-bottom">
                                           <div className="flex flex-col items-center leading-tight">
-                                            <span className="text-xs text-zinc-500">{formatHebDate(date)}</span>
-                                            <span className="mt-0.5">{d.label}</span>
+                                            <span className="text-[5px] md:text-xs text-zinc-500">{formatHebDate(date)}</span>
+                                            <span className="mt-0.5 text-[8px] md:text-sm">{d.label}</span>
                                           </div>
                                         </th>
                                       );
@@ -913,15 +938,29 @@ export default function WorkerDashboard() {
                                     const enabled = !!stationShift?.enabled;
                                     return (
                                       <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-2 py-2 w-28">
+                                        <td className="px-0.5 md:px-2 py-1 md:py-2 w-10 md:w-28">
                                           <div className="flex flex-col items-start">
                                             {(() => {
                                               const h = hoursFromConfig(st, sn) || hoursOf(sn);
                                               return h ? (
-                                                <div className="text-[10px] leading-none text-zinc-500 mb-0.5">{h}</div>
+                                                <div className="text-[7px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
+                                                  {(() => {
+                                                    const s = String(h || "").trim();
+                                                    const parts = s.split(/[-–—]/).map((x) => x.trim()).filter(Boolean);
+                                                    if (parts.length >= 2) {
+                                                      return (
+                                                        <span className="flex flex-col">
+                                                          <span>{parts[0]}</span>
+                                                          <span>{parts[1]}</span>
+                                                        </span>
+                                                      );
+                                                    }
+                                                    return s;
+                                                  })()}
+                                                </div>
                                               ) : null;
                                             })()}
-                                            <div className="font-medium">{sn}</div>
+                                            <div className="font-medium text-[6px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
                                           </div>
                                         </td>
                                         {dayCols.map((d, dayIdx) => {
@@ -937,7 +976,7 @@ export default function WorkerDashboard() {
                                             <td
                                               key={d.key}
                                               className={
-                                                "px-2 py-2 text-center " +
+                                                "px-0.5 md:px-2 py-1 md:py-2 text-center " +
                                                 (enabled ? "" : "text-zinc-400 ") +
                                                 (!activeDay ? "bg-zinc-100 text-zinc-400 dark:bg-zinc-900/40 " : "") +
                                                 (isPastDay ? " bg-zinc-100 dark:bg-zinc-900/40 " : "")
@@ -958,7 +997,7 @@ export default function WorkerDashboard() {
                                                             if (!nm) {
                                                               return (
                                                                 <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
-                                                                  <span className="inline-flex h-9 min-w-[4rem] max-w-[6rem] items-center justify-center rounded-full border px-3 py-1 text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
+                                                                  <span className="inline-flex h-7 md:h-9 min-w-[2.75rem] max-w-[2.75rem] md:min-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 text-[9px] md:text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
                                                                     —
                                                                   </span>
                                                                 </div>
@@ -978,12 +1017,12 @@ export default function WorkerDashboard() {
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
                                                             const chipClass =
-                                                              "inline-flex min-h-9 max-w-[6rem] items-start rounded-full border px-3 py-1 shadow-sm gap-2 " +
+                                                              "inline-flex min-h-7 md:min-h-9 max-w-[4.5rem] md:max-w-[6rem] items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm gap-2 " +
                                                               (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5">
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5" tabIndex={0}>
                                                                 <span
-                                                                  className={chipClass}
+                                                                  className={chipClass + " focus:outline-none"}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
@@ -991,10 +1030,16 @@ export default function WorkerDashboard() {
                                                                       <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"text-sm truncate max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"text-[9px] md:text-sm truncate max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {nm}
+                                                                      {/* Mobile: tronqué (>6), complet au focus/hover */}
+                                                                      <span className="md:hidden">
+                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
+                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                      </span>
+                                                                      {/* Desktop: ellipsis classique */}
+                                                                      <span className="hidden md:block w-full truncate">{nm}</span>
                                                                     </span>
                                                                     {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
                                                                   </span>
@@ -1003,7 +1048,7 @@ export default function WorkerDashboard() {
                                                                 {/* Expansion animée au survol (menu worker) */}
                                                                 <div
                                                                   aria-hidden
-                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
                                                                 >
                                                                   <span
                                                                     className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
@@ -1014,7 +1059,7 @@ export default function WorkerDashboard() {
                                                                         <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                       ) : null}
                                                                       <span
-                                                                        className={"text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"text-[9px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                         dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                       >
                                                                         {nm}
@@ -1061,16 +1106,16 @@ export default function WorkerDashboard() {
                             const summaryColorMap = buildNameColorMap(plan.nextWeek.assignments, workersList);
                             return (
                               <>
-                                <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                                <div className="mb-2 flex items-center justify-end gap-6 text-[10px] md:text-sm">
                                   <div>סה"כ נדרש: <span className="font-medium">{summary.totalRequired}</span></div>
                                   <div>סה"כ שיבוצים: <span className="font-medium">{summary.totalAssigned}</span></div>
                                 </div>
-                                <div className="overflow-x-auto">
-                                  <table className="w-full border-collapse text-sm table-fixed">
+                                <div className="overflow-x-hidden md:overflow-x-auto">
+                                  <table className="w-full border-collapse text-[10px] md:text-sm table-fixed">
                                     <thead>
                                       <tr className="border-b dark:border-zinc-800">
-                                        <th className="px-2 py-2 text-right w-64">עובד</th>
-                                        <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                                        <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">עובד</th>
+                                        <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                       </tr>
                                     </thead>
                                     <tbody>
@@ -1078,9 +1123,9 @@ export default function WorkerDashboard() {
                                         const col = getColorForName(nm, summaryColorMap);
                                         return (
                                           <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                            <td className="px-2 py-2 w-64">
+                                            <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64">
                                               <span
-                                                className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm max-w-full min-w-0"
+                                                className="inline-flex items-center rounded-full border px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full min-w-0"
                                                 style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
                                               >
                                                 <span
@@ -1092,7 +1137,7 @@ export default function WorkerDashboard() {
                                                 </span>
                                               </span>
                                             </td>
-                                            <td className="px-2 py-2 w-28">{c}</td>
+                                            <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28">{c}</td>
                                           </tr>
                                         );
                                       })}
@@ -1135,12 +1180,12 @@ export default function WorkerDashboard() {
                                       </a>
                                     ),
                                     table: ({ children }) => (
-                                      <div className="overflow-x-auto">
-                                        <table className="w-full border-collapse text-sm">{children}</table>
+                                      <div className="overflow-x-hidden md:overflow-x-auto">
+                                        <table className="w-full border-collapse text-[10px] md:text-sm table-fixed">{children}</table>
                                       </div>
                                     ),
-                                    th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
-                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
+                                    th: ({ children }) => <th className="border px-1 md:px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
+                                    td: ({ children }) => <td className="border px-1 md:px-2 py-1 text-right align-top">{children}</td>,
                                   }}
                                 >
                                   {raw}
