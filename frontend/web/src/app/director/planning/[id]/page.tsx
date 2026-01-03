@@ -2074,7 +2074,7 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-24">
+    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40">
       <div
         className={
           "mx-auto w-full max-w-none space-y-6 rounded-xl " +
@@ -2204,7 +2204,7 @@ export default function PlanningPage() {
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                         הוסף עובד
                       </button>
-                      </div>
+                    </div>
                     </div>
                       {/* Sur mobile: pas de défilement horizontal (tout doit tenir). Sur desktop: autoriser si besoin. */}
                       <div className="overflow-x-hidden md:overflow-x-auto">
@@ -4775,7 +4775,7 @@ export default function PlanningPage() {
                           >
                             איפוס עמדה
                           </button>
-                          </div>
+                        </div>
                         </div>
                         {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
                         <div className="overflow-x-hidden md:overflow-x-auto">
@@ -5247,7 +5247,7 @@ export default function PlanningPage() {
                                                                       <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"block w-full min-w-0 max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
                                                                       {/* Mobile: tronqué par défaut, complet quand focus/hover */}
@@ -5749,7 +5749,7 @@ export default function PlanningPage() {
                                                                   <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
                                                                 <span
-                                                                  className={"block w-full min-w-0 max-w-full leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                  className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
                                                                   {/* Mobile: tronqué par défaut, complet quand focus/hover */}
@@ -5854,7 +5854,7 @@ export default function PlanningPage() {
                                                                     <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                   ) : null}
                                                                   <span
-                                                                    className={"text-[8px] md:text-sm whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                    className={"text-[8px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                     dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                   >
                                                                     {nm}
@@ -6144,12 +6144,12 @@ export default function PlanningPage() {
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
-                        <div className="overflow-x-auto">
-                        <table className="w-full border-collapse text-sm table-fixed">
+                        <div className="overflow-x-hidden md:overflow-x-auto">
+                        <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-2 py-2 text-right w-64">עובד</th>
-                              <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">עובד</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -6157,12 +6157,12 @@ export default function PlanningPage() {
                               const col = colorForName(nm);
                               return (
                                 <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                  <td className="px-2 py-2 w-64">
-                                    <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                      {nm}
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
+                                    <span className="inline-flex items-center rounded-full border px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
+                                      <span className="min-w-0 truncate">{nm}</span>
                                     </span>
                                   </td>
-                                  <td className="px-2 py-2 w-28">{c}</td>
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                 </tr>
                               );
                             })}
@@ -6247,12 +6247,12 @@ export default function PlanningPage() {
                           if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
                           const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
                           return (
-                            <div className="mt-4 overflow-x-auto">
-                              <table className="w-full border-collapse text-sm table-fixed">
+                            <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
+                              <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-2 py-2 text-right w-64">תפקיד</th>
-                                    <th className="px-2 py-2 text-right w-28">סה"כ שיבוצים</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">תפקיד</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -6260,12 +6260,12 @@ export default function PlanningPage() {
                                     const rc = colorForRole(rName);
                                     return (
                                       <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-2 py-2 w-64">
-                                          <span className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-sm shadow-sm" style={{ borderColor: rc.border, color: rc.text }}>
-                                            {rName}
+                                        <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
+                                          <span className="inline-flex items-center rounded-full border bg-white px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ borderColor: rc.border, color: rc.text }}>
+                                            <span className="min-w-0 truncate">{rName}</span>
                                           </span>
                                         </td>
-                                        <td className="px-2 py-2 w-28">{cnt}</td>
+                                        <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                       </tr>
                                     );
                                   })}
@@ -6549,12 +6549,12 @@ export default function PlanningPage() {
                             if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
                             const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
                             return (
-                              <div className="mt-4 overflow-x-auto">
-                                <table className="w-full border-collapse text-sm table-fixed">
+                              <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
+                                <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
-                                      <th className="px-2 py-2 text-right w-64">תפקיד</th>
-                                      <th className="px-2 py-2 text-right w-28">סה"כ שיבוצים</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">תפקיד</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -6562,12 +6562,12 @@ export default function PlanningPage() {
                                       const rc = colorForRole(rName);
                                       return (
                                         <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                          <td className="px-2 py-2 w-64">
-                                            <span className="inline-flex items-center rounded-full border bg-white px-3 py-1 text-sm shadow-sm" style={{ borderColor: rc.border, color: rc.text }}>
-                                              {rName}
+                                          <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
+                                            <span className="inline-flex items-center rounded-full border bg-white px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ borderColor: rc.border, color: rc.text }}>
+                                              <span className="min-w-0 truncate">{rName}</span>
                                             </span>
                                           </td>
-                                          <td className="px-2 py-2 w-28">{cnt}</td>
+                                          <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                         </tr>
                                       );
                                     })}
@@ -7437,15 +7437,16 @@ export default function PlanningPage() {
         const total = 1 + (alts?.length || 0);
         return (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-zinc-900/90 dark:border-zinc-800">
-            <div className="mx-auto w-full max-w-none px-3 sm:px-6 py-3 md:py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-3 md:gap-4 text-sm">
-              {/* Left: Generate Plan + Mode toggle */}
-              <div className="flex items-center justify-center md:justify-start gap-2 md:gap-3 flex-wrap order-2 md:order-1">
+            <div className="mx-auto w-full max-w-none px-3 sm:px-6 py-3 md:py-4 grid grid-cols-1 place-items-center gap-3 md:gap-4 text-sm">
+              {/* Left: Mobile landscape = 2 lignes centrées */}
+              <div className="flex items-center justify-center md:justify-center gap-2 md:gap-3 flex-wrap order-2 md:order-1">
+                <div className="flex items-center justify-center gap-2 flex-wrap w-full md:w-auto [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                 <button
                   type="button"
                   onClick={() => { try { triggerGenerateButton(); } catch {} }}
                   disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
                   className={
-                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 " +
+                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                     ((aiLoading || (isSavedMode && !editingSaved) || isManual)
                       ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
                       : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
@@ -7468,7 +7469,7 @@ export default function PlanningPage() {
         )}
                 </button>
                 {(!isSavedMode || editingSaved) && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -7476,7 +7477,7 @@ export default function PlanningPage() {
                         setShowModeSwitchDialog(true);
                       }}
                       className={
-                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                          (isManual ? "dark:border-zinc-700" : "bg-[#00A8E0] text-white border-[#00A8E0]")
                       }
                     >
@@ -7518,7 +7519,7 @@ export default function PlanningPage() {
                         setShowModeSwitchDialog(true);
                       }}
                       className={
-                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm " +
+                        "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                          (isManual ? "bg-[#00A8E0] text-white border-[#00A8E0]" : "dark:border-zinc-700")
                       }
                     >
@@ -7529,9 +7530,9 @@ export default function PlanningPage() {
                     </button>
                   </div>
                 )}
-                {/* Alternatives sous les boutons mode */}
+                {/* Alternatives sur la même ligne que création/auto/manuel */}
                 {!isManual && aiPlan && total > 1 && (
-                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                  <div className="flex items-center justify-center gap-2 flex-wrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                     <button
                       type="button"
                       onClick={() => {
@@ -7548,15 +7549,15 @@ export default function PlanningPage() {
                         }
                       }}
                       disabled={total <= 1 || (altIndex === 0 && aiLoading)}
-                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                     >
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                         <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/>
                       </svg>
                       חלופה
                     </button>
-                    <span className="min-w-20 text-center">
-                      {altIndex + 1} / {total}
+                    <span className="min-w-14 text-center whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs">
+                      {altIndex + 1}/{total}
                     </span>
                     <button
                       type="button"
@@ -7574,7 +7575,7 @@ export default function PlanningPage() {
                         }
                       }}
                       disabled={total <= 1}
-                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                     >
                       חלופה
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
@@ -7583,14 +7584,15 @@ export default function PlanningPage() {
                     </button>
                   </div>
                 )}
+                </div>
                 {/* Save / Edit / Delete sous les alternatives */}
-                <div className="flex items-center justify-center gap-2 flex-wrap">
+                <div className="flex items-center justify-center gap-2 flex-wrap md:flex-nowrap w-full md:w-auto [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                 <button
                   type="button"
                   onClick={onDeletePlan}
                 disabled={!isSavedMode}
                 className={
-                    "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm " +
+                    "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                   (isSavedMode
                     ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
                     : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
@@ -7664,7 +7666,7 @@ export default function PlanningPage() {
                   }}
                   disabled={!isSavedMode}
                   className={
-                      "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm " +
+                      "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                     (isSavedMode
                       ? "bg-[#00A8E0] text-white hover:bg-[#0092c6] border border-[#00A8E0]"
                       : "bg-zinc-300 text-zinc-600 cursor-not-allowed opacity-60 dark:bg-zinc-700 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-700")
@@ -7680,7 +7682,7 @@ export default function PlanningPage() {
                   <button
                     type="button"
                     onClick={onCancelEdit}
-                    className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600"
+                    className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
@@ -7688,11 +7690,11 @@ export default function PlanningPage() {
                     ביטול
                 </button>
               )}
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
               <button
                 type="button"
                     onClick={() => onSavePlan(false)}
-                    className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-white px-3 py-2 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
+                    className="inline-flex items-center gap-2 rounded-md border border-green-600 bg-white px-3 py-2 text-sm text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                   <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
@@ -7702,7 +7704,7 @@ export default function PlanningPage() {
                 <button
                   type="button"
                     onClick={() => onSavePlan(true)}
-                    className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                    className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                   >
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
