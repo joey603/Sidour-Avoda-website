@@ -114,7 +114,8 @@ export default function SitesList() {
         </section>
 
         <div className="rounded-xl border p-4 dark:border-zinc-800">
-          <div className="mb-2 grid grid-cols-3 items-center gap-3">
+          {/* Desktop: grid avec titre, recherche et bouton sur la même ligne */}
+          <div className="mb-2 hidden md:grid grid-cols-3 items-center gap-3">
             <h2 className="text-lg font-semibold justify-self-start">רשימת אתרים</h2>
             <div className="justify-self-center w-full flex justify-center">
               <div className="relative w-56 md:w-64">
@@ -144,7 +145,63 @@ export default function SitesList() {
               </button>
             </div>
           </div>
-          <div className="mb-4 flex items-center justify-start">
+
+          {/* Mobile: titre, recherche, boutons de vue en colonne */}
+          <div className="mb-2 md:hidden space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">רשימת אתרים</h2>
+              <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+                הוסף אתר
+              </button>
+            </div>
+            <div className="relative w-full">
+              <svg
+                className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="חיפוש אתר לפי שם"
+                aria-label="חיפוש אתר"
+                className="h-9 w-full rounded-md border pl-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
+              />
+            </div>
+            <div className="flex items-center justify-start">
+              <div className="inline-flex rounded-md border dark:border-zinc-700 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  className={`px-3 py-1.5 text-sm ${viewMode === "list" ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "bg-white text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"}`}
+                  aria-label="תצוגת רשימה"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z"/>
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("cards")}
+                  className={`px-3 py-1.5 text-sm ${viewMode === "cards" ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "bg-white text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"}`}
+                  aria-label="תצוגת כרטיסים"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Desktop: boutons de vue (séparés) */}
+          <div className="mb-4 hidden md:flex items-center justify-start">
             <div className="inline-flex rounded-md border dark:border-zinc-700 overflow-hidden">
               <button
                 type="button"
