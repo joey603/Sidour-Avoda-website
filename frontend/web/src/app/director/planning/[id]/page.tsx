@@ -5417,7 +5417,8 @@ export default function PlanningPage() {
                                                                 <span
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    // Même gabarit que les chips "remplies" (mode téléphone inclus)
+                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5508,7 +5509,8 @@ export default function PlanningPage() {
                                                                   key={"slot-empty-" + slotIdx}
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "inline-flex h-6 md:h-9 w-[2.75rem] max-w-[2.75rem] md:w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    // Même gabarit que les chips "remplies" (mode téléphone inclus)
+                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5567,7 +5569,9 @@ export default function PlanningPage() {
                                                                   }}
                                                                   style={pullsActiveHere && isPullable ? { outline: "2px solid #fb923c", outlineOffset: "2px" } : undefined}
                                                       >
-                                                        —
+                                                                {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
+                                                                <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                       </span>
                                                               </div>
                                                           );
@@ -5878,12 +5882,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
-                                                                  className="w-full flex justify-center py-0.5"
+                                                                  className="group w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
-                                                                      "inline-flex h-6 md:h-9 min-w-[3rem] md:min-w-[4rem] max-w-[4rem] md:max-w-[6rem] flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 cursor-pointer " +
+                                                                      // Même gabarit que les chips "remplies" (mode téléphone inclus)
+                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     style={{ borderColor: c.border }}
@@ -5948,12 +5953,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={"empty-wrapper-" + slotIdx}
-                                                                  className="w-full flex justify-center py-0.5"
+                                                                  className="group w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={"empty-" + slotIdx}
                                                                     className={
-                                                                      "inline-flex h-6 md:h-9 min-w-[3rem] md:min-w-[4rem] max-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 cursor-pointer " +
+                                                                      // Même gabarit que les chips "remplies" (mode téléphone inclus)
+                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     onClick={(e) => {
@@ -6009,7 +6015,9 @@ export default function PlanningPage() {
                                                                       });
                                                                     }}
                                                                   >
-                                                                    —
+                                                                    {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
+                                                                    <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
