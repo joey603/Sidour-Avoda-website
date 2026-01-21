@@ -148,6 +148,7 @@ export default function PlanningPage() {
   // Mode édition après chargement d'une grille sauvegardée
   const [editingSaved, setEditingSaved] = useState(false);
   const [savedPlanLoading, setSavedPlanLoading] = useState(false);
+  const [workersLoading, setWorkersLoading] = useState(false);
 
   // --- Clés de sauvegarde planning ---
   // Shared => visible côté עובדים (WorkerDashboard / History)
@@ -1564,6 +1565,7 @@ export default function PlanningPage() {
     const reqId = ++loadWorkersReqIdRef.current;
     const weekKeyAtCall = weekStart.getTime();
     try {
+      setWorkersLoading(true);
       // eslint-disable-next-line no-console
       console.log("[Planning] loadWorkers: fetching...", { reqId, weekKeyAtCall });
       const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
@@ -1753,6 +1755,11 @@ export default function PlanningPage() {
       }
     } catch (e: any) {
       toast.error("שגיאה בטעינת עובדים", { description: e?.message || "נסה שוב מאוחר יותר." });
+    } finally {
+      // Ne pas écraser un chargement plus récent (changement de semaine rapide)
+      if (reqId === loadWorkersReqIdRef.current && weekStartRef.current && weekStartRef.current.getTime() === weekKeyAtCall) {
+        setWorkersLoading(false);
+      }
     }
   }
 
@@ -4196,6 +4203,14 @@ export default function PlanningPage() {
               </div>
               {/* Date navigation - responsive layout */}
               <div className="flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
+                {/*
+                  Loading indicator when switching weeks and we need to refetch data from DB:
+                  workers + weekly availability + saved plans (+ messages if applicable)
+                */}
+                {(() => {
+                  const menuLoading = workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading;
+                  return menuLoading ? <LoadingAnimation size={22} /> : null;
+                })()}
                 {/* Desktop: inline layout */}
                 <div className="hidden md:flex items-center gap-3">
                 <button
@@ -4274,7 +4289,12 @@ export default function PlanningPage() {
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
                   </button>
                   <div className="flex flex-col items-center gap-1 flex-1">
-                    <span className="text-xs text-zinc-500 dark:text-zinc-400">שבוע</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400">שבוע</span>
+                      {(workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading) ? (
+                        <LoadingAnimation size={18} />
+                      ) : null}
+                    </div>
                     <div className="flex flex-col items-center gap-0.5">
                       <span>{formatHebDate(weekStart)}</span>
                       <span className="text-zinc-400">—</span>
