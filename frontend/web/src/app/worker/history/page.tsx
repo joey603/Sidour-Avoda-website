@@ -285,7 +285,7 @@ export default function WorkerHistoryPage() {
     }
   }, [weekStart, isCalendarOpen]);
 
-  if (loading || weekPlanLoading) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <LoadingAnimation size={80} />
@@ -296,6 +296,11 @@ export default function WorkerHistoryPage() {
   return (
     <div className="min-h-screen p-6">
       <div className="mx-auto max-w-3xl space-y-6">
+        {weekPlanLoading ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+            <LoadingAnimation size={96} />
+          </div>
+        ) : null}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">היסטוריה</h1>
           <div className="flex-1 flex items-center justify-center gap-2">

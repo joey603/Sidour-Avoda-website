@@ -372,6 +372,7 @@ export default function PlanningPage() {
   // Weekly per-worker availability overrides (per week, per site). Keys by worker name.
   const [weeklyAvailability, setWeeklyAvailability] = useState<Record<string, WorkerAvailability>>({});
   const [weeklyAvailabilityLoading, setWeeklyAvailabilityLoading] = useState(false);
+  const isRefreshingWeekData = workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading;
 
   // Helpers to compute week key and persist weekly availability in localStorage
   function weekKeyOf(date: Date): string {
@@ -2249,12 +2250,18 @@ export default function PlanningPage() {
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
           </button>
         </div>
-        {loading || workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading ? (
+        {loading ? (
           <LoadingAnimation className="py-8" size={80} />
         ) : error ? (
           <p className="text-red-600">{error}</p>
         ) : (
           <>
+          {/* Lazy loading: keep UI visible, show a centered overlay while week data refreshes */}
+          {isRefreshingWeekData ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+              <LoadingAnimation size={96} />
+            </div>
+          ) : null}
           <div className="w-full rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>

@@ -259,10 +259,15 @@ export default function WorkerDetailsPage() {
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {loading || weekPlanLoading ? (
+        {loading ? (
           <LoadingAnimation className="py-8" size={80} />
         ) : worker ? (
           <>
+            {weekPlanLoading ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+                <LoadingAnimation size={96} />
+              </div>
+            ) : null}
             {isCalendarOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsCalendarOpen(false)}>
                 <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-xl max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
