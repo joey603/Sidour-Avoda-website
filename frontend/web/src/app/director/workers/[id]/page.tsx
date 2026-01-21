@@ -55,6 +55,7 @@ export default function WorkerDetailsPage() {
     workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]> }>;
     pulls?: Record<string, { before: { name: string; start: string; end: string }; after: { name: string; start: string; end: string } }>;
   }>(null);
+  const [weekPlanLoading, setWeekPlanLoading] = useState(false);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
@@ -125,6 +126,7 @@ export default function WorkerDetailsPage() {
       try {
         // reset before fetching to avoid showing previous week's plan
         setWeekPlan(null);
+        setWeekPlanLoading(true);
         try {
           const wk = iso(start);
           const fromApi = await apiFetch<any>(`/public/sites/${worker.site_id}/week-plan?week=${encodeURIComponent(wk)}`, {
@@ -159,6 +161,8 @@ export default function WorkerDetailsPage() {
         setWeekPlan(null);
       } catch {
         setWeekPlan(null);
+      } finally {
+        setWeekPlanLoading(false);
       }
     })();
   }, [worker, weekStart]);
@@ -253,6 +257,10 @@ export default function WorkerDetailsPage() {
             חזרה
           </button>
         </div>
+
+        {weekPlanLoading && (
+          <LoadingAnimation className="py-2" size={48} />
+        )}
 
         {error && <p className="text-sm text-red-600">{error}</p>}
         {loading ? (

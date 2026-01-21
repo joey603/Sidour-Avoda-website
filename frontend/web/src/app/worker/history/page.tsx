@@ -28,6 +28,7 @@ const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hé
 export default function WorkerHistoryPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [weekPlanLoading, setWeekPlanLoading] = useState(false);
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
   const [siteConfig, setSiteConfig] = useState<any | null>(null);
@@ -237,6 +238,7 @@ export default function WorkerHistoryPage() {
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const key = `plan_${selectedSiteId}_${iso(start)}`;
     (async () => {
+      setWeekPlanLoading(true);
       try {
         const wk = iso(start);
         const fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
@@ -271,6 +273,10 @@ export default function WorkerHistoryPage() {
         }
       } catch {}
       setWeekPlan(null);
+      setWeekPlanLoading(false);
+      return;
+    })().finally(() => {
+      setWeekPlanLoading(false);
     })();
   }, [selectedSiteId, weekStart]);
 
@@ -330,6 +336,9 @@ export default function WorkerHistoryPage() {
             </button>
           </div>
         </div>
+        {weekPlanLoading && (
+          <LoadingAnimation className="py-2" size={48} />
+        )}
 
         {isCalendarOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsCalendarOpen(false)}>

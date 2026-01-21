@@ -147,6 +147,7 @@ export default function PlanningPage() {
   const isSavedMode = !!savedWeekPlan?.assignments;
   // Mode édition après chargement d'une grille sauvegardée
   const [editingSaved, setEditingSaved] = useState(false);
+  const [savedPlanLoading, setSavedPlanLoading] = useState(false);
 
   // --- Clés de sauvegarde planning ---
   // Shared => visible côté עובדים (WorkerDashboard / History)
@@ -369,6 +370,7 @@ export default function PlanningPage() {
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   // Weekly per-worker availability overrides (per week, per site). Keys by worker name.
   const [weeklyAvailability, setWeeklyAvailability] = useState<Record<string, WorkerAvailability>>({});
+  const [weeklyAvailabilityLoading, setWeeklyAvailabilityLoading] = useState(false);
 
   // Helpers to compute week key and persist weekly availability in localStorage
   function weekKeyOf(date: Date): string {
@@ -392,6 +394,7 @@ export default function PlanningPage() {
   function loadWeeklyAvailability() {
     (async () => {
       try {
+        setWeeklyAvailabilityLoading(true);
         if (typeof window === "undefined") return;
         const wk = getWeekKeyISO(weekStart);
         const fromApi = await apiFetch<Record<string, WorkerAvailability>>(
@@ -409,6 +412,8 @@ export default function PlanningPage() {
       } catch {
         // Fallback: localStorage (par appareil)
         setWeeklyAvailability(readWeeklyAvailabilityFor(weekStart));
+      } finally {
+        setWeeklyAvailabilityLoading(false);
       }
     })();
   }
@@ -1797,6 +1802,7 @@ export default function PlanningPage() {
     const keyDirector = planKeyDirectorOnly(params.id, start);
     const keyShared = planKeyShared(params.id, start);
     try {
+      setSavedPlanLoading(true);
       setSavedWeekPlan(null);
       setEditingSaved(false);
       setPullsByHoleKey({});
@@ -1869,6 +1875,8 @@ export default function PlanningPage() {
       setManualAssignments(null);
       setAltIndex(0);
       baseAssignmentsRef.current = null;
+    } finally {
+      setSavedPlanLoading(false);
     }
   }
 
@@ -2225,14 +2233,19 @@ export default function PlanningPage() {
       >
         <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            aria-label="חזור"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-          </button>
+          <div className="flex items-center gap-3">
+            {(weeklyAvailabilityLoading || savedPlanLoading) && (
+              <LoadingAnimation size={28} />
+            )}
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="חזור"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+            </button>
+          </div>
         </div>
         {loading ? (
           <LoadingAnimation className="py-8" size={80} />
