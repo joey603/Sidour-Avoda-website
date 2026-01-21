@@ -452,6 +452,7 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, params.id]);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
+  const [expandedSlotKey, setExpandedSlotKey] = useState<string | null>(null);
   const [draggingWorkerName, setDraggingWorkerName] = useState<string | null>(null);
   const lastDropRef = useRef<{ key: string; ts: number } | null>(null);
   const lastConflictConfirmRef = useRef<{ key: string; ts: number } | null>(null);
@@ -3062,6 +3063,9 @@ export default function PlanningPage() {
                           if (editingWorkerId) {
                             // eslint-disable-next-line no-console
                             console.log("[Workers] calling API (PUT)");
+                            // Récupérer les réponses actuelles du worker pour les préserver
+                            const currentWorker = workers.find((x) => Number(x.id) === Number(editingWorkerId));
+                            const currentAnswers = (currentWorker as any)?.answers || {};
                             const updated = await apiFetch<any>(`/director/sites/${params.id}/workers/${editingWorkerId}`, {
                               method: "PUT",
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
@@ -3069,6 +3073,8 @@ export default function PlanningPage() {
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
+                                // Préserver les réponses existantes (elles sont stockées par semaine dans la structure {week_key: {general: {}, perDay: {}}})
+                                answers: currentAnswers,
                                 // do not update global availability here
                               }),
                             });
@@ -5137,7 +5143,7 @@ export default function PlanningPage() {
                                                             return (
                                                               <div
                                                                 key={"slot-nm-wrapper-" + slotIdx}
-                                                                className="group relative w-full flex justify-center py-0.5"
+                                                                className="group/slot relative w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -5163,8 +5169,11 @@ export default function PlanningPage() {
                                                                   key={"slot-nm-" + slotIdx}
                                                                   tabIndex={0}
                                                                   className={
-                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] group-hover:max-w-[18rem] focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none group-hover:z-30 focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
+                                                                    // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " max-w-[18rem] z-30" : "") +
                                                                     (() => {
                                                                       if (pullsModeStationIdx !== idx) return "";
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5178,6 +5187,19 @@ export default function PlanningPage() {
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                   draggable
+                                                                  onPointerDown={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
+                                                                  onPointerEnter={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") {
+                                                                      setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                    }
+                                                                  }}
+                                                                  onPointerLeave={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") {
+                                                                      setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                    }
+                                                                  }}
+                                                                  onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
+                                                                  onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k))}
                                                                   onClick={(e) => {
                                                                     // Si cette bulle fait partie d'une משיכה, permettre d'ouvrir la popup en cliquant sur la bulle
                                                                     if (pullsModeStationIdx !== idx) return;
@@ -5251,10 +5273,13 @@ export default function PlanningPage() {
                                                                       className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {/* Mobile: tronqué par défaut, complet quand focus/hover */}
+                                                                      {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
                                                                       <span className="md:hidden">
-                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
-                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                        {expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? (
+                                                                          <span className="whitespace-nowrap">{nm}</span>
+                                                                        ) : (
+                                                                          <span>{truncateMobile6(nm)}</span>
+                                                                        )}
                                                                       </span>
                                                                       {/* Desktop: ellipsis classique */}
                                                                       <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
@@ -5391,7 +5416,7 @@ export default function PlanningPage() {
                                                             return (
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
-                                                                className="group w-full flex justify-center py-0.5"
+                                                                className="group/slot w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -5418,7 +5443,7 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5483,7 +5508,7 @@ export default function PlanningPage() {
                                                           return (
                                                               <div
                                                                 key={"slot-empty-wrapper-" + slotIdx}
-                                                                className="group w-full flex justify-center py-0.5"
+                                                                className="group/slot w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -5510,7 +5535,7 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5671,7 +5696,7 @@ export default function PlanningPage() {
                                                           const roleToShow = rn || pullRoleName || null;
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
-                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 focus:max-w-[18rem] focus:z-30 focus:outline-none " +
+                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 md:focus:max-w-[18rem] md:focus:z-30 focus:outline-none " +
                                                             (() => {
                                                               if (pullsModeStationIdx !== idx) return "";
                                                               const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5685,13 +5710,26 @@ export default function PlanningPage() {
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
-                                                              className="group relative w-full flex justify-center py-0.5"
+                                                              className="group/slot relative w-full flex justify-center py-0.5"
                                                             >
                                                             <span
                                                               key={"nm-" + i}
-                                                              className={chipClass}
+                                                              className={chipClass + (expandedSlotKey === `${d.key}|${sn}|${idx}|${i}` ? " max-w-[18rem] z-30" : "")}
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                               tabIndex={0}
+                                                              onPointerDown={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`)}
+                                                              onPointerEnter={(e) => {
+                                                                if ((e as any)?.pointerType === "mouse") {
+                                                                  setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`);
+                                                                }
+                                                              }}
+                                                              onPointerLeave={(e) => {
+                                                                if ((e as any)?.pointerType === "mouse") {
+                                                                  setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${i}` ? null : k));
+                                                                }
+                                                              }}
+                                                              onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`)}
+                                                              onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${i}` ? null : k))}
                                                               onClick={(e) => {
                                                                 if (pullsModeStationIdx !== idx) return;
                                                                 if (isSavedMode && !editingSaved) return;
@@ -5757,10 +5795,13 @@ export default function PlanningPage() {
                                                                   className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
-                                                                  {/* Mobile: tronqué par défaut, complet quand focus/hover */}
+                                                                  {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
                                                                   <span className="md:hidden">
-                                                                    <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
-                                                                    <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                    {expandedSlotKey === `${d.key}|${sn}|${idx}|${i}` ? (
+                                                                      <span className="whitespace-nowrap">{nm}</span>
+                                                                    ) : (
+                                                                      <span>{truncateMobile6(nm)}</span>
+                                                                    )}
                                                                   </span>
                                                                   {/* Desktop: ellipsis classique */}
                                                                   <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
@@ -5848,10 +5889,10 @@ export default function PlanningPage() {
                                                             {/* Expansion animée au survol (pas de tooltip) */}
                                                             <div
                                                               aria-hidden
-                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 group-focus-within:opacity-100 group-focus-within:scale-100 transition-all duration-200 ease-out"
+                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 md:group-hover/slot:opacity-100 md:group-hover/slot:scale-100 md:group-focus-within/slot:opacity-100 md:group-focus-within/slot:scale-100 transition-all duration-200 ease-out"
                                                             >
                                                               <span
-                                                                className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] group-focus-within:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
+                                                                className={chipClass + " max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
                                                                 style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                               >
                                                                 <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
@@ -5882,13 +5923,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
-                                                                  className="group w-full flex justify-center py-0.5"
+                                                                  className="group/slot w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     style={{ borderColor: c.border }}
@@ -5953,13 +5994,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={"empty-wrapper-" + slotIdx}
-                                                                  className="group w-full flex justify-center py-0.5"
+                                                                  className="group/slot w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover:max-w-[18rem] md:group-focus-within:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     onClick={(e) => {
