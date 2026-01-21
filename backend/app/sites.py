@@ -785,8 +785,18 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
     # Pour éviter d'écraser les זמינות soumises par le travailleur
     if payload.availability is not None and len(payload.availability) > 0:
         w.availability = payload.availability
-    if payload.answers is not None and len(payload.answers) > 0:
-        w.answers = payload.answers
+    # Mettre à jour les réponses si elles sont fournies (même si vides, car elles peuvent contenir des structures par semaine)
+    # Important: préserver la structure par semaine {week_key: {general: {}, perDay: {}}}
+    if payload.answers is not None:
+        # Si les réponses sont un dict (structure par semaine), les fusionner au lieu de les remplacer complètement
+        if isinstance(payload.answers, dict) and isinstance(w.answers, dict):
+            # Fusionner les réponses: garder les semaines existantes et mettre à jour celles fournies
+            merged_answers = dict(w.answers)  # Copie des réponses existantes
+            merged_answers.update(payload.answers)  # Mettre à jour avec les nouvelles
+            w.answers = merged_answers
+        else:
+            # Si ce n'est pas un dict ou si les réponses existantes ne sont pas un dict, remplacer complètement
+            w.answers = payload.answers
     db.commit()
     db.refresh(w)
     phone = None
