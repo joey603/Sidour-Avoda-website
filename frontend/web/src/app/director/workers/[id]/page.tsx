@@ -258,13 +258,9 @@ export default function WorkerDetailsPage() {
           </button>
         </div>
 
-        {weekPlanLoading && (
-          <LoadingAnimation className="py-2" size={48} />
-        )}
-
         {error && <p className="text-sm text-red-600">{error}</p>}
-        {loading ? (
-          <LoadingAnimation className="py-8" size={60} />
+        {loading || weekPlanLoading ? (
+          <LoadingAnimation className="py-8" size={80} />
         ) : worker ? (
           <>
             {isCalendarOpen && (

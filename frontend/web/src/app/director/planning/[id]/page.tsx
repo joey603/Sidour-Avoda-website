@@ -2240,21 +2240,16 @@ export default function PlanningPage() {
       >
         <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
-          <div className="flex items-center gap-3">
-            {(weeklyAvailabilityLoading || savedPlanLoading) && (
-              <LoadingAnimation size={28} />
-            )}
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="חזור"
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            aria-label="חזור"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          </button>
         </div>
-        {loading ? (
+        {loading || workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading ? (
           <LoadingAnimation className="py-8" size={80} />
         ) : error ? (
           <p className="text-red-600">{error}</p>
@@ -4203,14 +4198,6 @@ export default function PlanningPage() {
               </div>
               {/* Date navigation - responsive layout */}
               <div className="flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
-                {/*
-                  Loading indicator when switching weeks and we need to refetch data from DB:
-                  workers + weekly availability + saved plans (+ messages if applicable)
-                */}
-                {(() => {
-                  const menuLoading = workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading;
-                  return menuLoading ? <LoadingAnimation size={22} /> : null;
-                })()}
                 {/* Desktop: inline layout */}
                 <div className="hidden md:flex items-center gap-3">
                 <button
@@ -4289,12 +4276,7 @@ export default function PlanningPage() {
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden><path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
                   </button>
                   <div className="flex flex-col items-center gap-1 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400">שבוע</span>
-                      {(workersLoading || weeklyAvailabilityLoading || savedPlanLoading || messagesLoading) ? (
-                        <LoadingAnimation size={18} />
-                      ) : null}
-                    </div>
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">שבוע</span>
                     <div className="flex flex-col items-center gap-0.5">
                       <span>{formatHebDate(weekStart)}</span>
                       <span className="text-zinc-400">—</span>

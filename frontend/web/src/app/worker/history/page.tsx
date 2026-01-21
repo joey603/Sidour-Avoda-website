@@ -285,7 +285,7 @@ export default function WorkerHistoryPage() {
     }
   }, [weekStart, isCalendarOpen]);
 
-  if (loading) {
+  if (loading || weekPlanLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <LoadingAnimation size={80} />
@@ -334,10 +334,6 @@ export default function WorkerHistoryPage() {
             </button>
           </div>
         </div>
-        {weekPlanLoading && (
-          <LoadingAnimation className="py-2" size={48} />
-        )}
-
         {isCalendarOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setIsCalendarOpen(false)}>
             <div className="bg-white dark:bg-zinc-900 rounded-lg p-6 shadow-xl max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
