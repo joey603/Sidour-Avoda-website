@@ -84,6 +84,21 @@ class CreateWorkerUserRequest(BaseModel):
     phone: str
 
 
+class WeeklyAvailabilityPayload(BaseModel):
+    # YYYY-MM-DD (week start)
+    week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
+    # { workerName: { sun: [...], mon: [...], ... } }
+    availability: dict[str, dict[str, list[str]]] = {}
+
+
+class WeekPlanPayload(BaseModel):
+    # YYYY-MM-DD (week start)
+    week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
+    scope: Literal["director", "shared"] = "director"
+    # Payload JSON (même structure que le localStorage historique)
+    data: dict | None = None
+
+
 class AIPlanningRequest(BaseModel):
     time_limit_seconds: int | None = 10
     max_nights_per_worker: int | None = 3

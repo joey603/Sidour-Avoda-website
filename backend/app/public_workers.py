@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from .deps import get_db, get_current_user
-from .models import Site, SiteWorker, SiteMessage, User
+from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User
 from .schemas import WorkerCreate, WorkerOut, SiteMessageOut
 import re
 
@@ -149,6 +149,27 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
         availability=worker.availability or {},
         answers=answers,
     )
+
+
+@router.get("/{site_id}/week-plan", response_model=dict | None)
+def get_published_week_plan(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Planning publié (scope=shared) pour une semaine donnée (visible pour les workers authentifiés)."""
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+    wk = _validate_week_iso(week)
+    row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == "shared")
+        .first()
+    )
+    return row.data if row else None
 
 
 @router.get("/{site_id}/messages", response_model=list[SiteMessageOut])

@@ -294,21 +294,31 @@ export default function WorkerDashboard() {
     return nextWeekStart;
   }
 
-  // Charger le planning pour une semaine donnée
-  function loadWeekPlan(siteId: number, weekStart: Date): any | null {
+  // Charger le planning publié (scope=shared) pour une semaine donnée (DB -> fallback localStorage)
+  async function loadWeekPlan(siteId: number, weekStart: Date): Promise<any | null> {
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const key = `plan_${siteId}_${iso(weekStart)}`;
     try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.assignments) {
-          return parsed;
-        }
+      const wk = iso(weekStart);
+      const fromApi = await apiFetch<any>(`/public/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+      if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
+        try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
+        return fromApi;
       }
     } catch {
       // Ignorer les erreurs
     }
+    // Fallback: localStorage
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.assignments) return parsed;
+      }
+    } catch {}
     return null;
   }
 
@@ -345,8 +355,8 @@ export default function WorkerDashboard() {
             // Charger les plannings
             const currentWeekStart = getCurrentWeekStart();
             const nextWeekStart = getNextWeekStart();
-            const currentPlan = loadWeekPlan(site.id, currentWeekStart);
-            const nextPlan = loadWeekPlan(site.id, nextWeekStart);
+            const currentPlan = await loadWeekPlan(site.id, currentWeekStart);
+            const nextPlan = await loadWeekPlan(site.id, nextWeekStart);
             const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
             const messagesCurrent = await apiFetch<SiteMessage[]>(`/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(currentWeekStart))}`, {
               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },

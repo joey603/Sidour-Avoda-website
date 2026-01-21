@@ -33,6 +33,40 @@ class Site(Base):
     config: Mapped[dict] = mapped_column(JSON, nullable=True)
 
 
+class SiteWeeklyAvailability(Base):
+    __tablename__ = "site_weekly_availability"
+    __table_args__ = (
+        UniqueConstraint("site_id", "week_iso", name="uq_site_weekly_availability_site_week"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    # YYYY-MM-DD (week start, Sunday)
+    week_iso: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    # { workerName: { sun: [...], mon: [...], ... } }
+    availability: Mapped[dict] = mapped_column(JSON, default=dict)
+    # epoch ms
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
+class SiteWeekPlan(Base):
+    __tablename__ = "site_week_plans"
+    __table_args__ = (
+        UniqueConstraint("site_id", "week_iso", "scope", name="uq_site_week_plans_site_week_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    # YYYY-MM-DD (week start, Sunday)
+    week_iso: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    # "director" (brouillon) ou "shared" (publié aux workers)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    # Payload JSON (même structure que le localStorage historique)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    # epoch ms
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
 class SiteAssignment(Base):
     __tablename__ = "site_assignments"
 

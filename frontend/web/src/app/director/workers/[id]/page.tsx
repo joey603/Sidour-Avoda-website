@@ -118,13 +118,31 @@ export default function WorkerDetailsPage() {
       } catch {
         setSiteConfig(null);
       }
-      // Load saved plan from localStorage for this site + current week
+      // Load published plan (DB) for this site + current week (fallback localStorage)
       const start = new Date(weekStart);
       const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
       const key = `plan_${worker.site_id}_${iso(start)}`;
       try {
         // reset before fetching to avoid showing previous week's plan
         setWeekPlan(null);
+        try {
+          const wk = iso(start);
+          const fromApi = await apiFetch<any>(`/public/sites/${worker.site_id}/week-plan?week=${encodeURIComponent(wk)}`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            cache: "no-store" as any,
+          });
+          if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
+            try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
+            setWeekPlan({
+              assignments: fromApi.assignments,
+              isManual: !!fromApi.isManual,
+              workers: Array.isArray(fromApi.workers) ? fromApi.workers : undefined,
+              pulls: (fromApi && fromApi.pulls && typeof fromApi.pulls === "object") ? fromApi.pulls : undefined,
+            });
+            return;
+          }
+        } catch {}
+        // Fallback localStorage
         const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
         if (raw) {
           const parsed = JSON.parse(raw);
@@ -135,10 +153,10 @@ export default function WorkerDetailsPage() {
               workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
               pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
             });
+            return;
           }
-        } else {
-          setWeekPlan(null);
         }
+        setWeekPlan(null);
       } catch {
         setWeekPlan(null);
       }

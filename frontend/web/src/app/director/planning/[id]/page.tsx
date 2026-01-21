@@ -390,11 +390,43 @@ export default function PlanningPage() {
     }
   }
   function loadWeeklyAvailability() {
-    setWeeklyAvailability(readWeeklyAvailabilityFor(weekStart));
+    (async () => {
+      try {
+        if (typeof window === "undefined") return;
+        const wk = getWeekKeyISO(weekStart);
+        const fromApi = await apiFetch<Record<string, WorkerAvailability>>(
+          `/director/sites/${params.id}/weekly-availability?week=${encodeURIComponent(wk)}`,
+          {
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            cache: "no-store" as any,
+          },
+        );
+        const normalized = (fromApi && typeof fromApi === "object") ? fromApi : {};
+        setWeeklyAvailability(normalized);
+        try {
+          localStorage.setItem(weekKeyOf(weekStart), JSON.stringify(normalized));
+        } catch {}
+      } catch {
+        // Fallback: localStorage (par appareil)
+        setWeeklyAvailability(readWeeklyAvailabilityFor(weekStart));
+      }
+    })();
   }
-  function saveWeeklyAvailability(next: Record<string, WorkerAvailability>) {
+  async function saveWeeklyAvailability(next: Record<string, WorkerAvailability>) {
+    // optimistic UI + fallback local
+    setWeeklyAvailability(next);
     try {
       localStorage.setItem(weekKeyOf(weekStart), JSON.stringify(next));
+    } catch {}
+    // persist to DB (shared across devices)
+    try {
+      if (typeof window === "undefined") return;
+      const wk = getWeekKeyISO(weekStart);
+      await apiFetch<Record<string, WorkerAvailability>>(`/director/sites/${params.id}/weekly-availability`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        body: JSON.stringify({ week_iso: wk, availability: next }),
+      });
     } catch {}
   }
 
@@ -1619,8 +1651,7 @@ export default function PlanningPage() {
           });
         });
         if (changedWeekly) {
-          setWeeklyAvailability(currentWeekly as any);
-          try { localStorage.setItem(weekKeyOf(weekStart), JSON.stringify(currentWeekly)); } catch {}
+          void saveWeeklyAvailability(currentWeekly as any);
         }
 
         // Update saved plan snapshot (workers + assignments) so UI shows new names
@@ -1760,9 +1791,9 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, weekStart]);
 
-  // Charger le plan sauvegardé pour la semaine sélectionnée (si existe)
-  useEffect(() => {
+  async function loadSavedPlanForWeek() {
     const start = new Date(weekStart);
+    const isoWeek = getWeekKeyISO(start);
     const keyDirector = planKeyDirectorOnly(params.id, start);
     const keyShared = planKeyShared(params.id, start);
     try {
@@ -1771,34 +1802,59 @@ export default function PlanningPage() {
       setPullsByHoleKey({});
       setPullsModeStationIdx(null);
       setPullsEditor(null);
+      setActiveSavedPlanKey(null);
+
+      // 1) DB (director first, then shared)
+      try {
+        const fromDirector = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        if (fromDirector && typeof fromDirector === "object") {
+          setActiveSavedPlanKey("db:director");
+          const pulls = (fromDirector?.pulls && typeof fromDirector.pulls === "object") ? fromDirector.pulls : undefined;
+          if (fromDirector.assignments) {
+            setSavedWeekPlan({ assignments: fromDirector.assignments, isManual: !!fromDirector.isManual, workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined, pulls });
+            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+            return;
+          }
+        }
+      } catch {}
+
+      try {
+        const fromShared = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        if (fromShared && typeof fromShared === "object") {
+          setActiveSavedPlanKey("db:shared");
+          const pulls = (fromShared?.pulls && typeof fromShared.pulls === "object") ? fromShared.pulls : undefined;
+          if (fromShared.assignments) {
+            setSavedWeekPlan({ assignments: fromShared.assignments, isManual: !!fromShared.isManual, workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined, pulls });
+            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+            return;
+          }
+        }
+      } catch {}
+
+      // 2) localStorage fallback (legacy)
       const raw = typeof window !== "undefined" ? (localStorage.getItem(keyDirector) || localStorage.getItem(keyShared)) : null;
       if (typeof window !== "undefined") {
         try { setActiveSavedPlanKey(localStorage.getItem(keyDirector) ? keyDirector : (localStorage.getItem(keyShared) ? keyShared : null)); } catch {}
       }
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // Charger les workers même si assignments est null (après suppression)
-        if (parsed && parsed.assignments) {
-          const pulls = (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined;
-          setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined, pulls });
-          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
-        } else if (parsed && Array.isArray(parsed.workers) && parsed.workers.length) {
-          // Si assignments est null mais workers existe, ne pas écraser workers
-          // Les workers de la semaine sauvegardée sont utilisés uniquement pour l'affichage
-          // On garde tous les workers du site dans l'état workers pour permettre la réutilisation
-          setAiPlan(null);
-          setManualAssignments(null);
-          setAltIndex(0);
-          baseAssignmentsRef.current = null;
-        } else {
-          // Aucune grille sauvegardée trouvée pour cette date, réinitialiser les états actifs
-          setAiPlan(null);
-          setManualAssignments(null);
-          setAltIndex(0);
-          baseAssignmentsRef.current = null;
-        }
+      if (!raw) {
+        setAiPlan(null);
+        setManualAssignments(null);
+        setAltIndex(0);
+        baseAssignmentsRef.current = null;
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.assignments) {
+        const pulls = (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined;
+        setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined, pulls });
+        if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
       } else {
-        // Aucune grille sauvegardée trouvée pour cette date, réinitialiser les états actifs
         setAiPlan(null);
         setManualAssignments(null);
         setAltIndex(0);
@@ -1809,12 +1865,17 @@ export default function PlanningPage() {
       setPullsByHoleKey({});
       setPullsModeStationIdx(null);
       setPullsEditor(null);
-      // En cas d'erreur, réinitialiser aussi les états actifs
       setAiPlan(null);
       setManualAssignments(null);
       setAltIndex(0);
       baseAssignmentsRef.current = null;
     }
+  }
+
+  // Charger le plan sauvegardé pour la semaine sélectionnée (si existe)
+  useEffect(() => {
+    void loadSavedPlanForWeek();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, weekStart]);
 
   // Synchroniser le mois du calendrier avec la semaine sélectionnée
@@ -1891,7 +1952,7 @@ export default function PlanningPage() {
       console.log('[DBG] triggerGenerateButton: error', e);
     }
   }
-  function onSavePlan(publishToWorkers: boolean) {
+  async function onSavePlan(publishToWorkers: boolean) {
     try {
       const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
       // Si on n'est pas en train d'éditer, on autorise la sauvegarde d'un plan déjà chargé (savedWeekPlan)
@@ -1923,13 +1984,26 @@ export default function PlanningPage() {
           answers: ((w as any).answers && typeof (w as any).answers === "object") ? (w as any).answers : {},
         })),
       };
+      // Persist DB (shared across devices)
+      try {
+        const scope = publishToWorkers ? "shared" : "director";
+        await apiFetch<any>(`/director/sites/${params.id}/week-plan`, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          body: JSON.stringify({ week_iso: getWeekKeyISO(start), scope, data: payload }),
+        });
+        setActiveSavedPlanKey(scope === "shared" ? "db:shared" : "db:director");
+      } catch {}
+
+      // Legacy localStorage fallback (per-device)
       if (typeof window !== "undefined") {
-        localStorage.setItem(key, JSON.stringify(payload));
-        setActiveSavedPlanKey(key);
-        // Si on publie vers les עובדים, nettoyer le brouillon directeur pour éviter de recharger un ancien draft
-        if (publishToWorkers) {
-          try { localStorage.removeItem(planKeyDirectorOnly(params.id, start)); } catch {}
-      }
+        try {
+          localStorage.setItem(key, JSON.stringify(payload));
+          // Si on publie vers les עובדים, nettoyer le brouillon directeur pour éviter de recharger un ancien draft
+          if (publishToWorkers) {
+            try { localStorage.removeItem(planKeyDirectorOnly(params.id, start)); } catch {}
+          }
+        } catch {}
       }
       // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
       setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
@@ -1940,10 +2014,10 @@ export default function PlanningPage() {
     }
   }
 
-  function onCancelEdit() {
+  async function onCancelEdit() {
     try {
-      // Recharger le plan sauvegardé depuis localStorage
       const start = new Date(weekStart);
+      const isoWeek = getWeekKeyISO(start);
       const keyFallback = (() => {
         const dk = planKeyDirectorOnly(params.id, start);
         const sk = planKeyShared(params.id, start);
@@ -1953,8 +2027,24 @@ export default function PlanningPage() {
         return sk;
       })();
       const key = activeSavedPlanKey || keyFallback;
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-      if (!raw) {
+      // Prefer DB if activeSavedPlanKey says so
+      let parsed: any = null;
+      if (String(key).startsWith("db:")) {
+        const scope = String(key) === "db:shared" ? "shared" : "director";
+        try {
+          parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            cache: "no-store" as any,
+          });
+        } catch {}
+      }
+      // Fallback legacy localStorage
+      if (!parsed) {
+        const raw = typeof window !== "undefined" ? localStorage.getItem(String(key)) : null;
+        parsed = raw ? JSON.parse(raw) : null;
+      }
+
+      if (!parsed) {
         // Pas de plan sauvegardé, réinitialiser tout
         setAiPlan(null);
         setManualAssignments(null);
@@ -1963,7 +2053,6 @@ export default function PlanningPage() {
         loadWorkers();
         return;
       }
-      const parsed = JSON.parse(raw);
       if (!parsed || !parsed.assignments) {
         // Plan sauvegardé sans assignments, réinitialiser
         setAiPlan(null);
@@ -2024,7 +2113,7 @@ export default function PlanningPage() {
     }
   }
 
-  function onDeletePlan() {
+  async function onDeletePlan() {
     try {
       if (!savedWeekPlan?.assignments) {
         toast.error("אין מה למחוק", { description: "לא נמצא תכנון לשמירה למחיקה" });
@@ -2033,33 +2122,80 @@ export default function PlanningPage() {
       const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי? זה ימחק את כל השיבוצים אך ישמור את רשימת העובדים והזמינות שלהם.");
       if (!confirmed) return;
       const start = new Date(weekStart);
+      const isoWeek = getWeekKeyISO(start);
       const keyShared = planKeyShared(params.id, start);
       const keyDirector = planKeyDirectorOnly(params.id, start);
-      // Charger les données actuelles pour garder les workers
-      const raw = typeof window !== "undefined" ? (localStorage.getItem(keyShared) || localStorage.getItem(keyDirector)) : null;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // Garder les workers, supprimer les assignments
+      // Charger les données actuelles pour garder les workers (DB puis localStorage)
+      let parsed: any = null;
+      try {
+        parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+      } catch {}
+      if (!parsed) {
+        try {
+          parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            cache: "no-store" as any,
+          });
+        } catch {}
+      }
+      if (!parsed) {
+        const raw = typeof window !== "undefined" ? (localStorage.getItem(keyShared) || localStorage.getItem(keyDirector)) : null;
+        parsed = raw ? JSON.parse(raw) : null;
+      }
+
+      if (parsed) {
+        // Garder les workers, supprimer les assignments (on garde un "record" shared avec assignments=null)
         const payload = {
-          siteId: parsed.siteId,
-          week: parsed.week,
+          siteId: parsed.siteId ?? Number(params.id),
+          week: parsed.week ?? { startISO: isoPlanKey(start) },
           isManual: false,
           assignments: null,
           pulls: {},
           workers: parsed.workers || [],
         };
+        try {
+          await apiFetch<any>(`/director/sites/${params.id}/week-plan`, {
+            method: "PUT",
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            body: JSON.stringify({ week_iso: isoWeek, scope: "shared", data: payload }),
+          });
+          // supprimer le draft director pour éviter confusion
+          try {
+            await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+            });
+          } catch {}
+          setActiveSavedPlanKey("db:shared");
+        } catch {}
         if (typeof window !== "undefined") {
-          localStorage.setItem(keyShared, JSON.stringify(payload));
-          try { localStorage.removeItem(keyDirector); } catch {}
-          setActiveSavedPlanKey(keyShared);
+          try {
+            localStorage.setItem(keyShared, JSON.stringify(payload));
+            try { localStorage.removeItem(keyDirector); } catch {}
+          } catch {}
         }
       } else {
-        // Si aucune donnée n'existe, supprimer complètement
+        // Si aucune donnée n'existe, supprimer complètement (DB + local)
+        try {
+          await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          });
+        } catch {}
+        try {
+          await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          });
+        } catch {}
         if (typeof window !== "undefined") {
-          localStorage.removeItem(keyShared);
+          try { localStorage.removeItem(keyShared); } catch {}
           try { localStorage.removeItem(keyDirector); } catch {}
-          setActiveSavedPlanKey(null);
         }
+        setActiveSavedPlanKey(null);
       }
       // Réinitialiser les états
       setSavedWeekPlan(null);
@@ -3129,12 +3265,9 @@ export default function PlanningPage() {
                           }
                           // Save weekly override for this specific week
                           try {
-                            const key = weekKeyOf(weekStart);
-                            const cur = localStorage.getItem(key);
-                            const parsed = cur ? JSON.parse(cur) : {};
+                            const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
                             parsed[trimmed] = { ...newWorkerAvailability };
-                            localStorage.setItem(key, JSON.stringify(parsed));
-                            setWeeklyAvailability(parsed);
+                            void saveWeeklyAvailability(parsed);
                           } catch {}
                           setEditingWorkerId(null);
                           setNewWorkerName("");

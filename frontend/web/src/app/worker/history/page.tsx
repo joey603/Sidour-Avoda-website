@@ -236,26 +236,42 @@ export default function WorkerHistoryPage() {
     const start = new Date(weekStart);
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const key = `plan_${selectedSiteId}_${iso(start)}`;
-    try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.assignments) {
+    (async () => {
+      try {
+        const wk = iso(start);
+        const fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
+          try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
           setWeekPlan({
-            assignments: parsed.assignments,
-            isManual: !!parsed.isManual,
-            workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-            pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+            assignments: fromApi.assignments,
+            isManual: !!fromApi.isManual,
+            workers: Array.isArray(fromApi.workers) ? fromApi.workers : undefined,
+            pulls: (fromApi && fromApi.pulls && typeof fromApi.pulls === "object") ? fromApi.pulls : undefined,
           });
-        } else {
-          setWeekPlan(null);
+          return;
         }
-      } else {
-        setWeekPlan(null);
-      }
-    } catch {
+      } catch {}
+      // Fallback localStorage
+      try {
+        const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.assignments) {
+            setWeekPlan({
+              assignments: parsed.assignments,
+              isManual: !!parsed.isManual,
+              workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+              pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+            });
+            return;
+          }
+        }
+      } catch {}
       setWeekPlan(null);
-    }
+    })();
   }, [selectedSiteId, weekStart]);
 
   // Synchroniser le mois du calendrier avec la semaine sélectionnée

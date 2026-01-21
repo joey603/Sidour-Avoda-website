@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import re
 
 from .deps import require_role, get_db
-from .models import Site, SiteAssignment, SiteWorker, SiteMessage, User, UserRole
+from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole
 from .schemas import (
     SiteCreate,
     SiteOut,
@@ -20,6 +20,8 @@ from .schemas import (
     AIPlanningResponse,
     UserOut,
     CreateWorkerUserRequest,
+    WeeklyAvailabilityPayload,
+    WeekPlanPayload,
     SiteMessageCreate,
     SiteMessageUpdate,
     SiteMessageOut,
@@ -57,6 +59,137 @@ def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
     if site.director_id != director_id:
         raise HTTPException(status_code=403, detail="Accès interdit")
     return site
+
+
+@router.get("/{site_id}/weekly-availability", response_model=dict[str, dict[str, list[str]]])
+def get_weekly_availability(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    """
+    Persistance DB (Neon) des overrides hebdo de disponibilité utilisés par le directeur.
+    Remplace le localStorage comme source de vérité entre appareils.
+    """
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(week)
+    row = (
+        db.query(SiteWeeklyAvailability)
+        .filter(SiteWeeklyAvailability.site_id == site_id)
+        .filter(SiteWeeklyAvailability.week_iso == wk)
+        .first()
+    )
+    return (row.availability or {}) if row else {}
+
+
+@router.put("/{site_id}/weekly-availability", response_model=dict[str, dict[str, list[str]]])
+def put_weekly_availability(
+    site_id: int,
+    payload: WeeklyAvailabilityPayload,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(payload.week_iso)
+    now = _now_ms()
+    row = (
+        db.query(SiteWeeklyAvailability)
+        .filter(SiteWeeklyAvailability.site_id == site_id)
+        .filter(SiteWeeklyAvailability.week_iso == wk)
+        .first()
+    )
+    data = payload.availability or {}
+    if row:
+        row.availability = data
+        row.updated_at = now
+    else:
+        row = SiteWeeklyAvailability(site_id=site_id, week_iso=wk, availability=data, updated_at=now)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row.availability or {}
+
+
+@router.get("/{site_id}/week-plan", response_model=dict | None)
+def get_week_plan(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    scope: str = Query("director", description="director|shared"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(week)
+    sc = (scope or "director").strip()
+    if sc not in ("director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == sc)
+        .first()
+    )
+    return row.data if row else None
+
+
+@router.put("/{site_id}/week-plan", response_model=dict | None)
+def put_week_plan(
+    site_id: int,
+    payload: WeekPlanPayload,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(payload.week_iso)
+    sc = (payload.scope or "director").strip()
+    if sc not in ("director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    now = _now_ms()
+    row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == sc)
+        .first()
+    )
+    data = payload.data or None
+    if row:
+        row.data = data or {}
+        row.updated_at = now
+    else:
+        row = SiteWeekPlan(site_id=site_id, week_iso=wk, scope=sc, data=data or {}, updated_at=now)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row.data or None
+
+
+@router.delete("/{site_id}/week-plan", status_code=204)
+def delete_week_plan(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    scope: str = Query("director", description="director|shared"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(week)
+    sc = (scope or "director").strip()
+    if sc not in ("director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == sc)
+        .first()
+    )
+    if row:
+        db.delete(row)
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{site_id}/messages", response_model=list[SiteMessageOut])
