@@ -237,8 +237,8 @@ export default function WorkerHistoryPage() {
     const start = new Date(weekStart);
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const key = `plan_${selectedSiteId}_${iso(start)}`;
+    setWeekPlanLoading(true);
     (async () => {
-      setWeekPlanLoading(true);
       try {
         const wk = iso(start);
         const fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
@@ -273,11 +273,9 @@ export default function WorkerHistoryPage() {
         }
       } catch {}
       setWeekPlan(null);
-      setWeekPlanLoading(false);
-      return;
     })().finally(() => {
       setWeekPlanLoading(false);
-    })();
+    });
   }, [selectedSiteId, weekStart]);
 
   // Synchroniser le mois du calendrier avec la semaine sélectionnée
