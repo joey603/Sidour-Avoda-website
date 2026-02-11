@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
 import os
 
 
@@ -9,9 +10,16 @@ DEFAULT_SQLITE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'dev.db')}"
 
 
 class Settings(BaseSettings):
-    # Par défaut, utiliser la base SQLite locale (dev.db). Surchargable via env DATABASE_URL
-    database_url: str = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
-    jwt_secret: str = os.getenv("JWT_SECRET", "change-me")
+    # Charge automatiquement backend/.env (local) + variables d'env (Render)
+    model_config = SettingsConfigDict(
+        env_file=os.path.join(BASE_DIR, ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # Par défaut, utiliser la base SQLite locale (dev.db). Surchargable via DATABASE_URL.
+    database_url: str = DEFAULT_SQLITE_URL
+    jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
 

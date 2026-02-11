@@ -37,6 +37,9 @@ export default function WorkersList() {
   const [newWorkerPhone, setNewWorkerPhone] = useState("");
   const [addingWorker, setAddingWorker] = useState(false);
 
+  const normalizedNewWorkerPhone = useMemo(() => String(newWorkerPhone || "").replace(/\D/g, ""), [newWorkerPhone]);
+  const isNewWorkerPhoneValid = normalizedNewWorkerPhone.length === 10;
+
   async function fetchWorkers() {
     try {
       const list = await apiFetch<Worker[]>("/director/sites/all-workers", {
@@ -94,8 +97,12 @@ export default function WorkersList() {
 
   async function handleAddWorker() {
     console.log("[handleAddWorker] Function called with:", { selectedSiteId, name: newWorkerName, phone: newWorkerPhone });
-    if (!selectedSiteId || !newWorkerName.trim() || !newWorkerPhone.trim()) {
+    if (!selectedSiteId || !newWorkerName.trim() || !normalizedNewWorkerPhone) {
       toast.error("נא למלא את כל השדות");
+      return;
+    }
+    if (!isNewWorkerPhoneValid) {
+      toast.error("מספר הטלפון חייב להכיל 10 ספרות");
       return;
     }
     setAddingWorker(true);
@@ -103,14 +110,14 @@ export default function WorkersList() {
     let userErrorOccurred = false;
     try {
       // Créer d'abord le User worker
-      console.log("[handleAddWorker] About to create User worker:", { name: newWorkerName.trim(), phone: newWorkerPhone.trim(), siteId: selectedSiteId });
+      console.log("[handleAddWorker] About to create User worker:", { name: newWorkerName.trim(), phone: normalizedNewWorkerPhone, siteId: selectedSiteId });
       try {
       await apiFetch(`/director/sites/${selectedSiteId}/create-worker-user`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: newWorkerName.trim(),
-          phone: newWorkerPhone.trim(),
+          phone: normalizedNewWorkerPhone,
         }),
       });
         userCreated = true;
@@ -151,7 +158,7 @@ export default function WorkersList() {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: newWorkerName.trim(),
-          phone: newWorkerPhone.trim(), // Passer le téléphone pour lier automatiquement au User
+          phone: normalizedNewWorkerPhone, // Passer le téléphone pour lier automatiquement au User
           max_shifts: 5, // Valeur par défaut
           roles: [],
           availability: {},
@@ -442,10 +449,13 @@ export default function WorkersList() {
                   type="tel"
                   dir="ltr"
                   value={newWorkerPhone}
-                  onChange={(e) => setNewWorkerPhone(e.target.value)}
+                  onChange={(e) => setNewWorkerPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                   className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800"
                   placeholder="הזן מספר טלפון"
                 />
+                {!!newWorkerPhone && !isNewWorkerPhoneValid && (
+                  <div className="mt-1 text-xs text-red-600">מספר טלפון חייב להכיל בדיוק 10 ספרות</div>
+                )}
               </div>
             </div>
             <div className="mt-6 flex items-center justify-end gap-2">
@@ -464,7 +474,7 @@ export default function WorkersList() {
               <button
                 type="button"
                 onClick={handleAddWorker}
-                disabled={addingWorker || !selectedSiteId || !newWorkerName.trim() || !newWorkerPhone.trim()}
+                disabled={addingWorker || !selectedSiteId || !newWorkerName.trim() || !isNewWorkerPhoneValid}
                 className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
               >
                 {addingWorker ? "מוסיף..." : "הוסף"}

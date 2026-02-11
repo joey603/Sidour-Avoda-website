@@ -2679,10 +2679,13 @@ export default function PlanningPage() {
                       <input
                         type="tel"
                         value={newWorkerPhone}
-                        onChange={(e) => setNewWorkerPhone(e.target.value)}
+                        onChange={(e) => setNewWorkerPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
                         className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                         placeholder="הזן מספר טלפון"
                       />
+                      {!!newWorkerPhone && String(newWorkerPhone || "").replace(/\D/g, "").length !== 10 && (
+                        <div className="mt-1 text-xs text-red-600">מספר טלפון חייב להכיל בדיוק 10 ספרות</div>
+                      )}
                     </div>
                   </div>
                   <div className="mt-4 flex items-center justify-center gap-2">
@@ -2697,9 +2700,13 @@ export default function PlanningPage() {
                       type="button"
                       onClick={async () => {
                         const trimmedName = newWorkerName.trim();
-                        const trimmedPhone = newWorkerPhone.trim();
-                        if (!trimmedName || !trimmedPhone) {
+                        const digitsPhone = String(newWorkerPhone || "").replace(/\D/g, "").trim();
+                        if (!trimmedName || !digitsPhone) {
                           toast.error("נא למלא את כל השדות");
+                          return;
+                        }
+                        if (digitsPhone.length !== 10) {
+                          toast.error("מספר הטלפון חייב להכיל 10 ספרות");
                           return;
                         }
                         let userCreated = false;
@@ -2710,9 +2717,9 @@ export default function PlanningPage() {
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                               cache: "no-store" as any,
                             });
-                            const normalizePhone = (p: any) => String(p || "").replace(/\s+/g, "").trim();
-                            const phoneN = normalizePhone(trimmedPhone);
-                            const alreadyOnSite = (existingWorkers || []).some((w: any) => normalizePhone(w?.phone) === phoneN);
+                            const normalizePhoneDigits = (p: any) => String(p || "").replace(/\D/g, "").trim();
+                            const phoneN = normalizePhoneDigits(digitsPhone);
+                            const alreadyOnSite = (existingWorkers || []).some((w: any) => normalizePhoneDigits(w?.phone) === phoneN);
                             if (alreadyOnSite) {
                               toast.error("העובד כבר קיים באתר");
                               return;
@@ -2731,7 +2738,7 @@ export default function PlanningPage() {
                             },
                             body: JSON.stringify({
                               name: trimmedName,
-                              phone: trimmedPhone,
+                              phone: digitsPhone,
                             }),
                           });
                             userCreated = true;
@@ -2763,7 +2770,7 @@ export default function PlanningPage() {
                             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             body: JSON.stringify({
                               name: trimmedName,
-                              phone: trimmedPhone,
+                              phone: digitsPhone,
                               max_shifts: 5,
                               roles: [],
                               availability: {},
@@ -2789,7 +2796,7 @@ export default function PlanningPage() {
                           // Préparer la modale d'édition des זמינות pour ce nouveau worker
                           setEditingWorkerId(createdWorker.id);
                           setNewWorkerName(trimmedName);
-                          setNewWorkerPhone(trimmedPhone);
+                          setNewWorkerPhone(digitsPhone);
                           setNewWorkerMax(5);
                           setNewWorkerRoles([]);
                           setOriginalAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
