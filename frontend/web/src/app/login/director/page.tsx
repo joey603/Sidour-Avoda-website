@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
-import { getRoleFromToken, setToken, getToken, clearToken } from "@/lib/auth";
+import { fetchMe, getRoleFromToken, isTokenExpired, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function DirectorLoginInner() {
@@ -28,9 +28,32 @@ function DirectorLoginInner() {
     return null;
   }
 
-  // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
-  // On redirige seulement après un submit réussi.
-  const existingRole = useMemo(() => getRoleFromToken(getToken()), []);
+  // Ne pas auto-rediriger depuis la page de login (évite les boucles).
+  // On affiche "déjà connecté" seulement si /me confirme que le token est valide.
+  const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = getToken();
+    if (!token) {
+      setValidatedRole(null);
+      return;
+    }
+    if (isTokenExpired(token)) {
+      clearToken();
+      setValidatedRole(null);
+      return;
+    }
+    (async () => {
+      const me = await fetchMe();
+      if (cancelled) return;
+      setValidatedRole(me?.role || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const existingTarget = useMemo(() => {
     const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
     return returnUrl || "/director";
@@ -89,7 +112,7 @@ function DirectorLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות מנהל</h1>
         </div>
-        {existingRole === "director" && !error && (
+        {validatedRole === "director" && !error && (
           <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
             אתה כבר מחובר כמנהל.{" "}
             <Link className="underline decoration-dotted" href={existingTarget}>

@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
-import { getRoleFromToken, setToken, getToken, clearToken } from "@/lib/auth";
+import { fetchMe, getRoleFromToken, isTokenExpired, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function WorkerLoginInner() {
@@ -26,21 +26,44 @@ function WorkerLoginInner() {
   }
 
   const returnUrl = searchParams?.get("returnUrl");
-  const existingRole = getRoleFromToken(getToken());
+  const decodedRole = getRoleFromToken(getToken());
   const existingTarget = useMemo(() => safeWorkerReturnUrl(returnUrl) || "/worker", [returnUrl]);
+  const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
 
   useEffect(() => {
     // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
     // Exception: si un directeur arrive ici via /public/workers, on nettoie le token pour permettre la connexion worker.
-    if (existingRole === "director" && returnUrl?.includes("/public/workers")) {
+    if (decodedRole === "director" && returnUrl?.includes("/public/workers")) {
       clearToken();
       setError(null);
       return;
     }
-    if (existingRole === "director") {
+    if (decodedRole === "director") {
       setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
     }
-  }, [existingRole, returnUrl]);
+  }, [decodedRole, returnUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = getToken();
+    if (!token) {
+      setValidatedRole(null);
+      return;
+    }
+    if (isTokenExpired(token)) {
+      clearToken();
+      setValidatedRole(null);
+      return;
+    }
+    (async () => {
+      const me = await fetchMe();
+      if (cancelled) return;
+      setValidatedRole(me?.role || null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,7 +116,7 @@ function WorkerLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות עובד</h1>
         </div>
-        {existingRole === "worker" && !error && (
+        {validatedRole === "worker" && !error && (
           <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
             אתה כבר מחובר כעובד.{" "}
             <Link className="underline decoration-dotted" href={existingTarget}>
