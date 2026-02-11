@@ -1,6 +1,6 @@
 "use client";
 
-import { apiFetch } from "./api";
+import { apiFetchWithRetry } from "./api";
 
 const TOKEN_KEY = "access_token";
 
@@ -23,12 +23,17 @@ export async function fetchMe() {
   const token = getToken();
   if (!token) return null;
   try {
-    return await apiFetch<{ id: number; email: string; role: "worker" | "director"; full_name: string; director_code?: string | null; directorCode?: string | null }>(
+    return await apiFetchWithRetry<{ id: number; email: string; role: "worker" | "director"; full_name: string; director_code?: string | null; directorCode?: string | null }>(
       "/me",
       {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
-      } as any
+      } as any,
+      {
+        // Render free wake: /me peut échouer 30-60s après login
+        timeoutMs: 12_000,
+        maxTotalMs: 60_000,
+      },
     );
   } catch (e: any) {
     const msg = String(e?.message || "");

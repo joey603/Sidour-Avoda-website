@@ -1,5 +1,12 @@
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-import { clearToken } from "./auth";
+const TOKEN_KEY = "access_token";
+
+function clearTokenLocal() {
+  try {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+}
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
@@ -29,14 +36,15 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     }
     // Redirection globale si non autorisé
     if (res.status === 401) {
-      try { clearToken(); } catch {}
+      clearTokenLocal();
       // IMPORTANT:
       // - Ne pas rediriger lors des endpoints d'auth (login) : on veut afficher l'erreur sur place.
       // - Sinon, rediriger vers la page de login adaptée (worker vs director) selon l'URL courante.
       if (typeof window !== "undefined") {
         const p = String(path || "");
         const isAuthEndpoint = p.startsWith("/auth/");
-        if (!isAuthEndpoint) {
+        const isLoginPage = window.location.pathname.startsWith("/login");
+        if (!isAuthEndpoint && !isLoginPage) {
           try {
             const cur = window.location.pathname + window.location.search;
             const isWorkerArea =
