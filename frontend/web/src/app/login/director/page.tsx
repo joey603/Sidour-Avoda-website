@@ -16,6 +16,18 @@ function DirectorLoginInner() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  function safeDirectorReturnUrl(raw: string | null): string | null {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    // Empêcher les boucles / écrans de login
+    if (s.startsWith("/login")) return null;
+    // Interdire les pages worker-only
+    if (s.startsWith("/worker") || s.startsWith("/public/workers")) return null;
+    // Autoriser uniquement l'espace directeur
+    if (s.startsWith("/director")) return s;
+    return null;
+  }
+
   useEffect(() => {
     const token = getToken();
     if (token) {
@@ -26,7 +38,7 @@ function DirectorLoginInner() {
           setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק או עבור להתחברות עובד.");
           return;
         }
-        const returnUrl = searchParams?.get("returnUrl");
+        const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
         router.replace(returnUrl || "/director");
       });
     }
@@ -61,7 +73,7 @@ function DirectorLoginInner() {
           setLoading(false);
           return;
         }
-        const returnUrl = searchParams?.get("returnUrl");
+        const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
         router.replace(returnUrl || "/director");
       }
     } catch (err: any) {

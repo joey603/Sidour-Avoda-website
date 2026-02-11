@@ -15,6 +15,15 @@ function WorkerLoginInner() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  function safeWorkerReturnUrl(raw: string | null): string | null {
+    const s = String(raw || "").trim();
+    if (!s) return null;
+    if (s.startsWith("/login")) return null;
+    // Autoriser worker dashboard + la page publique de registration worker
+    if (s.startsWith("/worker") || s.startsWith("/public/workers")) return s;
+    return null;
+  }
+
   useEffect(() => {
     const returnUrl = searchParams?.get("returnUrl");
     
@@ -34,11 +43,8 @@ function WorkerLoginInner() {
           return;
         }
         // Si le returnUrl nécessite un worker et que l'utilisateur est un worker, rediriger
-        if (returnUrl?.includes("/public/workers")) {
-          router.replace(returnUrl);
-        } else {
-          router.replace(returnUrl || "/worker");
-        }
+        const target = safeWorkerReturnUrl(returnUrl) || "/worker";
+        router.replace(target);
       });
     }
   }, [router, searchParams]);
@@ -75,12 +81,8 @@ function WorkerLoginInner() {
           setLoading(false);
           return;
         }
-        const returnUrl = searchParams?.get("returnUrl");
-        if (returnUrl?.includes("/public/workers")) {
-          router.replace(returnUrl);
-        } else {
-          router.replace(returnUrl || "/worker");
-        }
+        const target = safeWorkerReturnUrl(searchParams?.get("returnUrl")) || "/worker";
+        router.replace(target);
       }
     } catch (err: any) {
       const msg = String(err?.message || "");
