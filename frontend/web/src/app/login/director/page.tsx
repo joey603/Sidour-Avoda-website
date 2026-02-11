@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
 import { fetchMe, setToken, getToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
@@ -21,8 +22,8 @@ function DirectorLoginInner() {
       fetchMe().then((me) => {
         if (!me) return;
         if (me.role !== "director") {
-          // Si l'utilisateur est un worker, rediriger vers la page worker
-          router.replace("/login/worker");
+          // Ne pas bounce vers un autre écran de login: afficher un message.
+          setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק או עבור להתחברות עובד.");
           return;
         }
         const returnUrl = searchParams?.get("returnUrl");
@@ -108,6 +109,13 @@ function DirectorLoginInner() {
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
           {status && !error && <p className="text-sm text-zinc-500">{status}</p>}
+          {error && (
+            <div className="text-sm">
+              <Link className="underline decoration-dotted text-zinc-700 dark:text-zinc-200" href="/login/worker">
+                מעבר להתחברות עובד
+              </Link>
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}
