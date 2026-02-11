@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { fetchMe, clearToken } from "@/lib/auth";
+import { fetchMe, clearToken, getToken, isTokenExpired } from "@/lib/auth";
 // Remplace Image optimisé pour éviter erreurs avec PNG locaux non valides
 import Link from "next/link";
 
@@ -28,17 +28,12 @@ export default function TopNav() {
   }, [pathname]);
   const authReturnQuery = useMemo(() => (returnUrl ? `?returnUrl=${encodeURIComponent(returnUrl)}` : ""), [returnUrl]);
 
-  useEffect(() => {
-    fetchMe()
-      .then((me) => {
-      if (me) setUserRole(me.role);
-      })
-      .finally(() => setAuthChecked(true));
-  }, []);
-
-  // Recharger le rôle utilisateur à chaque changement de page (ex: après login -> /director)
+  // Charger/rafraîchir le rôle utilisateur à chaque changement de page.
+  // IMPORTANT: on met authChecked=false pendant le fetch pour éviter une redirection "bounce"
+  // (redirige vers /login puis immédiatement vers le menu quand /me revient).
   useEffect(() => {
     let cancelled = false;
+    setAuthChecked(false);
     (async () => {
       try {
         const me = await fetchMe();
@@ -65,6 +60,10 @@ export default function TopNav() {
     if (isAuthPage) return;
     if (userRole) return;
     if (typeof window === "undefined") return;
+
+    // Si un token semble encore valide, attendre le résultat de /me plutôt que de "bouncer" vers /login.
+    const token = getToken();
+    if (token && !isTokenExpired(token)) return;
 
     const cur = window.location.pathname + window.location.search;
     const isWorkerArea =
