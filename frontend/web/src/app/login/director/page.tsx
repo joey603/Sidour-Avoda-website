@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, setToken, getToken } from "@/lib/auth";
+import { getRoleFromToken, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function DirectorLoginInner() {
@@ -31,16 +31,15 @@ function DirectorLoginInner() {
   useEffect(() => {
     const token = getToken();
     if (token) {
-      fetchMe().then((me) => {
-        if (!me) return;
-        if (me.role !== "director") {
-          // Ne pas bounce vers un autre écran de login: afficher un message.
-          setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק או עבור להתחברות עובד.");
-          return;
-        }
+      const role = getRoleFromToken(token);
+      if (role === "director") {
         const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
         router.replace(returnUrl || "/director");
-      });
+        return;
+      }
+      if (role === "worker") {
+        setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק או עבור להתחברות עובד.");
+      }
     }
   }, [router, searchParams]);
 
@@ -50,6 +49,7 @@ function DirectorLoginInner() {
     setStatus(null);
     setLoading(true);
     try {
+      const prevToken = getToken();
       const data = await apiFetchWithRetry<{ access_token: string }>(
         "/auth/login",
         {
@@ -66,16 +66,16 @@ function DirectorLoginInner() {
         },
       );
       setToken(data.access_token);
-      const me = await fetchMe();
-      if (me) {
-        if (me.role !== "director") {
-          setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
-          setLoading(false);
-          return;
-        }
-        const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
-        router.replace(returnUrl || "/director");
+      const role = getRoleFromToken(data.access_token);
+      if (role !== "director") {
+        setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
+        // Restaurer le token précédent (ex: worker déjà connecté), sinon nettoyer
+        if (prevToken) setToken(prevToken);
+        else clearToken();
+        return;
       }
+      const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
+      router.replace(returnUrl || "/director");
     } catch (err: any) {
       const msg = String(err?.message || "");
       if (msg.toLowerCase().includes("timeout")) {

@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, setToken, getToken, clearToken } from "@/lib/auth";
+import { getRoleFromToken, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function WorkerLoginInner() {
@@ -29,23 +29,20 @@ function WorkerLoginInner() {
     
     const token = getToken();
     if (token) {
-      fetchMe().then((me) => {
-        if (!me) return;
-        if (me.role !== "worker") {
-          // Si l'utilisateur est un directeur, déconnecter pour permettre la connexion avec un compte worker
-          if (returnUrl?.includes("/public/workers")) {
-            clearToken();
-            return;
-          }
-          // IMPORTANT: ne pas rediriger vers le menu directeur.
-          // On reste sur cette page pour laisser l'utilisateur corriger sa connexion.
-          setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
-          return;
-        }
-        // Si le returnUrl nécessite un worker et que l'utilisateur est un worker, rediriger
+      const role = getRoleFromToken(token);
+      if (role === "worker") {
         const target = safeWorkerReturnUrl(returnUrl) || "/worker";
         router.replace(target);
-      });
+        return;
+      }
+      if (role === "director") {
+        // Si l'utilisateur est un directeur, déconnecter pour permettre la connexion avec un compte worker
+        if (returnUrl?.includes("/public/workers")) {
+          clearToken();
+          return;
+        }
+        setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
+      }
     }
   }, [router, searchParams]);
 
@@ -71,19 +68,16 @@ function WorkerLoginInner() {
         },
       );
       setToken(data.access_token);
-      const me = await fetchMe();
-      if (me) {
-        if (me.role !== "worker") {
-          setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
-          // Restaurer le token précédent (ex: directeur déjà connecté), sinon nettoyer
-          if (prevToken) setToken(prevToken);
-          else clearToken();
-          setLoading(false);
-          return;
-        }
-        const target = safeWorkerReturnUrl(searchParams?.get("returnUrl")) || "/worker";
-        router.replace(target);
+      const role = getRoleFromToken(data.access_token);
+      if (role !== "worker") {
+        setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
+        // Restaurer le token précédent (ex: directeur déjà connecté), sinon nettoyer
+        if (prevToken) setToken(prevToken);
+        else clearToken();
+        return;
       }
+      const target = safeWorkerReturnUrl(searchParams?.get("returnUrl")) || "/worker";
+      router.replace(target);
     } catch (err: any) {
       const msg = String(err?.message || "");
       if (msg.toLowerCase().includes("timeout")) {

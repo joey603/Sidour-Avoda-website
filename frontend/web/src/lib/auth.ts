@@ -19,6 +19,25 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+export function getRoleFromToken(token: string | null): "worker" | "director" | null {
+  try {
+    const t = String(token || "").trim();
+    if (!t) return null;
+    const parts = t.split(".");
+    if (parts.length < 2) return null;
+    const payloadB64 = parts[1]
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(parts[1].length / 4) * 4, "=");
+    const json = atob(payloadB64);
+    const payload = JSON.parse(json);
+    const role = String(payload?.role || "").trim();
+    return role === "worker" || role === "director" ? (role as any) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMe() {
   const token = getToken();
   if (!token) return null;
