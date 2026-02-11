@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
@@ -29,8 +29,9 @@ function DirectorLoginInner() {
   }
 
   // Ne pas auto-rediriger depuis la page de login (évite les boucles).
-  // On affiche "déjà connecté" seulement si /me confirme que le token est valide.
+  // On redirige seulement si /me confirme que le token est valide (avec garde-fou anti-boucle).
   const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
+  const didAutoRedirect = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +60,13 @@ function DirectorLoginInner() {
     return returnUrl || "/director";
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  useEffect(() => {
+    if (didAutoRedirect.current) return;
+    if (validatedRole !== "director") return;
+    didAutoRedirect.current = true;
+    router.replace(existingTarget);
+  }, [existingTarget, router, validatedRole]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -112,14 +120,6 @@ function DirectorLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות מנהל</h1>
         </div>
-        {validatedRole === "director" && !error && (
-          <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
-            אתה כבר מחובר כמנהל.{" "}
-            <Link className="underline decoration-dotted" href={existingTarget}>
-              עבור לתפריט מנהל
-            </Link>
-          </div>
-        )}
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="block text-sm">אימייל</label>

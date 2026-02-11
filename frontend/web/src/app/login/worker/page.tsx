@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
@@ -29,6 +29,7 @@ function WorkerLoginInner() {
   const decodedRole = getRoleFromToken(getToken());
   const existingTarget = useMemo(() => safeWorkerReturnUrl(returnUrl) || "/worker", [returnUrl]);
   const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
+  const didAutoRedirect = useRef(false);
 
   useEffect(() => {
     // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
@@ -64,6 +65,13 @@ function WorkerLoginInner() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (didAutoRedirect.current) return;
+    if (validatedRole !== "worker") return;
+    didAutoRedirect.current = true;
+    router.replace(existingTarget);
+  }, [existingTarget, router, validatedRole]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -116,14 +124,6 @@ function WorkerLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות עובד</h1>
         </div>
-        {validatedRole === "worker" && !error && (
-          <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
-            אתה כבר מחובר כעובד.{" "}
-            <Link className="underline decoration-dotted" href={existingTarget}>
-              עבור לתפריט עובד
-            </Link>
-          </div>
-        )}
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="block text-sm">קוד מנהל</label>
