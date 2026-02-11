@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import { apiFetchWithRetry } from "@/lib/api";
 import { fetchMe, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
@@ -12,6 +12,7 @@ function WorkerLoginInner() {
   const [code, setCode] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -45,13 +46,24 @@ function WorkerLoginInner() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setStatus(null);
     setLoading(true);
     try {
       const prevToken = getToken();
-      const data = await apiFetch<{ access_token: string }>("/auth/worker-login", {
-        method: "POST",
-        body: JSON.stringify({ code, phone }),
-      });
+      const data = await apiFetchWithRetry<{ access_token: string }>(
+        "/auth/worker-login",
+        {
+          method: "POST",
+          body: JSON.stringify({ code, phone }),
+        },
+        {
+          timeoutMs: 15_000,
+          maxTotalMs: 90_000,
+          onRetry: ({ attempt }) => {
+            setStatus(`השרת מתעורר... ניסיון ${attempt}`);
+          },
+        },
+      );
       setToken(data.access_token);
       const me = await fetchMe();
       if (me) {
@@ -71,9 +83,15 @@ function WorkerLoginInner() {
         }
       }
     } catch (err: any) {
-      setError("שגיאת התחברות. בדקו את הקוד ומספר הטלפון.");
+      const msg = String(err?.message || "");
+      if (msg.toLowerCase().includes("timeout")) {
+        setError("השרת לא זמין כרגע. נסו שוב בעוד רגע.");
+      } else {
+        setError("שגיאת התחברות. בדקו את הקוד ומספר הטלפון.");
+      }
     } finally {
       setLoading(false);
+      setStatus(null);
     }
   }
 
@@ -106,6 +124,7 @@ function WorkerLoginInner() {
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {status && !error && <p className="text-sm text-zinc-500">{status}</p>}
           <button
             type="submit"
             disabled={loading}

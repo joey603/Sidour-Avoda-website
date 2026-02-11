@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import { apiFetchWithRetry } from "@/lib/api";
 import { fetchMe, setToken, getToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
@@ -12,6 +12,7 @@ function DirectorLoginInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -33,12 +34,24 @@ function DirectorLoginInner() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setStatus(null);
     setLoading(true);
     try {
-      const data = await apiFetch<{ access_token: string }>("/auth/login", {
-        method: "POST",
-        body: JSON.stringify({ email, password }),
-      });
+      const data = await apiFetchWithRetry<{ access_token: string }>(
+        "/auth/login",
+        {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        },
+        {
+          timeoutMs: 15_000,
+          maxTotalMs: 90_000,
+          onRetry: ({ attempt }) => {
+            // Render free: réveil du serveur. Garder les identifiants dans les champs.
+            setStatus(`השרת מתעורר... ניסיון ${attempt}`);
+          },
+        },
+      );
       setToken(data.access_token);
       const me = await fetchMe();
       if (me) {
@@ -51,9 +64,15 @@ function DirectorLoginInner() {
         router.replace(returnUrl || "/director");
       }
     } catch (err: any) {
-      setError("שגיאת התחברות. בדקו את הפרטים.");
+      const msg = String(err?.message || "");
+      if (msg.toLowerCase().includes("timeout")) {
+        setError("השרת לא זמין כרגע. נסו שוב בעוד רגע.");
+      } else {
+        setError("שגיאת התחברות. בדקו את הפרטים.");
+      }
     } finally {
       setLoading(false);
+      setStatus(null);
     }
   }
 
@@ -88,6 +107,7 @@ function DirectorLoginInner() {
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
+          {status && !error && <p className="text-sm text-zinc-500">{status}</p>}
           <button
             type="submit"
             disabled={loading}

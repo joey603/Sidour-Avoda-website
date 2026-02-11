@@ -65,4 +65,91 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   return (await res.text()) as T;
 }
 
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export type ApiFetchRetryState = {
+  attempt: number;
+  elapsedMs: number;
+  nextDelayMs: number;
+  message: string;
+};
+
+export type ApiFetchRetryOptions = {
+  /** Timeout par tentative (ms). */
+  timeoutMs?: number;
+  /** Durée max totale de retry (ms). */
+  maxTotalMs?: number;
+  /** Délai initial (ms). */
+  initialDelayMs?: number;
+  /** Délai max (ms). */
+  maxDelayMs?: number;
+  /** Callback UI (ex: afficher "serveur en réveil"). */
+  onRetry?: (state: ApiFetchRetryState) => void;
+};
+
+function isRetryableError(err: any): boolean {
+  const name = String(err?.name || "");
+  if (name === "AbortError") return true;
+  const status = Number(err?.status || 0);
+  if (status === 502 || status === 503 || status === 504) return true;
+  // Erreurs réseau (fetch) => TypeError sans status
+  if (!status && err && (err instanceof TypeError || String(err?.message || "").toLowerCase().includes("failed to fetch"))) return true;
+  return false;
+}
+
+/**
+ * Utile pour Render (free) qui "dort": on timeout + retry jusqu'à ce que le serveur soit réveillé,
+ * sans forcer l'utilisateur à recharger la page / retaper ses identifiants.
+ */
+export async function apiFetchWithRetry<T>(
+  path: string,
+  options: RequestInit = {},
+  retry: ApiFetchRetryOptions = {},
+): Promise<T> {
+  const timeoutMs = Math.max(1_000, Number(retry.timeoutMs ?? 15_000));
+  const maxTotalMs = Math.max(timeoutMs, Number(retry.maxTotalMs ?? 90_000));
+  let delayMs = Math.max(200, Number(retry.initialDelayMs ?? 1_000));
+  const maxDelayMs = Math.max(delayMs, Number(retry.maxDelayMs ?? 8_000));
+  const started = Date.now();
+  let attempt = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    attempt += 1;
+    const elapsedMs = Date.now() - started;
+    if (elapsedMs > maxTotalMs) {
+      const e: any = new Error("Timeout: serveur indisponible");
+      e.status = 0;
+      throw e;
+    }
+
+    const ctrl = new AbortController();
+    const t = setTimeout(() => {
+      try {
+        ctrl.abort();
+      } catch {}
+    }, timeoutMs);
+    try {
+      return await apiFetch<T>(path, { ...options, signal: ctrl.signal });
+    } catch (err: any) {
+      if (!isRetryableError(err)) throw err;
+      const nextDelayMs = Math.min(maxDelayMs, delayMs);
+      retry.onRetry?.({
+        attempt,
+        elapsedMs,
+        nextDelayMs,
+        message: "Serveur en cours de démarrage…",
+      });
+      // backoff (avec léger jitter)
+      const jitter = Math.floor(Math.random() * 250);
+      await sleep(nextDelayMs + jitter);
+      delayMs = Math.min(maxDelayMs, Math.floor(delayMs * 1.7));
+    } finally {
+      clearTimeout(t);
+    }
+  }
+}
+
 
