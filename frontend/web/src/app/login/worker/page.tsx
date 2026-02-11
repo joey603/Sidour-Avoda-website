@@ -1,7 +1,8 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
 import { getRoleFromToken, setToken, getToken, clearToken } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
@@ -24,27 +25,22 @@ function WorkerLoginInner() {
     return null;
   }
 
+  const returnUrl = searchParams?.get("returnUrl");
+  const existingRole = getRoleFromToken(getToken());
+  const existingTarget = useMemo(() => safeWorkerReturnUrl(returnUrl) || "/worker", [returnUrl]);
+
   useEffect(() => {
-    const returnUrl = searchParams?.get("returnUrl");
-    
-    const token = getToken();
-    if (token) {
-      const role = getRoleFromToken(token);
-      if (role === "worker") {
-        const target = safeWorkerReturnUrl(returnUrl) || "/worker";
-        router.replace(target);
-        return;
-      }
-      if (role === "director") {
-        // Si l'utilisateur est un directeur, déconnecter pour permettre la connexion avec un compte worker
-        if (returnUrl?.includes("/public/workers")) {
-          clearToken();
-          return;
-        }
-        setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
-      }
+    // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
+    // Exception: si un directeur arrive ici via /public/workers, on nettoie le token pour permettre la connexion worker.
+    if (existingRole === "director" && returnUrl?.includes("/public/workers")) {
+      clearToken();
+      setError(null);
+      return;
     }
-  }, [router, searchParams]);
+    if (existingRole === "director") {
+      setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
+    }
+  }, [existingRole, returnUrl]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,6 +93,14 @@ function WorkerLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות עובד</h1>
         </div>
+        {existingRole === "worker" && !error && (
+          <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
+            אתה כבר מחובר כעובד.{" "}
+            <Link className="underline decoration-dotted" href={existingTarget}>
+              עבור לתפריט עובד
+            </Link>
+          </div>
+        )}
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="block text-sm">קוד מנהל</label>

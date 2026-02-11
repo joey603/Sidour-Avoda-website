@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
@@ -28,20 +28,14 @@ function DirectorLoginInner() {
     return null;
   }
 
-  useEffect(() => {
-    const token = getToken();
-    if (token) {
-      const role = getRoleFromToken(token);
-      if (role === "director") {
-        const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
-        router.replace(returnUrl || "/director");
-        return;
-      }
-      if (role === "worker") {
-        setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק או עבור להתחברות עובד.");
-      }
-    }
-  }, [router, searchParams]);
+  // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
+  // On redirige seulement après un submit réussi.
+  const existingRole = useMemo(() => getRoleFromToken(getToken()), []);
+  const existingTarget = useMemo(() => {
+    const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
+    return returnUrl || "/director";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -95,6 +89,14 @@ function DirectorLoginInner() {
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות מנהל</h1>
         </div>
+        {existingRole === "director" && !error && (
+          <div className="mb-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900/40 dark:text-zinc-200">
+            אתה כבר מחובר כמנהל.{" "}
+            <Link className="underline decoration-dotted" href={existingTarget}>
+              עבור לתפריט מנהל
+            </Link>
+          </div>
+        )}
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <label className="block text-sm">אימייל</label>
