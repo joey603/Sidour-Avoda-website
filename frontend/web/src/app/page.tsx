@@ -1,24 +1,39 @@
 "use client";
 import { useEffect, useState } from "react";
-import { fetchMe } from "@/lib/auth";
+import { useRouter } from "next/navigation";
+import { fetchMe, getToken } from "@/lib/auth";
 
 export default function Home() {
+  const router = useRouter();
   const [name, setName] = useState<string>("");
   const [role, setRole] = useState<"worker" | "director" | "">("");
   const [directorCode, setDirectorCode] = useState<string>("");
 
   useEffect(() => {
+    const token = getToken();
+    const target = `/login?returnUrl=${encodeURIComponent("/")}`;
+
+    // Si pas connecté: rediriger vers login (le login gère le wakeup du serveur).
+    if (!token) {
+      router.replace(target);
+      return;
+    }
+
     (async () => {
       try {
         const me = await fetchMe();
+        if (!me) {
+          router.replace(target);
+          return;
+        }
         if (me?.full_name) setName(me.full_name);
         if (me?.role) setRole(me.role);
         if (me?.role === "director" && me?.director_code) setDirectorCode(String(me.director_code));
       } catch {
-        // ignore
+        router.replace(target);
       }
     })();
-  }, []);
+  }, [router]);
 
   return (
     <div className="min-h-screen p-6 flex items-center justify-center">

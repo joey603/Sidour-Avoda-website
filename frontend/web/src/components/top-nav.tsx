@@ -15,6 +15,9 @@ export default function TopNav() {
   const [authChecked, setAuthChecked] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isAuthPage = (pathname || "").startsWith("/login") || (pathname || "").startsWith("/register");
+  const isProtectedPage =
+    (pathname || "").startsWith("/director") ||
+    (pathname || "").startsWith("/worker");
   const [returnUrl, setReturnUrl] = useState<string>("");
   useEffect(() => {
     // Eviter useSearchParams() ici (cause CSR bailout sur /_not-found lors du build).
@@ -58,6 +61,7 @@ export default function TopNav() {
   useEffect(() => {
     if (!authChecked) return;
     if (isAuthPage) return;
+    if (!isProtectedPage) return;
     if (userRole) return;
     if (typeof window === "undefined") return;
 

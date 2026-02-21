@@ -508,6 +508,14 @@ export default function PlanningPage() {
     !!window.matchMedia &&
     window.matchMedia("(max-width: 767px)").matches;
 
+  const expandedKeyFor = (
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number,
+    slotIndex: number,
+    token: string,
+  ) => `${dayKey}|${shiftName}|${stationIndex}|${slotIndex}|${token}`;
+
   // Helpers: day order and shift kind
   const dayOrder = ["sun","mon","tue","wed","thu","fri","sat"] as const;
   const prevDayKeyOf = (key: string) => dayOrder[(dayOrder.indexOf(key as any) + 6) % 7];
@@ -670,9 +678,23 @@ export default function PlanningPage() {
   function onWorkerDragStart(e: React.DragEvent, workerName: string) {
     didDropRef.current = false;
     dragSourceRef.current = null;
+    // Detect if drag starts from an already-assigned chip (grid slot)
+    const isFromSlot = (() => {
+      try {
+        const el = e.currentTarget as HTMLElement | null;
+        const dayKey = el?.getAttribute?.("data-dkey") || "";
+        const shiftName = el?.getAttribute?.("data-sname") || "";
+        const stationIndex = Number(el?.getAttribute?.("data-stidx") || NaN);
+        const slotIndex = Number(el?.getAttribute?.("data-slotidx") || NaN);
+        return !!(dayKey && shiftName && Number.isFinite(stationIndex) && Number.isFinite(slotIndex));
+      } catch {
+        return false;
+      }
+    })();
     try {
       e.dataTransfer.setData("text/plain", workerName);
-      e.dataTransfer.effectAllowed = "copy";
+      // If dragging from a slot in manual mode, treat it as a MOVE; otherwise keep COPY.
+      e.dataTransfer.effectAllowed = (isManual && isFromSlot) ? "move" : "copy";
     } catch {}
     // If drag starts from an existing assigned chip, remember its origin (for mobile "drag out = delete")
     try {
@@ -707,10 +729,11 @@ export default function PlanningPage() {
       const arr: string[] = base[src.dayKey]?.[src.shiftName]?.[src.stationIndex] || [];
       base[src.dayKey] = base[src.dayKey] || {};
       base[src.dayKey][src.shiftName] = base[src.dayKey][src.shiftName] || [];
-      // Remove only the dragged slot (preserve others), then compact
-      base[src.dayKey][src.shiftName][src.stationIndex] = (arr as string[])
-        .map((x: string, i: number) => (i === src.slotIndex ? "" : x))
-        .filter(Boolean);
+      // Remove only the dragged slot and KEEP slot order (do not compact).
+      const nextArr = Array.from(arr as string[]);
+      while (nextArr.length <= src.slotIndex) nextArr.push("");
+      nextArr[src.slotIndex] = "";
+      base[src.dayKey][src.shiftName][src.stationIndex] = nextArr;
 
       // If a red availability overlay was added for this name/day/shift and this was the last occurrence, remove it too
       try {
@@ -757,6 +780,8 @@ export default function PlanningPage() {
   ) {
     const trimmed = (workerName || "").trim();
     if (!trimmed) return;
+    const dragSrc = dragSourceRef.current;
+    const isMoveFromSlot = !!(isManual && dragSrc && (dragSrc.workerName || "").trim() === trimmed);
     // Vérification de la זמינות: si non demandée, demander confirmation et, si oui, ajouter un overlay rouge
     const w = findWorkerByName(trimmed);
     // Effective availability: weekly override first, else worker base availability
@@ -855,9 +880,18 @@ export default function PlanningPage() {
         console.log("[DND] slotMetaBefore:", slotMetaBefore.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole, roleHint: x.roleHint })));
         console.table(slotMetaBefore.map(x => ({ idx: x.idx, nm: x.nm, assignedRole: x.assignedRole || "—", roleHint: x.roleHint || "—" })));
       } catch {}
-      const arr: string[] = Array.from(beforeArr);
-      // Remove existing occurrence in this cell to avoid duplicates
-      const filtered = arr.filter((x) => (x || "").trim() !== trimmed);
+      const normName = (s: any) =>
+        String(s || "")
+          .normalize("NFKC")
+          .trim()
+          .replace(/\s+/g, " ");
+
+      // Preserve slot order: do NOT compact when removing duplicates.
+      const nextTarget = Array.from(beforeArr as string[]);
+      while (nextTarget.length <= slotIndex) nextTarget.push("");
+      for (let i = 0; i < nextTarget.length; i++) {
+        if (normName(nextTarget[i]) === normName(trimmed)) nextTarget[i] = "";
+      }
       // Role validation: if the slot expects a role and the worker has roles, ensure match or confirm
       const worker = workers.find((w) => (w.name || "").trim() === trimmed);
       const workerRoles: string[] = Array.isArray(worker?.roles) ? worker!.roles : [];
@@ -951,9 +985,29 @@ export default function PlanningPage() {
           if (!ok) return prev;
         }
       }
-      while (filtered.length <= slotIndex) filtered.push("");
-      filtered[slotIndex] = trimmed;
-      base[dayKey][shiftName][stationIndex] = filtered;
+      nextTarget[slotIndex] = trimmed;
+      base[dayKey][shiftName][stationIndex] = nextTarget;
+
+      // If dragging from an existing assigned slot in manual mode, MOVE it: clear source slot.
+      if (isMoveFromSlot && dragSrc) {
+        try {
+          const sameCell =
+            dragSrc.dayKey === dayKey &&
+            dragSrc.shiftName === shiftName &&
+            Number(dragSrc.stationIndex) === Number(stationIndex);
+          // Only clear when moving to a different slot or cell
+          if (!sameCell || Number(dragSrc.slotIndex) !== Number(slotIndex)) {
+            base[dragSrc.dayKey] = base[dragSrc.dayKey] || {};
+            base[dragSrc.dayKey][dragSrc.shiftName] = Array.isArray(base[dragSrc.dayKey][dragSrc.shiftName])
+              ? base[dragSrc.dayKey][dragSrc.shiftName]
+              : Array.from({ length: stationsCount }, () => []);
+            const srcArr: string[] = Array.from(base[dragSrc.dayKey][dragSrc.shiftName][dragSrc.stationIndex] || []);
+            while (srcArr.length <= dragSrc.slotIndex) srcArr.push("");
+            srcArr[dragSrc.slotIndex] = "";
+            base[dragSrc.dayKey][dragSrc.shiftName][dragSrc.stationIndex] = srcArr;
+          }
+        } catch {}
+      }
       // Update manualRoleHints according to expected role from UI
       try {
         if (typeof expectedRoleFromUI !== "undefined") {
@@ -974,6 +1028,21 @@ export default function PlanningPage() {
             const roleToSet = expectedRoleFromUI && workerHasRole(trimmed, expectedRoleFromUI) ? expectedRoleFromUI : null;
             arrHints[slotIndex] = roleToSet as any;
             nh[dayKey][shiftName][stationIndex] = arrHints;
+            // Clear hint from source slot when moving
+            if (isMoveFromSlot && dragSrc) {
+              try {
+                if (!nh[dragSrc.dayKey]) nh[dragSrc.dayKey] = {} as any;
+                if (!nh[dragSrc.dayKey][dragSrc.shiftName]) {
+                  nh[dragSrc.dayKey][dragSrc.shiftName] = Array.from({ length: stationsCount2 }, () => []);
+                }
+                const srcHints: (string | null)[] = Array.from(
+                  (nh as any)[dragSrc.dayKey]?.[dragSrc.shiftName]?.[dragSrc.stationIndex] || [],
+                );
+                while (srcHints.length <= dragSrc.slotIndex) srcHints.push(null);
+                srcHints[dragSrc.slotIndex] = null;
+                (nh as any)[dragSrc.dayKey][dragSrc.shiftName][dragSrc.stationIndex] = srcHints;
+              } catch {}
+            }
             return nh;
           });
         }
@@ -2251,14 +2320,16 @@ export default function PlanningPage() {
           </button>
         </div>
         {loading ? (
-          <LoadingAnimation className="py-8" size={80} />
+          <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+            <LoadingAnimation size={96} />
+          </div>
         ) : error ? (
           <p className="text-red-600">{error}</p>
         ) : (
           <>
           {/* Lazy loading: keep UI visible, show a centered overlay while week data refreshes */}
           {isRefreshingWeekData ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+            <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
               <LoadingAnimation size={96} />
             </div>
           ) : null}
@@ -5261,9 +5332,50 @@ export default function PlanningPage() {
                                                       Object.entries(reqRoles || {}).map(([rName, rCount]) => [String(rName), Number(rCount || 0)]),
                                                     );
 
+                                                    // En mode ידני: préserver l'ordre des slots (tableau brut) et séparer des noms non vides (pour les calculs).
+                                                    const cellRaw: string[] = (() => {
+                                                      try {
+                                                        const cell = (manualAssignments as any)?.[d.key]?.[sn]?.[idx];
+                                                        const baseArr = Array.isArray(cell) ? (cell as any[]).map((x) => String(x ?? "")) : [];
+                                                        // Garantir que les 2 noms d'une משיכה existent dans les slots (sans changer l'ordre existant):
+                                                        // si un nom manque, le placer dans un slot vide, sinon l'ajouter à la fin.
+                                                        const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                        const normSlot = (s: any) => String(s ?? "");
+                                                        const normName = (s: any) =>
+                                                          String(s || "")
+                                                            .normalize("NFKC")
+                                                            .trim()
+                                                            .replace(/\s+/g, " ");
+                                                        const have = new Set<string>(baseArr.map((x) => normName(x)).filter(Boolean));
+                                                        const addInto = (name: string) => {
+                                                          const n = normName(name);
+                                                          if (!n || have.has(n)) return;
+                                                          const emptyIdx = baseArr.findIndex((x) => !normName(x));
+                                                          if (emptyIdx >= 0) baseArr[emptyIdx] = normSlot(name);
+                                                          else baseArr.push(normSlot(name));
+                                                          have.add(n);
+                                                        };
+                                                        try {
+                                                          Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                                                            if (!String(k).startsWith(cellPrefix)) return;
+                                                            const b = String((entry as any)?.before?.name || "").trim();
+                                                            const a = String((entry as any)?.after?.name || "").trim();
+                                                            if (b) addInto(b);
+                                                            if (a) addInto(a);
+                                                          });
+                                                        } catch {}
+                                                        return baseArr;
+                                                      } catch {
+                                                        return [];
+                                                      }
+                                                    })();
+                                                    const assignedNamesNonEmpty: string[] = (cellRaw || [])
+                                                      .map((x) => String(x || "").trim())
+                                                      .filter(Boolean);
+
                                                     // Priorité: si un nom provient d'une משיכה avec roleName, afficher ce rôle.
                                                     // On décrémente seulement si ce rôle est effectivement requis et encore disponible.
-                                                    (assignedNames || []).forEach((nm) => {
+                                                    (assignedNamesNonEmpty || []).forEach((nm) => {
                                                       const nameTrimmed = String(nm || "").trim();
                                                       const pr = pullRoleMap.get(nameTrimmed) || null;
                                                       if (!pr) return;
@@ -5275,7 +5387,7 @@ export default function PlanningPage() {
                                                     });
 
                                                     // Allocation simple des rôles restants par déficit
-                                                    (assignedNames || []).forEach((nm) => {
+                                                    (assignedNamesNonEmpty || []).forEach((nm) => {
                                                       const nameTrimmed = String(nm || "").trim();
                                                       if (!nameTrimmed) return;
                                                       if (roleForName.has(nameTrimmed)) return;
@@ -5288,11 +5400,28 @@ export default function PlanningPage() {
                                                       }
                                                     });
 
+                                                    // IMPORTANT:
+                                                    // Quand on a une משיכה, on affiche 2 personnes pour 1 place.
+                                                    // Cela ajoute des "slots" visuels, mais il faut conserver les placeholders de rôles
+                                                    // pour les rôles encore manquants (sinon on voit un slot vide "neutre").
+                                                    const roleHintsExtended: string[] = [
+                                                      ...roleHints,
+                                                      ...Array.from(remaining.entries())
+                                                        .flatMap(([rName, cnt]) =>
+                                                          Array.from({ length: Math.max(0, Number(cnt || 0)) }, () => String(rName)),
+                                                        ),
+                                                    ];
+
                                                         // +pullsInCell: pour afficher 2 bulles pour une seule place (משיכה)
-                                                        const slots = Math.max(required + pullsInCell, assignedNames.length, roleHints.length, 1);
+                                                        const slots = Math.max(required + pullsInCell, assignedNamesNonEmpty.length, roleHints.length, 1);
                                                         return Array.from({ length: slots }).map((_, slotIdx) => {
-                                                          const nm = assignedNames[slotIdx];
+                                                          const nm = String(cellRaw[slotIdx] || "").trim();
                                                           if (nm) {
+                                                            const nmKey = String(nm || "")
+                                                              .normalize("NFKC")
+                                                              .trim()
+                                                              .replace(/\s+/g, " ");
+                                                            const expKey = expandedKeyFor(d.key, sn, idx, slotIdx, nmKey);
                                                             const c = colorForName(nm);
                                                             const hintedStored = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? null) as (string | null);
                                                             const pullRn = pullRoleMap.get(String(nm || "").trim()) || null;
@@ -5301,7 +5430,28 @@ export default function PlanningPage() {
                                                               hintedOk ||
                                                               (pullRn && nameHasRole(nm, pullRn) ? pullRn : null) ||
                                                               (roleForName.get(String(nm || "").trim()) || null);
-                                                            const rc = rn ? colorForRole(rn) : null;
+                                                            // Aligner l'affichage des משיכות sur l'automatique:
+                                                            // si ce nom fait partie d'une משיכה, afficher aussi roleName (couleur/bordure + libellé).
+                                                            const pullRoleName = (() => {
+                                                              const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                              const norm = (s: any) =>
+                                                                String(s || "")
+                                                                  .normalize("NFKC")
+                                                                  .trim()
+                                                                  .replace(/\s+/g, " ");
+                                                              const nmN = norm(nm);
+                                                              const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                if (!String(k).startsWith(cellPrefix)) return false;
+                                                                const e: any = entry;
+                                                                return norm(e?.before?.name) === nmN || norm(e?.after?.name) === nmN;
+                                                              });
+                                                              if (!match) return null;
+                                                              const [, entryAny] = match as any;
+                                                              const e: any = entryAny;
+                                                              return String(e?.roleName || "").trim() || null;
+                                                            })();
+                                                            const roleToShow = rn || pullRoleName || null;
+                                                            const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                             return (
                                                               <div
                                                                 key={"slot-nm-wrapper-" + slotIdx}
@@ -5333,35 +5483,43 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
                                                                     // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
-                                                                    "relative inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
-                                                                    (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " max-w-[18rem] z-30" : "") +
+                                                                    (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                     (() => {
+                                                                      // Comme en automatique: n'afficher le contour orange des משיכות
+                                                                      // que quand le mode משיכות est actif sur cette עמדה.
                                                                       if (pullsModeStationIdx !== idx) return "";
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      const norm = (s: any) =>
+                                                                        String(s || "")
+                                                                          .normalize("NFKC")
+                                                                          .trim()
+                                                                          .replace(/\s+/g, " ");
+                                                                      const nmN = norm(nm);
                                                                       const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
                                                                         if (!k.startsWith(cellPrefix)) return false;
                                                                         const e: any = entry;
-                                                                        return e?.before?.name === nm || e?.after?.name === nm;
+                                                                        return norm(e?.before?.name) === nmN || norm(e?.after?.name) === nmN;
                                                                       });
                                                                       return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
                                                                     })()
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                   draggable
-                                                                  onPointerDown={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
+                                                                  onPointerDown={() => setExpandedSlotKey(expKey)}
                                                                   onPointerEnter={(e) => {
                                                                     if ((e as any)?.pointerType === "mouse") {
-                                                                      setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                      setExpandedSlotKey(expKey);
                                                                     }
                                                                   }}
                                                                   onPointerLeave={(e) => {
                                                                     if ((e as any)?.pointerType === "mouse") {
-                                                                      setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                      setExpandedSlotKey((k) => (k === expKey ? null : k));
                                                                     }
                                                                   }}
-                                                                  onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
-                                                                  onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k))}
+                                                                  onFocus={() => setExpandedSlotKey(expKey)}
+                                                                  onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                                   onClick={(e) => {
                                                                     // Si cette bulle fait partie d'une משיכה, permettre d'ouvrir la popup en cliquant sur la bulle
                                                                     if (pullsModeStationIdx !== idx) return;
@@ -5428,8 +5586,8 @@ export default function PlanningPage() {
                                                                   data-slotidx={slotIdx}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center flex-1 min-w-0 w-full overflow-hidden">
-                                                                    {rn ? (
-                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                    {roleToShow ? (
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                     ) : null}
                                                                     <span
                                                                       className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
@@ -5437,7 +5595,7 @@ export default function PlanningPage() {
                                                                     >
                                                                       {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
                                                                       <span className="md:hidden">
-                                                                        {expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? (
+                                                                        {expandedSlotKey === expKey ? (
                                                                           <span className="whitespace-nowrap">{nm}</span>
                                                                         ) : (
                                                                           <span>{truncateMobile6(nm)}</span>
@@ -5531,30 +5689,83 @@ export default function PlanningPage() {
                                                                     title="הסר"
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
+                                                                      const norm = (s: any) =>
+                                                                        String(s || "")
+                                                                          .normalize("NFKC")
+                                                                          .trim()
+                                                                          .replace(/\s+/g, " ");
+                                                                      const clickedName = norm(nm);
+                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
+                                                                      const keysToDelete: string[] = [];
+                                                                      const namesToRemove = new Set<string>();
+                                                                      if (clickedName) namesToRemove.add(clickedName);
+
+                                                                      // Si on clique sur une personne qui fait partie d'une משיכה,
+                                                                      // supprimer la משיכה ET les deux personnes (before+after) de la cellule.
+                                                                      try {
+                                                                        Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                                                                          if (!String(k).startsWith(cellPrefix)) return;
+                                                                          const b = norm((entry as any)?.before?.name);
+                                                                          const a = norm((entry as any)?.after?.name);
+                                                                          if (!b && !a) return;
+                                                                          if (b === clickedName || a === clickedName) {
+                                                                            keysToDelete.push(String(k));
+                                                                            if (b) namesToRemove.add(b);
+                                                                            if (a) namesToRemove.add(a);
+                                                                          }
+                                                                        });
+                                                                      } catch {}
+
+                                                                      if (keysToDelete.length > 0) {
+                                                                        setPullsByHoleKey((prevPulls) => {
+                                                                          const next: any = { ...(prevPulls || {}) };
+                                                                          keysToDelete.forEach((k) => {
+                                                                            try { delete next[k]; } catch {}
+                                                                          });
+                                                                          return next;
+                                                                        });
+                                                                      }
                                                                       setManualAssignments((prev) => {
                                                                         if (!prev) return prev;
                                                                         const base = JSON.parse(JSON.stringify(prev));
-                                                                        const arr: string[] = base[d.key]?.[sn]?.[idx] || [];
                                                                         base[d.key] = base[d.key] || {};
                                                                         base[d.key][sn] = base[d.key][sn] || [];
-                                                                        base[d.key][sn][idx] = (arr as string[]).map((x: string, i: number) => (i === slotIdx ? "" : x)).filter(Boolean);
-                                                                        // Si l'overlay rouge a été ajouté pour ce nom/jour/shift et que c'est la dernière occurrence, le retirer aussi
+                                                                        const arr: string[] = Array.isArray(base[d.key]?.[sn]?.[idx]) ? (base[d.key][sn][idx] as string[]) : [];
+                                                                        // Retirer par valeur (pas par index) pour éviter les décalages quand l'ordre d'affichage diffère
+                                                                        // (ex: réordonnancement "before/after" pour les משיכות).
+                                                                        const nextArr = (arr || []).filter((x) => !namesToRemove.has(norm(x)));
+                                                                        base[d.key][sn][idx] = nextArr;
+
+                                                                        // Si l'overlay rouge a été ajouté pour un nom retiré sur ce jour/shift
+                                                                        // et que c'est la dernière occurrence (sur toutes les stations), le retirer aussi.
                                                                         try {
-                                                                          const nameTrimmed = (nm || "").trim();
-                                                                          const stillThere = (base?.[d.key]?.[sn] || []).some((cell: string[]) => Array.isArray(cell) && cell.some((x) => (x || "").trim() === nameTrimmed));
-                                                                          if (!stillThere) {
+                                                                          const removedNorms = Array.from(namesToRemove);
+                                                                          const stillThereByNorm = new Set<string>();
+                                                                          (base?.[d.key]?.[sn] || []).forEach((cell: string[]) => {
+                                                                            if (!Array.isArray(cell)) return;
+                                                                            cell.forEach((x) => {
+                                                                              const nx = norm(x);
+                                                                              if (removedNorms.includes(nx)) stillThereByNorm.add(nx);
+                                                                            });
+                                                                          });
+                                                                          const toClear = removedNorms.filter((nrm) => !stillThereByNorm.has(nrm));
+                                                                          if (toClear.length > 0) {
                                                                             setAvailabilityOverlays((prevOv) => {
                                                                               const next: any = { ...prevOv };
-                                                                              if (next?.[nameTrimmed]?.[d.key]) {
-                                                                                const list: string[] = Array.from(next[nameTrimmed][d.key] || []);
-                                                                                const filtered = list.filter((s) => s !== sn);
-                                                                                if (filtered.length > 0) {
-                                                                                  next[nameTrimmed][d.key] = filtered;
-                                                                                } else {
-                                                                                  delete next[nameTrimmed][d.key];
-                                                                                  if (Object.keys(next[nameTrimmed] || {}).length === 0) delete next[nameTrimmed];
+                                                                              Object.keys(next || {}).forEach((keyName) => {
+                                                                                const keyNorm = norm(keyName);
+                                                                                if (!toClear.includes(keyNorm)) return;
+                                                                                if (next?.[keyName]?.[d.key]) {
+                                                                                  const list: string[] = Array.from(next[keyName][d.key] || []);
+                                                                                  const filtered = list.filter((s) => s !== sn);
+                                                                                  if (filtered.length > 0) {
+                                                                                    next[keyName][d.key] = filtered;
+                                                                                  } else {
+                                                                                    delete next[keyName][d.key];
+                                                                                    if (Object.keys(next[keyName] || {}).length === 0) delete next[keyName];
+                                                                                  }
                                                                                 }
-                                                                              }
+                                                                              });
                                                                               return next;
                                                                             });
                                                                           }
@@ -5571,9 +5782,11 @@ export default function PlanningPage() {
                                                               </div>
                                                             );
                                                           }
-                                                          const hint = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? roleHints[slotIdx] ?? null) as (string | null);
+                                                          const hint = ((manualRoleHints as any)?.[d.key]?.[sn]?.[idx]?.[slotIdx] ?? roleHintsExtended[slotIdx] ?? null) as (string | null);
                                                           if (hint) {
                                                             const rc = colorForRole(hint);
+                                                            // En mode manuel, afficher clairement les slots "pullables"
+                                                            // même si le mode משיכות n'est pas activé (pour aider à repérer les trous).
                                                             const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(hint);
                                                             return (
                                                               <div
@@ -5605,7 +5818,8 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    (canPullThisRole ? " ring-2 ring-orange-400" : "") +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5697,7 +5911,8 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    (pullsActiveHere && isPullable ? " ring-2 ring-orange-400" : "") +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
                                                                   }
@@ -5754,7 +5969,7 @@ export default function PlanningPage() {
                                                                       roleName,
                                                                     });
                                                                   }}
-                                                                  style={pullsActiveHere && isPullable ? { outline: "2px solid #fb923c", outlineOffset: "2px" } : undefined}
+                                                                  style={undefined}
                                                       >
                                                                 {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
                                                                 <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
@@ -5842,6 +6057,11 @@ export default function PlanningPage() {
                                                       
                                                       const renderChip = (nm: string, i: number, rn: string | null) => {
                                                           const c = colorForName(nm);
+                                                          const nmKey = String(nm || "")
+                                                            .normalize("NFKC")
+                                                            .trim()
+                                                            .replace(/\s+/g, " ");
+                                                          const expKey = expandedKeyFor(d.key, sn, idx, i, nmKey);
                                                           // Si ce nom fait partie d'une משיכה avec roleName, afficher aussi le rôle sur la bulle "ajoutée"
                                                           const pullRoleName = (() => {
                                                             const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5858,7 +6078,8 @@ export default function PlanningPage() {
                                                           const roleToShow = rn || pullRoleName || null;
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
-                                                            "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 md:focus:max-w-[18rem] md:focus:z-30 focus:outline-none " +
+                                                            // Auto: aligner l'expansion desktop sur le mode manuel (la chip s'étire au hover/focus).
+                                                            "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                             (() => {
                                                               if (pullsModeStationIdx !== idx) return "";
                                                               const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -5876,22 +6097,22 @@ export default function PlanningPage() {
                                                             >
                                                             <span
                                                               key={"nm-" + i}
-                                                              className={chipClass + (expandedSlotKey === `${d.key}|${sn}|${idx}|${i}` ? " max-w-[18rem] z-30" : "")}
+                                                              className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                               tabIndex={0}
-                                                              onPointerDown={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`)}
+                                                              onPointerDown={() => setExpandedSlotKey(expKey)}
                                                               onPointerEnter={(e) => {
                                                                 if ((e as any)?.pointerType === "mouse") {
-                                                                  setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`);
+                                                                  setExpandedSlotKey(expKey);
                                                                 }
                                                               }}
                                                               onPointerLeave={(e) => {
                                                                 if ((e as any)?.pointerType === "mouse") {
-                                                                  setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${i}` ? null : k));
+                                                                  setExpandedSlotKey((k) => (k === expKey ? null : k));
                                                                 }
                                                               }}
-                                                              onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${i}`)}
-                                                              onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${i}` ? null : k))}
+                                                              onFocus={() => setExpandedSlotKey(expKey)}
+                                                              onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                               onClick={(e) => {
                                                                 if (pullsModeStationIdx !== idx) return;
                                                                 if (isSavedMode && !editingSaved) return;
@@ -5959,7 +6180,7 @@ export default function PlanningPage() {
                                                                 >
                                                                   {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
                                                                   <span className="md:hidden">
-                                                                    {expandedSlotKey === `${d.key}|${sn}|${idx}|${i}` ? (
+                                                                    {expandedSlotKey === expKey ? (
                                                                       <span className="whitespace-nowrap">{nm}</span>
                                                                     ) : (
                                                                       <span>{truncateMobile6(nm)}</span>
@@ -6047,29 +6268,6 @@ export default function PlanningPage() {
                                                                 })()}
                                                               </span>
                                                             </span>
-
-                                                            {/* Expansion animée au survol (pas de tooltip) */}
-                                                            <div
-                                                              aria-hidden
-                                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 md:group-hover/slot:opacity-100 md:group-hover/slot:scale-100 md:group-focus-within/slot:opacity-100 md:group-focus-within/slot:scale-100 transition-all duration-200 ease-out"
-                                                            >
-                                                              <span
-                                                                className={chipClass + " max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
-                                                                style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
-                                                              >
-                                                                <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
-                                                                  {roleToShow ? (
-                                                                    <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
-                                                                  ) : null}
-                                                                  <span
-                                                                    className={"text-[8px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                                  >
-                                                                    {nm}
-                                                                  </span>
-                                                              </span>
-                                                            </span>
-                                                            </div>
                                                             </div>
                                                           );
                                                       };
@@ -6091,10 +6289,17 @@ export default function PlanningPage() {
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
                                                                     style={{ borderColor: c.border }}
+                                                                    tabIndex={0}
+                                                                    onPointerDown={(e) => {
+                                                                      if ((e as any)?.pointerType !== "mouse") setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                    }}
+                                                                    onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
+                                                                    onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k))}
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
                                                                       if (!canPullThisRole) return;
@@ -6162,9 +6367,16 @@ export default function PlanningPage() {
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-full max-w-full md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
+                                                                    tabIndex={0}
+                                                                    onPointerDown={(e) => {
+                                                                      if ((e as any)?.pointerType !== "mouse") setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                    }}
+                                                                    onFocus={() => setExpandedSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`)}
+                                                                    onBlur={() => setExpandedSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k))}
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
                                                                       if (!neutralIsPullable) return;
@@ -7557,6 +7769,45 @@ export default function PlanningPage() {
                   // Keep current placements while switching
                   if (modeSwitchTarget === "auto") {
                     if (isManual && manualAssignments) {
+                      // Preserve pulls placements when switching back to auto:
+                      // ensure both before/after names exist in the target cell slots (without reordering existing slots).
+                      let nextAssignments: any = JSON.parse(JSON.stringify(manualAssignments));
+                      try {
+                        const normName = (s: any) =>
+                          String(s || "")
+                            .normalize("NFKC")
+                            .trim()
+                            .replace(/\s+/g, " ");
+                        const putIntoCell = (arrIn: any[], name: string) => {
+                          const n = normName(name);
+                          if (!n) return arrIn;
+                          const arr = Array.isArray(arrIn) ? arrIn.map((x) => String(x ?? "")) : [];
+                          const have = new Set<string>(arr.map((x) => normName(x)).filter(Boolean));
+                          if (have.has(n)) return arr;
+                          const emptyIdx = arr.findIndex((x) => !normName(x));
+                          if (emptyIdx >= 0) arr[emptyIdx] = String(name);
+                          else arr.push(String(name));
+                          return arr;
+                        };
+                        Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                          const parts = String(k).split("|");
+                          if (parts.length < 3) return;
+                          const dayKey = parts[0];
+                          const shiftName = parts[1];
+                          const stationIdx = Number(parts[2]);
+                          if (!dayKey || !shiftName || !Number.isFinite(stationIdx)) return;
+                          const beforeNm = String((entry as any)?.before?.name || "").trim();
+                          const afterNm = String((entry as any)?.after?.name || "").trim();
+                          if (!beforeNm || !afterNm) return;
+                          nextAssignments[dayKey] = nextAssignments[dayKey] || {};
+                          nextAssignments[dayKey][shiftName] = Array.isArray(nextAssignments[dayKey][shiftName]) ? nextAssignments[dayKey][shiftName] : [];
+                          while (nextAssignments[dayKey][shiftName].length <= stationIdx) nextAssignments[dayKey][shiftName].push([]);
+                          let cell = Array.isArray(nextAssignments[dayKey][shiftName][stationIdx]) ? nextAssignments[dayKey][shiftName][stationIdx] : [];
+                          cell = putIntoCell(cell, beforeNm);
+                          cell = putIntoCell(cell, afterNm);
+                          nextAssignments[dayKey][shiftName][stationIdx] = cell;
+                        });
+                      } catch {}
                       const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
                       const shiftNames = Array.from(new Set(((site?.config?.stations || []) as any[])
                         .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
@@ -7566,7 +7817,7 @@ export default function PlanningPage() {
                         days: dayKeys,
                         shifts: shiftNames,
                         stations: stationNames,
-                        assignments: manualAssignments,
+                        assignments: nextAssignments,
                         alternatives: [],
                         status: "TEMP",
                         objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
