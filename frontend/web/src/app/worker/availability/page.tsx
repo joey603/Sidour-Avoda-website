@@ -368,7 +368,8 @@ export default function WorkerAvailabilityPage() {
         return;
       }
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
-      await apiFetch(`/public/sites/${selectedSiteId}/register`, {
+      // IMPORTANT: send week_key as query param so backend can store answers per-week reliably
+      await apiFetch(`/public/sites/${selectedSiteId}/register?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -376,6 +377,9 @@ export default function WorkerAvailabilityPage() {
           max_shifts: maxShifts,
           roles: [],
           availability: availability,
+          // Backward/forward compatible:
+          // - Old backend expects answers.week_key in body (stores answers[week_key])
+          // - New backend can also read week_key from query param
           answers: { week_key: weekKeyISO, general: answersGeneral, perDay: answersPerDay },
         }),
       });

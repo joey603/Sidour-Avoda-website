@@ -134,11 +134,32 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
     
     # Retourner les réponses de la semaine spécifiée si week_key est fourni
     answers = worker.answers or {}
-    if week_key and isinstance(answers, dict) and week_key in answers:
-        answers = answers[week_key]
-    elif week_key:
-        # Si week_key est fourni mais pas de réponses pour cette semaine, retourner vide
-        answers = {}
+    if week_key:
+        wk = _validate_week_iso(week_key)
+        if isinstance(answers, dict) and wk in answers:
+            answers = answers[wk]
+        elif isinstance(answers, dict) and ("general" in answers or "perDay" in answers):
+            # Compat / migration: ancien format stocké sans clé semaine.
+            # On le retourne quand même pour wk, et on le migre sous answers[wk] pour les prochains loads.
+            week_answers = {
+                "general": answers.get("general") if isinstance(answers.get("general"), dict) else {},
+                "perDay": answers.get("perDay") if isinstance(answers.get("perDay"), dict) else {},
+            }
+            try:
+                # IMPORTANT (SQLAlchemy JSON): ne pas muter le dict en place (changements non détectés sans MutableDict)
+                base = worker.answers if isinstance(worker.answers, dict) else {}
+                if wk not in base:
+                    cur = dict(base)
+                    cur[wk] = week_answers
+                    worker.answers = cur
+                    db.commit()
+                    db.refresh(worker)
+            except Exception:
+                pass
+            answers = week_answers
+        else:
+            # Si week_key est fourni mais pas de réponses pour cette semaine, retourner vide
+            answers = {}
     
     return WorkerOut(
         id=worker.id,
@@ -218,7 +239,7 @@ def get_site_messages_for_worker(
 
 
 @router.post("/{site_id}/register", response_model=WorkerOut, status_code=201)
-def register_worker(site_id: int, payload: WorkerCreate, db: Session = Depends(get_db)):
+def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = Query(None), db: Session = Depends(get_db)):
     """Endpoint public pour permettre aux travailleurs de s'enregistrer et mettre à jour leur זמינות"""
     site = db.get(Site, site_id)
     if not site:
@@ -234,27 +255,49 @@ def register_worker(site_id: int, payload: WorkerCreate, db: Session = Depends(g
         .first()
     )
     
-    # Extraire week_key du payload si présent (dans answers ou directement)
-    week_key = None
-    answers_data = payload.answers or {}
-    if isinstance(answers_data, dict) and "week_key" in answers_data:
-        week_key = answers_data.pop("week_key")
-        # answers_data contient maintenant { general: {}, perDay: {} }
+    # Extraire week_key via query param (prioritaire) ou via payload.answers.week_key
+    wk = (week_key or "").strip() or None
+    answers_payload = payload.answers if isinstance(payload.answers, dict) else {}
+    body_wk = None
+    try:
+        body_wk = str(answers_payload.get("week_key") or "").strip() or None
+    except Exception:
+        body_wk = None
+    if not wk and body_wk:
+        wk = body_wk
+    # Normalize/validate if provided
+    if wk:
+        wk = _validate_week_iso(str(wk))
+
+    # Normaliser les réponses à stocker (sans week_key)
+    # On attend typiquement {general: {...}, perDay: {...}}.
+    answers_data: dict = {}
+    if isinstance(answers_payload, dict):
+        if "general" in answers_payload or "perDay" in answers_payload:
+            g = answers_payload.get("general")
+            p = answers_payload.get("perDay")
+            answers_data = {
+                "general": g if isinstance(g, dict) else {},
+                "perDay": p if isinstance(p, dict) else {},
+            }
+        else:
+            # fallback: stocker tel quel (évite de perdre des formats inattendus)
+            answers_data = {k: v for k, v in answers_payload.items() if k != "week_key"}
     
     if existing:
         # Si le worker existe déjà, mettre à jour sa זמינות et max_shifts
         existing.availability = payload.availability or {}
         
-        # Stocker les réponses par semaine si week_key est fourni
-        if week_key and answers_data:
-            current_answers = existing.answers or {}
-            if not isinstance(current_answers, dict):
-                current_answers = {}
-            current_answers[week_key] = answers_data
+        # Stocker les réponses par semaine si week_key est fourni (query ou body)
+        if wk:
+            # IMPORTANT (SQLAlchemy JSON): ne pas muter le dict en place (changements non détectés sans MutableDict)
+            base = existing.answers if isinstance(existing.answers, dict) else {}
+            current_answers = dict(base)
+            current_answers[str(wk)] = answers_data
             existing.answers = current_answers
         elif answers_data:
             # Compatibilité ascendante : si pas de week_key, stocker directement
-            existing.answers = answers_data
+            existing.answers = dict(answers_data) if isinstance(answers_data, dict) else answers_data
         
         if payload.max_shifts is not None:
             existing.max_shifts = payload.max_shifts
@@ -263,8 +306,8 @@ def register_worker(site_id: int, payload: WorkerCreate, db: Session = Depends(g
         
         # Retourner les réponses de la semaine si week_key est fourni
         return_answers = existing.answers or {}
-        if week_key and isinstance(return_answers, dict) and week_key in return_answers:
-            return_answers = return_answers[week_key]
+        if wk and isinstance(return_answers, dict) and str(wk) in return_answers:
+            return_answers = return_answers[str(wk)]
         
         return WorkerOut(
             id=existing.id,
@@ -278,8 +321,8 @@ def register_worker(site_id: int, payload: WorkerCreate, db: Session = Depends(g
     
     # Créer un nouveau worker
     initial_answers = {}
-    if week_key and answers_data:
-        initial_answers[week_key] = answers_data
+    if wk:
+        initial_answers[str(wk)] = answers_data
     elif answers_data:
         initial_answers = answers_data
     
@@ -296,8 +339,8 @@ def register_worker(site_id: int, payload: WorkerCreate, db: Session = Depends(g
     db.refresh(w)
     
     return_answers = w.answers or {}
-    if week_key and isinstance(return_answers, dict) and week_key in return_answers:
-        return_answers = return_answers[week_key]
+    if wk and isinstance(return_answers, dict) and str(wk) in return_answers:
+        return_answers = return_answers[str(wk)]
     
     return WorkerOut(
         id=w.id,

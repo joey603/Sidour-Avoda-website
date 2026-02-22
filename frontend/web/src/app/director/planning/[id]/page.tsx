@@ -1366,6 +1366,17 @@ export default function PlanningPage() {
         return { general, perDay };
       }
     }
+
+    // Format "public register" (ou snapshot) possible: { week_key: "YYYY-MM-DD", general: {...}, perDay: {...} }
+    // Dans ce cas, rawAnswers n'est pas un dictionnaire par semaine mais déjà l'objet de la semaine.
+    try {
+      const wk = String((rawAnswers as any)?.week_key || (rawAnswers as any)?.week_iso || "").trim();
+      if (wk && wk === weekKey && (("general" in rawAnswers) || ("perDay" in rawAnswers))) {
+        const general = ((rawAnswers as any).general && typeof (rawAnswers as any).general === "object") ? (rawAnswers as any).general : {};
+        const perDay = ((rawAnswers as any).perDay && typeof (rawAnswers as any).perDay === "object") ? (rawAnswers as any).perDay : {};
+        return { general, perDay };
+      }
+    } catch {}
     
     // Compatibilité ascendante : si pas de structure par semaine, vérifier si c'est l'ancien format
     if ("general" in rawAnswers || "perDay" in rawAnswers) {
@@ -1377,8 +1388,8 @@ export default function PlanningPage() {
       nextSunday.setDate(today.getDate() + daysUntilNextSunday);
       nextSunday.setHours(0, 0, 0, 0);
       
-      // Si la semaine actuelle est la semaine prochaine, afficher les réponses
-      if (weekStart.getTime() === nextSunday.getTime()) {
+      // Si la semaine actuelle est la semaine prochaine, afficher les réponses (comparer via clé ISO, pas via getTime)
+      if (getWeekKeyISO(weekStart) === getWeekKeyISO(nextSunday)) {
         const general = (rawAnswers.general && typeof rawAnswers.general === "object") ? rawAnswers.general : rawAnswers;
         const perDay = (rawAnswers.perDay && typeof rawAnswers.perDay === "object") ? rawAnswers.perDay : {};
         return { general, perDay };
@@ -2899,8 +2910,11 @@ export default function PlanningPage() {
             {/* Modal d'ajout d'employé */}
             {isAddModalOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-                <div className="w-full max-w-3xl rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-                  <div className="relative mb-3 flex items-center justify-center">
+                {/* Fixed height so the Q/A section requires scrolling (web + mobile).
+                    Use vh fallback (some browsers ignore dvh). */}
+                <div className="w-full max-w-3xl h-[50vh] h-[50dvh] md:h-[34rem] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 flex flex-col min-h-0">
+                  <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 p-4">
+                    <div className="relative flex items-center justify-center">
                     <h3 className="text-lg font-semibold text-center">{editingWorkerId ? "עריכת עובד" : "הוספת עובד"}</h3>
                     <button
                       type="button"
@@ -2909,7 +2923,9 @@ export default function PlanningPage() {
                     >
                       ✕
                     </button>
+                    </div>
                   </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto p-4">
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-4 justify-items-center text-center">
                     <div>
                       <label className="block text-sm font-semibold">שם</label>
@@ -3386,6 +3402,7 @@ export default function PlanningPage() {
                     >
                       שמור
                     </button>
+                  </div>
                   </div>
                 </div>
               </div>
