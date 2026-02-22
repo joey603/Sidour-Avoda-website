@@ -43,8 +43,8 @@ export default function WorkerAvailabilityPage() {
   const [workerId, setWorkerId] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [hasBeenSaved, setHasBeenSaved] = useState(false); // Pour savoir si on a déjà sauvegardé
-  const [nextWeekStart, setNextWeekStart] = useState<Date | null>(null);
-  const [nextWeekEnd, setNextWeekEnd] = useState<Date | null>(null);
+  const [nextWeekStart] = useState<Date>(() => calculateNextWeek().start);
+  const [nextWeekEnd] = useState<Date>(() => calculateNextWeek().end);
   const [maxShifts, setMaxShifts] = useState<number>(5);
 
   // Calculer la semaine prochaine (dimanche prochain à samedi prochain)
@@ -78,7 +78,6 @@ export default function WorkerAvailabilityPage() {
 
   // Charger les זמינות depuis le serveur (source de vérité)
   async function loadWorkerAvailabilityFromServer(siteId: number) {
-    if (!nextWeekStart) return;
     try {
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
       const workerData = await apiFetch<{
@@ -179,22 +178,18 @@ export default function WorkerAvailabilityPage() {
     }
   }
 
-  useEffect(() => {
-    const { start, end } = calculateNextWeek();
-    setNextWeekStart(start);
-    setNextWeekEnd(end);
-  }, []);
-
-  // Charger l'état sauvegardé quand nextWeekStart et selectedSiteId sont disponibles
-  useEffect(() => {
-    if (selectedSiteId && nextWeekStart) {
-      loadWorkerAvailabilityFromServer(selectedSiteId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSiteId, nextWeekStart, workerId]);
+  async function loadFullSiteData(siteId: number) {
+    // Charger la config du site + les données worker (DB) avant d'enlever le loading
+    const info = await apiFetch<{ id: number; name: string; shifts: string[]; questions?: SiteQuestion[] }>(`/public/sites/${siteId}/info`);
+    setSiteName(info.name || "");
+    setShifts(info.shifts || ["06-14", "14-22", "22-06"]);
+    setSiteQuestions(Array.isArray(info.questions) ? info.questions : []);
+    await loadWorkerAvailabilityFromServer(siteId);
+  }
 
   useEffect(() => {
     async function loadSites() {
+      setLoading(true);
       const me = await fetchMe();
       if (!me) {
         router.replace("/login/worker");
@@ -217,32 +212,19 @@ export default function WorkerAvailabilityPage() {
         // Si un seul site, le sélectionner automatiquement
         if (sitesList && sitesList.length === 1) {
           setSelectedSiteId(sitesList[0].id);
-          loadSiteInfo(sitesList[0].id);
+          await loadFullSiteData(sitesList[0].id);
         }
       } catch (e: any) {
         toast.error("שגיאה בטעינת אתרים", { description: e?.message || "נסה שוב מאוחר יותר." });
-      } finally {
-        setLoading(false);
       }
+      // Si plusieurs sites, on a juste besoin de la liste pour afficher l'UI.
+      // Si 1 seul site, loadFullSiteData a déjà tout chargé.
+      setLoading(false);
     }
     loadSites();
   }, [router]);
 
-  async function loadSiteInfo(siteId: number) {
-    try {
-      const info = await apiFetch<{ id: number; name: string; shifts: string[]; questions?: SiteQuestion[] }>(`/public/sites/${siteId}/info`);
-      setSiteName(info.name || "");
-      setShifts(info.shifts || ["06-14", "14-22", "22-06"]);
-      setSiteQuestions(Array.isArray(info.questions) ? info.questions : []);
-      // Charger les זמינות depuis le serveur (source de vérité)
-      await loadWorkerAvailabilityFromServer(siteId);
-    } catch (e: any) {
-      toast.error("שגיאה בטעינת פרטי האתר", { description: e?.message || "נסה שוב מאוחר יותר." });
-    }
-  }
-
-
-  function handleSiteSelect(siteId: number) {
+  async function handleSiteSelect(siteId: number) {
     setSelectedSiteId(siteId);
     setSuccess(false);
     setIsEditing(false);
@@ -260,7 +242,14 @@ export default function WorkerAvailabilityPage() {
       fri: [],
       sat: [],
     });
-    loadSiteInfo(siteId);
+    setLoading(true);
+    try {
+      await loadFullSiteData(siteId);
+    } catch (e: any) {
+      toast.error("שגיאה בטעינת פרטי האתר", { description: e?.message || "נסה שוב מאוחר יותר." });
+    } finally {
+      setLoading(false);
+    }
   }
 
   const dayDefs = [
@@ -476,7 +465,7 @@ export default function WorkerAvailabilityPage() {
               </label>
               <select
                 value={selectedSiteId || ""}
-                onChange={(e) => handleSiteSelect(Number(e.target.value))}
+                onChange={(e) => { void handleSiteSelect(Number(e.target.value)); }}
                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               >
                 <option value="">-- בחר אתר --</option>

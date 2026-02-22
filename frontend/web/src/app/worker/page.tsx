@@ -37,6 +37,7 @@ export default function WorkerDashboard() {
   const [name, setName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
+  const [expandedSlotKey, setExpandedSlotKey] = useState<string | null>(null);
   type SiteMessage = {
     id: number;
     site_id: number;
@@ -58,6 +59,24 @@ export default function WorkerDashboard() {
 
   type NameColor = { bg: string; border: string; text: string };
   type RoleColor = { border: string; text: string };
+
+  const normKey = (s: any) =>
+    String(s || "")
+      .normalize("NFKC")
+      .trim()
+      .replace(/\s+/g, " ");
+
+  const weekIso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  const expandedKeyFor = (
+    siteId: number,
+    weekStart: Date,
+    dayKey: string,
+    shiftName: string,
+    stationIndex: number,
+    slotIndex: number,
+    token: string,
+  ) => `${siteId}|${weekIso(weekStart)}|${dayKey}|${shiftName}|${stationIndex}|${slotIndex}|${token}`;
 
   function hashColorForName(name: string): NameColor {
     const s = name || "";
@@ -218,6 +237,34 @@ export default function WorkerDashboard() {
       }
     }
     return req;
+  }
+
+  // Liste ordonnée des "role slots" attendus (pour placeholders côté worker)
+  function roleHintsFor(st: any, shiftName: string, dayKey: string): string[] {
+    const out: string[] = [];
+    const pushRoles = (rolesArr: any) => {
+      if (!Array.isArray(rolesArr)) return;
+      for (const r of rolesArr) {
+        const nm = String(r?.name || "").trim();
+        const cnt = Number(r?.count || 0);
+        if (!nm || !Number.isFinite(cnt) || cnt <= 0) continue;
+        for (let i = 0; i < cnt; i++) out.push(nm);
+      }
+    };
+
+    // Station roles
+    pushRoles(st?.roles);
+    // Shift roles
+    const shift = (st?.shifts || []).find((sh: any) => sh?.name === shiftName && sh?.enabled);
+    pushRoles(shift?.roles);
+    // Per-day override roles
+    if (st?.perDayCustom && st?.dayOverrides?.[dayKey]?.active) {
+      const dayOv = st.dayOverrides[dayKey];
+      const dayShift = (dayOv?.shifts || []).find((sh: any) => sh?.name === shiftName && sh?.enabled);
+      pushRoles(dayShift?.roles);
+    }
+
+    return out;
   }
 
   // Fonction pour assigner les rôles aux travailleurs assignés
@@ -680,14 +727,42 @@ export default function WorkerDashboard() {
                                                           const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
                                                           const cellPrefix = `${d.key}|${sn}|${idx}|`;
                                                           const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                                          const roleHints = roleHintsFor(st, sn, d.key);
                                                           const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
                                                           return Array.from({ length: slotCount }).map((_, slotIdx) => {
                                                             const nm = cleanNames[slotIdx];
                                                             if (!nm) {
+                                                              const hint = String(roleHints?.[slotIdx] || "").trim();
+                                                              const token = hint ? `role:${normKey(hint)}` : `empty:${slotIdx}`;
+                                                              const expKey = expandedKeyFor(site.id, currentWeekStart, d.key, sn, idx, slotIdx, token);
+                                                              const rc = hint ? getColorForRole(hint, roleColorMap) : null;
                                                               return (
-                                                                <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
-                                                                  <span className="inline-flex h-7 md:h-9 min-w-[2.75rem] max-w-[2.75rem] md:min-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 text-[9px] md:text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
-                                                                    —
+                                                                <div key={`empty-${slotIdx}`} className="group/slot w-full flex justify-center py-0.5">
+                                                                  <span
+                                                                    tabIndex={0}
+                                                                    className={
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")
+                                                                    }
+                                                                    style={hint && rc ? { borderColor: rc.border, color: rc.text } : undefined}
+                                                                    onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                                    onPointerEnter={(e) => {
+                                                                      if ((e as any)?.pointerType === "mouse") setExpandedSlotKey(expKey);
+                                                                    }}
+                                                                    onPointerLeave={(e) => {
+                                                                      if ((e as any)?.pointerType === "mouse") setExpandedSlotKey((k) => (k === expKey ? null : k));
+                                                                    }}
+                                                                    onFocus={() => setExpandedSlotKey(expKey)}
+                                                                    onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
+                                                                  >
+                                                                    {hint ? (
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium truncate mb-0.5">
+                                                                        {expandedSlotKey === expKey ? hint : truncateMobile6(hint)}
+                                                                      </span>
+                                                                    ) : (
+                                                                      <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                    )}
+                                                                    <span className="text-[7px] md:text-[10px] font-medium">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -705,62 +780,52 @@ export default function WorkerDashboard() {
                                                                 ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
+                                                            const expKey = expandedKeyFor(site.id, currentWeekStart, d.key, sn, idx, slotIdx, normKey(nm));
                                                             const chipClass =
-                                                              "inline-flex min-h-7 md:min-h-9 max-w-[4.5rem] md:max-w-[6rem] items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm gap-2 " +
+                                                              "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                               (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5" tabIndex={0}>
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group/slot relative w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className={chipClass + " focus:outline-none"}
+                                                                  tabIndex={0}
+                                                                  className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                                  onPointerEnter={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") setExpandedSlotKey(expKey);
+                                                                  }}
+                                                                  onPointerLeave={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") setExpandedSlotKey((k) => (k === expKey ? null : k));
+                                                                  }}
+                                                                  onFocus={() => setExpandedSlotKey(expKey)}
+                                                                  onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
-                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">
+                                                                        {rn}
+                                                                      </span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"text-[9px] md:text-sm truncate max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"block w-full min-w-0 leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {/* Mobile: tronqué (>6), complet au focus/hover */}
                                                                       <span className="md:hidden">
-                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
-                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                        {expandedSlotKey === expKey ? (
+                                                                          <span className="whitespace-nowrap">{nm}</span>
+                                                                        ) : (
+                                                                          <span>{truncateMobile6(nm)}</span>
+                                                                        )}
                                                                       </span>
-                                                                      {/* Desktop: ellipsis classique */}
-                                                                      <span className="hidden md:block w-full truncate">{nm}</span>
+                                                                      <span className="hidden md:block w-full truncate text-[9px] md:text-sm">{nm}</span>
                                                                     </span>
-                                                                    {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
-                                                                  </span>
-                                                                </span>
-
-                                                                {/* Expansion animée au survol (menu worker) */}
-                                                                <div
-                                                                  aria-hidden
-                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
-                                                                >
-                                                                  <span
-                                                                    className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
-                                                                    style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
-                                                                  >
-                                                                    <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
-                                                                      {rn ? (
-                                                                        <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
-                                                                      ) : null}
-                                                                      <span
-                                                                      className={"text-[9px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                                        dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                                      >
-                                                                        {nm}
+                                                                    {pullTxt ? (
+                                                                      <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
+                                                                        {pullTxt}
                                                                       </span>
-                                                                      {pullTxt ? (
-                                                                        <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
-                                                                          {pullTxt}
-                                                                        </span>
-                                                                      ) : null}
+                                                                    ) : null}
                                                                   </span>
                                                                 </span>
-                                                                </div>
                                                               </div>
                                                             );
                                                           });
@@ -1001,14 +1066,42 @@ export default function WorkerDashboard() {
                                                           const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
                                                           const cellPrefix = `${d.key}|${sn}|${idx}|`;
                                                           const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                                          const roleHints = roleHintsFor(st, sn, d.key);
                                                           const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
                                                           return Array.from({ length: slotCount }).map((_, slotIdx) => {
                                                             const nm = cleanNames[slotIdx];
                                                             if (!nm) {
+                                                              const hint = String(roleHints?.[slotIdx] || "").trim();
+                                                              const token = hint ? `role:${normKey(hint)}` : `empty:${slotIdx}`;
+                                                              const expKey = expandedKeyFor(site.id, nextWeekStart, d.key, sn, idx, slotIdx, token);
+                                                              const rc = hint ? getColorForRole(hint, roleColorMap) : null;
                                                               return (
-                                                                <div key={`empty-${slotIdx}`} className="w-full flex justify-center py-0.5">
-                                                                  <span className="inline-flex h-7 md:h-9 min-w-[2.75rem] max-w-[2.75rem] md:min-w-[4rem] md:max-w-[6rem] items-center justify-center rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 text-[9px] md:text-xs text-zinc-500 bg-zinc-100 dark:bg-zinc-900 dark:border-zinc-700">
-                                                                    —
+                                                                <div key={`empty-${slotIdx}`} className="group/slot w-full flex justify-center py-0.5">
+                                                                  <span
+                                                                    tabIndex={0}
+                                                                    className={
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")
+                                                                    }
+                                                                    style={hint && rc ? { borderColor: rc.border, color: rc.text } : undefined}
+                                                                    onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                                    onPointerEnter={(e) => {
+                                                                      if ((e as any)?.pointerType === "mouse") setExpandedSlotKey(expKey);
+                                                                    }}
+                                                                    onPointerLeave={(e) => {
+                                                                      if ((e as any)?.pointerType === "mouse") setExpandedSlotKey((k) => (k === expKey ? null : k));
+                                                                    }}
+                                                                    onFocus={() => setExpandedSlotKey(expKey)}
+                                                                    onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
+                                                                  >
+                                                                    {hint ? (
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium truncate mb-0.5">
+                                                                        {expandedSlotKey === expKey ? hint : truncateMobile6(hint)}
+                                                                      </span>
+                                                                    ) : (
+                                                                      <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                    )}
+                                                                    <span className="text-[7px] md:text-[10px] font-medium">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -1026,62 +1119,52 @@ export default function WorkerDashboard() {
                                                                 ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
                                                                 : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
                                                               : null;
+                                                            const expKey = expandedKeyFor(site.id, nextWeekStart, d.key, sn, idx, slotIdx, normKey(nm));
                                                             const chipClass =
-                                                              "inline-flex min-h-7 md:min-h-9 max-w-[4.5rem] md:max-w-[6rem] items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm gap-2 " +
+                                                              "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                               (pullTxt ? "ring-2 ring-orange-400 " : "");
                                                             return (
-                                                              <div key={`nm-${nm}-${slotIdx}`} className="group relative w-full flex justify-center py-0.5" tabIndex={0}>
+                                                              <div key={`nm-${nm}-${slotIdx}`} className="group/slot relative w-full flex justify-center py-0.5">
                                                                 <span
-                                                                  className={chipClass + " focus:outline-none"}
+                                                                  tabIndex={0}
+                                                                  className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
+                                                                  onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                                  onPointerEnter={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") setExpandedSlotKey(expKey);
+                                                                  }}
+                                                                  onPointerLeave={(e) => {
+                                                                    if ((e as any)?.pointerType === "mouse") setExpandedSlotKey((k) => (k === expKey ? null : k));
+                                                                  }}
+                                                                  onFocus={() => setExpandedSlotKey(expKey)}
+                                                                  onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                                 >
                                                                   <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
                                                                     {rn ? (
-                                                                      <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">
+                                                                        {rn}
+                                                                      </span>
                                                                     ) : null}
                                                                     <span
-                                                                      className={"text-[9px] md:text-sm truncate max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                      className={"block w-full min-w-0 leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
-                                                                      {/* Mobile: tronqué (>6), complet au focus/hover */}
                                                                       <span className="md:hidden">
-                                                                        <span className="inline group-hover:hidden group-focus-within:hidden">{truncateMobile6(nm)}</span>
-                                                                        <span className="hidden group-hover:inline group-focus-within:inline whitespace-nowrap">{nm}</span>
+                                                                        {expandedSlotKey === expKey ? (
+                                                                          <span className="whitespace-nowrap">{nm}</span>
+                                                                        ) : (
+                                                                          <span>{truncateMobile6(nm)}</span>
+                                                                        )}
                                                                       </span>
-                                                                      {/* Desktop: ellipsis classique */}
-                                                                      <span className="hidden md:block w-full truncate">{nm}</span>
+                                                                      <span className="hidden md:block w-full truncate text-[9px] md:text-sm">{nm}</span>
                                                                     </span>
-                                                                    {pullTxt ? <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80">{pullTxt}</span> : null}
-                                                                  </span>
-                                                                </span>
-
-                                                                {/* Expansion animée au survol (menu worker) */}
-                                                                <div
-                                                                  aria-hidden
-                                                                  className="pointer-events-none absolute inset-x-0 top-0.1 z-30 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
-                                                                >
-                                                                  <span
-                                                                    className={chipClass + " max-w-[6rem] group-hover:max-w-[18rem] transition-[max-width] duration-200 ease-out shadow-lg"}
-                                                                    style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
-                                                                  >
-                                                                    <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0">
-                                                                      {rn ? (
-                                                                        <span className="text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{rn}</span>
-                                                                      ) : null}
-                                                                      <span
-                                                                      className={"text-[9px] md:text-sm whitespace-nowrap leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                                        dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                                      >
-                                                                        {nm}
+                                                                    {pullTxt ? (
+                                                                      <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
+                                                                        {pullTxt}
                                                                       </span>
-                                                                      {pullTxt ? (
-                                                                        <span dir="ltr" className="text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 whitespace-nowrap">
-                                                                          {pullTxt}
-                                                                        </span>
-                                                                      ) : null}
+                                                                    ) : null}
                                                                   </span>
                                                                 </span>
-                                                                </div>
                                                               </div>
                                                             );
                                                           });
