@@ -2648,8 +2648,6 @@ export default function PlanningPage() {
                               <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-12 md:w-auto text-[10px] md:text-sm">מקס'</th>
                               <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-16 md:w-auto text-[10px] md:text-sm">תפקידים</th>
                               <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-20 md:w-auto text-[10px] md:text-sm">זמינות</th>
-                              {/* Actions: cachées sur mobile (cliquer la ligne ouvre עריכת עובד) */}
-                              <th className="hidden md:table-cell px-1 md:px-3 py-1 md:py-2 w-16 md:w-auto"></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2721,29 +2719,26 @@ export default function PlanningPage() {
                             if (rows.length === 0) {
                               return (
                                 <tr>
-                                  <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">אין עובדים</td>
+                                  <td colSpan={4} className="px-3 py-6 text-center text-zinc-500">אין עובדים</td>
                                 </tr>
                               );
                             }
                             return rows.map((w) => (
                               <tr
                                 key={w.id}
-                                className="border-b last:border-0 dark:border-zinc-800 cursor-pointer md:cursor-default hover:bg-zinc-50 dark:hover:bg-zinc-800 md:hover:bg-transparent md:dark:hover:bg-transparent"
+                                className="border-b last:border-0 dark:border-zinc-800 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 onClick={() => {
-                                  // Sur mobile: pas de colonne d'actions → cliquer la ligne ouvre עריכת עובד
-                                  if (typeof window !== "undefined" && window.innerWidth < 768) {
-                                    setEditingWorkerId(w.id);
-                                    // eslint-disable-next-line no-console
-                                    console.log("[Planning] edit worker (row click)", w);
-                                    setNewWorkerName(w.name);
-                                    setNewWorkerMax(w.maxShifts);
-                                    setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
-                                    const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                                    setOriginalAvailability({ ...wa });
-                                    setNewWorkerAvailability({ ...wa });
-                                    setIsAddModalOpen(true);
-                                    void refreshWorkersAnswersFromApi();
-                                  }
+                                  setEditingWorkerId(w.id);
+                                  // eslint-disable-next-line no-console
+                                  console.log("[Planning] edit worker (row click)", w);
+                                  setNewWorkerName(w.name);
+                                  setNewWorkerMax(w.maxShifts);
+                                  setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
+                                  const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                                  setOriginalAvailability({ ...wa });
+                                  setNewWorkerAvailability({ ...wa });
+                                  setIsAddModalOpen(true);
+                                  void refreshWorkersAnswersFromApi();
                                 }}
                               >
                                 <td className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 overflow-hidden">
@@ -2784,131 +2779,6 @@ export default function PlanningPage() {
                                       </span>
                                     );
                                   })}
-                                </td>
-                                {/* Actions: desktop uniquement */}
-                                <td className="hidden md:table-cell px-1 md:px-3 py-1 md:py-2 text-left">
-                                  <div className="flex flex-col md:flex-row items-center md:items-center gap-0.5 md:gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setEditingWorkerId(w.id);
-                                        // eslint-disable-next-line no-console
-                                        console.log("[Planning] edit worker", w);
-                                        setNewWorkerName(w.name);
-                                        setNewWorkerMax(w.maxShifts);
-                                        setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
-                                        // Preload weekly availability (or empty) for this worker for this week only
-                                        const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                                      setOriginalAvailability({ ...wa });
-                                        setNewWorkerAvailability({ ...wa });
-                                        setIsAddModalOpen(true);
-                                        // S'assurer d'avoir les réponses à jour dans le modal
-                                        void refreshWorkersAnswersFromApi();
-                                      }}
-                                      disabled={isSavedMode && !editingSaved}
-                                      className={
-                                        "inline-flex items-center gap-0.5 md:gap-1 rounded-md border px-1 md:px-2 py-0.5 md:py-1 text-[10px] md:text-xs " +
-                                        ((isSavedMode && !editingSaved) ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600" : "hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
-                                      }
-                                    >
-                                      <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden className="md:w-3 md:h-3"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
-                                      <span className="hidden md:inline">ערוך</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={async (e) => {
-                                        e.stopPropagation();
-                                        // eslint-disable-next-line no-console
-                                        console.log("[Planning] delete click worker", w.id, w.name);
-                                        if (!confirm(`למחוק את ${w.name}?`)) return;
-                                        setDeletingId(w.id);
-                                        setHiddenWorkerIds((prev) => (prev.includes(w.id) ? prev : [...prev, w.id]));
-                                        const previousWorkers = workers;
-                                        // Retrait immédiat (optimiste)
-                                        setWorkers((prev) => prev.filter((x) => x.id !== w.id));
-                                        try {
-                                          // eslint-disable-next-line no-console
-                                          console.log("[Planning] DELETE /workers/", w.id);
-                                          await apiFetch(`/director/sites/${params.id}/workers/${w.id}`, {
-                                            method: "DELETE",
-                                            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                          });
-                                          toast.success("העובד נמחק בהצלחה");
-                                          // Rechargement avec retries pour éviter la réapparition (latence DB)
-                                          for (let i = 0; i < 3; i++) {
-                                            try {
-                                              // eslint-disable-next-line no-console
-                                              console.log(`[Planning] reload workers attempt ${i + 1}`);
-                                              const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
-                                                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                                cache: "no-store" as any,
-                                              });
-                                              // eslint-disable-next-line no-console
-                                              console.log("[Planning] reloaded list:", list);
-                                              const contains = (list || []).some((it: any) => Number(it?.id) === Number(w.id));
-                                              // eslint-disable-next-line no-console
-                                              console.log("[Planning] contains deleted?", contains);
-                                              if (!contains) {
-                                                const mapped: Worker[] = (list || []).map((rw: any) => ({
-                                                  id: rw.id,
-                                                  name: rw.name,
-                                                  maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
-                                                  roles: Array.isArray(rw.roles) ? rw.roles : [],
-                                                  availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                                                  answers: rw.answers || {},
-                                                }));
-                                                setWorkers(mapped);
-                                                setHiddenWorkerIds((prev) => prev.filter((id) => id !== w.id));
-                                                break;
-                                              }
-                                              await new Promise((r) => setTimeout(r, 250));
-                                            } catch {}
-                                          }
-                                          // Si, malgré tout, le backend renvoie encore l'élément, on le masque côté UI
-                                          setHiddenWorkerIds((prev) => prev.filter((id) => id !== w.id));
-                                        } catch (e: any) {
-                                          // eslint-disable-next-line no-console
-                                          console.log("[Planning] DELETE failed", e);
-                                          // Vérifier l'état réel côté serveur: si l'élément n'existe plus, considérer la suppression comme réussie
-                                          try {
-                                            const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
-                                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                              cache: "no-store" as any,
-                                            });
-                                            const stillThere = (list || []).some((it: any) => Number(it?.id) === Number(w.id));
-                                            // eslint-disable-next-line no-console
-                                            console.log("[Planning] verify after failed DELETE, stillThere=", stillThere);
-                                            if (!stillThere) {
-                                              toast.success("העובד נמחק בהצלחה");
-                                              setHiddenWorkerIds((prev) => prev.filter((id) => id !== w.id));
-                                              return;
-                                            }
-                                          } catch (verifyErr) {
-                                            // eslint-disable-next-line no-console
-                                            console.log("[Planning] verify after delete error failed", verifyErr);
-                                          }
-                                          // Rollback si réellement non supprimé
-                                          setWorkers(previousWorkers);
-                                          toast.error("שגיאה במחיקה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
-                                        } finally {
-                                          // eslint-disable-next-line no-console
-                                          console.log("[Planning] delete done", w.id);
-                                          setDeletingId(null);
-                                        }
-                                      }}
-                                      disabled={(isSavedMode && !editingSaved) || deletingId === w.id}
-                                      className={
-                                        "inline-flex items-center gap-0.5 md:gap-1 rounded-md border px-1 md:px-2 py-0.5 md:py-1 text-[10px] md:text-xs " +
-                                        (((isSavedMode && !editingSaved) || deletingId === w.id)
-                                          ? "border-zinc-200 text-zinc-400 cursor-not-allowed opacity-60 dark:border-zinc-700 dark:text-zinc-600"
-                                          : "border-red-600 text-red-700 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40")
-                                      }
-                                    >
-                                      <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" aria-hidden className="md:w-3 md:h-3"><path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/></svg>
-                                      <span className="hidden md:inline">מחק</span>
-                                    </button>
-                                  </div>
                                 </td>
                               </tr>
                             ));
@@ -3418,11 +3288,11 @@ export default function PlanningPage() {
                         שחזר זמינות מהעובד
                       </button>
                     )}
-                    {/* Mobile: suppression depuis la popup "עריכת עובד" (placée ליד שמור) */}
+                    {/* Suppression depuis la popup "עריכת עובד" */}
                     {editingWorkerId && (
                       <button
                         type="button"
-                        className="md:hidden rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                        className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
                         disabled={(isSavedMode && !editingSaved) || deletingId === editingWorkerId}
                         onClick={async () => {
                           const wid = editingWorkerId;
