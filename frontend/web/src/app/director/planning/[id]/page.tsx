@@ -8,6 +8,7 @@ import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
 import TimePicker from "@/components/time-picker";
 import LoadingAnimation from "@/components/loading-animation";
+import NumberPicker from "@/components/number-picker";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import DOMPurify from "dompurify";
@@ -26,6 +27,11 @@ export default function PlanningPage() {
     const s = String(value ?? "");
     const chars = Array.from(s);
     return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
+  };
+  const truncateSummaryMobile = (value: any) => {
+    const s = String(value ?? "");
+    const chars = Array.from(s);
+    return chars.length > 10 ? chars.slice(0, 8).join("") + "…" : s;
   };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +130,7 @@ export default function PlanningPage() {
   };
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [altIndex, setAltIndex] = useState<number>(0);
+  const [assignmentCountFilters, setAssignmentCountFilters] = useState<Record<string, string>>({});
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const prevAltCountRef = useRef<number>(0);
   const aiControllerRef = useRef<AbortController | null>(null);
@@ -354,6 +361,81 @@ export default function PlanningPage() {
   // Role hints per slot in manual mode (preserved from auto)
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
+  const hasAiPlan = !!aiPlan;
+  const aiAssignmentsVariants = useMemo(() => {
+    if (!aiPlan) return [] as Record<string, Record<string, string[][]>>[];
+    const base = baseAssignmentsRef.current || aiPlan.assignments;
+    if (!base) return [] as Record<string, Record<string, string[][]>>[];
+    return [base, ...((aiPlan.alternatives || []).filter(Boolean) as Record<string, Record<string, string[][]>>[])];
+  }, [aiPlan]);
+  const activeAssignmentCountFilters = useMemo(
+    () =>
+      Object.entries(assignmentCountFilters).flatMap(([workerName, rawValue]) => {
+        const trimmed = String(rawValue || "").trim();
+        if (!trimmed) return [];
+        const num = Number(trimmed);
+        if (!Number.isFinite(num) || num < 0) return [];
+        return [[workerName, Math.floor(num)] as [string, number]];
+      }),
+    [assignmentCountFilters],
+  );
+  const aiVariantCounts = useMemo(
+    () => aiAssignmentsVariants.map((assignments) => countAssignmentsByWorker(assignments, workers)),
+    [aiAssignmentsVariants, workers],
+  );
+  const filteredAiPlanIndices = useMemo(() => {
+    if (!aiVariantCounts.length) return [] as number[];
+    if (activeAssignmentCountFilters.length === 0) return aiVariantCounts.map((_, idx) => idx);
+    return aiVariantCounts.reduce((acc, counts, idx) => {
+      if (activeAssignmentCountFilters.every(([workerName, target]) => (counts.get(workerName) || 0) === target)) {
+        acc.push(idx);
+      }
+      return acc;
+    }, [] as number[]);
+  }, [aiVariantCounts, activeAssignmentCountFilters]);
+  const generatedAssignmentCountOptionsByWorker = useMemo(() => {
+    const byWorker = new Map<string, Set<number>>();
+    workers.forEach((w) => {
+      const values = new Set<number>();
+      aiVariantCounts.forEach((counts) => {
+        const matchesOtherFilters = activeAssignmentCountFilters.every(
+          ([workerName, target]) => workerName === w.name || (counts.get(workerName) || 0) === target,
+        );
+        if (matchesOtherFilters) {
+          values.add(counts.get(w.name) || 0);
+        }
+      });
+      byWorker.set(w.name, values);
+    });
+    return new Map<string, number[]>(
+      Array.from(byWorker.entries()).map(([workerName, values]) => [
+        workerName,
+        Array.from(values).sort((a, b) => a - b),
+      ]),
+    );
+  }, [aiVariantCounts, activeAssignmentCountFilters, workers]);
+  const hasActiveAssignmentCountFilters = activeAssignmentCountFilters.length > 0;
+  const filteredAiPlanPosition = filteredAiPlanIndices.indexOf(altIndex);
+  useEffect(() => {
+    if (!hasAiPlan || isManual) {
+      setAssignmentCountFilters({});
+    }
+  }, [hasAiPlan, isManual, params.id, weekStart]);
+  useEffect(() => {
+    if (isManual || !aiPlan) return;
+    if (filteredAiPlanIndices.length === 0) return;
+    if (filteredAiPlanIndices.includes(altIndex)) return;
+    const next = filteredAiPlanIndices[0];
+    const assignments = next === 0
+      ? (baseAssignmentsRef.current || aiPlan.assignments || null)
+      : ((aiPlan.alternatives || [])[next - 1] || null);
+    setAltIndex(next);
+    setPullsByHoleKey({});
+    setPullsEditor(null);
+    if (assignments) {
+      setAiPlan((prev) => (prev ? { ...prev, assignments } : prev));
+    }
+  }, [isManual, aiPlan, altIndex, filteredAiPlanIndices]);
     // Mode switch confirmation dialog
     const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
     const [modeSwitchTarget, setModeSwitchTarget] = useState<"auto" | "manual" | null>(null);
@@ -1332,8 +1414,120 @@ export default function PlanningPage() {
     return map;
   }, [site, workers]);
 
+  const enabledRoleNameSet = useMemo(() => {
+    const set = new Set<string>();
+    const pushIfEnabled = (name?: string, enabled?: boolean) => {
+      const nm = String(name || "").trim();
+      if (!nm || !enabled) return;
+      set.add(nm);
+    };
+
+    for (const st of (site?.config?.stations || [])) {
+      for (const r of (st?.roles || [])) pushIfEnabled(r?.name, r?.enabled);
+      for (const sh of (st?.shifts || [])) {
+        for (const r of (sh?.roles || [])) pushIfEnabled(r?.name, r?.enabled);
+      }
+      for (const dayCfg of Object.values(st?.dayOverrides || {})) {
+        const cfg: any = dayCfg;
+        for (const sh of (cfg?.shifts || [])) {
+          for (const r of (sh?.roles || [])) pushIfEnabled(r?.name, r?.enabled);
+        }
+      }
+    }
+
+    return set;
+  }, [site]);
+
   function colorForRole(roleName: string): { border: string; text: string } {
     return roleColorMap.get(roleName) || { border: "#64748b", text: "#334155" };
+  }
+
+  function renderSummaryWorkerChip(name: string): ReactElement {
+    const col = colorForName(name);
+    return (
+      <span
+        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
+        style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
+      >
+        <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
+          <span
+            className={"block min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(name) ? "text-right" : "text-left")}
+            dir={isRtlName(name) ? "rtl" : "ltr"}
+          >
+            <span className="md:hidden text-[8px]">{truncateSummaryMobile(name)}</span>
+            <span className="hidden md:block truncate text-[8px] md:text-sm">{name}</span>
+          </span>
+        </span>
+      </span>
+    );
+  }
+
+  function renderSummaryRoleChip(roleName: string): ReactElement {
+    const rc = colorForRole(roleName);
+    return (
+      <span
+        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border bg-white px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
+        style={{ borderColor: rc.border, color: rc.text }}
+      >
+        <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
+          <span className="block min-w-0 max-w-full leading-tight text-center">
+            <span className="md:hidden text-[8px]">{truncateSummaryMobile(roleName)}</span>
+            <span className="hidden md:block truncate text-[8px] md:text-sm">{roleName}</span>
+          </span>
+        </span>
+      </span>
+    );
+  }
+
+  function countAssignmentsByWorker(
+    assignments: Record<string, Record<string, string[][]>> | null | undefined,
+    workerList: Worker[],
+  ): Map<string, number> {
+    const counts = new Map<string, number>();
+    workerList.forEach((w) => counts.set(w.name, 0));
+    if (!assignments || typeof assignments !== "object") return counts;
+
+    for (const dKey of Object.keys(assignments)) {
+      const shiftsMap = assignments[dKey] || {};
+      for (const sn of Object.keys(shiftsMap)) {
+        const perStation: string[][] = shiftsMap[sn] || [];
+        for (const namesHere of perStation) {
+          for (const nm of (namesHere || [])) {
+            const clean = String(nm || "").trim();
+            if (!clean) continue;
+            counts.set(clean, (counts.get(clean) || 0) + 1);
+          }
+        }
+      }
+    }
+
+    return counts;
+  }
+
+  function handleAssignmentCountFilterChange(workerName: string, rawValue: string, maxAllowed?: number) {
+    const cleaned = String(rawValue || "").replace(/[^\d]/g, "");
+    setAssignmentCountFilters((prev) => {
+      const next = { ...prev };
+      if (!cleaned) delete next[workerName];
+      else {
+        const numeric = Number(cleaned);
+        const bounded = Number.isFinite(maxAllowed) ? Math.min(numeric, Number(maxAllowed)) : numeric;
+        next[workerName] = String(bounded);
+      }
+      return next;
+    });
+  }
+
+  function selectAiPlanIndex(index: number) {
+    const assignments = index === 0
+      ? (baseAssignmentsRef.current || aiPlan?.assignments || null)
+      : ((aiPlan?.alternatives || [])[index - 1] || null);
+    setAltIndex(index);
+    setPullsByHoleKey({});
+    setPullsEditor(null);
+    if (assignments) {
+      setAiPlan((prev) => (prev ? { ...prev, assignments } : prev));
+    }
   }
 
   function addDays(base: Date, days: number): Date {
@@ -1573,13 +1767,7 @@ export default function PlanningPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isManual, site?.config?.stations, aiPlan?.assignments]);
 
-  const allRoleNames: string[] = Array.from(
-    new Set(
-      (site?.config?.stations || [])
-        .flatMap((st: any) => (st?.roles || []).map((r: any) => r?.name))
-        .filter(Boolean)
-    )
-  );
+  const allRoleNames: string[] = Array.from(enabledRoleNameSet).sort((a, b) => a.localeCompare(b));
 
   function toggleNewAvailability(dayKey: string, shift: string) {
     setNewWorkerAvailability((prev) => {
@@ -2001,6 +2189,15 @@ export default function PlanningPage() {
     setAiLoading(false);
   }
 
+  useEffect(() => {
+    if (!isSavedMode || editingSaved) return;
+    stopAiGeneration();
+    setAiPlan(null);
+    setAltIndex(0);
+    baseAssignmentsRef.current = null;
+    setAssignmentCountFilters({});
+  }, [isSavedMode, editingSaved]);
+
   function triggerGenerateButton() {
     try {
       // If we're in saved mode (button disabled), exit saved mode first
@@ -2308,7 +2505,7 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40">
+    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40 [&_button]:touch-manipulation [&_button]:select-none [&_button]:transition-[transform,filter,opacity] [&_button]:duration-75 [&_button]:active:scale-[0.98] [&_button]:active:brightness-95">
       <div
         className={
           "mx-auto w-full max-w-none space-y-6 rounded-xl " +
@@ -2380,13 +2577,7 @@ export default function PlanningPage() {
                       .filter(Boolean)
                   )
                 );
-                const allRoleNames: string[] = Array.from(
-                  new Set(
-                    (site?.config?.stations || [])
-                      .flatMap((st: any) => (st?.roles || []).map((r: any) => r?.name))
-                      .filter(Boolean)
-                  )
-                );
+                const allRoleNames: string[] = Array.from(enabledRoleNameSet).sort((a, b) => a.localeCompare(b));
 
                 function toggleNewAvailability(dayKey: string, shift: string) {
                   setNewWorkerAvailability((prev) => {
@@ -2546,7 +2737,7 @@ export default function PlanningPage() {
                                     console.log("[Planning] edit worker (row click)", w);
                                     setNewWorkerName(w.name);
                                     setNewWorkerMax(w.maxShifts);
-                                    setNewWorkerRoles([...w.roles]);
+                                    setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
                                     const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
                                     setOriginalAvailability({ ...wa });
                                     setNewWorkerAvailability({ ...wa });
@@ -2566,7 +2757,7 @@ export default function PlanningPage() {
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
-                                  {w.roles.join(",") || "—"}
+                                  {w.roles.filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())).join(",") || "—"}
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
                                   {dayDefs.map((d, i) => {
@@ -2606,7 +2797,7 @@ export default function PlanningPage() {
                                         console.log("[Planning] edit worker", w);
                                         setNewWorkerName(w.name);
                                         setNewWorkerMax(w.maxShifts);
-                                        setNewWorkerRoles([...w.roles]);
+                                        setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
                                         // Preload weekly availability (or empty) for this worker for this week only
                                         const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
                                       setOriginalAvailability({ ...wa });
@@ -2912,38 +3103,38 @@ export default function PlanningPage() {
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
                 {/* Fixed height so the Q/A section requires scrolling (web + mobile).
                     Use vh fallback (some browsers ignore dvh). */}
-                <div className="w-full max-w-3xl h-[50vh] h-[50dvh] md:h-[34rem] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 flex flex-col min-h-0">
-                  <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 p-4">
+                <div className="w-full max-w-3xl h-[72vh] h-[72dvh] md:h-[34rem] overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 flex flex-col min-h-0">
+                  <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 p-3 md:p-4">
                     <div className="relative flex items-center justify-center">
-                    <h3 className="text-lg font-semibold text-center">{editingWorkerId ? "עריכת עובד" : "הוספת עובד"}</h3>
+                    <h3 className="text-base md:text-lg font-semibold text-center">{editingWorkerId ? "עריכת עובד" : "הוספת עובד"}</h3>
                     <button
                       type="button"
                       onClick={() => setIsAddModalOpen(false)}
-                      className="absolute right-2 top-1.5 rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      className="absolute right-2 top-1.5 rounded-md border px-2 py-1 text-xs md:text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                     >
                       ✕
                     </button>
                     </div>
                   </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto p-4">
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4 justify-items-center text-center">
+                  <div className="flex-1 min-h-0 overflow-y-auto p-3 md:p-4">
+                  <div className="grid grid-cols-1 gap-2 md:gap-3 md:grid-cols-4 justify-items-center text-center">
                     <div>
-                      <label className="block text-sm font-semibold">שם</label>
+                      <label className="block text-xs md:text-sm font-semibold">שם</label>
                       <input
                         type="text"
                         value={newWorkerName}
                         onChange={(e) => setNewWorkerName(e.target.value)}
-                        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        className="w-full rounded-md border border-zinc-300 bg-white px-2 md:px-3 py-1.5 md:py-2 text-sm md:text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold">מקס' משמרות בשבוע</label>
-                      <input
-                        type="number"
-                        min={0}
+                      <label className="block text-xs md:text-sm font-semibold">מקס' משמרות בשבוע</label>
+                      <NumberPicker
                         value={newWorkerMax}
-                        onChange={(e) => setNewWorkerMax(Math.max(0, parseInt(e.target.value || "0", 10)))}
-                        className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        onChange={(value) => setNewWorkerMax(Math.max(0, Math.min(6, value)))}
+                        min={0}
+                        max={6}
+                        className="w-full rounded-md border border-zinc-300 bg-white px-2 md:px-3 py-1.5 md:py-2 text-sm md:text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                       />
                     </div>
                     <div className="md:col-span-2">
@@ -3163,7 +3354,8 @@ export default function PlanningPage() {
                     );
                   })()}
 
-                  <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+                  </div>
+                  <div className="flex items-center justify-center gap-2 flex-wrap border-t border-zinc-200 bg-white/95 px-3 py-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:px-4">
                     <button
                       type="button"
                       onClick={() => setIsAddModalOpen(false)}
@@ -3402,7 +3594,6 @@ export default function PlanningPage() {
                     >
                       שמור
                     </button>
-                  </div>
                   </div>
                 </div>
               </div>
@@ -5326,12 +5517,12 @@ export default function PlanningPage() {
                                         {enabled ? (
                                             <div
                                               className="flex flex-col items-center rounded-md"
-                                              onDragOver={isManual ? (e) => { e.preventDefault(); try { (e as any).dataTransfer.dropEffect = "copy"; } catch {} } : undefined}
-                                              onDrop={isManual ? (e) => onCellContainerDrop(e, d.key, sn, idx) : undefined}
+                                              onDragOver={(isManual && !(isSavedMode && !editingSaved)) ? (e) => { e.preventDefault(); try { (e as any).dataTransfer.dropEffect = "copy"; } catch {} } : undefined}
+                                              onDrop={(isManual && !(isSavedMode && !editingSaved)) ? (e) => onCellContainerDrop(e, d.key, sn, idx) : undefined}
                                             >
                                               {required > 0 ? (
                                                 <div className="mb-1 flex flex-col items-center gap-1 min-w-full">
-                                                  {isManual ? (
+                                                  {(isManual && !(isSavedMode && !editingSaved)) ? (
                                                     <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
                                                   {(() => {
                                                     const reqRoles = roleRequirements(st, sn, d.key);
@@ -6488,7 +6679,7 @@ export default function PlanningPage() {
                             </tbody>
                           </table>
                         </div>
-                        {isManual && (
+                        {isManual && !(isSavedMode && !editingSaved) && (
                           <div className="mt-3">
                             <div className="mb-1 text-xs text-zinc-600 dark:text-zinc-300 text-center">גרור/י עובד אל תא השיבוץ</div>
                             <div className="flex flex-wrap items-center justify-center gap-2">
@@ -6518,7 +6709,6 @@ export default function PlanningPage() {
               })()}
               {aiPlan && !isManual && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     const counts = new Map<string, number>();
                     const days = Object.keys(aiPlan.assignments || {});
@@ -6579,31 +6769,96 @@ export default function PlanningPage() {
                     if (workers.length === 0) {
                       return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
                     }
+                    const generatedPlansTotal = aiAssignmentsVariants.length;
+                    const matchingPlansTotal = filteredAiPlanIndices.length;
+                    const allowCountFiltering = generatedPlansTotal > 1;
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                        <div className="mb-2 flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
+                          <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
+                          {allowCountFiltering && hasActiveAssignmentCountFilters && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                                {matchingPlansTotal}/{generatedPlansTotal}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setAssignmentCountFilters({})}
+                                className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+                              >
+                                איפוס סינון
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mb-2 flex items-center justify-end gap-3 text-xs md:text-sm flex-wrap">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
+                        {allowCountFiltering && matchingPlansTotal === 0 && (
+                          <div className="mb-2 text-sm text-amber-600 dark:text-amber-400">
+                            אין חלופות שתואמות את מספרי המשמרות שנבחרו.
+                          </div>
+                        )}
                         <div className="overflow-x-hidden md:overflow-x-auto">
                         <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">עובד</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
                               <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                             </tr>
                           </thead>
                           <tbody>
                             {items.map(([nm, c]) => {
-                              const col = colorForName(nm);
+                              const allowedCounts = generatedAssignmentCountOptionsByWorker.get(nm) || [c];
+                              const minAllowed = allowedCounts[0] ?? 0;
+                              const maxAllowed = allowedCounts[allowedCounts.length - 1] ?? c;
+                              const isManuallyModified = Object.prototype.hasOwnProperty.call(assignmentCountFilters, nm);
                               return (
                                 <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                  <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
-                                    <span className="inline-flex items-center rounded-full border px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                      <span className="min-w-0 truncate">{nm}</span>
-                                    </span>
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                    {renderSummaryWorkerChip(nm)}
                                   </td>
-                                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
+                                    {allowCountFiltering ? (
+                                      <>
+                                        <div className="md:hidden">
+                                          <NumberPicker
+                                            value={Number(assignmentCountFilters[nm] ?? c)}
+                                            onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
+                                            min={minAllowed}
+                                            max={maxAllowed}
+                                            placeholder={String(c)}
+                                            className={
+                                              "w-14 rounded-md border px-2 py-1 text-center text-[10px] outline-none " +
+                                              (isManuallyModified
+                                                ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
+                                                : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
+                                            }
+                                          />
+                                        </div>
+                                        <input
+                                          type="number"
+                                          min={minAllowed}
+                                          max={maxAllowed}
+                                          inputMode="numeric"
+                                          value={assignmentCountFilters[nm] ?? ""}
+                                          placeholder={String(c)}
+                                          onChange={(e) => handleAssignmentCountFilterChange(nm, e.target.value, maxAllowed)}
+                                          className={
+                                            "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[10px] md:text-sm outline-none " +
+                                            (isManuallyModified
+                                              ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
+                                              : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
+                                          }
+                                          aria-label={`מספר משמרות עבור ${nm}`}
+                                          title={`Valeurs générées: ${allowedCounts.join(", ")}`}
+                                        />
+                                      </>
+                                    ) : (
+                                      c
+                                    )}
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -6681,18 +6936,20 @@ export default function PlanningPage() {
                             }
                           });
                           // Compléter avec tous les rôles connus (même si 0 assignation)
-                          for (const rName of Array.from(roleColorMap.keys())) {
+                          for (const rName of Array.from(enabledRoleNameSet)) {
                             if (!roleTotals.has(rName)) roleTotals.set(rName, 0);
                           }
-                          // S'il n'y a aucun rôle défini globalement, ne rien afficher
-                          if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
-                          const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                          // N'afficher que les rôles actifs dans la config
+                          if (enabledRoleNameSet.size === 0) return null;
+                          const rows = Array.from(roleTotals.entries())
+                            .filter(([rName]) => enabledRoleNameSet.has(rName))
+                            .sort((a, b) => a[0].localeCompare(b[0]));
                           return (
                             <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
                               <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">תפקיד</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
                                     <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
@@ -6701,10 +6958,8 @@ export default function PlanningPage() {
                                     const rc = colorForRole(rName);
                                     return (
                                       <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
-                                          <span className="inline-flex items-center rounded-full border bg-white px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ borderColor: rc.border, color: rc.text }}>
-                                            <span className="min-w-0 truncate">{rName}</span>
-                                          </span>
+                                        <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                          {renderSummaryRoleChip(rName)}
                                         </td>
                                         <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                       </tr>
@@ -6780,29 +7035,26 @@ export default function PlanningPage() {
                     const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full border-collapse text-sm table-fixed">
+                        <div className="overflow-x-hidden md:overflow-x-auto">
+                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-right w-64">עובד</th>
-                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                               </tr>
                             </thead>
                             <tbody>
                               {items.map(([nm, c]) => {
-                                const col = colorForName(nm);
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-2 py-2 w-64">
-                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                        {nm}
-                                      </span>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                      {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-2 py-2 w-28">{c}</td>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                   </tr>
                                 );
                               })}
@@ -6886,29 +7138,26 @@ export default function PlanningPage() {
                     }
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full border-collapse text-sm table-fixed">
+                        <div className="overflow-x-hidden md:overflow-x-auto">
+                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-right w-64">עובד</th>
-                                <th className="px-2 py-2 text-right w-28">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                               </tr>
                             </thead>
                             <tbody>
                               {items.map(([nm, c]) => {
-                                const col = colorForName(nm);
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-2 py-2 w-64">
-                                      <span className="inline-flex items-center rounded-full border px-3 py-1 text-sm shadow-sm" style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}>
-                                        {nm}
-                                      </span>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                      {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-2 py-2 w-28">{c}</td>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                   </tr>
                                 );
                               })}
@@ -6983,18 +7232,20 @@ export default function PlanningPage() {
                               }
                             });
                             // Compléter avec tous les rôles connus (même si 0 assignation)
-                            for (const rName of Array.from(roleColorMap.keys())) {
+                            for (const rName of Array.from(enabledRoleNameSet)) {
                               if (!roleTotals.has(rName)) roleTotals.set(rName, 0);
                             }
-                            // S'il n'y a aucun rôle défini globalement, ne rien afficher
-                            if (roleTotals.size === 0 && roleColorMap.size === 0) return null;
-                            const rows = Array.from(roleTotals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+                            // N'afficher que les rôles actifs dans la config
+                            if (enabledRoleNameSet.size === 0) return null;
+                            const rows = Array.from(roleTotals.entries())
+                              .filter(([rName]) => enabledRoleNameSet.has(rName))
+                              .sort((a, b) => a[0].localeCompare(b[0]));
                             return (
                               <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
                                 <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
-                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-32 md:w-64">תפקיד</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
                                       <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                     </tr>
                                   </thead>
@@ -7003,10 +7254,8 @@ export default function PlanningPage() {
                                       const rc = colorForRole(rName);
                                       return (
                                         <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                          <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden">
-                                            <span className="inline-flex items-center rounded-full border bg-white px-2 md:px-3 py-0.5 md:py-1 text-[10px] md:text-sm shadow-sm max-w-full overflow-hidden" style={{ borderColor: rc.border, color: rc.text }}>
-                                              <span className="min-w-0 truncate">{rName}</span>
-                                            </span>
+                                          <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                            {renderSummaryRoleChip(rName)}
                                           </td>
                                           <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                         </tr>
@@ -7915,8 +8164,10 @@ export default function PlanningPage() {
           </div>
       )}
       {(() => {
-        const alts = aiPlan?.alternatives || [];
-        const total = 1 + (alts?.length || 0);
+        const total = filteredAiPlanIndices.length;
+        const totalAll = aiAssignmentsVariants.length;
+        const currentVisibleIndex = filteredAiPlanPosition;
+        const displayTotal = total > 0 ? total : totalAll;
         return (
           <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:bg-zinc-900/90 dark:border-zinc-800">
             <div className="mx-auto w-full max-w-none px-3 sm:px-6 py-3 md:py-4 grid grid-cols-1 place-items-center gap-3 md:gap-4 text-sm">
@@ -8013,24 +8264,17 @@ export default function PlanningPage() {
                   </div>
                 )}
                 {/* Alternatives sur la même ligne que création/auto/manuel */}
-                {!isManual && aiPlan && total > 1 && (
+                {!isManual && aiPlan && totalAll > 1 && (
                   <div className="flex items-center justify-center gap-2 flex-wrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                     <button
                       type="button"
                       onClick={() => {
-                        const next = (altIndex - 1 + total) % total;
-                        setAltIndex(next);
-                        // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
-                        setPullsByHoleKey({});
-                        setPullsEditor(null);
-                        if (next === 0) {
-                          setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                        } else {
-                          const alt = alts[next - 1];
-                          setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                        }
+                        if (total <= 0) return;
+                        const pos = currentVisibleIndex >= 0 ? currentVisibleIndex : 0;
+                        const next = filteredAiPlanIndices[(pos - 1 + total) % total];
+                        selectAiPlanIndex(next);
                       }}
-                      disabled={total <= 1 || (altIndex === 0 && aiLoading)}
+                      disabled={total <= 1 || currentVisibleIndex < 0}
                       className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                     >
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
@@ -8039,24 +8283,17 @@ export default function PlanningPage() {
                       חלופה
                     </button>
                     <span className="min-w-14 text-center whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs">
-                      {altIndex + 1}/{total}
+                      {currentVisibleIndex >= 0 ? currentVisibleIndex + 1 : 0}/{displayTotal}
                     </span>
                     <button
                       type="button"
                       onClick={() => {
-                        const next = (altIndex + 1) % total;
-                        setAltIndex(next);
-                        // En changeant de חלופה: garder le mode משיכות, mais effacer les משיכות sauvegardées
-                        setPullsByHoleKey({});
-                        setPullsEditor(null);
-                        if (next === 0) {
-                          setAiPlan((prev) => (prev ? { ...prev, assignments: baseAssignmentsRef.current || prev.assignments } : prev));
-                        } else {
-                          const alt = alts[next - 1];
-                          setAiPlan((prev) => (prev ? { ...prev, assignments: alt } : prev));
-                        }
+                        if (total <= 0) return;
+                        const pos = currentVisibleIndex >= 0 ? currentVisibleIndex : 0;
+                        const next = filteredAiPlanIndices[(pos + 1) % total];
+                        selectAiPlanIndex(next);
                       }}
-                      disabled={total <= 1}
+                      disabled={total <= 1 || currentVisibleIndex < 0}
                       className="inline-flex items-center gap-2 rounded-md border px-3 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                     >
                       חלופה
