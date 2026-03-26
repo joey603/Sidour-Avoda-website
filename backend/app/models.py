@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Enum, ForeignKey, Integer, BigInteger, JSON, UniqueConstraint
+from sqlalchemy import String, Enum, ForeignKey, Integer, BigInteger, JSON, UniqueConstraint, Boolean
 import enum
 
 from .database import Base
@@ -31,6 +31,26 @@ class Site(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     director_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     config: Mapped[dict] = mapped_column(JSON, nullable=True)
+
+
+class DirectorAutoPlanningConfig(Base):
+    __tablename__ = "director_auto_planning_configs"
+    __table_args__ = (
+        UniqueConstraint("director_id", name="uq_director_auto_planning_director"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    director_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 0 = Sunday ... 6 = Saturday
+    day_of_week: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
+    minute: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    auto_pulls_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    last_run_week_iso: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    last_run_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 class SiteWeeklyAvailability(Base):

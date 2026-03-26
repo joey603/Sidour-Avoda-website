@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+from threading import Event, Thread
 
-from .database import Base, engine
+from .database import Base, engine, SessionLocal
 from .auth import router as auth_router
-from .sites import router as sites_router
+from .sites import router as sites_router, process_auto_planning_tick
 from .public_workers import router as public_workers_router
 from .deps import get_current_user, require_role
 
@@ -167,6 +168,26 @@ def create_app() -> FastAPI:
                 except Exception as e:
                     # La table n'existe peut-être pas encore
                     logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
+
+                # Migration pour director_auto_planning_configs: ajouter auto_pulls_enabled
+                try:
+                    auto_cols = conn.exec_driver_sql("PRAGMA table_info(director_auto_planning_configs)").fetchall()
+                    auto_col_names = {c[1] for c in auto_cols}
+                    if auto_cols and "auto_pulls_enabled" not in auto_col_names:
+                        logger.info("Ajout de la colonne auto_pulls_enabled à director_auto_planning_configs")
+                        conn.exec_driver_sql(
+                            "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_pulls_enabled BOOLEAN NOT NULL DEFAULT 0"
+                        )
+                except Exception as e:
+                    logger.info(f"Table director_auto_planning_configs pas encore créée ou erreur: {e}")
+            elif dialect_name == "postgresql":
+                try:
+                    logger.info("Vérification de la colonne auto_pulls_enabled sur director_auto_planning_configs")
+                    conn.exec_driver_sql(
+                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_pulls_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                except Exception as e:
+                    logger.info(f"Migration Postgres director_auto_planning_configs ignorée ou impossible: {e}")
     except Exception:
         # Safe to ignore in dev if another process handles migration
         pass
@@ -193,6 +214,39 @@ def create_app() -> FastAPI:
     @app.get("/director/dashboard")
     def director_dashboard(user=Depends(require_role("director"))):
         return {"message": "ברוך הבא, מנהל", "user": user.full_name}
+
+    @app.on_event("startup")
+    def start_auto_planning_scheduler():
+        existing = getattr(app.state, "auto_planning_thread", None)
+        if existing and existing.is_alive():
+            return
+
+        stop_event = Event()
+        app.state.auto_planning_stop_event = stop_event
+
+        def loop():
+            while not stop_event.is_set():
+                db = SessionLocal()
+                try:
+                    process_auto_planning_tick(db)
+                except Exception:
+                    logger.exception("Auto-planning scheduler tick failed")
+                finally:
+                    db.close()
+                stop_event.wait(30)
+
+        thread = Thread(target=loop, name="auto-planning-scheduler", daemon=True)
+        thread.start()
+        app.state.auto_planning_thread = thread
+
+    @app.on_event("shutdown")
+    def stop_auto_planning_scheduler():
+        stop_event = getattr(app.state, "auto_planning_stop_event", None)
+        if stop_event:
+            try:
+                stop_event.set()
+            except Exception:
+                pass
 
     return app
 

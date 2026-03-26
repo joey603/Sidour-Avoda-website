@@ -6,12 +6,14 @@ from fastapi import Body, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 import re
+from datetime import datetime, timedelta
 
 from .deps import require_role, get_db
-from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole
+from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole, DirectorAutoPlanningConfig
 from .schemas import (
     SiteCreate,
     SiteOut,
+    NextWeekSavedPlanStatus,
     SiteUpdate,
     WorkerCreate,
     WorkerUpdate,
@@ -22,6 +24,8 @@ from .schemas import (
     CreateWorkerUserRequest,
     WeeklyAvailabilityPayload,
     WeekPlanPayload,
+    AutoPlanningConfigPayload,
+    AutoPlanningConfigOut,
     SiteMessageCreate,
     SiteMessageUpdate,
     SiteMessageOut,
@@ -52,6 +56,676 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _week_start_date(dt: datetime) -> datetime:
+    days_since_sunday = (dt.weekday() + 1) % 7
+    base = dt - timedelta(days=days_since_sunday)
+    return base.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _next_week_iso(dt: datetime) -> str:
+    return (_week_start_date(dt) + timedelta(days=7)).date().isoformat()
+
+
+def _schedule_run_time_for_current_week(now: datetime, day_of_week: int, hour: int, minute: int) -> datetime:
+    return _week_start_date(now) + timedelta(days=int(day_of_week), hours=int(hour), minutes=int(minute))
+
+
+def _ms_to_datetime(value: int | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value) / 1000)
+    except Exception:
+        return None
+
+
+def _next_effective_run_time(now: datetime, config: DirectorAutoPlanningConfig) -> datetime:
+    candidate = _schedule_run_time_for_current_week(now, config.day_of_week, config.hour, config.minute)
+    updated_at = _ms_to_datetime(getattr(config, "updated_at", None))
+    last_run_at = _ms_to_datetime(getattr(config, "last_run_at", None))
+
+    # Si la config a été créée/modifiée après le créneau de cette semaine,
+    # on attend la prochaine occurrence réelle du jour/heure choisis.
+    # La saisie UI est à la minute: si on sauvegarde pendant cette même minute,
+    # on considère encore que le créneau de cette semaine est valide.
+    if updated_at and updated_at >= (candidate + timedelta(minutes=1)):
+        candidate += timedelta(days=7)
+
+    while last_run_at and candidate <= last_run_at:
+        candidate += timedelta(days=7)
+
+    return candidate
+
+
+def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> AutoPlanningConfigOut:
+    next_run_at = None
+    target_week_iso = None
+    if row and bool(getattr(row, "enabled", False)):
+        next_run_dt = _next_effective_run_time(datetime.now(), row)
+        next_run_at = int(next_run_dt.timestamp() * 1000)
+        target_week_iso = _next_week_iso(next_run_dt)
+    return AutoPlanningConfigOut(
+        enabled=bool(getattr(row, "enabled", False)),
+        day_of_week=int(getattr(row, "day_of_week", 0) or 0),
+        hour=int(getattr(row, "hour", 9) or 0),
+        minute=int(getattr(row, "minute", 0) or 0),
+        auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
+        last_run_week_iso=getattr(row, "last_run_week_iso", None),
+        last_run_at=getattr(row, "last_run_at", None),
+        last_error=getattr(row, "last_error", None),
+        next_run_at=next_run_at,
+        target_week_iso=target_week_iso,
+    )
+
+
+def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, dict[str, list[str]]] | None) -> list[dict]:
+    overrides = weekly_overrides or {}
+    workers: list[dict] = []
+    for r in rows:
+        ovr = overrides.get(r.name)
+        if isinstance(ovr, dict):
+            avail = {}
+            for day_key, shifts_list in ovr.items():
+                if isinstance(shifts_list, list):
+                    valid_shifts = [s for s in shifts_list if s]
+                    if valid_shifts:
+                        avail[day_key] = valid_shifts
+        else:
+            avail = {}
+        workers.append({
+            "id": r.id,
+            "name": r.name,
+            "max_shifts": r.max_shifts,
+            "roles": r.roles or [],
+            "availability": avail,
+        })
+    return workers
+
+
+def _build_worker_snapshots(rows: list[SiteWorker]) -> list[dict]:
+    snapshots: list[dict] = []
+    for r in rows:
+        snapshots.append({
+            "id": r.id,
+            "name": r.name,
+            "max_shifts": r.max_shifts,
+            "roles": r.roles or [],
+            "availability": r.availability or { "sun": [], "mon": [], "tue": [], "wed": [], "thu": [], "fri": [], "sat": [] },
+            "answers": r.answers or {},
+        })
+    return snapshots
+
+
+def _save_site_week_plan(db: Session, site_id: int, week_iso: str, scope: str, data: dict) -> None:
+    row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == week_iso)
+        .filter(SiteWeekPlan.scope == scope)
+        .first()
+    )
+    now = _now_ms()
+    if row:
+        row.data = data
+        row.updated_at = now
+    else:
+        row = SiteWeekPlan(
+            site_id=site_id,
+            week_iso=week_iso,
+            scope=scope,
+            data=data,
+            updated_at=now,
+        )
+        db.add(row)
+
+
+def _norm_name_local(value: str | None) -> str:
+    return str(value or "").strip().replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
+
+
+def _norm_role_local(value: str | None) -> str:
+    return _norm_name_local(value).replace('"', "'")
+
+
+def _hours_of(shift_name: str) -> str | None:
+    s = str(shift_name or "")
+    m = re.search(r"(\d{1,2})\s*[-:–]\s*(\d{1,2})", s)
+    if m:
+        return f"{m.group(1).zfill(2)}-{m.group(2).zfill(2)}"
+    if re.search(r"בוקר", s, re.I):
+        return "06-14"
+    if re.search(r"צהר(יים|י)ם?", s, re.I):
+        return "14-22"
+    if re.search(r"לילה|night", s, re.I):
+        return "22-06"
+    return None
+
+
+def _hours_from_config(station_cfg: dict | None, shift_name: str, day_key: str) -> str | None:
+    station_cfg = station_cfg or {}
+
+    def fmt(start: str | None, end: str | None) -> str | None:
+        if not start or not end:
+            return None
+        return f"{start}-{end}"
+
+    if station_cfg.get("perDayCustom") and isinstance(station_cfg.get("dayOverrides"), dict):
+        day_cfg = (station_cfg.get("dayOverrides") or {}).get(day_key) or {}
+        if day_cfg and day_cfg.get("active") is not False:
+            shift_cfg = next((x for x in (day_cfg.get("shifts") or []) if isinstance(x, dict) and x.get("name") == shift_name), None)
+            out = fmt(shift_cfg.get("start") if isinstance(shift_cfg, dict) else None, shift_cfg.get("end") if isinstance(shift_cfg, dict) else None)
+            if out:
+                return out
+
+    shift_cfg = next((x for x in (station_cfg.get("shifts") or []) if isinstance(x, dict) and x.get("name") == shift_name), None)
+    return fmt(shift_cfg.get("start") if isinstance(shift_cfg, dict) else None, shift_cfg.get("end") if isinstance(shift_cfg, dict) else None)
+
+
+def _parse_hours_range(range_text: str | None) -> tuple[str, str] | None:
+    text = str(range_text or "").strip()
+    m = re.match(r"^\s*(\d{1,2}):?(\d{2})?\s*[-–]\s*(\d{1,2}):?(\d{2})?\s*$", text)
+    if not m:
+        return None
+    return (f"{int(m.group(1)):02d}:{int(m.group(2) or '0'):02d}", f"{int(m.group(3)):02d}:{int(m.group(4) or '0'):02d}")
+
+
+def _to_minutes(hhmm: str) -> int | None:
+    m = re.match(r"^(\d{1,2}):(\d{2})$", str(hhmm or "").strip())
+    if not m:
+        return None
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if hh < 0 or hh > 23 or mm < 0 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
+def _from_minutes(value: int) -> str:
+    value = int(value) % (24 * 60)
+    return f"{value // 60:02d}:{value % 60:02d}"
+
+
+def _split_range_for_pulls(start: str, end: str, max_each_minutes: int = 4 * 60) -> tuple[dict, dict]:
+    s = _to_minutes(start)
+    e0 = _to_minutes(end)
+    if s is None or e0 is None:
+        return ({"start": "00:00", "end": "12:00"}, {"start": "12:00", "end": "00:00"})
+    e = e0
+    if e <= s:
+        e += 24 * 60
+    duration = e - s
+    each = min(max_each_minutes, duration / 2)
+    return (
+        {"start": _from_minutes(s), "end": _from_minutes(int(s + each))},
+        {"start": _from_minutes(int(e - each)), "end": _from_minutes(e)},
+    )
+
+
+def _summarize_auto_planning_result(
+    site: Site,
+    assignments: dict | None,
+    week_iso: str,
+    source: str,
+    error: str | None = None,
+    pulls: dict | None = None,
+) -> dict:
+    from .ai_solver import build_capacities_from_config
+
+    days, shifts, stations = build_capacities_from_config(site.config or {})
+    total_required = 0
+    for t_idx, st in enumerate(stations):
+        cap_map = (st.get("capacity") or {})
+        for day_key in days:
+            for shift_name in shifts:
+                total_required += int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
+
+    total_assigned = 0
+    assignments_map = assignments or {}
+    if isinstance(assignments_map, dict):
+        for day_key in days:
+            shifts_map = assignments_map.get(day_key) or {}
+            if not isinstance(shifts_map, dict):
+                continue
+            for shift_name in shifts:
+                per_station = shifts_map.get(shift_name) or []
+                if not isinstance(per_station, list):
+                    continue
+                for t_idx in range(len(stations)):
+                    cell = per_station[t_idx] if t_idx < len(per_station) else []
+                    if isinstance(cell, list):
+                        total_assigned += len([nm for nm in cell if str(nm or "").strip()])
+    if isinstance(pulls, dict):
+        total_assigned = max(0, total_assigned - len(pulls))
+
+    complete = (error is None) and (total_assigned == total_required)
+    return {
+        "week_iso": week_iso,
+        "ran_at": _now_ms(),
+        "source": source,
+        "complete": complete,
+        "assigned_count": total_assigned,
+        "required_count": total_required,
+        "error": error,
+    }
+
+
+def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
+    cfg = dict(site.config or {})
+    cfg["autoPlanningLastRun"] = summary
+    site.config = cfg
+
+
+def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict) -> dict:
+    from .ai_solver import build_capacities_from_config
+
+    assignments = payload.get("assignments")
+    if not isinstance(assignments, dict):
+        return payload
+
+    site_cfg = site.config or {}
+    station_cfgs = (site_cfg.get("stations") or []) if isinstance(site_cfg, dict) else []
+    days, shifts, stations = build_capacities_from_config(site_cfg)
+    name_to_roles = {
+        _norm_name_local(r.name): {_norm_role_local(x) for x in (r.roles or [])}
+        for r in rows
+    }
+    pulls: dict[str, dict] = {}
+
+    def worker_has_role(worker_name: str, role_name: str) -> bool:
+        return _norm_role_local(role_name) in name_to_roles.get(_norm_name_local(worker_name), set())
+
+    def get_cell_names(day_key: str, shift_name: str, station_idx: int) -> list[str]:
+        per_shift = (assignments.get(day_key) or {}).get(shift_name) or []
+        if not isinstance(per_shift, list) or station_idx >= len(per_shift):
+            return []
+        raw = per_shift[station_idx]
+        return [_norm_name_local(x) for x in raw] if isinstance(raw, list) else []
+
+    def set_cell_names(day_key: str, shift_name: str, station_idx: int, names: list[str]) -> None:
+        assignments.setdefault(day_key, {})
+        per_shift = assignments[day_key].setdefault(shift_name, [])
+        while len(per_shift) <= station_idx:
+            per_shift.append([])
+        per_shift[station_idx] = names
+
+    def pulled_names_for(day_key: str, shift_name: str) -> set[str]:
+        out: set[str] = set()
+        prefix = f"{day_key}|{shift_name}|"
+        for key, entry in pulls.items():
+            if not str(key).startswith(prefix):
+                continue
+            before_name = _norm_name_local(((entry or {}).get("before") or {}).get("name"))
+            after_name = _norm_name_local(((entry or {}).get("after") or {}).get("name"))
+            if before_name:
+                out.add(before_name)
+            if after_name:
+                out.add(after_name)
+        return out
+
+    def prev_of(day_idx: int, shift_idx: int) -> tuple[int, int] | None:
+        if day_idx == 0 and shift_idx == 0:
+            return None
+        if shift_idx == 0:
+            return (day_idx - 1, len(shifts) - 1)
+        return (day_idx, shift_idx - 1)
+
+    def next_of(day_idx: int, shift_idx: int) -> tuple[int, int] | None:
+        if day_idx == len(days) - 1 and shift_idx == len(shifts) - 1:
+            return None
+        if shift_idx == len(shifts) - 1:
+            return (day_idx + 1, 0)
+        return (day_idx, shift_idx + 1)
+
+    for station_idx, station in enumerate(stations):
+        station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
+        cap_map = station.get("capacity") or {}
+        cap_roles = station.get("capacity_roles") or {}
+        for day_idx, day_key in enumerate(days):
+            for shift_idx, shift_name in enumerate(shifts):
+                required = int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
+                prev_coord = prev_of(day_idx, shift_idx)
+                next_coord = next_of(day_idx, shift_idx)
+                if required <= 0 or not prev_coord or not next_coord:
+                    continue
+
+                while True:
+                    cell_prefix = f"{day_key}|{shift_name}|{station_idx}|"
+                    existing_pull_keys = [k for k in pulls if str(k).startswith(cell_prefix)]
+                    current_names = get_cell_names(day_key, shift_name, station_idx)
+                    assigned_places = max(0, len(current_names) - len(existing_pull_keys))
+                    if required - assigned_places < 1:
+                        break
+
+                    prev_day, prev_shift = days[prev_coord[0]], shifts[prev_coord[1]]
+                    next_day, next_shift = days[next_coord[0]], shifts[next_coord[1]]
+                    prev_prev = prev_of(prev_coord[0], prev_coord[1])
+                    next_next = next_of(next_coord[0], next_coord[1])
+                    prev_names = [nm for nm in get_cell_names(prev_day, prev_shift, station_idx) if nm not in pulled_names_for(prev_day, prev_shift)]
+                    next_names = [nm for nm in get_cell_names(next_day, next_shift, station_idx) if nm not in pulled_names_for(next_day, next_shift)]
+                    used_in_cell = set(current_names)
+                    pulled_before_prev = pulled_names_for(days[prev_prev[0]], shifts[prev_prev[1]]) if prev_prev else set()
+                    pulled_after_next = pulled_names_for(days[next_next[0]], shifts[next_next[1]]) if next_next else set()
+
+                    before_candidates = [nm for nm in prev_names if nm not in used_in_cell and nm not in pulled_before_prev]
+                    after_candidates = [nm for nm in next_names if nm not in used_in_cell and nm not in pulled_after_next]
+                    both_sides = {nm for nm in before_candidates if nm in set(after_candidates)}
+                    before_candidates = [nm for nm in before_candidates if nm not in both_sides]
+                    after_candidates = [nm for nm in after_candidates if nm not in both_sides]
+                    if not before_candidates or not after_candidates:
+                        break
+
+                    req_roles = (cap_roles.get(day_key, {}) or {}).get(shift_name, {}) or {}
+                    role_name = None
+                    before_options = before_candidates
+                    after_options = after_candidates
+                    if req_roles:
+                        for rn in [str(x) for x in req_roles.keys() if str(x).strip()]:
+                            b = [nm for nm in before_candidates if worker_has_role(nm, rn)]
+                            a = [nm for nm in after_candidates if worker_has_role(nm, rn)]
+                            if not b or not a:
+                                continue
+                            if len(b) == 1 and len(a) == 1 and b[0] == a[0]:
+                                continue
+                            role_name = rn
+                            before_options = b
+                            after_options = a
+                            break
+                        if not role_name:
+                            break
+                    elif len(before_options) == 1 and len(after_options) == 1 and before_options[0] == after_options[0]:
+                        break
+
+                    before_name = before_options[0] if before_options else ""
+                    after_name = next((nm for nm in after_options if nm != before_name), "")
+                    if not before_name or not after_name:
+                        break
+
+                    hours = _hours_from_config(station_cfg, shift_name, day_key) or _hours_of(shift_name) or "00:00-00:00"
+                    parsed = _parse_hours_range(hours)
+                    shift_start, shift_end = parsed if parsed else ("00:00", "00:00")
+                    before_range, after_range = _split_range_for_pulls(shift_start, shift_end)
+
+                    new_pull_count = len(existing_pull_keys) + 1
+                    next_names = list(current_names)
+                    if before_name not in next_names:
+                        next_names.append(before_name)
+                    if after_name not in next_names:
+                        next_names.append(after_name)
+                    if len(next_names) > required + new_pull_count:
+                        break
+
+                    slot_idx = required + len(existing_pull_keys)
+                    pulls[f"{day_key}|{shift_name}|{station_idx}|{slot_idx}"] = {
+                        "before": {"name": before_name, "start": before_range["start"], "end": before_range["end"]},
+                        "after": {"name": after_name, "start": after_range["start"], "end": after_range["end"]},
+                        "roleName": role_name,
+                    }
+                    set_cell_names(day_key, shift_name, station_idx, next_names)
+
+    payload["assignments"] = assignments
+    payload["pulls"] = pulls
+    return payload
+
+
+def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, week_iso: str) -> NextWeekSavedPlanStatus:
+    assignments = None
+    pulls = None
+    if row and isinstance(row.data, dict):
+        assignments = row.data.get("assignments")
+        pulls = row.data.get("pulls")
+    if not isinstance(assignments, dict):
+        return NextWeekSavedPlanStatus(
+            exists=False,
+            week_iso=week_iso,
+            complete=None,
+            assigned_count=0,
+            required_count=0,
+            pulls_count=0,
+        )
+
+    summary = _summarize_auto_planning_result(
+        site,
+        assignments,
+        week_iso,
+        "saved-next-week",
+        pulls=pulls if isinstance(pulls, dict) else None,
+    )
+    return NextWeekSavedPlanStatus(
+        exists=True,
+        week_iso=week_iso,
+        complete=bool(summary.get("complete")),
+        assigned_count=int(summary.get("assigned_count") or 0),
+        required_count=int(summary.get("required_count") or 0),
+        pulls_count=len(pulls) if isinstance(pulls, dict) else 0,
+    )
+
+
+def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all()
+    weekly_row = (
+        db.query(SiteWeeklyAvailability)
+        .filter(SiteWeeklyAvailability.site_id == site.id)
+        .filter(SiteWeeklyAvailability.week_iso == week_iso)
+        .first()
+    )
+    weekly_overrides = (weekly_row.availability or {}) if weekly_row else {}
+    workers = _build_solver_workers(rows, weekly_overrides)
+    start_dt = datetime.fromisoformat(week_iso)
+    end_dt = start_dt + timedelta(days=6)
+
+    def make_payload(assignments_value: dict) -> dict:
+        return {
+            "siteId": int(site.id),
+            "week": {
+                "startISO": week_iso,
+                "endISO": end_dt.date().isoformat(),
+                "label": f"{week_iso} — {end_dt.date().isoformat()}",
+            },
+            "isManual": False,
+            "assignments": assignments_value,
+            "pulls": {},
+            "workers": _build_worker_snapshots(rows),
+        }
+
+    if not workers:
+        from .ai_solver import build_capacities_from_config
+
+        days, shifts, stations = build_capacities_from_config(site.config or {})
+        assignments = {day: {sh: [[] for _ in stations] for sh in shifts} for day in days}
+        payload = make_payload(assignments)
+        if auto_pulls_enabled:
+            payload = _apply_auto_pulls_to_payload(site, rows, payload)
+        return payload
+
+    result = solve_schedule(
+        site.config or {},
+        workers,
+        time_limit_seconds=25,
+        max_nights_per_worker=3,
+        num_alternatives=20 if auto_pulls_enabled else 1,
+        fixed_assignments=None,
+        exclude_days=None,
+    )
+
+    if not auto_pulls_enabled:
+        return make_payload(result["assignments"])
+
+    candidate_assignments: list[dict] = [result["assignments"]]
+    for alt in (result.get("alternatives") or []):
+        if isinstance(alt, dict):
+            candidate_assignments.append(alt)
+
+    best_payload: dict | None = None
+    best_key: tuple[int, int, int] | None = None
+    best_idx = 0
+
+    for idx, candidate in enumerate(candidate_assignments):
+        candidate_payload = make_payload(candidate)
+        candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload)
+        summary = _summarize_auto_planning_result(
+            site,
+            candidate_payload.get("assignments"),
+            week_iso,
+            "auto-pulls-eval",
+            pulls=candidate_payload.get("pulls") if isinstance(candidate_payload.get("pulls"), dict) else None,
+        )
+        assigned = int(summary.get("assigned_count") or 0)
+        required = int(summary.get("required_count") or 0)
+        holes = max(0, required - assigned)
+        pulls_count = len(candidate_payload.get("pulls") or {}) if isinstance(candidate_payload.get("pulls"), dict) else 0
+        candidate_key = (holes, -assigned, pulls_count)
+        if best_key is None or candidate_key < best_key:
+            best_key = candidate_key
+            best_payload = candidate_payload
+            best_idx = idx
+
+    if best_payload is not None:
+        logger.info(
+            "[AUTO-PLANNING] selected best alternative with pulls site_id=%s site_name=%s candidate_idx=%s holes=%s assigned=%s pulls=%s candidates=%s",
+            site.id,
+            site.name,
+            best_idx,
+            best_key[0] if best_key else None,
+            -best_key[1] if best_key else None,
+            best_key[2] if best_key else None,
+            len(candidate_assignments),
+        )
+        return best_payload
+
+    assignments = result["assignments"]
+    payload = make_payload(assignments)
+    if auto_pulls_enabled:
+        payload = _apply_auto_pulls_to_payload(site, rows, payload)
+    return payload
+
+
+def _run_auto_planning_for_director(
+    db: Session,
+    director_id: int,
+    target_week_iso: str,
+    source: str = "auto",
+    auto_pulls_enabled: bool = False,
+) -> tuple[int, list[str]]:
+    sites = db.query(Site).filter(Site.director_id == director_id).all()
+    errors: list[str] = []
+    success_count = 0
+    logger.info(
+        "[AUTO-PLANNING] run start director_id=%s source=%s target_week=%s sites=%s",
+        director_id,
+        source,
+        target_week_iso,
+        len(sites),
+    )
+    for site in sites:
+        try:
+            logger.info(
+                "[AUTO-PLANNING] site start director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
+                director_id,
+                site.id,
+                site.name,
+                target_week_iso,
+                source,
+            )
+            payload = _generate_director_week_plan_payload(db, site, target_week_iso, auto_pulls_enabled=auto_pulls_enabled)
+            _save_site_week_plan(db, site.id, target_week_iso, "director", payload)
+            _store_site_auto_planning_status(
+                site,
+                _summarize_auto_planning_result(
+                    site,
+                    payload.get("assignments"),
+                    target_week_iso,
+                    source,
+                    pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
+                ),
+            )
+            logger.info(
+                "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
+                director_id,
+                site.id,
+                site.name,
+                target_week_iso,
+                source,
+            )
+            success_count += 1
+        except Exception as exc:
+            logger.exception("[AUTO-PLANNING] Failed for director=%s site=%s", director_id, site.id)
+            _store_site_auto_planning_status(
+                site,
+                _summarize_auto_planning_result(site, None, target_week_iso, source, str(exc)),
+            )
+            errors.append(f"{site.name}: {exc}")
+    logger.info(
+        "[AUTO-PLANNING] run end director_id=%s source=%s target_week=%s success_sites=%s errors=%s",
+        director_id,
+        source,
+        target_week_iso,
+        success_count,
+        len(errors),
+    )
+    return success_count, errors
+
+
+def process_auto_planning_tick(db: Session) -> None:
+    now = datetime.now()
+    configs = db.query(DirectorAutoPlanningConfig).filter(DirectorAutoPlanningConfig.enabled == True).all()
+    logger.info("[AUTO-PLANNING] tick start now=%s enabled_configs=%s", now.isoformat(), len(configs))
+    for config in configs:
+        next_run_at = _next_effective_run_time(now, config)
+        logger.info(
+            "[AUTO-PLANNING] tick inspect director_id=%s enabled=%s scheduled_day=%s scheduled_time=%02d:%02d next_run_at=%s last_run_week=%s last_run_at=%s",
+            config.director_id,
+            config.enabled,
+            config.day_of_week,
+            config.hour,
+            config.minute,
+            next_run_at.isoformat(),
+            config.last_run_week_iso,
+            config.last_run_at,
+        )
+        if now < next_run_at:
+            logger.info(
+                "[AUTO-PLANNING] tick skip director_id=%s reason=before_next_run now=%s next_run_at=%s",
+                config.director_id,
+                now.isoformat(),
+                next_run_at.isoformat(),
+            )
+            continue
+        target_week_iso = _next_week_iso(next_run_at)
+        if (config.last_run_week_iso or "").strip() == target_week_iso:
+            logger.info(
+                "[AUTO-PLANNING] tick skip director_id=%s reason=already_ran target_week=%s",
+                config.director_id,
+                target_week_iso,
+            )
+            continue
+
+        logger.info(
+            "[AUTO-PLANNING] tick trigger director_id=%s target_week=%s now=%s next_run_at=%s",
+            config.director_id,
+            target_week_iso,
+            now.isoformat(),
+            next_run_at.isoformat(),
+        )
+        _, errors = _run_auto_planning_for_director(
+            db,
+            config.director_id,
+            target_week_iso,
+            "scheduled",
+            auto_pulls_enabled=bool(getattr(config, "auto_pulls_enabled", False)),
+        )
+        config.last_run_week_iso = target_week_iso
+        config.last_run_at = _now_ms()
+        config.last_error = "\n".join(errors)[:1000] if errors else None
+        db.commit()
+        logger.info(
+            "[AUTO-PLANNING] tick commit director_id=%s target_week=%s last_error=%s",
+            config.director_id,
+            target_week_iso,
+            config.last_error,
+        )
+    logger.info("[AUTO-PLANNING] tick end now=%s", now.isoformat())
+
+
 def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
     site = db.get(Site, site_id)
     if not site:
@@ -59,6 +733,106 @@ def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
     if site.director_id != director_id:
         raise HTTPException(status_code=403, detail="Accès interdit")
     return site
+
+
+@router.get("/settings/auto-planning", response_model=AutoPlanningConfigOut)
+def get_auto_planning_config(
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(DirectorAutoPlanningConfig)
+        .filter(DirectorAutoPlanningConfig.director_id == user.id)
+        .first()
+    )
+    return _serialize_auto_planning_config(row)
+
+
+@router.put("/settings/auto-planning", response_model=AutoPlanningConfigOut)
+def put_auto_planning_config(
+    payload: AutoPlanningConfigPayload,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(DirectorAutoPlanningConfig)
+        .filter(DirectorAutoPlanningConfig.director_id == user.id)
+        .first()
+    )
+    now = _now_ms()
+    if not row:
+        row = DirectorAutoPlanningConfig(
+            director_id=user.id,
+            enabled=payload.enabled,
+            day_of_week=payload.day_of_week,
+            hour=payload.hour,
+            minute=payload.minute,
+            auto_pulls_enabled=payload.auto_pulls_enabled,
+            updated_at=now,
+        )
+        db.add(row)
+    else:
+        row.enabled = payload.enabled
+        row.day_of_week = payload.day_of_week
+        row.hour = payload.hour
+        row.minute = payload.minute
+        row.auto_pulls_enabled = payload.auto_pulls_enabled
+        row.updated_at = now
+    # Toute modification de créneau redéfinit le prochain déclenchement planifié.
+    row.last_run_week_iso = None
+    row.last_run_at = None
+    db.commit()
+    db.refresh(row)
+    return _serialize_auto_planning_config(row)
+
+
+@router.post("/settings/auto-planning/test-now")
+def test_auto_planning_now(
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(DirectorAutoPlanningConfig)
+        .filter(DirectorAutoPlanningConfig.director_id == user.id)
+        .first()
+    )
+    target_week_iso = _next_week_iso(datetime.now())
+    logger.info(
+        "[AUTO-PLANNING] manual test trigger director_id=%s target_week=%s",
+        user.id,
+        target_week_iso,
+    )
+    if not row:
+        row = DirectorAutoPlanningConfig(
+            director_id=user.id,
+            enabled=False,
+            day_of_week=0,
+            hour=9,
+            minute=0,
+            auto_pulls_enabled=False,
+            updated_at=_now_ms(),
+        )
+        db.add(row)
+    success_count, errors = _run_auto_planning_for_director(
+        db,
+        user.id,
+        target_week_iso,
+        "manual-test",
+        auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
+    )
+    # Un test manuel ne doit jamais bloquer l'exécution planifiée du créneau hebdo.
+    row.last_run_week_iso = None
+    row.last_run_at = None
+    row.last_error = "\n".join(errors)[:1000] if errors else None
+    db.commit()
+    db.refresh(row)
+    return {
+        "ok": len(errors) == 0,
+        "target_week_iso": target_week_iso,
+        "generated_sites": success_count,
+        "errors": errors,
+        "config": _serialize_auto_planning_config(row).model_dump(),
+    }
 
 
 @router.get("/{site_id}/weekly-availability", response_model=dict[str, dict[str, list[str]]])
@@ -496,8 +1270,42 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         .all()
     )
     counts = {r.site_id: int(r.workers_count or 0) for r in counts_rows}
+    next_week_iso = _next_week_iso(datetime.now())
+    plan_rows = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.week_iso == next_week_iso)
+        .filter(SiteWeekPlan.scope.in_(["director", "shared"]))
+        .all()
+    )
+    def _row_has_assignments(row: SiteWeekPlan) -> bool:
+        data = row.data if isinstance(row.data, dict) else {}
+        return isinstance(data.get("assignments"), dict)
+
+    preferred_plan_by_site: dict[int, SiteWeekPlan] = {}
+    for row in plan_rows:
+        existing = preferred_plan_by_site.get(row.site_id)
+        if existing is None:
+            preferred_plan_by_site[row.site_id] = row
+            continue
+        existing_has_assignments = _row_has_assignments(existing)
+        row_has_assignments = _row_has_assignments(row)
+        if row_has_assignments and not existing_has_assignments:
+            preferred_plan_by_site[row.site_id] = row
+            continue
+        if row_has_assignments == existing_has_assignments and existing.scope != "shared" and row.scope == "shared":
+            preferred_plan_by_site[row.site_id] = row
     return [
-        SiteOut(id=s.id, name=s.name, workers_count=counts.get(s.id, 0), config=s.config)
+        SiteOut(
+            id=s.id,
+            name=s.name,
+            workers_count=counts.get(s.id, 0),
+            config=s.config,
+            next_week_saved_plan_status=_build_next_week_saved_plan_status(
+                s,
+                preferred_plan_by_site.get(s.id),
+                next_week_iso,
+            ),
+        )
         for s in sites
     ]
 
@@ -508,7 +1316,20 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
     db.add(site)
     db.commit()
     db.refresh(site)
-    return SiteOut(id=site.id, name=site.name, workers_count=0, config=site.config)
+    return SiteOut(
+        id=site.id,
+        name=site.name,
+        workers_count=0,
+        config=site.config,
+        next_week_saved_plan_status=NextWeekSavedPlanStatus(
+            exists=False,
+            week_iso=_next_week_iso(datetime.now()),
+            complete=None,
+            assigned_count=0,
+            required_count=0,
+            pulls_count=0,
+        ),
+    )
 
 
 @router.get("/all-workers", response_model=list[WorkerOut])

@@ -449,23 +449,26 @@ def solve_schedule(
     coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
 
     # Fairness: introduce deviation variables to target = max_shifts (soft)
+    max_possible_assignments = max(1, len(D) * len(S) * len(T))
+    max_target_shifts = max([int(workers[w].get("max_shifts") or 5) for w in W], default=1)
+    max_deviation_bound = max(max_possible_assignments, max_target_shifts)
     fairness_terms: List[cp_model.IntVar] = []
     assigned_vars: List[cp_model.IntVar] = []
     for w in W:
-        assigned = model.NewIntVar(0, len(D), f"assign_count_w{w}")
+        assigned = model.NewIntVar(0, max_possible_assignments, f"assign_count_w{w}")
         model.Add(assigned == sum(x[(w, d, s, t)] for d in D for s in S for t in T))
         assigned_vars.append(assigned)
         target = int(workers[w].get("max_shifts") or 5)
         # deviation = |assigned - target| using two non-negative vars
-        over = model.NewIntVar(0, len(D), f"dev_over_w{w}")
-        under = model.NewIntVar(0, len(D), f"dev_under_w{w}")
+        over = model.NewIntVar(0, max_deviation_bound, f"dev_over_w{w}")
+        under = model.NewIntVar(0, max_deviation_bound, f"dev_under_w{w}")
         model.Add(assigned - target == over - under)
-        dev = model.NewIntVar(0, len(D), f"dev_abs_w{w}")
+        dev = model.NewIntVar(0, max_deviation_bound, f"dev_abs_w{w}")
         model.Add(dev == over + under)
         fairness_terms.append(dev)
 
     # Minimize maximum deviation as priority after coverage
-    max_dev = model.NewIntVar(0, len(D), "max_dev")
+    max_dev = model.NewIntVar(0, max_deviation_bound, "max_dev")
     for dev in fairness_terms:
         model.Add(dev <= max_dev)
 
@@ -1510,20 +1513,23 @@ def solve_schedule_stream(
 
     # objective coverage + fairness
     coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
+    max_possible_assignments = max(1, len(D) * len(S) * len(T))
+    max_target_shifts = max([int(workers[w].get("max_shifts") or 5) for w in W], default=1)
+    max_deviation_bound = max(max_possible_assignments, max_target_shifts)
     fairness_terms: List[cp_model.IntVar] = []
     assigned_vars: List[cp_model.IntVar] = []
     for w in W:
-        assigned = model.NewIntVar(0, len(D), f"assign_count_w{w}")
+        assigned = model.NewIntVar(0, max_possible_assignments, f"assign_count_w{w}")
         model.Add(assigned == sum(x[(w, d, s, t)] for d in D for s in S for t in T))
         assigned_vars.append(assigned)
         target = int(workers[w].get("max_shifts") or 5)
-        over = model.NewIntVar(0, len(D), f"dev_over_w{w}")
-        under = model.NewIntVar(0, len(D), f"dev_under_w{w}")
+        over = model.NewIntVar(0, max_deviation_bound, f"dev_over_w{w}")
+        under = model.NewIntVar(0, max_deviation_bound, f"dev_under_w{w}")
         model.Add(assigned - target == over - under)
-        dev = model.NewIntVar(0, len(D), f"dev_abs_w{w}")
+        dev = model.NewIntVar(0, max_deviation_bound, f"dev_abs_w{w}")
         model.Add(dev == over + under)
         fairness_terms.append(dev)
-    max_dev = model.NewIntVar(0, len(D), "max_dev")
+    max_dev = model.NewIntVar(0, max_deviation_bound, "max_dev")
     for dev in fairness_terms:
         model.Add(dev <= max_dev)
     # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)

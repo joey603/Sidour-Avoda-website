@@ -46,11 +46,21 @@ class SiteCreate(BaseModel):
     config: dict | None = None
 
 
+class NextWeekSavedPlanStatus(BaseModel):
+    exists: bool = False
+    week_iso: str | None = None
+    complete: bool | None = None
+    assigned_count: int = 0
+    required_count: int = 0
+    pulls_count: int = 0
+
+
 class SiteOut(BaseModel):
     id: int
     name: str
     workers_count: int
     config: dict | None = None
+    next_week_saved_plan_status: NextWeekSavedPlanStatus | None = None
 
 class SiteUpdate(BaseModel):
     name: str | None = None
@@ -89,6 +99,22 @@ class WeeklyAvailabilityPayload(BaseModel):
     week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
     # { workerName: { sun: [...], mon: [...], ... } }
     availability: dict[str, dict[str, list[str]]] = {}
+
+
+class AutoPlanningConfigPayload(BaseModel):
+    enabled: bool = False
+    day_of_week: int = Field(default=0, ge=0, le=6)
+    hour: int = Field(default=9, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    auto_pulls_enabled: bool = False
+
+
+class AutoPlanningConfigOut(AutoPlanningConfigPayload):
+    last_run_week_iso: str | None = None
+    last_run_at: int | None = None
+    last_error: str | None = None
+    next_run_at: int | None = None
+    target_week_iso: str | None = None
 
 
 class WeekPlanPayload(BaseModel):

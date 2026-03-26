@@ -11,6 +11,94 @@ interface Site {
   id: number;
   name: string;
   workers_count: number;
+  next_week_saved_plan_status?: {
+    exists?: boolean;
+    week_iso?: string | null;
+    complete?: boolean | null;
+    assigned_count?: number;
+    required_count?: number;
+    pulls_count?: number;
+  } | null;
+  config?: {
+    autoPlanningLastRun?: {
+      week_iso?: string;
+      ran_at?: number;
+      source?: string;
+      complete?: boolean;
+      assigned_count?: number;
+      required_count?: number;
+      error?: string | null;
+    };
+  } | null;
+}
+
+interface AutoPlanningConfig {
+  enabled: boolean;
+  day_of_week: number;
+  hour: number;
+  minute: number;
+  auto_pulls_enabled?: boolean;
+  last_run_week_iso?: string | null;
+  last_run_at?: number | null;
+  last_error?: string | null;
+  next_run_at?: number | null;
+  target_week_iso?: string | null;
+}
+
+interface AutoPlanningTestResponse {
+  ok: boolean;
+  target_week_iso: string;
+  generated_sites: number;
+  errors: string[];
+  config: AutoPlanningConfig;
+}
+
+const AUTO_PLANNING_DAY_OPTIONS = [
+  { value: 0, label: "יום ראשון" },
+  { value: 1, label: "יום שני" },
+  { value: 2, label: "יום שלישי" },
+  { value: 3, label: "יום רביעי" },
+  { value: 4, label: "יום חמישי" },
+  { value: 5, label: "יום שישי" },
+  { value: 6, label: "שבת" },
+];
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || "");
+}
+
+function getSiteAutoPlanningStatus(site: Site) {
+  return site.next_week_saved_plan_status || null;
+}
+
+function formatIsoDateLabel(isoDate: string): string {
+  const [year, month, day] = String(isoDate || "").split("-");
+  if (!year || !month || !day) return isoDate;
+  return `${day}/${month}/${year}`;
+}
+
+function addDaysToIsoDate(isoDate: string, days: number): string {
+  const date = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return isoDate;
+  date.setDate(date.getDate() + days);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getTargetWeekIsoFromRunAt(runAtMs: number): string | null {
+  const date = new Date(runAtMs);
+  if (Number.isNaN(date.getTime())) return null;
+  const startOfWeek = new Date(date);
+  startOfWeek.setHours(0, 0, 0, 0);
+  startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+  startOfWeek.setDate(startOfWeek.getDate() + 7);
+  const y = startOfWeek.getFullYear();
+  const m = String(startOfWeek.getMonth() + 1).padStart(2, "0");
+  const d = String(startOfWeek.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 export default function SitesList() {
@@ -21,16 +109,47 @@ export default function SitesList() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [query, setQuery] = useState<string>("");
   const [viewMode, setViewMode] = useState<"list" | "cards">("list");
+  const [autoPlanningConfig, setAutoPlanningConfig] = useState<AutoPlanningConfig | null>(null);
+  const [autoPlanningModalOpen, setAutoPlanningModalOpen] = useState(false);
+  const [autoPlanningSaving, setAutoPlanningSaving] = useState(false);
+  const [autoPlanningTesting, setAutoPlanningTesting] = useState(false);
+  const [scheduledAutoPlanningRunning, setScheduledAutoPlanningRunning] = useState(false);
+  const [autoPlanningForm, setAutoPlanningForm] = useState({
+    enabled: false,
+    day_of_week: 0,
+    time: "09:00",
+    auto_pulls_enabled: false,
+  });
 
   async function fetchSites() {
     try {
       const list = await apiFetch<Site[]>("/director/sites/", {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        cache: "no-store" as any,
+        cache: "no-store",
       });
       setSites(list);
-    } catch (e: any) {
+    } catch {
       setError("שגיאה בטעינת אתרים");
+    }
+  }
+
+  async function fetchAutoPlanningConfig() {
+    try {
+      const config = await apiFetch<AutoPlanningConfig>("/director/sites/settings/auto-planning", {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store",
+      });
+      setAutoPlanningConfig(config);
+      setAutoPlanningForm({
+        enabled: !!config.enabled,
+        day_of_week: Number(config.day_of_week || 0),
+        time: `${String(config.hour ?? 9).padStart(2, "0")}:${String(config.minute ?? 0).padStart(2, "0")}`,
+        auto_pulls_enabled: !!config.auto_pulls_enabled,
+      });
+      return config;
+    } catch {
+      toast.error("שגיאה בטעינת תכנון אוטומטי");
+      return null;
     }
   }
 
@@ -40,12 +159,79 @@ export default function SitesList() {
       if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
       try {
-        await fetchSites();
+        await Promise.all([fetchSites(), fetchAutoPlanningConfig()]);
       } finally {
         setLoading(false);
       }
     })();
   }, [router]);
+
+  useEffect(() => {
+    if (!autoPlanningConfig?.enabled || !autoPlanningConfig?.next_run_at) {
+      setScheduledAutoPlanningRunning(false);
+      return;
+    }
+
+    let cancelled = false;
+    let startTimeout: ReturnType<typeof setTimeout> | null = null;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    const scheduledAt = Number(autoPlanningConfig.next_run_at);
+    const targetWeekIso = getTargetWeekIsoFromRunAt(scheduledAt);
+
+    async function refreshAfterScheduledRun(attempt: number) {
+      if (cancelled) return;
+      try {
+        const [, config] = await Promise.all([fetchSites(), fetchAutoPlanningConfig()]);
+        const completedAt = typeof config?.last_run_at === "number" ? config.last_run_at : null;
+        if (completedAt && completedAt >= scheduledAt) {
+          if (!cancelled) setScheduledAutoPlanningRunning(false);
+          return;
+        }
+      } catch {}
+
+      if (attempt < 5 && !cancelled) {
+        retryTimeout = setTimeout(() => {
+          void refreshAfterScheduledRun(attempt + 1);
+        }, 5000);
+      } else if (!cancelled) {
+        setScheduledAutoPlanningRunning(false);
+      }
+    }
+
+    const delayMs = Math.max(0, scheduledAt - Date.now());
+    startTimeout = setTimeout(() => {
+      if (cancelled) return;
+      setScheduledAutoPlanningRunning(true);
+      toast.success("התכנון האוטומטי התחיל", {
+        description: targetWeekIso ? `עבור השבוע ${targetWeekIso}` : undefined,
+      });
+      void refreshAfterScheduledRun(0);
+    }, delayMs);
+
+    return () => {
+      cancelled = true;
+      if (startTimeout) clearTimeout(startTimeout);
+      if (retryTimeout) clearTimeout(retryTimeout);
+    };
+  }, [autoPlanningConfig?.enabled, autoPlanningConfig?.next_run_at]);
+
+  useEffect(() => {
+    if (!scheduledAutoPlanningRunning) return;
+    if (!autoPlanningConfig?.enabled) {
+      setScheduledAutoPlanningRunning(false);
+      return;
+    }
+    const nextRunAt = typeof autoPlanningConfig?.next_run_at === "number" ? autoPlanningConfig.next_run_at : null;
+    const lastRunAt = typeof autoPlanningConfig?.last_run_at === "number" ? autoPlanningConfig.last_run_at : null;
+    if (nextRunAt && lastRunAt && lastRunAt < nextRunAt) {
+      setScheduledAutoPlanningRunning(false);
+    }
+  }, [
+    scheduledAutoPlanningRunning,
+    autoPlanningConfig?.enabled,
+    autoPlanningConfig?.next_run_at,
+    autoPlanningConfig?.last_run_at,
+  ]);
 
   async function onAddClick() {
     router.push("/director/sites/new");
@@ -67,12 +253,12 @@ export default function SitesList() {
       });
       deleteOk = true;
       toast.success("האתר נמחק בהצלחה");
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Vérifier l'état réel: si le site n'existe plus, considérer comme succès
       try {
         const list = await apiFetch<Site[]>("/director/sites/", {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
+          cache: "no-store",
         });
         const stillThere = (list || []).some((s) => Number(s.id) === Number(id));
         if (!stillThere) {
@@ -80,7 +266,7 @@ export default function SitesList() {
           setSites(list || []);
           deleteOk = true;
         } else {
-          toast.error("שגיאה במחיקה", { description: String(e?.message || "") });
+          toast.error("שגיאה במחיקה", { description: getErrorMessage(e) });
           setSites(list || []);
         }
       } catch {
@@ -97,11 +283,104 @@ export default function SitesList() {
     }
   }
 
+  function openAutoPlanningModal() {
+    const config = autoPlanningConfig;
+    setAutoPlanningForm({
+      enabled: !!config?.enabled,
+      day_of_week: Number(config?.day_of_week || 0),
+      time: `${String(config?.hour ?? 9).padStart(2, "0")}:${String(config?.minute ?? 0).padStart(2, "0")}`,
+      auto_pulls_enabled: !!config?.auto_pulls_enabled,
+    });
+    setAutoPlanningModalOpen(true);
+  }
+
+  async function onSaveAutoPlanning() {
+    const match = /^(\d{2}):(\d{2})$/.exec(autoPlanningForm.time || "");
+    if (!match) {
+      toast.error("יש לבחור שעה תקינה");
+      return;
+    }
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      toast.error("יש לבחור שעה תקינה");
+      return;
+    }
+    setAutoPlanningSaving(true);
+    try {
+      const saved = await apiFetch<AutoPlanningConfig>("/director/sites/settings/auto-planning", {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        body: JSON.stringify({
+          enabled: autoPlanningForm.enabled,
+          day_of_week: autoPlanningForm.day_of_week,
+          hour,
+          minute,
+          auto_pulls_enabled: autoPlanningForm.auto_pulls_enabled,
+        }),
+      });
+      setAutoPlanningConfig(saved);
+      setAutoPlanningModalOpen(false);
+      toast.success(saved.enabled ? "התכנון האוטומטי הופעל" : "התכנון האוטומטי כובה");
+    } catch (e: unknown) {
+      toast.error("שגיאה בשמירת תכנון אוטומטי", { description: getErrorMessage(e) });
+    } finally {
+      setAutoPlanningSaving(false);
+    }
+  }
+
+  async function onTestAutoPlanningNow() {
+    setAutoPlanningTesting(true);
+    try {
+      const result = await apiFetch<AutoPlanningTestResponse>("/director/sites/settings/auto-planning/test-now", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+      });
+      setAutoPlanningConfig(result.config);
+      await fetchSites();
+      if (result.ok) {
+        toast.success("ההרצה הידנית הושלמה בהצלחה", {
+          description: `נוצרו ${result.generated_sites} אתרים עבור השבוע ${result.target_week_iso}`,
+        });
+      } else {
+        toast.error("ההרצה הידנית הסתיימה עם שגיאות", {
+          description: `נוצרו ${result.generated_sites} אתרים, ${result.errors.length} שגיאות`,
+        });
+      }
+    } catch (e: unknown) {
+      toast.error("שגיאה בהרצה ידנית", { description: getErrorMessage(e) });
+    } finally {
+      setAutoPlanningTesting(false);
+    }
+  }
+
   const filteredSites = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
     if (!q) return sites;
     return (sites || []).filter((s) => (s?.name || "").toLowerCase().includes(q));
   }, [sites, query]);
+
+  const autoPlanningSummary = useMemo(() => {
+    if (!autoPlanningConfig?.enabled) {
+      return {
+        scheduleLabel: "כבוי",
+        weekLabel: "",
+      };
+    }
+    const dayLabel = AUTO_PLANNING_DAY_OPTIONS.find((option) => option.value === autoPlanningConfig.day_of_week)?.label || "יום ראשון";
+    const timeLabel = `${String(autoPlanningConfig.hour ?? 9).padStart(2, "0")}:${String(autoPlanningConfig.minute ?? 0).padStart(2, "0")}`;
+    const targetWeekStart = autoPlanningConfig.target_week_iso || null;
+    const targetWeekEnd = targetWeekStart ? addDaysToIsoDate(targetWeekStart, 6) : null;
+    const weekLabel = targetWeekStart && targetWeekEnd
+      ? `${formatIsoDateLabel(targetWeekStart)} - ${formatIsoDateLabel(targetWeekEnd)}`
+      : "שבוע הבא";
+    return {
+      scheduleLabel: `${dayLabel} ${timeLabel}`,
+      weekLabel,
+    };
+  }, [autoPlanningConfig]);
+
+  const showAutoPlanningSiteStatuses = !!autoPlanningConfig?.enabled;
 
   return (
     <div className="min-h-screen p-6">
@@ -140,6 +419,14 @@ export default function SitesList() {
               </div>
             </div>
             <div className="justify-self-end flex items-center gap-2">
+              <button
+                type="button"
+                onClick={openAutoPlanningModal}
+                className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
+                תכנון אוטומטי 
+              </button>
               <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                 הוסף אתר
@@ -151,10 +438,20 @@ export default function SitesList() {
           <div className="mb-2 md:hidden space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">רשימת אתרים</h2>
-              <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-                הוסף אתר
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={openAutoPlanningModal}
+                  className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
+                  אוטומטי
+                </button>
+                <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+                  הוסף אתר
+                </button>
+              </div>
             </div>
             <div className="relative w-full">
               <svg
@@ -199,6 +496,15 @@ export default function SitesList() {
                 </button>
               </div>
             </div>
+            <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300">
+              <div className="flex flex-col gap-1">
+                <span className="inline-flex items-center gap-2">
+                  <span>תכנון אוטומטי: {autoPlanningSummary.scheduleLabel}</span>
+                  {scheduledAutoPlanningRunning ? <span className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-300"><span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />מריץ תכנון...</span> : null}
+                </span>
+                {autoPlanningSummary.weekLabel ? <span className="text-center">{autoPlanningSummary.weekLabel}</span> : null}
+              </div>
+            </div>
           </div>
 
           {/* Desktop: boutons de vue (séparés) */}
@@ -226,6 +532,18 @@ export default function SitesList() {
               </button>
             </div>
           </div>
+          <div className="mb-4 hidden md:grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300">
+            <div className="justify-self-start">
+              <div className="inline-flex items-center gap-2">
+                <span>תכנון אוטומטי: {autoPlanningSummary.scheduleLabel}</span>
+                {scheduledAutoPlanningRunning ? <span className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-300"><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />מריץ תכנון...</span> : null}
+              </div>
+            </div>
+            {autoPlanningSummary.weekLabel ? <div className="justify-self-center text-center whitespace-nowrap">{autoPlanningSummary.weekLabel}</div> : <div />}
+            <div className="justify-self-end text-left">
+              {autoPlanningConfig?.last_run_week_iso ? <span>ריצה אחרונה לשבוע: {autoPlanningConfig.last_run_week_iso}</span> : <span>עדיין לא בוצעה ריצה</span>}
+            </div>
+          </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
           {loading ? (
             <LoadingAnimation className="py-8" size={60} />
@@ -240,6 +558,33 @@ export default function SitesList() {
                       <div className="flex flex-col">
                         <span className="font-medium">{s.name}</span>
                         <span className="text-sm text-zinc-500">מספר עובדים: {s.workers_count}</span>
+                        {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s) ? (
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <span
+                              className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-0.5 text-xs ${
+                                getSiteAutoPlanningStatus(s)?.exists
+                                  ? getSiteAutoPlanningStatus(s)?.complete
+                                  ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300"
+                                  : "border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
+                                  : "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                              }`}
+                            >
+                              <span className="font-semibold">
+                                {getSiteAutoPlanningStatus(s)?.exists ? (getSiteAutoPlanningStatus(s)?.complete ? "V" : "X") : "•"}
+                              </span>
+                              <span>
+                                {getSiteAutoPlanningStatus(s)?.exists
+                                  ? `${getSiteAutoPlanningStatus(s)?.assigned_count ?? 0}/${getSiteAutoPlanningStatus(s)?.required_count ?? 0} שיבוצים`
+                                  : "אין סידור שמור"}
+                              </span>
+                            </span>
+                            {(getSiteAutoPlanningStatus(s)?.pulls_count ?? 0) > 0 ? (
+                              <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                                {getSiteAutoPlanningStatus(s)?.pulls_count} משיכות
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                       <div className="flex items-center gap-2">
                         <button
@@ -273,6 +618,33 @@ export default function SitesList() {
                         <span className="text-base font-semibold">{s.name}</span>
                         <span className="text-sm text-zinc-500">{s.workers_count} עובדים</span>
                       </div>
+                      {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s) ? (
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                          <div
+                            className={`inline-flex items-center gap-2 rounded-full border px-2 py-1 text-xs ${
+                              getSiteAutoPlanningStatus(s)?.exists
+                                ? getSiteAutoPlanningStatus(s)?.complete
+                                ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300"
+                                : "border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
+                                : "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                            }`}
+                          >
+                            <span className="font-semibold">
+                              {getSiteAutoPlanningStatus(s)?.exists ? (getSiteAutoPlanningStatus(s)?.complete ? "V" : "X") : "•"}
+                            </span>
+                            <span>
+                              {getSiteAutoPlanningStatus(s)?.exists
+                                ? `${getSiteAutoPlanningStatus(s)?.assigned_count ?? 0}/${getSiteAutoPlanningStatus(s)?.required_count ?? 0} שיבוצים`
+                                : "אין סידור שמור"}
+                            </span>
+                          </div>
+                          {(getSiteAutoPlanningStatus(s)?.pulls_count ?? 0) > 0 ? (
+                            <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2 py-1 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                              {getSiteAutoPlanningStatus(s)?.pulls_count} משיכות
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => router.push(`/director/planning/${s.id}`)}
@@ -302,6 +674,113 @@ export default function SitesList() {
           )}
         </div>
       </div>
+      {autoPlanningModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 md:items-center md:p-6" onClick={() => setAutoPlanningModalOpen(false)}>
+          <div
+            className="w-full max-w-md rounded-2xl bg-white shadow-2xl dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold">תכנון אוטומטי / שבועי</h3>
+                  <p className="mt-1 text-xs text-zinc-500">ההרצה יוצרת ושומרת את התכנון הראשון עבור השבוע הבא בלבד.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoPlanningModalOpen(false)}
+                  className="rounded-md border px-2 py-1 text-sm dark:border-zinc-700"
+                >
+                  סגור
+                </button>
+              </div>
+            </div>
+            <div className="space-y-4 px-4 py-4">
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">הפעל תכנון אוטומטי</div>
+                  <div className="text-xs text-zinc-500">כאשר פעיל, כל האתרים יקבלו שמירה אוטומטית לשבוע הבא.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoPlanningForm.enabled}
+                  onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, enabled: e.target.checked }))}
+                  className="h-5 w-5 accent-sky-600"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">משיכה</div>
+                  <div className="text-xs text-zinc-500">אם יש חורים, המערכת תנסה להוסיף משיכות אוטומטיות לכל האתרים.</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoPlanningForm.auto_pulls_enabled}
+                  onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, auto_pulls_enabled: e.target.checked }))}
+                  className="h-5 w-5 accent-orange-500"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-sm font-medium">יום הפעלה</span>
+                <select
+                  value={autoPlanningForm.day_of_week}
+                  onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, day_of_week: Number(e.target.value) }))}
+                  className="h-10 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  {AUTO_PLANNING_DAY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-sm font-medium">שעת הפעלה</span>
+                <input
+                  type="time"
+                  step={60}
+                  dir="ltr"
+                  value={autoPlanningForm.time}
+                  onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, time: e.target.value }))}
+                  className="h-10 w-full rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
+                />
+              </label>
+              {autoPlanningConfig?.last_error ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+                  שגיאת הרצה אחרונה: {autoPlanningConfig.last_error}
+                </div>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+              <span className="text-xs text-zinc-500">{autoPlanningConfig?.last_run_week_iso ? `ריצה אחרונה לשבוע ${autoPlanningConfig.last_run_week_iso}` : "טרם בוצעה ריצה אוטומטית"}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onTestAutoPlanningNow}
+                  disabled={autoPlanningTesting || autoPlanningSaving}
+                  className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                >
+                  {autoPlanningTesting ? "מריץ..." : "הרץ ידנית"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAutoPlanningModalOpen(false)}
+                  disabled={autoPlanningTesting || autoPlanningSaving}
+                  className="rounded-md border px-3 py-2 text-sm disabled:opacity-60 dark:border-zinc-700"
+                >
+                  ביטול
+                </button>
+                <button
+                  type="button"
+                  onClick={onSaveAutoPlanning}
+                  disabled={autoPlanningSaving || autoPlanningTesting}
+                  className="rounded-md bg-sky-600 px-3 py-2 text-sm text-white hover:bg-sky-700 disabled:opacity-60"
+                >
+                  {autoPlanningSaving ? "שומר..." : "שמור"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
