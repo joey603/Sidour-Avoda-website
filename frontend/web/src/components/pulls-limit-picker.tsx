@@ -3,28 +3,37 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
-interface NumberPickerProps {
-  value: number;
-  onChange: (value: number) => void;
-  className?: string;
-  min?: number;
-  max?: number;
+const PULLS_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "ללא" },
+  ...Array.from({ length: 10 }, (_, i) => ({
+    value: String(i + 1),
+    label: String(i + 1),
+  })),
+  { value: "unlimited", label: "מקסימום" },
+];
+
+function labelForValue(v: string): string {
+  return PULLS_OPTIONS.find((o) => o.value === v)?.label ?? "ללא";
+}
+
+interface PullsLimitPickerProps {
+  value: string;
+  onChange: (value: string) => void;
   disabled?: boolean;
-  placeholder?: string;
+  className?: string;
+  title?: string;
 }
 
 /** Toutes tailles d’écran : champ + overlay (portail body) + liste haute + ביטול / שמור. */
-export default function NumberPicker({
+export default function PullsLimitPicker({
   value,
   onChange,
-  className = "",
-  min = 0,
-  max = 100,
   disabled = false,
-  placeholder = "0",
-}: NumberPickerProps) {
+  className = "",
+  title = "מגבלת משיכות",
+}: PullsLimitPickerProps) {
   const [showPopup, setShowPopup] = useState(false);
-  const [selectedValue, setSelectedValue] = useState(value.toString());
+  const [selectedValue, setSelectedValue] = useState(value);
   const popupRef = useRef<HTMLDivElement>(null);
   const openedAtRef = useRef<number>(0);
   const [portalEl, setPortalEl] = useState<HTMLElement | null>(null);
@@ -34,7 +43,7 @@ export default function NumberPicker({
   }, []);
 
   useEffect(() => {
-    setSelectedValue(value.toString());
+    setSelectedValue(value);
   }, [value]);
 
   useEffect(() => {
@@ -51,39 +60,38 @@ export default function NumberPicker({
   }, [showPopup]);
 
   const handleSave = () => {
-    const numValue = parseInt(selectedValue, 10);
-    if (!isNaN(numValue)) {
-      const clampedValue = Math.max(min, Math.min(max, numValue));
-      onChange(clampedValue);
-      setShowPopup(false);
-    }
+    onChange(selectedValue);
+    setShowPopup(false);
   };
 
-  const handleOpen = () => {
+  const openPopup = () => {
     if (disabled) return;
     openedAtRef.current = Date.now();
     setShowPopup(true);
-    setSelectedValue(value.toString());
+    setSelectedValue(value);
   };
 
-  const options = Array.from({ length: max - min + 1 }, (_, i) => min + i);
+  const listSize = PULLS_OPTIONS.length;
 
   return (
     <>
       <input
         type="text"
-        value={value || ""}
+        value={labelForValue(value)}
         onPointerDown={(e) => {
           if (disabled) return;
           e.preventDefault();
           e.stopPropagation();
-          handleOpen();
+          openPopup();
         }}
         readOnly
         disabled={disabled}
         className={`${className} cursor-pointer`}
         inputMode="none"
-        placeholder={placeholder}
+        title={title}
+        aria-label={title}
+        aria-haspopup="dialog"
+        aria-expanded={showPopup}
       />
       {showPopup &&
         portalEl &&
@@ -100,22 +108,23 @@ export default function NumberPicker({
               ref={popupRef}
               className="relative mx-auto w-full max-w-sm shrink-0 rounded-xl border bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
               onPointerDown={(e) => e.stopPropagation()}
-              dir="ltr"
+              dir="rtl"
             >
               <div className="border-b px-4 py-3 dark:border-zinc-800">
-                <h3 className="text-lg font-semibold">בחר מספר</h3>
+                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">משיכות</h3>
               </div>
-              <div className="p-4">
+              <div className="px-4 pb-3 pt-2">
                 <div className="flex items-center justify-center">
                   <select
                     value={selectedValue}
                     onChange={(e) => setSelectedValue(e.target.value)}
-                    className="h-64 w-32 rounded-md border border-zinc-300 bg-white px-3 text-center text-lg focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-                    size={Math.min(12, options.length)}
+                    className="box-border w-full max-w-[11rem] rounded-md border border-zinc-300 bg-white px-2 py-0 text-center text-sm leading-6 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    style={{ height: `${listSize}lh`, maxHeight: `${listSize}lh` }}
+                    size={listSize}
                   >
-                    {options.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
+                    {PULLS_OPTIONS.map((o) => (
+                      <option key={o.value === "" ? "empty" : o.value} value={o.value}>
+                        {o.label}
                       </option>
                     ))}
                   </select>

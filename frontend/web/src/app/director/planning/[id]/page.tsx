@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
 import TimePicker from "@/components/time-picker";
 import LoadingAnimation from "@/components/loading-animation";
 import NumberPicker from "@/components/number-picker";
+import PullsLimitPicker from "@/components/pulls-limit-picker";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import DOMPurify from "dompurify";
@@ -23,6 +24,7 @@ import Color from "@tiptap/extension-color";
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const truncateMobile6 = (value: any) => {
     const s = String(value ?? "");
     const chars = Array.from(s);
@@ -44,6 +46,9 @@ export default function PlanningPage() {
     roles: string[];
     availability: WorkerAvailability;
     answers: Record<string, any>;
+    phone?: string | null;
+    linkedSiteIds?: number[];
+    linkedSiteNames?: string[];
   };
   const [workers, setWorkers] = useState<Worker[]>([]);
   const workersRef = useRef<Worker[]>([]);
@@ -82,7 +87,16 @@ export default function PlanningPage() {
   const weekStartRef = useRef<Date | null>(null);
   // Éviter de re-fetch les réponses en boucle dans le modal
   const answersRefreshKeyRef = useRef<string | null>(null);
+  const weekFromQuery = (() => {
+    const raw = searchParams.get("week");
+    if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+    const parsed = new Date(`${raw}T00:00:00`);
+    if (Number.isNaN(parsed.getTime())) return null;
+    parsed.setHours(0, 0, 0, 0);
+    return parsed;
+  })();
   const [weekStart, setWeekStart] = useState<Date>(() => {
+    if (weekFromQuery) return weekFromQuery;
     // Calculer la semaine prochaine (identique à la page worker)
     const today = new Date();
     const currentDay = today.getDay(); // 0 = dimanche, 6 = samedi
@@ -97,6 +111,12 @@ export default function PlanningPage() {
   useEffect(() => {
     weekStartRef.current = weekStart;
   }, [weekStart]);
+
+  useEffect(() => {
+    if (!weekFromQuery) return;
+    if (weekStartRef.current && weekStartRef.current.getTime() === weekFromQuery.getTime()) return;
+    setWeekStart(weekFromQuery);
+  }, [weekFromQuery]);
 
   // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
   useEffect(() => {
@@ -125,10 +145,42 @@ export default function PlanningPage() {
     stations: string[];
     assignments: Record<string, Record<string, string[][]>>;
     alternatives?: Record<string, Record<string, string[][]>>[];
+    pulls?: Record<string, PullEntry>;
+    alternativePulls?: Record<string, PullEntry>[];
     status: string;
     objective: number;
   };
+  type LinkedSite = {
+    id: number;
+    name: string;
+    assigned_count?: number;
+    required_count?: number;
+  };
+  type LinkedSitePlan = {
+    site_id: number;
+    site_name: string;
+    days: string[];
+    shifts: string[];
+    stations: string[];
+    assignments: Record<string, Record<string, string[][]>>;
+    alternatives?: Record<string, Record<string, string[][]>>[];
+    pulls?: Record<string, PullEntry>;
+    alternative_pulls?: Record<string, PullEntry>[];
+    status?: string;
+    objective?: number;
+    assigned_count?: number;
+    required_count?: number;
+  };
+  type LinkedPlansMemory = {
+    activeAltIndex: number;
+    plansBySite: Record<string, LinkedSitePlan>;
+  };
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
+  const [autoPullsLimit, setAutoPullsLimit] = useState<string>("");
+  /** ללא = pas de משיכות ; unlimited (מקסימום) = sans plafond ; 1–10 = plafond */
+  const autoPullsEnabled = autoPullsLimit !== "";
+  const [linkedSites, setLinkedSites] = useState<LinkedSite[]>([]);
+  const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
   const [altIndex, setAltIndex] = useState<number>(0);
   const [assignmentCountFilters, setAssignmentCountFilters] = useState<Record<string, string>>({});
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
@@ -136,6 +188,7 @@ export default function PlanningPage() {
   const aiControllerRef = useRef<AbortController | null>(null);
   const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const aiIdleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const streamPullPriorityPromotedRef = useRef(false);
 
   // Snapshot sauvegardé pour la semaine (assignations + éventuelle liste travailleurs)
   const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
@@ -163,6 +216,9 @@ export default function PlanningPage() {
   const isoPlanKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const planKeyShared = (siteId: string | number, start: Date) => `plan_${siteId}_${isoPlanKey(start)}`;
   const planKeyDirectorOnly = (siteId: string | number, start: Date) => `plan_director_${siteId}_${isoPlanKey(start)}`;
+  const multiSiteMemoryPrefix = "multi_site_generated_";
+  const multiSiteMemoryKey = (start: Date) => `${multiSiteMemoryPrefix}${isoPlanKey(start)}`;
+  const multiSiteNavigationFlag = "multi_site_navigation_in_app";
   const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
 
   // --- Pulls ("משיכות") ---
@@ -426,15 +482,8 @@ export default function PlanningPage() {
     if (filteredAiPlanIndices.length === 0) return;
     if (filteredAiPlanIndices.includes(altIndex)) return;
     const next = filteredAiPlanIndices[0];
-    const assignments = next === 0
-      ? (baseAssignmentsRef.current || aiPlan.assignments || null)
-      : ((aiPlan.alternatives || [])[next - 1] || null);
-    setAltIndex(next);
-    setPullsByHoleKey({});
-    setPullsEditor(null);
-    if (assignments) {
-      setAiPlan((prev) => (prev ? { ...prev, assignments } : prev));
-    }
+    if (next === altIndex) return;
+    selectAiPlanIndex(next);
   }, [isManual, aiPlan, altIndex, filteredAiPlanIndices]);
     // Mode switch confirmation dialog
     const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
@@ -449,6 +498,8 @@ export default function PlanningPage() {
   const [genExcludeDays, setGenExcludeDays] = useState<string[] | null>(null);
   const [showPastDaysDialog, setShowPastDaysDialog] = useState(false);
   const [pendingExcludeDays, setPendingExcludeDays] = useState<string[] | null>(null);
+  const pendingLinkedAvailabilitySaveRef = useRef<null | ((propagate: boolean) => Promise<void>)>(null);
+  const [linkedAvailabilityConfirmSites, setLinkedAvailabilityConfirmSites] = useState<string[] | null>(null);
   // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   // Weekly per-worker availability overrides (per week, per site). Keys by worker name.
@@ -1304,13 +1355,31 @@ export default function PlanningPage() {
     setDraggingWorkerName(null);
   }
 
+  function colorIdentityForWorker(worker: Worker): string {
+    const phone = String(worker.phone || "").trim();
+    if (phone) return `phone:${phone}`;
+    const linkedIds = Array.isArray(worker.linkedSiteIds) ? worker.linkedSiteIds.map((id) => Number(id)).filter(Number.isFinite).sort((a, b) => a - b) : [];
+    if (linkedIds.length > 1) return `linked:${linkedIds.join(",")}:${String(worker.name || "").trim()}`;
+    return `name:${String(worker.name || "").trim()}`;
+  }
+
+  const workerColorIdentityByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const worker of workers) {
+      const name = String(worker.name || "").trim();
+      if (!name) continue;
+      map.set(name, colorIdentityForWorker(worker));
+    }
+    return map;
+  }, [workers]);
+
   // Construire un mapping nom -> couleur distincte (éviter rouge/vert), stable et réparti (golden angle)
   const nameToColor = useMemo(() => {
-    const set = new Set<string>();
+    const namesSet = new Set<string>();
     // depuis la liste des workers
     for (const w of workers) {
       const nm = (w.name || "").trim();
-      if (nm) set.add(nm);
+      if (nm) namesSet.add(nm);
     }
     // depuis le plan IA courant
     if (aiPlan && aiPlan.assignments) {
@@ -1321,13 +1390,14 @@ export default function PlanningPage() {
           for (const arr of perStation) {
             for (const nm of arr || []) {
               const v = (nm || "").trim();
-              if (v) set.add(v);
+              if (v) namesSet.add(v);
             }
           }
         }
       }
     }
-    const names = Array.from(set).sort((a, b) => a.localeCompare(b));
+    const names = Array.from(namesSet).sort((a, b) => a.localeCompare(b));
+    const identities = Array.from(new Set(names.map((name) => workerColorIdentityByName.get(name) || `name:${name}`))).sort((a, b) => a.localeCompare(b));
     const GOLDEN = 137.508;
     function shiftForbidden(h: number) {
       // éviter rouge ~[350..360)∪[0..20], vert ~[100..150]
@@ -1335,8 +1405,8 @@ export default function PlanningPage() {
       if (h >= 100 && h <= 150) h = (h + 40) % 360;
       return h;
     }
-    const map = new Map<string, { bg: string; border: string; text: string }>();
-    names.forEach((nm, i) => {
+    const identityToColor = new Map<string, { bg: string; border: string; text: string }>();
+    identities.forEach((identity, i) => {
       let h = (i * GOLDEN) % 360;
       h = shiftForbidden(h);
       // alterner saturation/luminosité pour plus de séparation perceptuelle
@@ -1345,10 +1415,16 @@ export default function PlanningPage() {
       const bg = `hsl(${h} ${Sbg}% ${L}%)`;
       const border = `hsl(${h} 60% ${Math.max(65, L - 10)}%)`;
       const text = `#1f2937`;
-      map.set(nm, { bg, border, text });
+      identityToColor.set(identity, { bg, border, text });
+    });
+    const map = new Map<string, { bg: string; border: string; text: string }>();
+    names.forEach((name) => {
+      const identity = workerColorIdentityByName.get(name) || `name:${name}`;
+      const color = identityToColor.get(identity);
+      if (color) map.set(name, color);
     });
     return map;
-  }, [workers, aiPlan]);
+  }, [workers, aiPlan, workerColorIdentityByName]);
 
   // Couleur stable par employé (palette sans rouge/vert) pour éviter confusion avec l'état שיבוצים
   function colorForName(name: string): { bg: string; border: string; text: string } {
@@ -1504,6 +1580,365 @@ export default function PlanningPage() {
     return counts;
   }
 
+  function requiredForStationSummary(st: any, shiftName: string, dayKey: string): number {
+    if (!st) return 0;
+    if (st.perDayCustom) {
+      const dayCfg = st.dayOverrides?.[dayKey];
+      if (!dayCfg || dayCfg.active === false) return 0;
+      if (st.uniformRoles) return Number(st.workers || 0);
+      const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+      if (!sh || !sh.enabled) return 0;
+      return Number(sh.workers || 0);
+    }
+    if (st.days && st.days[dayKey] === false) return 0;
+    if (st.uniformRoles) return Number(st.workers || 0);
+    const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+    if (!sh || !sh.enabled) return 0;
+    return Number(sh.workers || 0);
+  }
+
+  function roleRequirementsForStationSummary(st: any, shiftName: string, dayKey: string): Record<string, number> {
+    const out: Record<string, number> = {};
+    const push = (name?: string, count?: number, enabled?: boolean) => {
+      const roleName = String(name || "").trim();
+      const roleCount = Number(count || 0);
+      if (!roleName || !enabled || roleCount <= 0) return;
+      out[roleName] = (out[roleName] || 0) + roleCount;
+    };
+    if (!st) return out;
+    if (st.perDayCustom) {
+      const dayCfg = st.dayOverrides?.[dayKey];
+      if (!dayCfg || dayCfg.active === false) return out;
+      if (st.uniformRoles) {
+        for (const role of (st.roles || [])) push(role?.name, role?.count, role?.enabled);
+      } else {
+        const sh = (dayCfg.shifts || []).find((x: any) => x?.name === shiftName);
+        if (!sh || !sh.enabled) return out;
+        for (const role of (sh.roles || [])) push(role?.name, role?.count, role?.enabled);
+      }
+      return out;
+    }
+    if (st.days && st.days[dayKey] === false) return out;
+    if (st.uniformRoles) {
+      for (const role of (st.roles || [])) push(role?.name, role?.count, role?.enabled);
+    } else {
+      const sh = (st.shifts || []).find((x: any) => x?.name === shiftName);
+      if (!sh || !sh.enabled) return out;
+      for (const role of (sh.roles || [])) push(role?.name, role?.count, role?.enabled);
+    }
+    return out;
+  }
+
+  function analyzePlanPullPriority(
+    assignments: Record<string, Record<string, string[][]>> | null | undefined,
+    pulls?: Record<string, PullEntry> | null,
+  ) {
+    const stationsCfg = (site?.config?.stations || []) as any[];
+    const shiftNames = Array.from(
+      new Set(
+        stationsCfg.flatMap((st: any) => (
+          st?.perDayCustom
+            ? Object.values(st?.dayOverrides || {}).flatMap((dayCfg: any) => (dayCfg?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => String(sh?.name || "")))
+            : (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => String(sh?.name || ""))
+        )),
+      ),
+    )
+      .filter(Boolean)
+      .sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b) || a.localeCompare(b));
+    const shiftsOrder = shiftNames.length ? shiftNames : Array.from(new Set(Object.values(assignments || {}).flatMap((shiftMap) => Object.keys(shiftMap || {}))));
+    const dayKeys = [...dayOrder];
+    const getCellNames = (dayKey: string, shiftName: string, stationIdx: number): string[] => {
+      const cell = assignments?.[dayKey]?.[shiftName]?.[stationIdx];
+      return Array.isArray(cell) ? cell.filter((name) => String(name || "").trim()).map((name) => String(name).trim()) : [];
+    };
+    const getPullsCount = (dayKey: string, shiftName: string, stationIdx: number): number =>
+      Object.keys(pulls || {}).filter((key) => String(key).startsWith(`${dayKey}|${shiftName}|${stationIdx}|`)).length;
+
+    let assigned = 0;
+    let required = 0;
+    let holes = 0;
+    let pullableHoles = 0;
+    const pullOpportunities: Array<{ key: string; pairs: Array<[string, string]> }> = [];
+
+    for (let stationIdx = 0; stationIdx < stationsCfg.length; stationIdx++) {
+      const stationCfg = stationsCfg[stationIdx];
+      for (let dayIdx = 0; dayIdx < dayKeys.length; dayIdx++) {
+        const dayKey = dayKeys[dayIdx];
+        for (let shiftIdx = 0; shiftIdx < shiftsOrder.length; shiftIdx++) {
+          const shiftName = shiftsOrder[shiftIdx];
+          const req = requiredForStationSummary(stationCfg, shiftName, dayKey);
+          if (req <= 0) continue;
+          const namesHere = getCellNames(dayKey, shiftName, stationIdx);
+          const pullsHere = getPullsCount(dayKey, shiftName, stationIdx);
+          const assignedPlaces = Math.max(0, namesHere.length - pullsHere);
+          assigned += assignedPlaces;
+          required += req;
+          if (assignedPlaces >= req) continue;
+          holes += req - assignedPlaces;
+
+          const prevCoord = (dayIdx === 0 && shiftIdx === 0)
+            ? null
+            : (shiftIdx === 0 ? { dayIdx: dayIdx - 1, shiftIdx: shiftsOrder.length - 1 } : { dayIdx, shiftIdx: shiftIdx - 1 });
+          const nextCoord = (dayIdx === dayKeys.length - 1 && shiftIdx === shiftsOrder.length - 1)
+            ? null
+            : (shiftIdx === shiftsOrder.length - 1 ? { dayIdx: dayIdx + 1, shiftIdx: 0 } : { dayIdx, shiftIdx: shiftIdx + 1 });
+          const prevNames = prevCoord ? getCellNames(dayKeys[prevCoord.dayIdx], shiftsOrder[prevCoord.shiftIdx], stationIdx) : [];
+          const nextNames = nextCoord ? getCellNames(dayKeys[nextCoord.dayIdx], shiftsOrder[nextCoord.shiftIdx], stationIdx) : [];
+          const usedInCell = new Set(namesHere);
+          const beforeCandidates = prevNames.filter((name) => !usedInCell.has(name));
+          const afterCandidates = nextNames.filter((name) => !usedInCell.has(name));
+          const bothSides = new Set(beforeCandidates.filter((name) => afterCandidates.includes(name)));
+          const beforeCandidates2 = beforeCandidates.filter((name) => !bothSides.has(name));
+          const afterCandidates2 = afterCandidates.filter((name) => !bothSides.has(name));
+          const reqRoles = Object.keys(roleRequirementsForStationSummary(stationCfg, shiftName, dayKey));
+          const pairSet = new Set<string>();
+          const pairs: Array<[string, string]> = [];
+          const pushPair = (beforeName: string, afterName: string) => {
+            const beforeTrimmed = String(beforeName || "").trim();
+            const afterTrimmed = String(afterName || "").trim();
+            if (!beforeTrimmed || !afterTrimmed || beforeTrimmed === afterTrimmed) return;
+            const pairKey = `${beforeTrimmed}__${afterTrimmed}`;
+            if (pairSet.has(pairKey)) return;
+            pairSet.add(pairKey);
+            pairs.push([beforeTrimmed, afterTrimmed]);
+          };
+          if (reqRoles.length > 0) {
+            reqRoles.forEach((roleName) => {
+              const beforeWithRole = beforeCandidates2.filter((name) => workerHasRole(name, roleName));
+              const afterWithRole = afterCandidates2.filter((name) => workerHasRole(name, roleName));
+              beforeWithRole.forEach((beforeName) => {
+                afterWithRole.forEach((afterName) => pushPair(beforeName, afterName));
+              });
+            });
+          } else {
+            beforeCandidates2.forEach((beforeName) => {
+              afterCandidates2.forEach((afterName) => pushPair(beforeName, afterName));
+            });
+          }
+          if (pairs.length > 0) {
+            pullableHoles += 1;
+            pullOpportunities.push({ key: `${dayKey}|${shiftName}|${stationIdx}`, pairs });
+          }
+        }
+      }
+    }
+
+    const orderedOpportunities = [...pullOpportunities].sort((a, b) => a.pairs.length - b.pairs.length);
+    let maxCompatiblePulls = 0;
+    const dfs = (index: number, usedNames: Set<string>, chosen: number) => {
+      if (chosen + (orderedOpportunities.length - index) <= maxCompatiblePulls) return;
+      if (index >= orderedOpportunities.length) {
+        if (chosen > maxCompatiblePulls) maxCompatiblePulls = chosen;
+        return;
+      }
+      dfs(index + 1, usedNames, chosen);
+      const current = orderedOpportunities[index];
+      for (const [beforeName, afterName] of current.pairs) {
+        if (usedNames.has(beforeName) || usedNames.has(afterName)) continue;
+        const nextUsed = new Set(usedNames);
+        nextUsed.add(beforeName);
+        nextUsed.add(afterName);
+        dfs(index + 1, nextUsed, chosen + 1);
+      }
+    };
+    dfs(0, new Set<string>(), 0);
+
+    return { assigned, required, holes, pullableHoles, maxCompatiblePulls };
+  }
+
+  function shouldPromotePullFriendlyPlan(
+    currentAssignments: Record<string, Record<string, string[][]>> | null | undefined,
+    currentPulls: Record<string, PullEntry> | null | undefined,
+    candidateAssignments: Record<string, Record<string, string[][]>> | null | undefined,
+    candidatePulls: Record<string, PullEntry> | null | undefined,
+  ): boolean {
+    if (!currentAssignments || !candidateAssignments) return false;
+    const current = analyzePlanPullPriority(currentAssignments, currentPulls);
+    const candidate = analyzePlanPullPriority(candidateAssignments, candidatePulls);
+    if (current.holes <= 0) return false;
+    if (autoPullsEnabled) {
+      if (candidate.holes < current.holes) return true;
+      if (candidate.holes === current.holes && candidate.assigned > current.assigned) return true;
+      return false;
+    }
+    const currentHasPulls = current.maxCompatiblePulls > 0;
+    const candidateHasPulls = candidate.maxCompatiblePulls > 0;
+    if (!currentHasPulls && candidateHasPulls) return true;
+    if (currentHasPulls && candidateHasPulls && candidate.maxCompatiblePulls > current.maxCompatiblePulls) return true;
+    if (currentHasPulls && candidateHasPulls && candidate.maxCompatiblePulls === current.maxCompatiblePulls && candidate.pullableHoles > current.pullableHoles) return true;
+    if (candidateHasPulls === currentHasPulls && candidate.holes < current.holes) return true;
+    if (candidateHasPulls === currentHasPulls && candidate.holes === current.holes && candidate.assigned > current.assigned) return true;
+    return false;
+  }
+
+  function comparePlanQuality(
+    currentAssignments: Record<string, Record<string, string[][]>> | null | undefined,
+    currentPulls: Record<string, PullEntry> | null | undefined,
+    candidateAssignments: Record<string, Record<string, string[][]>> | null | undefined,
+    candidatePulls: Record<string, PullEntry> | null | undefined,
+  ): -1 | 0 | 1 {
+    if (!currentAssignments || !candidateAssignments) return 0;
+    const current = analyzePlanPullPriority(currentAssignments, currentPulls);
+    const candidate = analyzePlanPullPriority(candidateAssignments, candidatePulls);
+    if (candidate.holes < current.holes) return -1;
+    if (candidate.holes > current.holes) return 1;
+    if (candidate.assigned > current.assigned) return -1;
+    if (candidate.assigned < current.assigned) return 1;
+    return 0;
+  }
+
+  function compareLinkedSitePlansQuality(
+    currentPlans: Record<string, LinkedSitePlan>,
+    candidatePlans: Record<string, LinkedSitePlan>,
+  ): -1 | 0 | 1 {
+    const summarize = (plans: Record<string, LinkedSitePlan>) =>
+      Object.values(plans).reduce(
+        (acc, plan) => {
+          const summary = analyzePlanPullPriority(plan.assignments, plan.pulls);
+          return {
+            holes: acc.holes + summary.holes,
+            assigned: acc.assigned + summary.assigned,
+          };
+        },
+        { holes: 0, assigned: 0 },
+      );
+    const current = summarize(currentPlans);
+    const candidate = summarize(candidatePlans);
+    if (candidate.holes < current.holes) return -1;
+    if (candidate.holes > current.holes) return 1;
+    if (candidate.assigned > current.assigned) return -1;
+    if (candidate.assigned < current.assigned) return 1;
+    return 0;
+  }
+
+  const workersByName = useMemo(() => {
+    const map = new Map<string, Worker>();
+    for (const worker of workers) {
+      const name = String(worker.name || "").trim();
+      if (!name) continue;
+      map.set(name, worker);
+    }
+    return map;
+  }, [workers]);
+
+  const showMultiSiteTotalColumn = linkedSites.length > 1;
+
+  const totalAssignmentsByWorkerIdentity = useMemo(() => {
+    const totals = new Map<string, number>();
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+
+    const accumulateAssignments = (assignments: Record<string, Record<string, string[][]>> | null | undefined) => {
+      const nameCounts = countAssignmentsByWorker(assignments, []);
+      for (const [name, count] of nameCounts.entries()) {
+        const worker = workersByName.get(String(name || "").trim());
+        if (!worker) continue;
+        const identity = colorIdentityForWorker(worker);
+        totals.set(identity, (totals.get(identity) || 0) + count);
+      }
+    };
+
+    if (linkedMemory?.plansBySite) {
+      for (const plan of Object.values(linkedMemory.plansBySite)) {
+        accumulateAssignments(resolveAssignmentsForAlternative(plan, linkedMemory.activeAltIndex || 0));
+      }
+      return totals;
+    }
+
+    const currentAssignments =
+      savedWeekPlan?.assignments && !editingSaved
+        ? savedWeekPlan.assignments
+        : (isManual ? manualAssignments : aiPlan?.assignments);
+    accumulateAssignments(currentAssignments);
+    return totals;
+  }, [weekStart, workersByName, savedWeekPlan, editingSaved, isManual, manualAssignments, aiPlan]);
+
+  function totalAssignmentsForSummaryWorker(workerName: string, localCount: number): number {
+    if (!showMultiSiteTotalColumn) return localCount;
+    const worker = workersByName.get(String(workerName || "").trim());
+    if (!worker || (worker.linkedSiteIds || []).length <= 1) return localCount;
+    return totalAssignmentsByWorkerIdentity.get(colorIdentityForWorker(worker)) ?? localCount;
+  }
+
+  function countAssignedCells(assignments: Record<string, Record<string, string[][]>> | null | undefined): number {
+    if (!assignments || typeof assignments !== "object") return 0;
+    let total = 0;
+    for (const dayKey of Object.keys(assignments)) {
+      const shiftsMap = assignments[dayKey] || {};
+      for (const shiftName of Object.keys(shiftsMap)) {
+        const perStation = shiftsMap[shiftName] || [];
+        for (const cell of perStation) {
+          if (Array.isArray(cell)) total += cell.filter((name) => String(name || "").trim()).length;
+        }
+      }
+    }
+    return total;
+  }
+
+  function countRequiredForCurrentSite(): number {
+    const stations = (site?.config?.stations || []) as any[];
+    let total = 0;
+    for (const st of stations) {
+      const uniformRoles = !!st?.uniformRoles;
+      const stationWorkers = Number(st?.workers || 0);
+      if (st?.perDayCustom) {
+        const dayOverrides = st?.dayOverrides || {};
+        for (const dayCfg of Object.values(dayOverrides) as any[]) {
+          if (!dayCfg?.active) continue;
+          for (const shift of (dayCfg?.shifts || [])) {
+            if (!shift?.enabled) continue;
+            const roleTotal = Array.isArray(shift?.roles)
+              ? shift.roles.filter((role: any) => role?.enabled).reduce((sum: number, role: any) => sum + Number(role?.count || 0), 0)
+              : 0;
+            const required = uniformRoles ? stationWorkers : Number(shift?.workers || 0);
+            total += required > 0 ? required : roleTotal;
+          }
+        }
+      } else {
+        const activeDays = Object.values(st?.days || {}).filter(Boolean).length;
+        for (const shift of (st?.shifts || [])) {
+          if (!shift?.enabled) continue;
+          const roleTotal = Array.isArray(shift?.roles)
+            ? shift.roles.filter((role: any) => role?.enabled).reduce((sum: number, role: any) => sum + Number(role?.count || 0), 0)
+            : 0;
+          const required = uniformRoles ? stationWorkers : Number(shift?.workers || 0);
+          total += (required > 0 ? required : roleTotal) * activeDays;
+        }
+      }
+    }
+    return total;
+  }
+
+  const linkedSiteEntries = useMemo(() => {
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const currentAssignments = aiPlan?.assignments || savedWeekPlan?.assignments || null;
+    const currentAssigned = countAssignedCells(currentAssignments);
+    const currentRequired = countRequiredForCurrentSite();
+    return linkedSites.map((linkedSite) => {
+      const memoryPlan = linkedMemory?.plansBySite?.[String(linkedSite.id)];
+      const assigned = typeof memoryPlan?.assigned_count === "number"
+        ? memoryPlan.assigned_count
+        : (typeof linkedSite.assigned_count === "number"
+          ? linkedSite.assigned_count
+          : (String(linkedSite.id) === String(params.id) ? currentAssigned : 0));
+      const required = typeof memoryPlan?.required_count === "number"
+        ? memoryPlan.required_count
+        : (typeof linkedSite.required_count === "number"
+          ? linkedSite.required_count
+          : (String(linkedSite.id) === String(params.id) ? currentRequired : 0));
+      return {
+        ...linkedSite,
+        assignedCount: assigned,
+        requiredCount: required,
+        holesCount: Math.max(0, required - assigned),
+      };
+    });
+  }, [linkedSites, weekStart, aiPlan, savedWeekPlan, site, params.id]);
+
+  const linkedSitesTotalHoles = useMemo(
+    () => linkedSiteEntries.reduce((sum, linkedSite) => sum + Number(linkedSite.holesCount || 0), 0),
+    [linkedSiteEntries],
+  );
+
   function handleAssignmentCountFilterChange(workerName: string, rawValue: string, maxAllowed?: number) {
     const cleaned = String(rawValue || "").replace(/[^\d]/g, "");
     setAssignmentCountFilters((prev) => {
@@ -1522,11 +1957,28 @@ export default function PlanningPage() {
     const assignments = index === 0
       ? (baseAssignmentsRef.current || aiPlan?.assignments || null)
       : ((aiPlan?.alternatives || [])[index - 1] || null);
+    const pulls = index === 0
+      ? (aiPlan?.pulls || {})
+      : ((aiPlan?.alternativePulls || [])[index - 1] || {});
+    if (index === altIndex && sameAssignmentsMap(aiPlan?.assignments, assignments || undefined)) {
+      const linkedMemory = readLinkedPlansFromMemory(weekStart);
+      if (linkedMemory?.plansBySite) {
+        saveLinkedPlansToMemory(weekStart, linkedMemory.plansBySite, index);
+      }
+      return;
+    }
     setAltIndex(index);
-    setPullsByHoleKey({});
+    setPullsByHoleKey(pulls || {});
     setPullsEditor(null);
     if (assignments) {
-      setAiPlan((prev) => (prev ? { ...prev, assignments } : prev));
+      setAiPlan((prev) => {
+        if (!prev || sameAssignmentsMap(prev.assignments, assignments)) return prev;
+        return { ...prev, assignments };
+      });
+    }
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    if (linkedMemory?.plansBySite) {
+      saveLinkedPlansToMemory(weekStart, linkedMemory.plansBySite, index);
     }
   }
 
@@ -1543,6 +1995,129 @@ export default function PlanningPage() {
   // Fonction pour obtenir la clé de semaine au format ISO (pour filtrer les réponses)
   function getWeekKeyISO(date: Date): string {
     return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+  }
+
+  function saveLinkedPlansToMemory(start: Date, plansBySite: Record<string, LinkedSitePlan>, activeAltIndex = 0) {
+    if (typeof window === "undefined") return;
+    try {
+      const payload: LinkedPlansMemory = { activeAltIndex, plansBySite };
+      const storageKey = multiSiteMemoryKey(start);
+      sessionStorage.setItem(storageKey, JSON.stringify(payload));
+      window.dispatchEvent(new CustomEvent("linked-plans-memory-updated", { detail: { storageKey } }));
+    } catch {}
+  }
+
+  function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = sessionStorage.getItem(multiSiteMemoryKey(start));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return null;
+      if ("plansBySite" in parsed && parsed.plansBySite && typeof parsed.plansBySite === "object") {
+        return {
+          activeAltIndex: Number(parsed.activeAltIndex || 0),
+          plansBySite: parsed.plansBySite as Record<string, LinkedSitePlan>,
+        };
+      }
+      return {
+        activeAltIndex: 0,
+        plansBySite: parsed as Record<string, LinkedSitePlan>,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function clearLinkedPlansMemory() {
+    if (typeof window === "undefined") return;
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith(multiSiteMemoryPrefix)) keysToRemove.push(key);
+      }
+      keysToRemove.forEach((key) => sessionStorage.removeItem(key));
+    } catch {}
+  }
+
+  function hasStoredMultiSitePlans(start: Date): boolean {
+    const stored = readLinkedPlansFromMemory(start);
+    const plansBySite = stored?.plansBySite;
+    return !!plansBySite && Object.keys(plansBySite).length > 1;
+  }
+
+  function resolveAssignmentsForAlternative(plan: LinkedSitePlan, index: number) {
+    if (index <= 0) return plan.assignments;
+    return (plan.alternatives || [])[index - 1] || plan.assignments;
+  }
+
+  function resolvePullsForAlternative(plan: LinkedSitePlan, index: number) {
+    if (index <= 0) return plan.pulls || {};
+    return (plan.alternative_pulls || [])[index - 1] || {};
+  }
+
+  function sameAssignmentsMap(
+    a: Record<string, Record<string, string[][]>> | null | undefined,
+    b: Record<string, Record<string, string[][]>> | null | undefined,
+  ) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+
+  function samePullsMap(
+    a: Record<string, PullEntry> | null | undefined,
+    b: Record<string, PullEntry> | null | undefined,
+  ) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+
+  function applyLinkedSitePlan(plan: LinkedSitePlan, index: number) {
+    const assignments = resolveAssignmentsForAlternative(plan, index);
+    const pulls = resolvePullsForAlternative(plan, index);
+    setSavedWeekPlan(null);
+    setEditingSaved(false);
+    setPullsByHoleKey(pulls || {});
+    setPullsEditor(null);
+    setAiPlan((prev) => {
+      const nextAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      if (
+        prev &&
+        prev.status === (plan.status || "DONE") &&
+        Number(prev.objective || 0) === Number(plan.objective || 0) &&
+        prev.days.length === plan.days.length &&
+        prev.shifts.length === plan.shifts.length &&
+        prev.stations.length === plan.stations.length &&
+        (prev.alternatives?.length || 0) === nextAlternatives.length &&
+        sameAssignmentsMap(prev.assignments, assignments)
+      ) {
+        return prev;
+      }
+      return {
+        days: plan.days,
+        shifts: plan.shifts,
+        stations: plan.stations,
+        assignments,
+        alternatives: nextAlternatives,
+        pulls: plan.pulls || {},
+        alternativePulls: Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [],
+        status: plan.status || "DONE",
+        objective: Number(plan.objective || 0),
+      };
+    });
+    setAltIndex((prev) => (prev === index ? prev : index));
+    baseAssignmentsRef.current = plan.assignments;
   }
 
   // Fonction pour extraire les réponses de la semaine actuelle
@@ -1600,6 +2175,19 @@ export default function PlanningPage() {
     console.log("[Planning] workers state:", workers);
   }, [workers]);
   useEffect(() => {
+    if (!isAddModalOpen || !editingWorkerId) return;
+    const workerFromState = workers.find((w) => Number(w.id) === Number(editingWorkerId));
+    const workerFromSaved = (savedWeekPlan?.workers || []).find((w: any) => Number(w?.id) === Number(editingWorkerId));
+    // eslint-disable-next-line no-console
+    console.log("[Planning] edit modal linked sites debug", {
+      editingWorkerId,
+      workerFromState,
+      workerFromSaved,
+      linkedSiteNamesFromState: workerFromState?.linkedSiteNames,
+      linkedSiteNamesFromSaved: (workerFromSaved as any)?.linkedSiteNames ?? (workerFromSaved as any)?.linked_site_names,
+    });
+  }, [isAddModalOpen, editingWorkerId, workers, savedWeekPlan]);
+  useEffect(() => {
     // eslint-disable-next-line no-console
     console.log("[Planning] hiddenWorkerIds:", hiddenWorkerIds);
   }, [hiddenWorkerIds]);
@@ -1629,6 +2217,7 @@ export default function PlanningPage() {
   useEffect(() => {
     if (!isManual) {
       setManualAssignments(null);
+      setPullsModeStationIdx(null);
       return;
     }
     const stationsCount = (site?.config?.stations || []).length || 0;
@@ -1808,6 +2397,66 @@ export default function PlanningPage() {
     })();
   }, [params.id, router]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        setLinkedSites(Array.isArray(list) ? list : []);
+      } catch {
+        setLinkedSites([]);
+      }
+    })();
+  }, [params.id, weekStart]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const skipClearForInAppNavigation = sessionStorage.getItem(multiSiteNavigationFlag) === "1";
+      if (skipClearForInAppNavigation) {
+        sessionStorage.removeItem(multiSiteNavigationFlag);
+        return;
+      }
+      const navEntry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+      const legacyNavType = (performance as Performance & { navigation?: { type?: number } }).navigation?.type;
+      const isReload = navEntry?.type === "reload" || legacyNavType === 1;
+      if (isReload) {
+        clearLinkedPlansMemory();
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!hasStoredMultiSitePlans(weekStart)) return;
+    const stored = readLinkedPlansFromMemory(weekStart);
+    const current = stored?.plansBySite?.[String(params.id)];
+    if (!current || !current.assignments) return;
+    applyLinkedSitePlan(current, stored?.activeAltIndex || 0);
+  }, [params.id, weekStart]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storageKey = multiSiteMemoryKey(weekStart);
+    const syncFromMemory = () => {
+      if (!hasStoredMultiSitePlans(weekStart)) return;
+      const stored = readLinkedPlansFromMemory(weekStart);
+      const current = stored?.plansBySite?.[String(params.id)];
+      if (!current || !current.assignments) return;
+      applyLinkedSitePlan(current, stored?.activeAltIndex || 0);
+    };
+    const onLinkedPlansUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ storageKey?: string }>;
+      if (customEvent.detail?.storageKey && customEvent.detail.storageKey !== storageKey) return;
+      syncFromMemory();
+    };
+    window.addEventListener("linked-plans-memory-updated", onLinkedPlansUpdated as EventListener);
+    return () => {
+      window.removeEventListener("linked-plans-memory-updated", onLinkedPlansUpdated as EventListener);
+    };
+  }, [params.id, weekStart]);
+
   // Calculer la semaine prochaine (identique à la page worker)
   function calculateNextWeek(): Date {
     const today = new Date();
@@ -1865,6 +2514,9 @@ export default function PlanningPage() {
         roles: Array.isArray(w.roles) ? w.roles : [],
         availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
         answers: w.answers || {},
+        phone: w.phone ?? null,
+        linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
+        linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
       }));
 
       // --- Handle renames (worker name changed outside planning) ---
@@ -2086,6 +2738,15 @@ export default function PlanningPage() {
       setPullsEditor(null);
       setActiveSavedPlanKey(null);
 
+      // Priorité au planning multi-sites gardé en mémoire tant qu'il n'a pas été sauvegardé.
+      const linkedMemoryPlans = hasStoredMultiSitePlans(start) ? readLinkedPlansFromMemory(start) : null;
+      const linkedCurrentPlan = linkedMemoryPlans?.plansBySite?.[String(params.id)];
+      if (linkedCurrentPlan && linkedCurrentPlan.assignments) {
+        applyLinkedSitePlan(linkedCurrentPlan, linkedMemoryPlans?.activeAltIndex || 0);
+        setManualAssignments(null);
+        return;
+      }
+
       // 1) DB (director first, then shared)
       try {
         const fromDirector = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
@@ -2256,6 +2917,17 @@ export default function PlanningPage() {
         return;
       }
       const effectiveIsManual = currentAssignments ? isManual : !!savedWeekPlan?.isManual;
+      // Snapshots découplés : évite le partage de référence avec manualAssignments / effets qui mutent
+      // (sinon après שמור l’UI peut ne montrer que les משיכות jusqu’au rechargement).
+      let assignmentsSnapshot: typeof effective;
+      let pullsSnapshot: Record<string, PullEntry>;
+      try {
+        assignmentsSnapshot = JSON.parse(JSON.stringify(effective)) as typeof effective;
+        pullsSnapshot = JSON.parse(JSON.stringify(pullsByHoleKey || {})) as Record<string, PullEntry>;
+      } catch {
+        assignmentsSnapshot = effective;
+        pullsSnapshot = pullsByHoleKey || {};
+      }
       // Range de semaine
       const start = new Date(weekStart);
       const end = new Date(start);
@@ -2265,8 +2937,8 @@ export default function PlanningPage() {
         siteId: Number(params.id),
         week: { startISO: isoPlanKey(start), endISO: isoPlanKey(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
         isManual: effectiveIsManual,
-        assignments: effective,
-        pulls: pullsByHoleKey,
+        assignments: assignmentsSnapshot,
+        pulls: pullsSnapshot,
         workers: (workers || []).map((w) => ({
           id: w.id,
           name: w.name,
@@ -2300,6 +2972,10 @@ export default function PlanningPage() {
       }
       // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
       setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
+      if (effectiveIsManual) {
+        setManualAssignments(assignmentsSnapshot as AssignmentsMap);
+      }
+      setPullsByHoleKey(pullsSnapshot);
       setEditingSaved(false);
       toast.success(publishToWorkers ? "התכנון נשמר ונשלח" : "התכנון נשמר (למנהל בלבד)");
     } catch (e: any) {
@@ -2384,6 +3060,7 @@ export default function PlanningPage() {
         setAiPlan(newPlan);
       }
       if (Array.isArray(parsed.workers) && parsed.workers.length) {
+        const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
         const mapped = (parsed.workers as any[]).map((w: any) => ({
           id: w.id,
           name: String(w.name),
@@ -2391,6 +3068,9 @@ export default function PlanningPage() {
           roles: Array.isArray(w.roles) ? w.roles : [],
           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
           answers: w.answers || {},
+          phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
+          linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
+          linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
         }));
         setWorkers(mapped);
       } else {
@@ -2516,8 +3196,19 @@ export default function PlanningPage() {
               : ""))
         }
       >
-        <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+            {linkedSites.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setShowLinkedSitesDialog(true)}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+              >
+                מולטי אתרים
+              </button>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => router.back()}
@@ -2527,6 +3218,60 @@ export default function PlanningPage() {
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
           </button>
         </div>
+        {showLinkedSitesDialog ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setShowLinkedSitesDialog(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-3 text-center text-base font-semibold">מולטי אתרים</div>
+              <div className="mb-3 text-center text-sm font-medium text-orange-600 dark:text-orange-400">
+                סה"כ חוסרים: {linkedSitesTotalHoles}
+              </div>
+              <div className="space-y-2">
+                {linkedSiteEntries.map((linkedSite) => (
+                  <button
+                    key={linkedSite.id}
+                    type="button"
+                    onClick={() => {
+                      setShowLinkedSitesDialog(false);
+                      try { sessionStorage.setItem(multiSiteNavigationFlag, "1"); } catch {}
+                      router.push(`/director/planning/${linkedSite.id}?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`);
+                    }}
+                    className={
+                      "flex w-full items-center justify-between rounded-xl border px-3 py-3 text-right transition-colors " +
+                      (String(linkedSite.id) === String(params.id)
+                        ? "border-[#00A8E0] bg-sky-50 dark:border-sky-600 dark:bg-sky-950/30"
+                        : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                    }
+                  >
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">{linkedSite.name}</span>
+                    <span className="flex flex-col items-end text-sm">
+                      <span className="text-zinc-500 dark:text-zinc-400">
+                        {linkedSite.assignedCount}/{linkedSite.requiredCount}
+                      </span>
+                      <span className="text-orange-600 dark:text-orange-400">
+                        חוסרים: {linkedSite.holesCount}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowLinkedSitesDialog(false)}
+                  className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  סגור
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {loading ? (
           <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
             <LoadingAnimation size={96} />
@@ -2930,6 +3675,7 @@ export default function PlanningPage() {
                               roles: Array.isArray(createdWorker.roles) ? createdWorker.roles : [],
                               availability: createdWorker.availability || fallbackAvail,
                               answers: createdWorker.answers || {},
+                              phone: createdWorker.phone ?? null,
                             };
                             const idx = prev.findIndex((w) => w.id === mapped.id);
                             if (idx >= 0) return prev.map((w) => (w.id === mapped.id ? mapped : w));
@@ -3030,6 +3776,38 @@ export default function PlanningPage() {
                       </div>
                     </div>
                   </div>
+                  {(() => {
+                    const currentWorker =
+                      workers.find((w) => Number(w.id) === Number(editingWorkerId)) ||
+                      ((savedWeekPlan?.workers || []).find((w: any) => Number(w?.id) === Number(editingWorkerId)) as any);
+                    const linkedSiteNames = Array.isArray(currentWorker?.linkedSiteNames)
+                      ? currentWorker?.linkedSiteNames || []
+                      : (Array.isArray(currentWorker?.linked_site_names) ? currentWorker?.linked_site_names || [] : []);
+                    // eslint-disable-next-line no-console
+                    console.log("[Planning] render linked site badges", {
+                      editingWorkerId,
+                      currentWorker,
+                      linkedSiteNames,
+                    });
+                    if (linkedSiteNames.length <= 1) return null;
+                    return (
+                      <div className="mt-3 flex w-full flex-col items-center text-center">
+                        <div className="w-full text-center text-[11px] md:text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                          משויך לאתרים:
+                        </div>
+                        <div className="mt-1 flex w-full items-center justify-center gap-1.5 overflow-x-auto whitespace-nowrap pb-1">
+                          {linkedSiteNames.map((siteName: string) => (
+                            <span
+                              key={siteName}
+                              className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] md:text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                            >
+                              {siteName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                   <div className="mt-3 text-center">
                     <div className="block text-sm font-semibold mb-1">זמינות לפי יום/משמרת</div>
                     <div className="space-y-2">
@@ -3274,6 +4052,9 @@ export default function PlanningPage() {
                               roles: Array.isArray(w.roles) ? w.roles : [],
                               availability: w.availability || fallback,
                               answers: w.answers || {},
+                              phone: w.phone ?? null,
+                              linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
+                              linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
                             }));
                             setWorkers(mapped);
                             toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
@@ -3380,30 +4161,75 @@ export default function PlanningPage() {
                             // Récupérer les réponses actuelles du worker pour les préserver
                             const currentWorker = workers.find((x) => Number(x.id) === Number(editingWorkerId));
                             const currentAnswers = (currentWorker as any)?.answers || {};
-                            const updated = await apiFetch<any>(`/director/sites/${params.id}/workers/${editingWorkerId}`, {
-                              method: "PUT",
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                              body: JSON.stringify({
-                                name: trimmed,
-                                max_shifts: newWorkerMax,
-                                roles: newWorkerRoles,
-                                // Préserver les réponses existantes (elles sont stockées par semaine dans la structure {week_key: {general: {}, perDay: {}}})
-                                answers: currentAnswers,
-                                // do not update global availability here
-                              }),
-                            });
-                            // eslint-disable-next-line no-console
-                            console.log("[Workers] API ok (PUT)", updated);
-                            const mapped: Worker = {
-                              id: updated.id,
-                              name: updated.name,
-                              maxShifts: updated.max_shifts ?? updated.maxShifts ?? 0,
-                              roles: Array.isArray(updated.roles) ? updated.roles : [],
-                              availability: updated.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                              answers: updated.answers || {},
+                            const availabilityChanged = (() => {
+                              try {
+                                return JSON.stringify(originalAvailability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] })
+                                  !== JSON.stringify(newWorkerAvailability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                              } catch {
+                                return true;
+                              }
+                            })();
+                            const linkedSiteNames = Array.isArray(currentWorker?.linkedSiteNames) ? currentWorker?.linkedSiteNames || [] : [];
+                            const linkedOtherSiteNames = linkedSiteNames.filter((siteName) => String(siteName) !== String(site?.name || ""));
+                            const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
+                              const updated = await apiFetch<any>(`/director/sites/${params.id}/workers/${editingWorkerId}`, {
+                                method: "PUT",
+                                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                                body: JSON.stringify({
+                                  name: trimmed,
+                                  max_shifts: newWorkerMax,
+                                  roles: newWorkerRoles,
+                                  // Préserver les réponses existantes (elles sont stockées par semaine dans la structure {week_key: {general: {}, perDay: {}}})
+                                  answers: currentAnswers,
+                                  week_iso: getWeekKeyISO(weekStart),
+                                  weekly_availability: newWorkerAvailability,
+                                  propagate_linked_availability: propagateLinkedAvailability,
+                                }),
+                              });
+                              // eslint-disable-next-line no-console
+                              console.log("[Workers] API ok (PUT)", updated);
+                              const mapped: Worker = {
+                                id: updated.id,
+                                name: updated.name,
+                                maxShifts: updated.max_shifts ?? updated.maxShifts ?? 0,
+                                roles: Array.isArray(updated.roles) ? updated.roles : [],
+                                availability: updated.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+                                answers: updated.answers || {},
+                                phone: updated.phone ?? null,
+                                linkedSiteIds: Array.isArray(updated.linked_site_ids) ? updated.linked_site_ids : [],
+                                linkedSiteNames: Array.isArray(updated.linked_site_names) ? updated.linked_site_names : [],
+                              };
+                              setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
+                              toast.success("עובד עודכן בהצלחה!");
+                              try {
+                                const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
+                                parsed[trimmed] = { ...newWorkerAvailability };
+                                void saveWeeklyAvailability(parsed);
+                                setOriginalAvailability({ ...newWorkerAvailability });
+                              } catch {}
+                              setEditingWorkerId(null);
+                              setNewWorkerName("");
+                              setNewWorkerMax(5);
+                              setNewWorkerRoles([]);
+                              setNewWorkerAvailability({ sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+                              setIsAddModalOpen(false);
                             };
-                            setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
-                            toast.success("עובד עודכן בהצלחה!");
+                            if (availabilityChanged && linkedOtherSiteNames.length > 0) {
+                              pendingLinkedAvailabilitySaveRef.current = async (propagate: boolean) => {
+                                try {
+                                  await submitEditedWorker(propagate);
+                                } catch (e: any) {
+                                  const msg = String(e?.message || "");
+                                  // eslint-disable-next-line no-console
+                                  console.log("[Workers] save error", { status: e?.status, message: msg, raw: e });
+                                  toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
+                                }
+                              };
+                              setLinkedAvailabilityConfirmSites(linkedOtherSiteNames);
+                              return;
+                            }
+                            await submitEditedWorker(false);
+                            return;
                           } else {
                             // eslint-disable-next-line no-console
                             console.log("[Workers] calling API (POST)");
@@ -3428,6 +4254,9 @@ export default function PlanningPage() {
                               roles: Array.isArray(result.roles) ? result.roles : [],
                               availability: result.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
                               answers: result.answers || {},
+                              phone: result.phone ?? null,
+                              linkedSiteIds: Array.isArray(result.linked_site_ids) ? result.linked_site_ids : [],
+                              linkedSiteNames: Array.isArray(result.linked_site_names) ? result.linked_site_names : [],
                             };
                             // Vérifier si le worker existe déjà dans la liste (réutilisé)
                             const existingIndex = workers.findIndex((w) => w.id === result.id);
@@ -3446,6 +4275,7 @@ export default function PlanningPage() {
                             const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
                             parsed[trimmed] = { ...newWorkerAvailability };
                             void saveWeeklyAvailability(parsed);
+                            setOriginalAvailability({ ...newWorkerAvailability });
                           } catch {}
                           setEditingWorkerId(null);
                           setNewWorkerName("");
@@ -4836,7 +5666,7 @@ export default function PlanningPage() {
                         <div className="mb-2 flex items-center justify-between">
                           <div className="text-base font-medium">{st.name}</div>
                           <div className="flex items-center gap-1">
-                            {(!!aiPlan?.assignments || !!manualAssignments) && (
+                            {isManual && (!!aiPlan?.assignments || !!manualAssignments) && (
                           <button
                             type="button"
                             onClick={() => {
@@ -5170,16 +6000,9 @@ export default function PlanningPage() {
                                           }
                                           return [];
                                         }
-                                        // Mode normal: si on est en manuel avec une grille chargée, elle prime (sinon on peut afficher l'ancien plan sauvegardé)
-                                        if (isManual && manualAssignments) {
-                                          const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
-                                          return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
-                                        }
-                                        // Sinon: priorité au plan sauvegardé (lecture)
-                                        if (savedWeekPlan?.assignments) {
-                                          const savedCell = (savedWeekPlan as any).assignments?.[dayKey]?.[shiftName]?.[idx];
-                                          if (Array.isArray(savedCell)) return (savedCell as any[]).filter((x) => x && String(x).trim());
-                                        }
+                                        // Mode normal: si on est en manuel avec une grille chargée, elle prime.
+                                        // En automatique, toujours privilégier le plan AI courant s'il existe,
+                                        // sinon seulement retomber sur le planning sauvegardé.
                                         if (isManual && manualAssignments) {
                                           const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
                                           return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
@@ -5187,6 +6010,10 @@ export default function PlanningPage() {
                                         if (aiPlan?.assignments) {
                                           const cell = (aiPlan.assignments as any)[dayKey]?.[shiftName]?.[idx];
                                           return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
+                                        }
+                                        if (savedWeekPlan?.assignments) {
+                                          const savedCell = (savedWeekPlan as any).assignments?.[dayKey]?.[shiftName]?.[idx];
+                                          if (Array.isArray(savedCell)) return (savedCell as any[]).filter((x) => x && String(x).trim());
                                         }
                                         return [];
                                       };
@@ -5197,6 +6024,22 @@ export default function PlanningPage() {
                                       const pullEntriesHere: any[] = Object.entries(pullsByHoleKey || {})
                                         .filter(([k]) => String(k).startsWith(cellPrefix))
                                         .map(([, e]) => e as any);
+                                      const normPullNameLocal = (s: any) =>
+                                        String(s || "")
+                                          .normalize("NFKC")
+                                          .trim()
+                                          .replace(/\s+/g, " ");
+                                      /** שמור / שמור ואשלח sans עריכה : aucune interaction sur les bulles d'une משיכה */
+                                      const blockSavedViewPullBubble = (workerName: string) => {
+                                        if (!isSavedMode || editingSaved) return false;
+                                        const nmN = normPullNameLocal(workerName);
+                                        if (!nmN) return false;
+                                        return pullEntriesHere.some((e: any) => {
+                                          const b = normPullNameLocal(e?.before?.name);
+                                          const a = normPullNameLocal(e?.after?.name);
+                                          return b === nmN || a === nmN;
+                                        });
+                                      };
                                       const pullRoleMap = new Map<string, string>();
                                       pullEntriesHere.forEach((e) => {
                                         const rn = String(e?.roleName || "").trim();
@@ -5557,7 +6400,7 @@ export default function PlanningPage() {
                                                               >
                       <span
                                                                   key={"slot-nm-" + slotIdx}
-                                                                  tabIndex={0}
+                                                                  tabIndex={blockSavedViewPullBubble(nm) ? -1 : 0}
                                                                   className={
                                                                     // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
                                                                     // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
@@ -5580,13 +6423,25 @@ export default function PlanningPage() {
                                                                         const e: any = entry;
                                                                         return norm(e?.before?.name) === nmN || norm(e?.after?.name) === nmN;
                                                                       });
-                                                                      return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
+                                                                      return match
+                                                                        ? (blockSavedViewPullBubble(nm)
+                                                                          ? " ring-2 ring-orange-400 cursor-default"
+                                                                          : " ring-2 ring-orange-400 cursor-pointer")
+                                                                        : "";
                                                                     })()
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
-                                                                  draggable
-                                                                  onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                                  draggable={!blockSavedViewPullBubble(nm)}
+                                                                  onPointerDown={(e) => {
+                                                                    if (blockSavedViewPullBubble(nm)) {
+                                                                      e.preventDefault();
+                                                                      e.stopPropagation();
+                                                                      return;
+                                                                    }
+                                                                    setExpandedSlotKey(expKey);
+                                                                  }}
                                                                   onPointerEnter={(e) => {
+                                                                    if (blockSavedViewPullBubble(nm)) return;
                                                                     if ((e as any)?.pointerType === "mouse") {
                                                                       setExpandedSlotKey(expKey);
                                                                     }
@@ -5596,7 +6451,13 @@ export default function PlanningPage() {
                                                                       setExpandedSlotKey((k) => (k === expKey ? null : k));
                                                                     }
                                                                   }}
-                                                                  onFocus={() => setExpandedSlotKey(expKey)}
+                                                                  onFocus={(ev) => {
+                                                                    if (blockSavedViewPullBubble(nm)) {
+                                                                      ev.preventDefault();
+                                                                      return;
+                                                                    }
+                                                                    setExpandedSlotKey(expKey);
+                                                                  }}
                                                                   onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                                   onClick={(e) => {
                                                                     // Si cette bulle fait partie d'une משיכה, permettre d'ouvrir la popup en cliquant sur la bulle
@@ -5703,6 +6564,7 @@ export default function PlanningPage() {
                                                                           className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                           onClick={(e) => {
                                                                             e.stopPropagation();
+                                                                            if (isSavedMode && !editingSaved) return;
                                                                             const hours = hoursFromConfig(st, sn) || hoursOf(sn);
                                                                             const parsed = parseHoursRange(hours);
                                                                             const shiftStart = parsed ? parsed.start : "00:00";
@@ -5767,6 +6629,7 @@ export default function PlanningPage() {
                                                                     title="הסר"
                                                                     onClick={(e) => {
                                                                       e.stopPropagation();
+                                                                      if (blockSavedViewPullBubble(nm)) return;
                                                                       const norm = (s: any) =>
                                                                         String(s || "")
                                                                           .normalize("NFKC")
@@ -6166,7 +7029,11 @@ export default function PlanningPage() {
                                                                 const e: any = entry;
                                                                 return e?.before?.name === nm || e?.after?.name === nm;
                                                               });
-                                                              return match ? " ring-2 ring-orange-400 cursor-pointer" : "";
+                                                              return match
+                                                                ? (blockSavedViewPullBubble(nm)
+                                                                  ? " ring-2 ring-orange-400 cursor-default"
+                                                                  : " ring-2 ring-orange-400 cursor-pointer")
+                                                                : "";
                                                             })();
                                                           return (
                                                             <div
@@ -6177,9 +7044,17 @@ export default function PlanningPage() {
                                                               key={"nm-" + i}
                                                               className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
                                                               style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
-                                                              tabIndex={0}
-                                                              onPointerDown={() => setExpandedSlotKey(expKey)}
+                                                              tabIndex={blockSavedViewPullBubble(nm) ? -1 : 0}
+                                                              onPointerDown={(e) => {
+                                                                if (blockSavedViewPullBubble(nm)) {
+                                                                  e.preventDefault();
+                                                                  e.stopPropagation();
+                                                                  return;
+                                                                }
+                                                                setExpandedSlotKey(expKey);
+                                                              }}
                                                               onPointerEnter={(e) => {
+                                                                if (blockSavedViewPullBubble(nm)) return;
                                                                 if ((e as any)?.pointerType === "mouse") {
                                                                   setExpandedSlotKey(expKey);
                                                                 }
@@ -6189,7 +7064,13 @@ export default function PlanningPage() {
                                                                   setExpandedSlotKey((k) => (k === expKey ? null : k));
                                                                 }
                                                               }}
-                                                              onFocus={() => setExpandedSlotKey(expKey)}
+                                                              onFocus={(ev) => {
+                                                                if (blockSavedViewPullBubble(nm)) {
+                                                                  ev.preventDefault();
+                                                                  return;
+                                                                }
+                                                                setExpandedSlotKey(expKey);
+                                                              }}
                                                               onBlur={() => setExpandedSlotKey((k) => (k === expKey ? null : k))}
                                                               onClick={(e) => {
                                                                 if (pullsModeStationIdx !== idx) return;
@@ -6288,6 +7169,7 @@ export default function PlanningPage() {
                                                                       className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                       onClick={(e) => {
                                                                         e.stopPropagation();
+                                                                        if (isSavedMode && !editingSaved) return;
                                                                         const hours = hoursFromConfig(st, sn) || hoursOf(sn);
                                                                         const parsed = parseHoursRange(hours);
                                                                         const shiftStart = parsed ? parsed.start : "00:00";
@@ -6676,6 +7558,9 @@ export default function PlanningPage() {
                             <tr className="border-b dark:border-zinc-800">
                               <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
                               <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                              {showMultiSiteTotalColumn && (
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
+                              )}
                             </tr>
                           </thead>
                           <tbody>
@@ -6729,6 +7614,11 @@ export default function PlanningPage() {
                                       c
                                     )}
                                   </td>
+                                  {showMultiSiteTotalColumn && (
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                      {totalAssignmentsForSummaryWorker(nm, c)}
+                                    </td>
+                                  )}
                                 </tr>
                               );
                             })}
@@ -6915,6 +7805,9 @@ export default function PlanningPage() {
                               <tr className="border-b dark:border-zinc-800">
                                 <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
                                 <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                {showMultiSiteTotalColumn && (
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                )}
                               </tr>
                             </thead>
                             <tbody>
@@ -6925,6 +7818,11 @@ export default function PlanningPage() {
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
                                     <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    {showMultiSiteTotalColumn && (
+                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                        {totalAssignmentsForSummaryWorker(nm, c)}
+                                      </td>
+                                    )}
                                   </tr>
                                 );
                               })}
@@ -7018,6 +7916,9 @@ export default function PlanningPage() {
                               <tr className="border-b dark:border-zinc-800">
                                 <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
                                 <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                {showMultiSiteTotalColumn && (
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                )}
                               </tr>
                             </thead>
                             <tbody>
@@ -7028,6 +7929,11 @@ export default function PlanningPage() {
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
                                     <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    {showMultiSiteTotalColumn && (
+                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                        {totalAssignmentsForSummaryWorker(nm, c)}
+                                      </td>
+                                    )}
                                   </tr>
                                 );
                               })}
@@ -7568,9 +8474,13 @@ export default function PlanningPage() {
                     try {
                       // eslint-disable-next-line no-console
                       console.log("[BTN] click start");
+                      clearLinkedPlansMemory();
                       setAiLoading(true);
                       setAiPlan(null);
+                      setPullsByHoleKey({});
+                      setPullsEditor(null);
                       baseAssignmentsRef.current = null;
+                      streamPullPriorityPromotedRef.current = false;
                       setAltIndex(0);
                       const controller = new AbortController();
                       aiControllerRef.current = controller;
@@ -7634,6 +8544,207 @@ export default function PlanningPage() {
                       })();
 
                       const effectiveExcludeDays = (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined);
+                      const weeklyAvailabilityForRequest = (() => {
+                        const wa = buildWeeklyAvailabilityForRequest();
+                        // eslint-disable-next-line no-console
+                        console.log("[BTN] weekly_availability to send:", Object.keys(wa), Object.keys(wa).map(k => ({ name: k, days: Object.keys(wa[k] || {}) })));
+                        return wa;
+                      })();
+                      const effectivePullsLimit: number | undefined =
+                        autoPullsEnabled && autoPullsLimit !== "unlimited" ? Number(autoPullsLimit) : undefined;
+                      const pullsCountOf = (pulls: any) => (pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0);
+                      const exceedsPullsLimit = (pulls: any) =>
+                        effectivePullsLimit != null && pullsCountOf(pulls) > effectivePullsLimit;
+                      if (linkedSites.length > 1) {
+                        const linkedResp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate-linked/stream`, {
+                          method: "POST",
+                          headers: {
+                            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+                            Accept: "text/event-stream",
+                            "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({
+                            week_iso: getWeekKeyISO(weekStart),
+                            num_alternatives: 500,
+                            auto_pulls_enabled: autoPullsEnabled,
+                            pulls_limit: effectivePullsLimit,
+                            fixed_assignments: fixed || undefined,
+                            exclude_days: effectiveExcludeDays,
+                            weekly_availability: weeklyAvailabilityForRequest,
+                          }),
+                          signal: controller.signal,
+                        });
+                        if (!linkedResp.ok || !linkedResp.body) {
+                          throw new Error(`HTTP ${linkedResp.status}`);
+                        }
+                        const reader = linkedResp.body.getReader();
+                        const decoder = new TextDecoder("utf-8");
+                        let buffer = "";
+                        while (true) {
+                          const { value, done } = await reader.read();
+                          if (done) break;
+                          buffer += decoder.decode(value, { stream: true });
+                          let idx;
+                          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+                            const frame = buffer.slice(0, idx).trim();
+                            buffer = buffer.slice(idx + 2);
+                            if (!frame.startsWith("data:")) continue;
+                            try {
+                              const jsonStr = frame.replace(/^data:\s*/, "");
+                              const evt = JSON.parse(jsonStr);
+                              if (Array.isArray(evt?.linked_sites)) {
+                                setLinkedSites(evt.linked_sites);
+                              }
+                              if (evt?.type === "base" && evt?.site_plans && typeof evt.site_plans === "object") {
+                                const current = evt.site_plans[String(params.id)];
+                                if (exceedsPullsLimit(current?.pulls)) {
+                                  continue;
+                                }
+                                saveLinkedPlansToMemory(weekStart, evt.site_plans, 0);
+                                if (current?.assignments) {
+                                  applyLinkedSitePlan(current, 0);
+                                  toast.success("תכנון בסיסי מוכן");
+                                  armIdle();
+                                }
+                              } else if (evt?.type === "alternative" && evt?.site_plans && typeof evt.site_plans === "object") {
+                                armIdle();
+                                const currentIncomingPlan = (evt.site_plans as Record<string, LinkedSitePlan>)[String(params.id)];
+                                if (exceedsPullsLimit(currentIncomingPlan?.pulls)) {
+                                  continue;
+                                }
+                                const existingMemory = readLinkedPlansFromMemory(weekStart);
+                                const mergedPlans = { ...(existingMemory?.plansBySite || {}) } as Record<string, LinkedSitePlan>;
+                                if (autoPullsEnabled && Object.keys(mergedPlans).length > 0) {
+                                  const quality = compareLinkedSitePlansQuality(mergedPlans, evt.site_plans as Record<string, LinkedSitePlan>);
+                                  if (quality < 0) {
+                                    const nextPlans = Object.fromEntries(
+                                      Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).map(([siteKey, incomingPlan]) => [
+                                        siteKey,
+                                        {
+                                          ...incomingPlan,
+                                          assignments: incomingPlan.assignments,
+                                          alternatives: [],
+                                          pulls: incomingPlan.pulls || {},
+                                          alternative_pulls: [],
+                                        },
+                                      ]),
+                                    ) as Record<string, LinkedSitePlan>;
+                                    saveLinkedPlansToMemory(weekStart, nextPlans, 0);
+                                    const current = nextPlans[String(params.id)];
+                                    if (current?.assignments) applyLinkedSitePlan(current, 0);
+                                  } else if (quality === 0) {
+                                    Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).forEach(([siteKey, incomingPlan]) => {
+                                      const prevPlan = mergedPlans[siteKey];
+                                      if (!prevPlan) return;
+                                      const alreadyExists =
+                                        sameAssignmentsMap(prevPlan.assignments, incomingPlan.assignments) &&
+                                        samePullsMap(prevPlan.pulls || {}, incomingPlan.pulls || {});
+                                      const altExists = ((prevPlan.alternatives || []) as Record<string, Record<string, string[][]>>[])
+                                        .some((alt, idx) =>
+                                          sameAssignmentsMap(alt, incomingPlan.assignments) &&
+                                          samePullsMap(((prevPlan.alternative_pulls || [])[idx] || {}) as Record<string, PullEntry>, incomingPlan.pulls || {}),
+                                        );
+                                      if (alreadyExists || altExists) return;
+                                      mergedPlans[siteKey] = {
+                                        ...prevPlan,
+                                        alternatives: [...((prevPlan.alternatives || []) as Record<string, Record<string, string[][]>>[]), incomingPlan.assignments],
+                                        alternative_pulls: [...((prevPlan.alternative_pulls || []) as Record<string, PullEntry>[]), (incomingPlan.pulls || {})],
+                                      };
+                                    });
+                                    saveLinkedPlansToMemory(weekStart, mergedPlans, Number(existingMemory?.activeAltIndex || 0));
+                                  }
+                                } else {
+                                  const currentExistingPlan = mergedPlans[String(params.id)];
+                                  const promoteIncomingAsBase =
+                                    !streamPullPriorityPromotedRef.current &&
+                                    !!currentExistingPlan?.assignments &&
+                                    !!currentIncomingPlan?.assignments &&
+                                    shouldPromotePullFriendlyPlan(
+                                      currentExistingPlan.assignments,
+                                      currentExistingPlan.pulls,
+                                      currentIncomingPlan.assignments,
+                                      currentIncomingPlan.pulls,
+                                    );
+                                  Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).forEach(([siteKey, incomingPlan]) => {
+                                    const prevPlan = mergedPlans[siteKey];
+                                    mergedPlans[siteKey] = {
+                                      ...(prevPlan || incomingPlan),
+                                      ...incomingPlan,
+                                      assignments: promoteIncomingAsBase
+                                        ? incomingPlan.assignments
+                                        : (prevPlan?.assignments || incomingPlan.assignments),
+                                      alternatives: promoteIncomingAsBase
+                                        ? [
+                                            ...(prevPlan?.assignments ? [prevPlan.assignments] : []),
+                                            ...((prevPlan?.alternatives || []) as Record<string, Record<string, string[][]>>[]),
+                                          ]
+                                        : [
+                                            ...((prevPlan?.alternatives || []) as Record<string, Record<string, string[][]>>[]),
+                                            incomingPlan.assignments,
+                                          ],
+                                      pulls: promoteIncomingAsBase
+                                        ? (incomingPlan.pulls || {})
+                                        : (prevPlan?.pulls || incomingPlan.pulls || {}),
+                                      alternative_pulls: promoteIncomingAsBase
+                                        ? [
+                                            ...(prevPlan?.pulls ? [prevPlan.pulls] : []),
+                                            ...((prevPlan?.alternative_pulls || []) as Record<string, PullEntry>[]),
+                                          ]
+                                        : [
+                                            ...((prevPlan?.alternative_pulls || []) as Record<string, PullEntry>[]),
+                                            (incomingPlan.pulls || {}),
+                                          ],
+                                    };
+                                  });
+                                  if (promoteIncomingAsBase) {
+                                    streamPullPriorityPromotedRef.current = true;
+                                  }
+                                  const activeIndex = Number(existingMemory?.activeAltIndex || 0);
+                                  saveLinkedPlansToMemory(weekStart, mergedPlans, promoteIncomingAsBase ? 0 : activeIndex);
+                                  const current = mergedPlans[String(params.id)];
+                                  if (current?.assignments) {
+                                    applyLinkedSitePlan(current, promoteIncomingAsBase ? 0 : activeIndex);
+                                  }
+                                }
+                              } else if (evt?.type === "status") {
+                                if (evt?.status === "ERROR" && evt?.detail) {
+                                  toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
+                                }
+                                setAiLoading(false);
+                                try { await reader.cancel(); } catch {}
+                                if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                                aiTimeoutRef.current = null;
+                                if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                                aiIdleTimeoutRef.current = null;
+                                aiControllerRef.current = null;
+                                stopped = true;
+                                break;
+                              } else if (evt?.type === "done") {
+                                try { await reader.cancel(); } catch {}
+                                if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                                aiTimeoutRef.current = null;
+                                if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                                aiIdleTimeoutRef.current = null;
+                                aiControllerRef.current = null;
+                                stopped = true;
+                                setAiLoading(false);
+                                setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
+                                toast.success("התכנון הושלם");
+                                break;
+                              }
+                            } catch (e) {
+                              console.log("[AI][LINKED-SSE] parse error", e);
+                            }
+                          }
+                          if (stopped) break;
+                        }
+                        if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
+                        aiTimeoutRef.current = null;
+                        if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
+                        aiIdleTimeoutRef.current = null;
+                        aiControllerRef.current = null;
+                        return;
+                      }
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
@@ -7643,14 +8754,11 @@ export default function PlanningPage() {
                         },
                         body: JSON.stringify({ 
                           num_alternatives: 500, 
+                          auto_pulls_enabled: autoPullsEnabled,
+                          pulls_limit: effectivePullsLimit,
                           fixed_assignments: fixed || undefined, 
                           exclude_days: effectiveExcludeDays, 
-                          weekly_availability: (() => {
-                            const wa = buildWeeklyAvailabilityForRequest();
-                            // eslint-disable-next-line no-console
-                            console.log("[BTN] weekly_availability to send:", Object.keys(wa), Object.keys(wa).map(k => ({ name: k, days: Object.keys(wa[k] || {}) })));
-                            return wa;
-                          })()
+                          weekly_availability: weeklyAvailabilityForRequest
                         }),
                         signal: controller.signal,
                       });
@@ -7676,12 +8784,19 @@ export default function PlanningPage() {
                             const jsonStr = frame.replace(/^data:\s*/, "");
                             const evt = JSON.parse(jsonStr);
                             if (evt?.type === "base") {
+                              if (exceedsPullsLimit(evt?.pulls)) {
+                                continue;
+                              }
+                              setPullsByHoleKey(evt.pulls || {});
+                              setPullsEditor(null);
                               setAiPlan({
                                 days: evt.days,
                                 shifts: evt.shifts,
                                 stations: evt.stations,
                                 assignments: evt.assignments,
                                 alternatives: [],
+                                pulls: evt.pulls || {},
+                                alternativePulls: [],
                                 status: "STREAMING",
                                 objective: 0,
                               } as any);
@@ -7690,17 +8805,84 @@ export default function PlanningPage() {
                               armIdle();
                             } else if (evt?.type === "alternative") {
                               armIdle();
+                              if (exceedsPullsLimit(evt?.pulls)) {
+                                continue;
+                              }
                               setAiPlan((prev) => {
                                 if (!prev) return prev;
+                                if (autoPullsEnabled) {
+                                  const quality = comparePlanQuality(prev.assignments, prev.pulls, evt.assignments, evt.pulls);
+                                  if (quality > 0) return prev;
+                                  if (quality < 0) {
+                                    baseAssignmentsRef.current = evt.assignments;
+                                    setAltIndex(0);
+                                    setPullsByHoleKey(evt.pulls || {});
+                                    return {
+                                      ...prev,
+                                      assignments: evt.assignments,
+                                      pulls: evt.pulls || {},
+                                      alternatives: [],
+                                      alternativePulls: [],
+                                    } as any;
+                                  }
+                                  const duplicateBase =
+                                    sameAssignmentsMap(prev.assignments, evt.assignments) &&
+                                    samePullsMap(prev.pulls || {}, evt.pulls || {});
+                                  const duplicateAlt = ((prev.alternatives || []) as Record<string, Record<string, string[][]>>[])
+                                    .some((alt, idx) =>
+                                      sameAssignmentsMap(alt, evt.assignments) &&
+                                      samePullsMap(((prev.alternativePulls || [])[idx] || {}) as Record<string, PullEntry>, evt.pulls || {}),
+                                    );
+                                  if (duplicateBase || duplicateAlt) return prev;
+                                  return {
+                                    ...prev,
+                                    alternatives: [...((prev.alternatives || []) as Record<string, Record<string, string[][]>>[]), evt.assignments],
+                                    alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})],
+                                  } as any;
+                                }
+                                const promoteIncomingAsBase =
+                                  !streamPullPriorityPromotedRef.current &&
+                                  !!baseAssignmentsRef.current &&
+                                  shouldPromotePullFriendlyPlan(
+                                    baseAssignmentsRef.current,
+                                    aiPlan?.pulls,
+                                    evt.assignments,
+                                    evt.pulls,
+                                  );
                                 const alts = Array.isArray(prev.alternatives) ? prev.alternatives : [];
-                                const next = { ...prev, alternatives: [...alts, evt.assignments] } as any;
+                                const next = promoteIncomingAsBase
+                                  ? {
+                                      ...prev,
+                                      assignments: evt.assignments,
+                                      pulls: evt.pulls || {},
+                                      alternatives: [
+                                        ...(baseAssignmentsRef.current ? [baseAssignmentsRef.current] : []),
+                                        ...alts,
+                                      ],
+                                      alternativePulls: [
+                                        ...(prev.pulls ? [prev.pulls] : []),
+                                        ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
+                                      ],
+                                    }
+                                  : {
+                                      ...prev,
+                                      alternatives: [...alts, evt.assignments],
+                                      alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})],
+                                    };
                                 // eslint-disable-next-line no-console
-                                console.log("[AI][SSE] alternatives count:", next.alternatives.length);
-                                return next;
+                                console.log("[AI][SSE] alternatives count:", next.alternatives.length, "promoted:", promoteIncomingAsBase);
+                                if (promoteIncomingAsBase) {
+                                  baseAssignmentsRef.current = evt.assignments;
+                                  streamPullPriorityPromotedRef.current = true;
+                                }
+                                return next as any;
                               });
                             } else if (evt?.type === "status") {
                               // eslint-disable-next-line no-console
                               console.log("[AI][SSE] status", evt);
+                              if (evt?.status === "ERROR" && evt?.detail) {
+                                toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
+                              }
                               setAiLoading(false);
                               try { await reader.cancel(); } catch {}
                               if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
@@ -8044,33 +9226,81 @@ export default function PlanningPage() {
               {/* Left: Mobile landscape = 2 lignes centrées */}
               <div className="flex items-center justify-center md:justify-center gap-2 md:gap-3 flex-wrap order-2 md:order-1">
                 <div className="flex items-center justify-center gap-2 flex-wrap w-full md:w-auto [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
-                <button
-                  type="button"
-                  onClick={() => { try { triggerGenerateButton(); } catch {} }}
-                  disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
+                {aiLoading && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        stopAiGeneration();
+                        toast.message("יצירת התכנון הופסקה");
+                      } catch {}
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-500/90 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50 dark:border-red-500/70 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/50 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M6 6h12v12H6z" />
+                    </svg>
+                  </button>
+                )}
+                <div
                   className={
-                    "inline-flex items-center gap-2 rounded-md px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                    ((aiLoading || (isSavedMode && !editingSaved) || isManual)
-                      ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
-                      : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
+                    "inline-flex overflow-hidden rounded-md border disabled:opacity-60 " +
+                    (aiLoading || (isSavedMode && !editingSaved) || isManual
+                      ? "border-zinc-300 dark:border-zinc-600"
+                      : "border-[#00A8E0]")
                   }
                 >
-                  {aiLoading ? (
-                    <>
-                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
-                      </svg>
-                      יוצר...
-                    </>
-                  ) : (
-                    <>
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
-                      </svg>
-                      יצירת תכנון
-          </>
-        )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        triggerGenerateButton();
+                      } catch {}
+                    }}
+                    disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
+                    className={
+                      "inline-flex items-center gap-2 rounded-none border-0 px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                      (aiLoading || (isSavedMode && !editingSaved) || isManual
+                        ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
+                        : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
+                    }
+                  >
+                    {aiLoading ? (
+                      <>
+                        <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                          <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
+                        </svg>
+                        יוצר...
+                      </>
+                    ) : (
+                      <>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                          <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z" />
+                        </svg>
+                        יצירת תכנון
+                      </>
+                    )}
+                  </button>
+                  <div
+                    className={
+                      "flex min-w-[2rem] flex-col items-center justify-center border-l px-0.5 py-0 [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
+                      (aiLoading || (isSavedMode && !editingSaved) || isManual
+                        ? "border-zinc-300 bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800"
+                        : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
+                    }
+                  >
+                    <span className="text-[9px] font-medium leading-none text-orange-600 dark:text-orange-400 [@media(orientation:landscape)_and_(max-width:1024px)]:text-[8px]">
+                      משיכות
+                    </span>
+                    <PullsLimitPicker
+                      value={autoPullsLimit}
+                      onChange={setAutoPullsLimit}
+                      disabled={aiLoading || isManual || (isSavedMode && !editingSaved)}
+                      className="w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none text-orange-600 outline-none placeholder:text-orange-600/70 disabled:opacity-50 dark:text-orange-400 dark:placeholder:text-orange-400/70 [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px]"
+                      title="מגבלת משיכות"
+                    />
+                  </div>
+                </div>
                 {(!isSavedMode || editingSaved) && (
             <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                     <button
@@ -8224,6 +9454,7 @@ export default function PlanningPage() {
                         setAiPlan(newPlan);
                       }
                       if (Array.isArray(savedWeekPlan.workers) && savedWeekPlan.workers.length) {
+                        const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
                         const mapped = (savedWeekPlan.workers as any[]).map((w: any) => ({
                           id: w.id,
                           name: String(w.name),
@@ -8231,6 +9462,9 @@ export default function PlanningPage() {
                           roles: Array.isArray(w.roles) ? w.roles : [],
                           availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
                           answers: w.answers || {},
+          phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
+                          linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
+                          linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
                         }));
                         setWorkers(mapped);
                       // Précharger les זמינות hebdomadaires avec celles du planning sauvegardé (fusion avec overrides existants)
@@ -8624,6 +9858,53 @@ export default function PlanningPage() {
                 </div>
       </div>
           </div>
+      )}
+      {linkedAvailabilityConfirmSites && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
+            <div className="mb-3 text-sm">
+              {`העובד משויך גם לאתרים נוספים: ${linkedAvailabilityConfirmSites.join(", ")}.`}
+              <br />
+              האם לעדכן את הזמינות גם באתרים המקושרים?
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  pendingLinkedAvailabilitySaveRef.current = null;
+                  setLinkedAvailabilityConfirmSites(null);
+                }}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={async () => {
+                  const run = pendingLinkedAvailabilitySaveRef.current;
+                  pendingLinkedAvailabilitySaveRef.current = null;
+                  setLinkedAvailabilityConfirmSites(null);
+                  if (run) await run(false);
+                }}
+              >
+                לא
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={async () => {
+                  const run = pendingLinkedAvailabilitySaveRef.current;
+                  pendingLinkedAvailabilitySaveRef.current = null;
+                  setLinkedAvailabilityConfirmSites(null);
+                  if (run) await run(true);
+                }}
+              >
+                כן
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

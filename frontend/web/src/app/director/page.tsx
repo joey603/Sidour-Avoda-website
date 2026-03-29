@@ -3,24 +3,48 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
+import LoadingAnimation from "@/components/loading-animation";
 
 export default function DirectorDashboard() {
   const router = useRouter();
+  const [loading, setLoading] = useState(true);
   const [name, setName] = useState<string>("");
   const [directorCode, setDirectorCode] = useState<string>("");
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const me = await fetchMe();
-      if (!me) return router.replace("/login/director");
-      if (me.role !== "director") return router.replace("/worker");
-      setName(me.full_name);
-      setDirectorCode(String((me as any)?.director_code || (me as any)?.directorCode || ""));
+      setLoading(true);
+      try {
+        const me = await fetchMe();
+        if (!me) {
+          if (!cancelled) router.replace("/login/director");
+          return;
+        }
+        if (me.role !== "director") {
+          if (!cancelled) router.replace("/worker");
+          return;
+        }
+        if (!cancelled) {
+          setName(me.full_name);
+          setDirectorCode(String((me as any)?.director_code || (me as any)?.directorCode || ""));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   return (
-    <div className="min-h-screen p-6 flex items-center justify-center">
+    <div className="relative min-h-screen p-6 flex items-center justify-center">
+      {loading ? (
+        <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+          <LoadingAnimation size={96} />
+        </div>
+      ) : null}
       <div className="text-center space-y-3">
         <h1 className="text-2xl font-semibold">
           ברוך הבא{name ? ", " : ""}<span className="font-bold" style={{ color: '#00A8E0' }}>{name}</span>

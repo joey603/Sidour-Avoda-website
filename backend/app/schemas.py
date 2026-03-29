@@ -81,12 +81,44 @@ class WorkerCreate(WorkerBase):
 
 
 class WorkerUpdate(WorkerBase):
-    pass
+    week_iso: str | None = None
+    weekly_availability: dict[str, list[str]] | None = None
+    propagate_linked_availability: bool = False
 
 
 class WorkerOut(WorkerBase):
     id: int
     site_id: int
+    linked_site_ids: list[int] = []
+    linked_site_names: list[str] = []
+
+
+class WorkerContextQuestion(BaseModel):
+    id: str
+    label: str
+    type: Literal["text", "dropdown", "yesno", "slider"]
+    perDay: bool = False
+    options: list[str] = []
+    slider: dict[str, Any] | None = None
+    source_site_id: int
+    source_site_name: str
+    original_id: str
+
+
+class WorkerContextOut(BaseModel):
+    worker_name: str
+    sites: list[dict[str, Any]] = []
+    shifts: list[str] = []
+    questions: list[WorkerContextQuestion] = []
+    availability: dict[str, list[str]] = {}
+    answers: dict[str, Any] = {}
+    max_shifts: int = 5
+
+
+class WorkerContextUpdatePayload(BaseModel):
+    max_shifts: int = 5
+    availability: dict[str, list[str]] = {}
+    answers: dict[str, Any] = {}
 
 
 class CreateWorkerUserRequest(BaseModel):
@@ -126,9 +158,12 @@ class WeekPlanPayload(BaseModel):
 
 
 class AIPlanningRequest(BaseModel):
+    week_iso: str | None = None
     time_limit_seconds: int | None = 10
     max_nights_per_worker: int | None = 3
     num_alternatives: int | None = 20
+    auto_pulls_enabled: bool = False
+    pulls_limit: int | None = Field(default=None, ge=1)
     # Optional map of fixed assignments: assignments[day][shift][station_index] -> list[str]
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
     # Optional: exclude specific day keys from planning (e.g., past days of the current week)
@@ -149,6 +184,8 @@ class AIPlanningResponse(BaseModel):
     # assignments[day][shift][station_index] -> list[str]
     assignments: dict[str, dict[str, list[list[str]]]]
     alternatives: list[dict[str, dict[str, list[list[str]]]]] | None = None
+    pulls: dict | None = None
+    alternative_pulls: list[dict] | None = None
     status: str
     objective: float
 

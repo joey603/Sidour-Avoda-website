@@ -121,9 +121,22 @@ def worker_login(req: WorkerLoginRequest, db: Session = Depends(get_db)):
     if not sw:
         raise HTTPException(status_code=401, detail="Identifiants invalides")
 
-    # 4) Si on a trouvé un SiteWorker avec le bon téléphone mais pas encore lié, lier au user
-    if sw.user_id is None:
-        sw.user_id = user.id
+    # 4) Lier toutes les lignes SiteWorker compatibles à ce user pour stabiliser le multi-sites
+    rows_to_link = (
+        db.query(SiteWorker)
+        .join(Site, Site.id == SiteWorker.site_id)
+        .filter(
+            Site.director_id == director.id,
+            ((SiteWorker.phone == req.phone) | (SiteWorker.user_id == user.id)),
+        )
+        .all()
+    )
+    changed = False
+    for row in rows_to_link:
+        if row.user_id != user.id:
+            row.user_id = user.id
+            changed = True
+    if changed:
         try:
             db.commit()
         except Exception:

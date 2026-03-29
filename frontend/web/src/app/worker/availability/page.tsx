@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -9,6 +9,7 @@ import LoadingAnimation from "@/components/loading-animation";
 
 type WorkerAvailability = Record<string, string[]>; // key: day key (sun..sat) -> enabled shift names
 type QuestionType = "text" | "dropdown" | "yesno" | "slider";
+type AnswerValue = string | number | boolean | null;
 type SiteQuestion = {
   id: string;
   label: string;
@@ -17,18 +18,40 @@ type SiteQuestion = {
   options?: string[];
   slider?: { min: number; max: number; step: number };
 };
+type WorkerContextAnswers = {
+  general?: Record<string, AnswerValue>;
+  perDay?: Record<string, Record<string, AnswerValue>>;
+};
+type WorkerContextResponse = {
+  worker_name: string;
+  sites: Array<{ id: number; name: string }>;
+  shifts: string[];
+  questions: SiteQuestion[];
+  max_shifts: number;
+  roles: string[];
+  availability: Record<string, string[]>;
+  answers: WorkerContextAnswers | Record<string, AnswerValue>;
+};
+type LocalWorkerContextCache = {
+  availability?: Record<string, string[]>;
+  maxShifts?: number;
+  answers?: WorkerContextAnswers | Record<string, AnswerValue>;
+  sites?: Array<{ id: number; name: string }>;
+  shifts?: string[];
+  questions?: SiteQuestion[];
+  siteName?: string;
+};
 
 export default function WorkerAvailabilityPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [sites, setSites] = useState<Array<{ id: number; name: string }>>([]);
-  const [selectedSiteId, setSelectedSiteId] = useState<number | null>(null);
   const [siteName, setSiteName] = useState<string>("");
   const [shifts, setShifts] = useState<string[]>([]);
   const [siteQuestions, setSiteQuestions] = useState<SiteQuestion[]>([]);
-  const [answersGeneral, setAnswersGeneral] = useState<Record<string, any>>({});
-  const [answersPerDay, setAnswersPerDay] = useState<Record<string, Record<string, any>>>({});
+  const [answersGeneral, setAnswersGeneral] = useState<Record<string, AnswerValue>>({});
+  const [answersPerDay, setAnswersPerDay] = useState<Record<string, Record<string, AnswerValue>>>({});
   const [availability, setAvailability] = useState<WorkerAvailability>({
     sun: [],
     mon: [],
@@ -65,10 +88,10 @@ export default function WorkerAvailabilityPage() {
   }
 
   // Fonction pour obtenir la clé de semaine
-  function getWeekKey(siteId: number, date: Date, wid?: number | null): string {
+  function getWeekKey(date: Date, wid?: number | null): string {
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     const suffix = wid ? `_w${wid}` : "";
-    return `worker_avail_${siteId}_${iso(date)}${suffix}`;
+    return `worker_avail_global_${iso(date)}${suffix}`;
   }
 
   // Fonction pour obtenir la clé de semaine au format ISO (pour le backend)
@@ -76,22 +99,67 @@ export default function WorkerAvailabilityPage() {
     return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
   }
 
-  // Charger les זמינות depuis le serveur (source de vérité)
-  async function loadWorkerAvailabilityFromServer(siteId: number) {
+  // Charger depuis localStorage (fallback uniquement)
+  function loadSavedAvailabilityFromLocalStorage() {
+    if (!nextWeekStart) return;
+    const keyNew = getWeekKey(nextWeekStart, workerId);
+    try {
+      const saved = localStorage.getItem(keyNew);
+      if (saved) {
+        const parsed = JSON.parse(saved) as LocalWorkerContextCache;
+        if (parsed && typeof parsed === 'object') {
+          if (Array.isArray(parsed.sites)) setSites(parsed.sites);
+          if (Array.isArray(parsed.shifts)) setShifts(parsed.shifts);
+          if (Array.isArray(parsed.questions)) setSiteQuestions(parsed.questions);
+          if (typeof parsed.siteName === "string") setSiteName(parsed.siteName);
+          if (parsed.availability && typeof parsed.availability === 'object') {
+            setAvailability(parsed.availability);
+            if (typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6) {
+              setMaxShifts(parsed.maxShifts);
+            }
+            if (parsed.answers && typeof parsed.answers === "object") {
+              if ("general" in parsed.answers || "perDay" in parsed.answers) {
+                const answers = parsed.answers as WorkerContextAnswers;
+                setAnswersGeneral(answers.general && typeof answers.general === "object" ? answers.general : {});
+                setAnswersPerDay(answers.perDay && typeof answers.perDay === "object" ? answers.perDay : {});
+              } else {
+                setAnswersGeneral(parsed.answers as Record<string, AnswerValue>);
+                setAnswersPerDay({});
+              }
+            }
+          } else {
+            setAvailability(parsed as WorkerAvailability);
+          }
+          setIsEditing(true);
+          setSuccess(true);
+          setHasBeenSaved(true);
+        }
+      }
+    } catch {
+      // Ignorer les erreurs de parsing
+    }
+  }
+
+  // Charger le contexte worker global depuis le serveur
+  const loadWorkerContextFromServer = useCallback(async () => {
     try {
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
-      const workerData = await apiFetch<{
-        id: number;
-        name: string;
-        max_shifts: number;
-        roles: string[];
-        availability: Record<string, string[]>;
-        answers: { general?: Record<string, any>; perDay?: Record<string, any> } | Record<string, any>;
-      }>(`/public/sites/${siteId}/worker-availability?week_key=${encodeURIComponent(weekKeyISO)}`, {
+      const workerData = await apiFetch<WorkerContextResponse>(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
 
       if (workerData) {
+        setSites(Array.isArray(workerData.sites) ? workerData.sites : []);
+        const mergedSites = Array.isArray(workerData.sites) ? workerData.sites : [];
+        setSiteName(
+          mergedSites.length === 1
+            ? (mergedSites[0]?.name || "")
+            : mergedSites.length > 1
+            ? `${mergedSites.length} אתרים מחוברים`
+            : ""
+        );
+        setShifts(Array.isArray(workerData.shifts) && workerData.shifts.length > 0 ? workerData.shifts : ["06-14", "14-22", "22-06"]);
+        setSiteQuestions(Array.isArray(workerData.questions) ? workerData.questions : []);
         // Charger les זמינות depuis le serveur
         if (workerData.availability && typeof workerData.availability === 'object') {
           setAvailability(workerData.availability);
@@ -104,11 +172,12 @@ export default function WorkerAvailabilityPage() {
         if (workerData.answers && typeof workerData.answers === "object") {
           // Nouveau format: {general, perDay}
           if ("general" in workerData.answers || "perDay" in workerData.answers) {
-            setAnswersGeneral((workerData.answers as any).general && typeof (workerData.answers as any).general === "object" ? (workerData.answers as any).general : {});
-            setAnswersPerDay((workerData.answers as any).perDay && typeof (workerData.answers as any).perDay === "object" ? (workerData.answers as any).perDay : {});
+            const answers = workerData.answers as WorkerContextAnswers;
+            setAnswersGeneral(answers.general && typeof answers.general === "object" ? answers.general : {});
+            setAnswersPerDay(answers.perDay && typeof answers.perDay === "object" ? answers.perDay : {});
           } else {
             // Ancien format: answers = {qid: value}
-            setAnswersGeneral(workerData.answers);
+            setAnswersGeneral(workerData.answers as Record<string, AnswerValue>);
             setAnswersPerDay({});
           }
         }
@@ -123,72 +192,31 @@ export default function WorkerAvailabilityPage() {
         }
 
         // Mettre à jour le cache localStorage (optionnel, pour performance)
-        const keyNew = getWeekKey(siteId, nextWeekStart, workerId);
+        const keyNew = getWeekKey(nextWeekStart, workerId);
         localStorage.setItem(keyNew, JSON.stringify({
           availability: workerData.availability || {},
           maxShifts: workerData.max_shifts,
           answers: workerData.answers || {},
+          sites: workerData.sites || [],
+          shifts: workerData.shifts || [],
+          questions: workerData.questions || [],
+          siteName:
+            mergedSites.length === 1
+              ? (mergedSites[0]?.name || "")
+              : mergedSites.length > 1
+              ? `${mergedSites.length} אתרים מחוברים`
+              : "",
         }));
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Si le serveur échoue, essayer de charger depuis localStorage comme fallback
       console.warn("Erreur lors du chargement depuis le serveur, tentative avec localStorage:", e);
-      loadSavedAvailabilityFromLocalStorage(siteId);
+      loadSavedAvailabilityFromLocalStorage();
     }
-  }
-
-  // Charger depuis localStorage (fallback uniquement)
-  function loadSavedAvailabilityFromLocalStorage(siteId: number) {
-    if (!nextWeekStart) return;
-    const keyNew = getWeekKey(siteId, nextWeekStart, workerId);
-    const keyOld = getWeekKey(siteId, nextWeekStart);
-    try {
-      const saved = localStorage.getItem(keyNew) ?? localStorage.getItem(keyOld);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          // Si c'est un objet avec availability et maxShifts
-          if (parsed.availability && typeof parsed.availability === 'object') {
-            setAvailability(parsed.availability);
-            if (typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6) {
-              setMaxShifts(parsed.maxShifts);
-            }
-            if (parsed.answers && typeof parsed.answers === "object") {
-              // Nouveau format: {general, perDay}
-              if ("general" in parsed.answers || "perDay" in parsed.answers) {
-                setAnswersGeneral((parsed.answers as any).general && typeof (parsed.answers as any).general === "object" ? (parsed.answers as any).general : {});
-                setAnswersPerDay((parsed.answers as any).perDay && typeof (parsed.answers as any).perDay === "object" ? (parsed.answers as any).perDay : {});
-              } else {
-                // Ancien format: answers = {qid: value}
-                setAnswersGeneral(parsed.answers);
-                setAnswersPerDay({});
-              }
-            }
-          } else {
-            // Sinon, c'est directement l'objet availability
-            setAvailability(parsed);
-          }
-          setIsEditing(true);
-          setSuccess(true);
-          setHasBeenSaved(true);
-        }
-      }
-    } catch (e) {
-      // Ignorer les erreurs de parsing
-    }
-  }
-
-  async function loadFullSiteData(siteId: number) {
-    // Charger la config du site + les données worker (DB) avant d'enlever le loading
-    const info = await apiFetch<{ id: number; name: string; shifts: string[]; questions?: SiteQuestion[] }>(`/public/sites/${siteId}/info`);
-    setSiteName(info.name || "");
-    setShifts(info.shifts || ["06-14", "14-22", "22-06"]);
-    setSiteQuestions(Array.isArray(info.questions) ? info.questions : []);
-    await loadWorkerAvailabilityFromServer(siteId);
-  }
+  }, [nextWeekStart, workerId]);
 
   useEffect(() => {
-    async function loadSites() {
+    async function loadContext() {
       setLoading(true);
       const me = await fetchMe();
       if (!me) {
@@ -201,56 +229,18 @@ export default function WorkerAvailabilityPage() {
       }
 
       setWorkerName(me.full_name || "");
-      setWorkerId(typeof (me as any).id === "number" ? (me as any).id : null);
+      setWorkerId(typeof (me as { id?: unknown }).id === "number" ? ((me as { id: number }).id) : null);
 
       try {
-        const sitesList = await apiFetch<Array<{ id: number; name: string }>>("/public/sites/worker-sites", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
-        setSites(sitesList || []);
-        
-        // Si un seul site, le sélectionner automatiquement
-        if (sitesList && sitesList.length === 1) {
-          setSelectedSiteId(sitesList[0].id);
-          await loadFullSiteData(sitesList[0].id);
-        }
-      } catch (e: any) {
-        toast.error("שגיאה בטעינת אתרים", { description: e?.message || "נסה שוב מאוחר יותר." });
+        await loadWorkerContextFromServer();
+      } catch (e: unknown) {
+        toast.error("שגיאה בטעינת נתוני העובד", { description: e instanceof Error ? e.message : "נסה שוב מאוחר יותר." });
+      } finally {
+        setLoading(false);
       }
-      // Si plusieurs sites, on a juste besoin de la liste pour afficher l'UI.
-      // Si 1 seul site, loadFullSiteData a déjà tout chargé.
-      setLoading(false);
     }
-    loadSites();
-  }, [router]);
-
-  async function handleSiteSelect(siteId: number) {
-    setSelectedSiteId(siteId);
-    setSuccess(false);
-    setIsEditing(false);
-    setHasBeenSaved(false);
-    setMaxShifts(5);
-    setAnswersGeneral({});
-    setAnswersPerDay({});
-    setSiteQuestions([]);
-    setAvailability({
-      sun: [],
-      mon: [],
-      tue: [],
-      wed: [],
-      thu: [],
-      fri: [],
-      sat: [],
-    });
-    setLoading(true);
-    try {
-      await loadFullSiteData(siteId);
-    } catch (e: any) {
-      toast.error("שגיאה בטעינת פרטי האתר", { description: e?.message || "נסה שוב מאוחר יותר." });
-    } finally {
-      setLoading(false);
-    }
-  }
+    loadContext();
+  }, [router, loadWorkerContextFromServer]);
 
   const dayDefs = [
     { key: "sun", label: "א'" },
@@ -314,10 +304,6 @@ export default function WorkerAvailabilityPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedSiteId) {
-      toast.error("נא לבחור אתר");
-      return;
-    }
     if (!workerName.trim()) {
       toast.error("נא להזין שם");
       return;
@@ -357,36 +343,34 @@ export default function WorkerAvailabilityPage() {
         return;
       }
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
-      // IMPORTANT: send week_key as query param so backend can store answers per-week reliably
-      await apiFetch(`/public/sites/${selectedSiteId}/register?week_key=${encodeURIComponent(weekKeyISO)}`, {
+      await apiFetch(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: workerName.trim(),
           max_shifts: maxShifts,
-          roles: [],
           availability: availability,
-          // Backward/forward compatible:
-          // - Old backend expects answers.week_key in body (stores answers[week_key])
-          // - New backend can also read week_key from query param
-          answers: { week_key: weekKeyISO, general: answersGeneral, perDay: answersPerDay },
+          answers: { general: answersGeneral, perDay: answersPerDay },
         }),
       });
       
       // Sauvegarder dans localStorage avec la clé de semaine (inclure maxShifts)
-      const weekKey = getWeekKey(selectedSiteId, nextWeekStart, workerId);
+      const weekKey = getWeekKey(nextWeekStart, workerId);
       localStorage.setItem(weekKey, JSON.stringify({
         availability: availability,
         maxShifts: maxShifts,
         answers: { general: answersGeneral, perDay: answersPerDay },
+        sites,
+        shifts,
+        questions: siteQuestions,
+        siteName,
       }));
       
       setSuccess(true);
       setIsEditing(true);
       setHasBeenSaved(true);
       toast.success("הזמינות נשמרה בהצלחה!");
-    } catch (e: any) {
-      toast.error("שגיאה בשמירה", { description: e?.message || "נסה שוב מאוחר יותר." });
+    } catch (e: unknown) {
+      toast.error("שגיאה בשמירה", { description: e instanceof Error ? e.message : "נסה שוב מאוחר יותר." });
     } finally {
       setSubmitting(false);
     }
@@ -454,32 +438,24 @@ export default function WorkerAvailabilityPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              {siteName ? "עדכן את זמינותך השבועית" : "בחר אתר ועדכן את זמינותך השבועית"}
+              {siteName ? "עדכן פעם אחת את זמינותך לכל האתרים המחוברים" : "עדכן את זמינותך השבועית"}
             </p>
           </div>
 
-          {sites.length > 1 && (
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
-                בחר אתר
-              </label>
-              <select
-                value={selectedSiteId || ""}
-                onChange={(e) => { void handleSiteSelect(Number(e.target.value)); }}
-                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-              >
-                <option value="">-- בחר אתר --</option>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {selectedSiteId && (
+          {sites.length > 0 && (
             <>
+              {sites.length > 1 && (
+                <div className="mb-6 flex flex-wrap justify-center gap-2">
+                  {sites.map((site) => (
+                    <span
+                      key={site.id}
+                      className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                    >
+                      {site.name}
+                    </span>
+                  ))}
+                </div>
+              )}
               {success && isEditing && !submitting && (
                 <div className="mb-4 rounded-lg bg-green-50 border border-green-200 p-4 text-center text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
                   ✓ הזמינות נשמרה בהצלחה לשבוע הבא!
@@ -519,7 +495,7 @@ export default function WorkerAvailabilityPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">
-                    זמינות שבועית - {siteName}
+                    זמינות שבועית
                   </label>
                   <div className="space-y-4">
                     {dayDefs.map((day) => (
@@ -561,7 +537,7 @@ export default function WorkerAvailabilityPage() {
                             {siteQuestions
                               .filter((q) => !!q.perDay && (q?.label || "").trim())
                               .map((q) => {
-                                const dayAns = (answersPerDay?.[q.id] || {}) as Record<string, any>;
+                                const dayAns = (answersPerDay?.[q.id] || {}) as Record<string, AnswerValue>;
                                 const value = dayAns[day.key];
                                 const disabled = submitting || (success && isEditing);
                                 return (
@@ -788,12 +764,6 @@ export default function WorkerAvailabilityPage() {
                 </p>
               </div>
             </>
-          )}
-
-          {!selectedSiteId && sites.length === 1 && (
-            <div className="text-center py-4">
-              <LoadingAnimation size={50} />
-            </div>
           )}
         </div>
       </div>

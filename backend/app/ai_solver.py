@@ -172,7 +172,15 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
                     if role_counts:
                         cap_roles.setdefault(day, {}).setdefault(sh_name, {}).update(role_counts)
 
-        stations.append({"name": name, "capacity": cap, "capacity_roles": cap_roles})
+        stations.append({
+            "name": name,
+            "capacity": cap,
+            "capacity_roles": cap_roles,
+            "allowed_workers": [str(x) for x in (st.get("allowedWorkers") or []) if str(x or "").strip()],
+            "site_id": st.get("siteId"),
+            "site_name": st.get("siteName"),
+            "site_station_index": st.get("siteStationIndex"),
+        })
 
     days = order_days(list(all_days)) or ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
     shifts = order_shifts(list(all_shifts)) or ["06-14", "14-22", "22-06"]
@@ -292,12 +300,14 @@ def solve_schedule(
                     sh_name = shifts[s]
                     avail = (workers[w].get("availability") or {}).get(day_key, [])
                     allowed = sh_name in avail if isinstance(avail, list) else False
+                    station_allowed_workers = stations[t].get("allowed_workers") or []
+                    allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
                     # Pré-affectation prioritaire: force à 1 et ignore indisponibilité
                     if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
                         model.Add(var == 1)
                     else:
-                        if not allowed:
+                        if not allowed or not allowed_for_station:
                             model.Add(var == 0)
                     x[(w, d, s, t)] = var
 
@@ -968,7 +978,7 @@ def solve_schedule(
         return False
 
     # Try generate up to N alternatives
-    alt_budget = max(0, int(num_alternatives)) or 20
+    alt_budget = 20 if num_alternatives is None else max(0, int(num_alternatives))
     logger.info("Alt budget=%d", alt_budget)
     for dkey in days:
         if alt_budget <= 0:
@@ -1444,12 +1454,14 @@ def solve_schedule_stream(
                     sh_name = shifts[s]
                     avail = (workers[w].get("availability") or {}).get(day_key, [])
                     allowed = sh_name in avail if isinstance(avail, list) else False
+                    station_allowed_workers = stations[t].get("allowed_workers") or []
+                    allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
                     # Pré-affectation prioritaire
                     if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
                         model.Add(var == 1)
                     else:
-                        if not allowed:
+                        if not allowed or not allowed_for_station:
                             model.Add(var == 0)
                     x[(w, d, s, t)] = var
 

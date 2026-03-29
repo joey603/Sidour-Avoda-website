@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 import re
 from datetime import datetime, timedelta
+from copy import deepcopy
 
 from .deps import require_role, get_db
 from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole, DirectorAutoPlanningConfig
@@ -315,7 +316,7 @@ def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
     site.config = cfg
 
 
-def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict) -> dict:
+def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict, pulls_limit: int | None = None) -> dict:
     from .ai_solver import build_capacities_from_config
 
     assignments = payload.get("assignments")
@@ -330,6 +331,7 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
         for r in rows
     }
     pulls: dict[str, dict] = {}
+    normalized_pulls_limit = int(pulls_limit) if pulls_limit is not None else None
 
     def worker_has_role(worker_name: str, role_name: str) -> bool:
         return _norm_role_local(role_name) in name_to_roles.get(_norm_name_local(worker_name), set())
@@ -377,11 +379,17 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
         return (day_idx, shift_idx + 1)
 
     for station_idx, station in enumerate(stations):
+        if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+            break
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}
         cap_roles = station.get("capacity_roles") or {}
         for day_idx, day_key in enumerate(days):
+            if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+                break
             for shift_idx, shift_name in enumerate(shifts):
+                if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+                    break
                 required = int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
                 prev_coord = prev_of(day_idx, shift_idx)
                 next_coord = next_of(day_idx, shift_idx)
@@ -389,6 +397,8 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
                     continue
 
                 while True:
+                    if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+                        break
                     cell_prefix = f"{day_key}|{shift_name}|{station_idx}|"
                     existing_pull_keys = [k for k in pulls if str(k).startswith(cell_prefix)]
                     current_names = get_cell_names(day_key, shift_name, station_idx)
@@ -498,6 +508,431 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
         required_count=int(summary.get("required_count") or 0),
         pulls_count=len(pulls) if isinstance(pulls, dict) else 0,
     )
+
+
+def _worker_identity_key(row: SiteWorker) -> str:
+    if getattr(row, "user_id", None):
+        return f"user:{int(row.user_id)}"
+    phone = str(getattr(row, "phone", "") or "").strip()
+    if phone:
+        return f"phone:{phone}"
+    return f"name:{_norm_name_local(getattr(row, 'name', ''))}"
+
+
+def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int) -> list[int]:
+    sites = db.query(Site).filter(Site.director_id == director_id).all()
+    site_ids = [int(s.id) for s in sites]
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
+    site_to_keys: dict[int, set[str]] = {}
+    key_to_sites: dict[str, set[int]] = {}
+    for row in rows:
+        site_id = int(row.site_id)
+        key = _worker_identity_key(row)
+        if not key:
+            continue
+        site_to_keys.setdefault(site_id, set()).add(key)
+        key_to_sites.setdefault(key, set()).add(site_id)
+
+    visited: set[int] = set()
+    queue: list[int] = [int(root_site_id)]
+    while queue:
+        site_id = queue.pop(0)
+        if site_id in visited:
+            continue
+        visited.add(site_id)
+        for key in site_to_keys.get(site_id, set()):
+            for linked_site_id in key_to_sites.get(key, set()):
+                if linked_site_id not in visited:
+                    queue.append(linked_site_id)
+    return sorted(visited)
+
+
+def _site_role_key(site_id: int, role_name: str | None) -> str:
+    return f"site:{site_id}:{_norm_role_local(role_name)}"
+
+
+def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) -> list[int]:
+    director_site_ids = [
+        int(site_id)
+        for (site_id,) in db.query(Site.id).filter(Site.director_id == director_id).all()
+    ]
+    if not director_site_ids:
+        return [int(row.site_id)]
+    key = _worker_identity_key(row)
+    linked_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all()
+    linked_site_ids = sorted({int(r.site_id) for r in linked_rows if _worker_identity_key(r) == key})
+    return linked_site_ids or [int(row.site_id)]
+
+
+def _prefix_roles_for_combined_station(station_cfg: dict, site_id: int) -> dict:
+    cloned = deepcopy(station_cfg)
+
+    def prefix_roles(items: list[dict] | None) -> list[dict]:
+        out: list[dict] = []
+        for item in (items or []):
+            if not isinstance(item, dict):
+                continue
+            cp = dict(item)
+            cp["name"] = _site_role_key(site_id, item.get("name"))
+            out.append(cp)
+        return out
+
+    cloned["roles"] = prefix_roles(cloned.get("roles"))
+    cloned["shifts"] = [
+        {**sh, "roles": prefix_roles((sh or {}).get("roles"))}
+        for sh in (cloned.get("shifts") or [])
+        if isinstance(sh, dict)
+    ]
+    if isinstance(cloned.get("dayOverrides"), dict):
+        next_day_overrides = {}
+        for day_key, ov in (cloned.get("dayOverrides") or {}).items():
+            if not isinstance(ov, dict):
+                next_day_overrides[day_key] = ov
+                continue
+            next_day_overrides[day_key] = {
+                **ov,
+                "shifts": [
+                    {**sh, "roles": prefix_roles((sh or {}).get("roles"))}
+                    for sh in (ov.get("shifts") or [])
+                    if isinstance(sh, dict)
+                ],
+            }
+        cloned["dayOverrides"] = next_day_overrides
+    return cloned
+
+
+def _build_multi_site_generation_context(
+    db: Session,
+    director_id: int,
+    root_site_id: int,
+    week_iso: str,
+    weekly_availability: dict[str, dict[str, list[str]]] | None = None,
+    exclude_days: list[str] | None = None,
+    fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None,
+) -> dict:
+    connected_site_ids = _connected_site_ids_for_root(db, director_id, root_site_id)
+    sites = db.query(Site).filter(Site.id.in_(connected_site_ids)).all() if connected_site_ids else []
+    sites_by_id = {int(s.id): s for s in sites}
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all() if connected_site_ids else []
+    weekly_rows = (
+        db.query(SiteWeeklyAvailability)
+        .filter(SiteWeeklyAvailability.site_id.in_(connected_site_ids))
+        .filter(SiteWeeklyAvailability.week_iso == week_iso)
+        .all()
+        if connected_site_ids else []
+    )
+    weekly_overrides_by_site: dict[int, dict[str, dict[str, list[str]]]] = {
+        int(row.site_id): (row.availability or {})
+        for row in weekly_rows
+    }
+
+    worker_groups: dict[str, dict] = {}
+    current_site_overrides = weekly_availability or {}
+    for row in rows:
+        key = _worker_identity_key(row)
+        group = worker_groups.setdefault(key, {
+            "solver_name": f"worker::{key}",
+            "site_ids": set(),
+            "site_display_names": {},
+            "roles": set(),
+            "max_shifts": [],
+            "availability": None,
+        })
+        site_id = int(row.site_id)
+        group["site_ids"].add(site_id)
+        group["site_display_names"][site_id] = row.name
+        group["max_shifts"].append(int(row.max_shifts or 5))
+        for role_name in (row.roles or []):
+            group["roles"].add(_site_role_key(site_id, str(role_name)))
+        site_weekly_overrides = weekly_overrides_by_site.get(site_id, {})
+        override = None
+        if site_id == int(root_site_id):
+            override = current_site_overrides.get(row.name)
+        if not isinstance(override, dict):
+            override = site_weekly_overrides.get(row.name)
+        if isinstance(override, dict):
+            group["availability"] = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
+        if group["availability"] is None and isinstance(row.availability, dict):
+            group["availability"] = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+
+    combined_stations: list[dict] = []
+    station_map: list[dict] = []
+    for site_id in connected_site_ids:
+        site = sites_by_id.get(site_id)
+        if not site:
+            continue
+        for idx, station_cfg in enumerate(((site.config or {}).get("stations") or [])):
+            if not isinstance(station_cfg, dict):
+                continue
+            cloned = _prefix_roles_for_combined_station(station_cfg, site_id)
+            cloned["name"] = f"{site.name} / {cloned.get('name') or f'עמדה {idx + 1}'}"
+            cloned["siteId"] = site_id
+            cloned["siteName"] = site.name
+            cloned["siteStationIndex"] = idx
+            cloned["allowedWorkers"] = [
+                group["solver_name"]
+                for group in worker_groups.values()
+                if site_id in group["site_ids"]
+            ]
+            combined_stations.append(cloned)
+            station_map.append({"site_id": site_id, "site_station_index": idx})
+
+    combined_config = {"stations": combined_stations}
+    combined_workers = [
+        {
+            "id": idx + 1,
+            "name": group["solver_name"],
+            "max_shifts": min(group["max_shifts"]) if group["max_shifts"] else 5,
+            "roles": sorted(group["roles"]),
+            "availability": group["availability"] or {},
+        }
+        for idx, group in enumerate(worker_groups.values())
+    ]
+
+    combined_fixed: dict[str, dict[str, list[list[str]]]] | None = None
+    if fixed_assignments:
+        root_site = sites_by_id.get(int(root_site_id))
+        if root_site:
+            from .ai_solver import build_capacities_from_config
+            root_days, root_shifts, _root_stations = build_capacities_from_config(root_site.config or {}, exclude_days)
+            name_to_solver = {}
+            for key, group in worker_groups.items():
+                site_name = group["site_display_names"].get(int(root_site_id))
+                if site_name:
+                    name_to_solver[str(site_name)] = group["solver_name"]
+            combined_fixed = {day: {sh: [[] for _ in combined_stations] for sh in root_shifts} for day in root_days}
+            station_index_map = {
+                meta["site_station_index"]: idx
+                for idx, meta in enumerate(station_map)
+                if int(meta["site_id"]) == int(root_site_id)
+            }
+            for day_key, shifts_map in (fixed_assignments or {}).items():
+                if day_key not in combined_fixed or not isinstance(shifts_map, dict):
+                    continue
+                for shift_name, per_station in shifts_map.items():
+                    if shift_name not in combined_fixed[day_key] or not isinstance(per_station, list):
+                        continue
+                    for local_idx, cell in enumerate(per_station):
+                        combined_idx = station_index_map.get(local_idx)
+                        if combined_idx is None or not isinstance(cell, list):
+                            continue
+                        combined_fixed[day_key][shift_name][combined_idx] = [
+                            name_to_solver.get(str(name), str(name))
+                            for name in cell
+                            if str(name or "").strip()
+                        ]
+
+    display_name_by_solver_site: dict[tuple[str, int], str] = {}
+    for group in worker_groups.values():
+        for site_id, display_name in group["site_display_names"].items():
+            display_name_by_solver_site[(group["solver_name"], int(site_id))] = str(display_name)
+
+    return {
+        "connected_site_ids": connected_site_ids,
+        "sites_by_id": sites_by_id,
+        "combined_config": combined_config,
+        "combined_workers": combined_workers,
+        "combined_fixed": combined_fixed,
+        "station_map": station_map,
+        "display_name_by_solver_site": display_name_by_solver_site,
+        "exclude_days": exclude_days,
+    }
+
+
+def _split_multi_site_assignments(
+    context: dict,
+    combined_assignments_value: dict | None,
+    status: str | None = None,
+    objective: float | int | None = None,
+) -> dict[str, dict]:
+    connected_site_ids = context["connected_site_ids"]
+    sites_by_id = context["sites_by_id"]
+    station_map = context["station_map"]
+    display_name_by_solver_site = context["display_name_by_solver_site"]
+    exclude_days = context["exclude_days"]
+
+    site_plans_local: dict[str, dict] = {}
+    for site_id in connected_site_ids:
+        site = sites_by_id.get(site_id)
+        if not site:
+            continue
+        from .ai_solver import build_capacities_from_config
+        days, shifts, stations = build_capacities_from_config(site.config or {}, exclude_days)
+        required_count = 0
+        for st in stations:
+            cap_map = (st.get("capacity") or {})
+            for day_key in days:
+                for shift_name in shifts:
+                    required_count += int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
+        site_plans_local[str(site_id)] = {
+            "site_id": site_id,
+            "site_name": site.name,
+            "days": days,
+            "shifts": shifts,
+            "stations": [st.get("name") for st in stations],
+            "assignments": {day: {shift: [[] for _ in stations] for shift in shifts} for day in days},
+            "status": status,
+            "objective": objective,
+            "assigned_count": 0,
+            "required_count": required_count,
+            "alternatives": [],
+        }
+
+    combined_assignments = combined_assignments_value or {}
+    for combined_idx, meta in enumerate(station_map):
+        site_id = int(meta["site_id"])
+        local_idx = int(meta["site_station_index"])
+        site_plan = site_plans_local.get(str(site_id))
+        if not site_plan:
+            continue
+        for day_key in site_plan["days"]:
+            for shift_name in site_plan["shifts"]:
+                per_station = (combined_assignments.get(day_key) or {}).get(shift_name) or []
+                names = per_station[combined_idx] if combined_idx < len(per_station) else []
+                if not isinstance(names, list):
+                    names = []
+                site_plan["assignments"][day_key][shift_name][local_idx] = [
+                    display_name_by_solver_site.get((str(name), site_id), str(name))
+                    for name in names
+                    if str(name or "").strip()
+                ]
+    for site_plan in site_plans_local.values():
+        assigned_count = 0
+        for day_key in site_plan["days"]:
+            for shift_name in site_plan["shifts"]:
+                for cell in (site_plan["assignments"].get(day_key, {}) or {}).get(shift_name, []):
+                    if isinstance(cell, list):
+                        assigned_count += len([name for name in cell if str(name or "").strip()])
+        site_plan["assigned_count"] = assigned_count
+    return site_plans_local
+
+
+def _generate_multi_site_memory_plans(
+    db: Session,
+    director_id: int,
+    root_site_id: int,
+    week_iso: str,
+    weekly_availability: dict[str, dict[str, list[str]]] | None = None,
+    exclude_days: list[str] | None = None,
+    fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None,
+    num_alternatives: int | None = 20,
+) -> dict:
+    context = _build_multi_site_generation_context(
+        db,
+        director_id,
+        root_site_id,
+        week_iso,
+        weekly_availability=weekly_availability,
+        exclude_days=exclude_days,
+        fixed_assignments=fixed_assignments,
+    )
+
+    result = solve_schedule(
+        context["combined_config"],
+        context["combined_workers"],
+        time_limit_seconds=25,
+        max_nights_per_worker=3,
+        num_alternatives=num_alternatives,
+        fixed_assignments=context["combined_fixed"],
+        exclude_days=exclude_days,
+    )
+
+    filled_base_site_plans = _split_multi_site_assignments(
+        context,
+        result.get("assignments") or {},
+        status=result.get("status"),
+        objective=result.get("objective"),
+    )
+    for site_id, site_plan in filled_base_site_plans.items():
+        site_plan["status"] = result.get("status")
+        site_plan["objective"] = result.get("objective")
+    for alt_assignments in (result.get("alternatives") or []):
+        alt_site_plans = _split_multi_site_assignments(
+            context,
+            alt_assignments if isinstance(alt_assignments, dict) else {},
+            status=result.get("status"),
+            objective=result.get("objective"),
+        )
+        for site_id, alt_site_plan in alt_site_plans.items():
+            filled_base_site_plans[site_id].setdefault("alternatives", []).append(alt_site_plan["assignments"])
+
+    linked_sites = [
+        {"id": site_id, "name": context["sites_by_id"][site_id].name}
+        for site_id in context["connected_site_ids"]
+        if site_id in context["sites_by_id"]
+    ]
+    return {
+        "root_site_id": root_site_id,
+        "linked_sites": linked_sites,
+        "site_plans": filled_base_site_plans,
+    }
+
+
+def _apply_auto_pulls_to_site_plans(
+    db: Session,
+    sites_by_id: dict[int, Site],
+    site_plans: dict[str, dict],
+    pulls_limit: int | None = None,
+) -> dict[str, dict]:
+    if not site_plans:
+        return site_plans
+    site_ids = [int(site_id) for site_id in site_plans.keys()]
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
+    rows_by_site: dict[int, list[SiteWorker]] = {}
+    for row in rows:
+        rows_by_site.setdefault(int(row.site_id), []).append(row)
+
+    for site_id_str, site_plan in site_plans.items():
+        site_id = int(site_id_str)
+        site = sites_by_id.get(site_id)
+        if not site:
+            continue
+        site_rows = rows_by_site.get(site_id, [])
+
+        base_payload = _apply_auto_pulls_to_payload(
+            site,
+            site_rows,
+            {"assignments": deepcopy(site_plan.get("assignments") or {}), "pulls": {}},
+            pulls_limit=pulls_limit,
+        )
+        site_plan["assignments"] = base_payload.get("assignments") or {}
+        site_plan["pulls"] = base_payload.get("pulls") or {}
+        site_plan["assigned_count"] = max(
+            0,
+            int(site_plan.get("assigned_count") or 0) - len(site_plan["pulls"]),
+        )
+
+        next_alternatives: list[dict] = []
+        alternative_pulls: list[dict] = []
+        for alt_assignments in (site_plan.get("alternatives") or []):
+            alt_payload = _apply_auto_pulls_to_payload(
+                site,
+                site_rows,
+                {"assignments": deepcopy(alt_assignments or {}), "pulls": {}},
+                pulls_limit=pulls_limit,
+            )
+            next_alternatives.append(alt_payload.get("assignments") or {})
+            alternative_pulls.append(alt_payload.get("pulls") or {})
+        if next_alternatives:
+            site_plan["alternatives"] = next_alternatives
+            site_plan["alternative_pulls"] = alternative_pulls
+    return site_plans
+
+
+def _pulls_count(pulls: dict | None) -> int:
+    return len(pulls or {}) if isinstance(pulls, dict) else 0
+
+
+def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None) -> bool:
+    if pulls_limit is None:
+        return True
+    return _pulls_count(pulls) <= int(pulls_limit)
+
+
+def _planning_limit_error_detail(pulls_limit: int) -> str:
+    if int(pulls_limit) == 1:
+        return "לא נמצא תכנון עם עד משיכה אחת"
+    return f"לא נמצא תכנון עם עד {int(pulls_limit)} משיכות"
 
 
 def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
@@ -1482,6 +1917,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
     # Récupérer tous les workers users pour trouver les numéros de téléphone
     all_workers = db.query(User).filter(User.role == UserRole.worker).all()
+    director_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
     result = []
     for r in rows:
         user_worker = None
@@ -1514,6 +1950,16 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
         if not phone:
             phone = r.phone
         
+        linked_site_ids = _linked_site_ids_for_worker(db, user.id, r)
+        linked_site_names = [director_site_name_by_id[sid] for sid in linked_site_ids if sid in director_site_name_by_id]
+        logger.info(
+            "[list_workers] worker id=%s name=%s site_id=%s linked_site_ids=%s linked_site_names=%s",
+            r.id,
+            r.name,
+            r.site_id,
+            linked_site_ids,
+            linked_site_names,
+        )
         result.append(WorkerOut(
             id=r.id,
             site_id=r.site_id,
@@ -1522,7 +1968,9 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
             roles=r.roles or [],
             availability=r.availability or {},
             answers=r.answers or {},
-            phone=phone
+            phone=phone,
+            linked_site_ids=linked_site_ids,
+            linked_site_names=linked_site_names,
         ))
     return result
 
@@ -1617,6 +2065,10 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             if user_worker and not existing.user_id:
                 existing.user_id = user_worker.id
                 logger.info(f"[create-worker] Linked existing worker '{payload.name}' to User id={user_worker.id}")
+            if existing.user_id:
+                linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == existing.user_id).all()
+                for linked_row in linked_rows:
+                    linked_row.max_shifts = payload.max_shifts
             db.commit()
             db.refresh(existing)
             # Récupérer le téléphone du User lié
@@ -1624,7 +2076,9 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             if existing.user_id:
                 linked_user = db.get(User, existing.user_id)
                 phone = linked_user.phone if linked_user else None
-            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone)
+            linked_site_ids = _linked_site_ids_for_worker(db, user.id, existing)
+            linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
         
         # Créer un nouveau worker avec le lien au User si trouvé
         w = SiteWorker(
@@ -1638,11 +2092,18 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             user_id=user_worker.id if user_worker else None
         )
         db.add(w)
+        db.flush()
+        if w.user_id:
+            linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
+            for linked_row in linked_rows:
+                linked_row.max_shifts = payload.max_shifts
         db.commit()
         db.refresh(w)
         logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
         phone = user_worker.phone if user_worker else None
-        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone)
+        linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+        linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
     except HTTPException:
         raise
     except Exception as e:
@@ -1751,6 +2212,44 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         else:
             # Si ce n'est pas un dict ou si les réponses existantes ne sont pas un dict, remplacer complètement
             w.answers = payload.answers
+    if payload.week_iso and isinstance(payload.weekly_availability, dict):
+        wk = _validate_week_iso(payload.week_iso)
+        now = _now_ms()
+
+        def upsert_weekly_availability(target_site_id: int, worker_name: str, availability_value: dict[str, list[str]]) -> None:
+            row = (
+                db.query(SiteWeeklyAvailability)
+                .filter(SiteWeeklyAvailability.site_id == target_site_id)
+                .filter(SiteWeeklyAvailability.week_iso == wk)
+                .first()
+            )
+            data = dict((row.availability or {}) if row else {})
+            data[str(worker_name)] = availability_value
+            if row:
+                row.availability = data
+                row.updated_at = now
+            else:
+                row = SiteWeeklyAvailability(site_id=target_site_id, week_iso=wk, availability=data, updated_at=now)
+                db.add(row)
+
+        cleaned_weekly_availability = {
+            day_key: [str(shift_name) for shift_name in shifts_list if str(shift_name or "").strip()]
+            for day_key, shifts_list in (payload.weekly_availability or {}).items()
+            if isinstance(shifts_list, list)
+        }
+        upsert_weekly_availability(site_id, w.name, cleaned_weekly_availability)
+
+        if payload.propagate_linked_availability:
+            linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+            linked_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids)).all()
+            for linked_row in linked_rows:
+                if _worker_identity_key(linked_row) != _worker_identity_key(w):
+                    continue
+                upsert_weekly_availability(int(linked_row.site_id), linked_row.name, cleaned_weekly_availability)
+    if w.user_id:
+        linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
+        for linked_row in linked_rows:
+            linked_row.max_shifts = payload.max_shifts
     db.commit()
     db.refresh(w)
     phone = None
@@ -1759,7 +2258,9 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         phone = linked_user.phone if linked_user else None
     if not phone:
         phone = w.phone
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone)
+    linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+    linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
 
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)
@@ -1781,6 +2282,299 @@ def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_rol
     logger.info(f"[delete-worker] Deleted worker '{w.name}' (id={worker_id}) from site {site_id}")
 
     return Response(status_code=204)
+
+
+@router.get("/{site_id}/linked-sites")
+def get_linked_sites(
+    site_id: int,
+    week: str | None = Query(None),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    linked_site_ids = _connected_site_ids_for_root(db, user.id, site_id)
+    sites = db.query(Site).filter(Site.id.in_(linked_site_ids)).all() if linked_site_ids else []
+    by_id = {int(s.id): s for s in sites}
+    week_iso = _validate_week_iso(week) if week else None
+    plan_rows_by_site: dict[int, list[SiteWeekPlan]] = {}
+    if week_iso and linked_site_ids:
+        rows = (
+            db.query(SiteWeekPlan)
+            .filter(SiteWeekPlan.site_id.in_(linked_site_ids))
+            .filter(SiteWeekPlan.week_iso == week_iso)
+            .filter(SiteWeekPlan.scope.in_(["director", "shared"]))
+            .all()
+        )
+        for row in rows:
+            plan_rows_by_site.setdefault(int(row.site_id), []).append(row)
+
+    def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
+        best_row: SiteWeekPlan | None = None
+        best_rank = -1
+        for row in site_rows:
+            data = row.data if isinstance(row.data, dict) else {}
+            assignments = data.get("assignments")
+            has_assignments = isinstance(assignments, dict)
+            rank = 0
+            if has_assignments:
+                rank += 10
+            if row.scope == "shared":
+                rank += 1
+            if rank > best_rank:
+                best_rank = rank
+                best_row = row
+        return best_row
+
+    response: list[dict] = []
+    for linked_site_id in linked_site_ids:
+        linked_site_int = int(linked_site_id)
+        linked_site = by_id.get(linked_site_int)
+        if not linked_site:
+            continue
+        entry = {"id": linked_site_int, "name": linked_site.name}
+        if week_iso:
+            preferred_row = _preferred_week_plan(plan_rows_by_site.get(linked_site_int, []))
+            data = preferred_row.data if preferred_row and isinstance(preferred_row.data, dict) else {}
+            summary = _summarize_auto_planning_result(
+                linked_site,
+                data.get("assignments"),
+                week_iso,
+                "linked-sites",
+                pulls=data.get("pulls") if isinstance(data.get("pulls"), dict) else None,
+            )
+            entry["assigned_count"] = int(summary.get("assigned_count") or 0)
+            entry["required_count"] = int(summary.get("required_count") or 0)
+        response.append(entry)
+    return response
+
+
+@router.post("/{site_id}/ai-generate-linked")
+def ai_generate_linked_planning(
+    site_id: int,
+    payload: AIPlanningRequest = Body(default=AIPlanningRequest()),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    week_iso = _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now())
+    result = _generate_multi_site_memory_plans(
+        db,
+        user.id,
+        site_id,
+        week_iso,
+        weekly_availability=(payload.weekly_availability or {}) if payload else None,
+        exclude_days=payload.exclude_days if payload else None,
+        fixed_assignments=payload.fixed_assignments if payload else None,
+        num_alternatives=payload.num_alternatives if payload else 20,
+    )
+    if payload and payload.auto_pulls_enabled:
+        context = _build_multi_site_generation_context(
+            db,
+            user.id,
+            site_id,
+            week_iso,
+            weekly_availability=(payload.weekly_availability or {}) if payload else None,
+            exclude_days=payload.exclude_days if payload else None,
+            fixed_assignments=payload.fixed_assignments if payload else None,
+        )
+        result["site_plans"] = _apply_auto_pulls_to_site_plans(
+            db,
+            context["sites_by_id"],
+            result.get("site_plans") or {},
+            pulls_limit=payload.pulls_limit if payload else None,
+        )
+        pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
+        if pulls_limit is not None:
+            site_plans = result.get("site_plans") or {}
+            candidate_count = 1 + max((len(site_plan.get("alternatives") or []) for site_plan in site_plans.values()), default=0)
+            accepted_indices: list[int] = []
+            for candidate_idx in range(candidate_count):
+                matches_all_sites = True
+                for site_plan in site_plans.values():
+                    if candidate_idx == 0:
+                        candidate_pulls = site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {}
+                    else:
+                        alt_pulls_list = site_plan.get("alternative_pulls") or []
+                        candidate_pulls = (alt_pulls_list[candidate_idx - 1] or {}) if candidate_idx - 1 < len(alt_pulls_list) else None
+                    if not _matches_pulls_limit(candidate_pulls if isinstance(candidate_pulls, dict) else {}, pulls_limit):
+                        matches_all_sites = False
+                        break
+                if matches_all_sites:
+                    accepted_indices.append(candidate_idx)
+            if not accepted_indices:
+                raise HTTPException(status_code=422, detail=_planning_limit_error_detail(pulls_limit))
+            filtered_site_plans: dict[str, dict] = {}
+            for site_key, site_plan in site_plans.items():
+                next_site_plan = dict(site_plan)
+                first_idx = accepted_indices[0]
+                if first_idx == 0:
+                    next_site_plan["assignments"] = site_plan.get("assignments") or {}
+                    next_site_plan["pulls"] = site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {}
+                else:
+                    alternatives = site_plan.get("alternatives") or []
+                    alternative_pulls = site_plan.get("alternative_pulls") or []
+                    next_site_plan["assignments"] = (alternatives[first_idx - 1] or {}) if first_idx - 1 < len(alternatives) else {}
+                    next_site_plan["pulls"] = (alternative_pulls[first_idx - 1] or {}) if first_idx - 1 < len(alternative_pulls) else {}
+                next_site_plan["alternatives"] = []
+                next_site_plan["alternative_pulls"] = []
+                for candidate_idx in accepted_indices[1:]:
+                    if candidate_idx == 0:
+                        next_site_plan["alternatives"].append(site_plan.get("assignments") or {})
+                        next_site_plan["alternative_pulls"].append(site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {})
+                    else:
+                        alternatives = site_plan.get("alternatives") or []
+                        alternative_pulls = site_plan.get("alternative_pulls") or []
+                        if candidate_idx - 1 < len(alternatives):
+                            next_site_plan["alternatives"].append(alternatives[candidate_idx - 1] or {})
+                            next_site_plan["alternative_pulls"].append((alternative_pulls[candidate_idx - 1] or {}) if candidate_idx - 1 < len(alternative_pulls) else {})
+                filtered_site_plans[site_key] = next_site_plan
+            result["site_plans"] = filtered_site_plans
+    return result
+
+
+@router.api_route("/{site_id}/ai-generate-linked/stream", methods=["GET", "POST"])
+async def ai_generate_linked_planning_stream(
+    site_id: int,
+    request: Request,
+    payload: AIPlanningRequest = Body(default=AIPlanningRequest()),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    if request.method == "GET":
+        q_num_alternatives = request.query_params.get("num_alternatives")
+        q_time_limit_seconds = request.query_params.get("time_limit_seconds")
+        q_max_nights_per_worker = request.query_params.get("max_nights_per_worker")
+    else:
+        q_num_alternatives = None
+        q_time_limit_seconds = None
+        q_max_nights_per_worker = None
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                q_num_alternatives = body.get("num_alternatives")
+                q_time_limit_seconds = body.get("time_limit_seconds")
+                q_max_nights_per_worker = body.get("max_nights_per_worker")
+                if body and "weekly_availability" in body:
+                    cleaned_wa = {}
+                    for worker_name, worker_avail in (body.get("weekly_availability") or {}).items():
+                        if isinstance(worker_avail, dict):
+                            if "availability" in worker_avail and not any(k in worker_avail for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]):
+                                cleaned_wa[worker_name] = worker_avail["availability"]
+                            else:
+                                cleaned_wa[worker_name] = worker_avail
+                    payload.weekly_availability = cleaned_wa if cleaned_wa else None
+        except Exception:
+            pass
+
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+
+    eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
+    eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
+    eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
+    eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
+
+    context = _build_multi_site_generation_context(
+        db,
+        user.id,
+        site_id,
+        _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now()),
+        weekly_availability=(payload.weekly_availability or {}) if payload else None,
+        exclude_days=payload.exclude_days if payload else None,
+        fixed_assignments=payload.fixed_assignments if payload else None,
+    )
+
+    linked_sites = [
+        {"id": linked_site_id, "name": context["sites_by_id"][linked_site_id].name}
+        for linked_site_id in context["connected_site_ids"]
+        if linked_site_id in context["sites_by_id"]
+    ]
+
+    async def event_stream():
+        import threading, queue, json, asyncio as _asyncio
+        q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
+
+        def _producer():
+            matched_candidates = 0
+            try:
+                gen = solve_schedule_stream(
+                    context["combined_config"],
+                    context["combined_workers"],
+                    time_limit_seconds=eff_time,
+                    max_nights_per_worker=eff_max_nights,
+                    num_alternatives=eff_num_alts,
+                    fixed_assignments=context["combined_fixed"],
+                    exclude_days=(payload.exclude_days or None),
+                )
+                for item in gen:
+                    if item.get("type") in {"base", "alternative"}:
+                        split_site_plans = _split_multi_site_assignments(
+                            context,
+                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                            status="STREAMING" if item.get("type") == "base" else None,
+                            objective=0,
+                        )
+                        if payload and payload.auto_pulls_enabled:
+                            split_site_plans = _apply_auto_pulls_to_site_plans(
+                                db,
+                                context["sites_by_id"],
+                                split_site_plans,
+                                pulls_limit=eff_pulls_limit,
+                            )
+                        if eff_pulls_limit is not None:
+                            if not split_site_plans:
+                                continue
+                            plans = list(split_site_plans.values())
+                            if not plans or not all(_matches_pulls_limit(plan.get("pulls"), eff_pulls_limit) for plan in plans):
+                                continue
+                            matched_candidates += 1
+                        q.put({
+                            "type": item.get("type"),
+                            "index": item.get("index"),
+                            "source": item.get("source"),
+                            "linked_sites": linked_sites,
+                            "site_plans": split_site_plans,
+                        })
+                    else:
+                        if item.get("type") == "done" and eff_pulls_limit is not None and matched_candidates == 0:
+                            q.put({
+                                "type": "status",
+                                "status": "ERROR",
+                                "detail": _planning_limit_error_detail(eff_pulls_limit),
+                                "linked_sites": linked_sites,
+                            })
+                            continue
+                        enriched = dict(item)
+                        enriched["linked_sites"] = linked_sites
+                        q.put(enriched)
+            except Exception as e:
+                q.put({"type": "status", "status": "ERROR", "detail": str(e), "linked_sites": linked_sites})
+            finally:
+                q.put(None)
+
+        threading.Thread(target=_producer, daemon=True).start()
+
+        while True:
+            item = await _asyncio.to_thread(q.get)
+            if item is None:
+                break
+            try:
+                chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                yield chunk
+            finally:
+                await asyncio.sleep(0)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream; charset=utf-8", headers=headers)
 
 
 @router.post("/{site_id}/ai-generate", response_model=AIPlanningResponse)
@@ -1847,12 +2641,48 @@ def ai_generate_planning(
         fixed_assignments=payload.fixed_assignments or None,
         exclude_days=(payload.exclude_days or None),
     )
+    base_pulls: dict = {}
+    alt_pulls: list[dict] = []
+    assignments_out = result["assignments"]
+    alternatives_out = result.get("alternatives", [])
+    if payload.auto_pulls_enabled:
+        base_payload = _apply_auto_pulls_to_payload(
+            site,
+            rows,
+            {"assignments": deepcopy(result["assignments"]), "pulls": {}},
+            pulls_limit=payload.pulls_limit,
+        )
+        candidate_pairs: list[tuple[dict, dict]] = []
+        base_assignments = base_payload.get("assignments") or {}
+        base_pulls = base_payload.get("pulls") or {}
+        if _matches_pulls_limit(base_pulls, payload.pulls_limit):
+            candidate_pairs.append((base_assignments, base_pulls))
+        for alt in (result.get("alternatives") or []):
+            alt_payload = _apply_auto_pulls_to_payload(
+                site,
+                rows,
+                {"assignments": deepcopy(alt), "pulls": {}},
+                pulls_limit=payload.pulls_limit,
+            )
+            current_alt_assignments = alt_payload.get("assignments") or {}
+            current_alt_pulls = alt_payload.get("pulls") or {}
+            if _matches_pulls_limit(current_alt_pulls, payload.pulls_limit):
+                candidate_pairs.append((current_alt_assignments, current_alt_pulls))
+        if payload.pulls_limit is not None and not candidate_pairs:
+            raise HTTPException(status_code=422, detail=_planning_limit_error_detail(payload.pulls_limit))
+        if candidate_pairs:
+            assignments_out = candidate_pairs[0][0]
+            base_pulls = candidate_pairs[0][1]
+            alternatives_out = [assignments for assignments, _ in candidate_pairs[1:]]
+            alt_pulls = [pulls for _, pulls in candidate_pairs[1:]]
     return AIPlanningResponse(
         days=result["days"],
         shifts=result["shifts"],
         stations=result["stations"],
-        assignments=result["assignments"],
-        alternatives=result.get("alternatives", []),
+        assignments=assignments_out,
+        alternatives=alternatives_out,
+        pulls=base_pulls,
+        alternative_pulls=alt_pulls,
         status=result["status"],
         objective=float(result.get("objective", 0.0)),
     )
@@ -1946,6 +2776,7 @@ async def ai_generate_stream(
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
+    eff_pulls_limit = int(payload.pulls_limit) if payload.pulls_limit is not None else None
     logger.info("[SSE] start site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%s", site_id, eff_time, eff_max_nights, eff_num_alts, [w["name"] for w in workers])
 
     async def event_stream():
@@ -1954,6 +2785,7 @@ async def ai_generate_stream(
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
 
         def _producer():
+            matched_candidates = 0
             try:
                 gen = solve_schedule_stream(
                     site.config or {},
@@ -1965,6 +2797,24 @@ async def ai_generate_stream(
                     exclude_days=(payload.exclude_days or None),
                 )
                 for item in gen:
+                    if item.get("type") in {"base", "alternative"} and payload.auto_pulls_enabled:
+                        transformed = _apply_auto_pulls_to_payload(
+                            site,
+                            rows,
+                            {"assignments": deepcopy(item.get("assignments") or {}), "pulls": {}},
+                            pulls_limit=eff_pulls_limit,
+                        )
+                        if eff_pulls_limit is not None and not _matches_pulls_limit(transformed.get("pulls"), eff_pulls_limit):
+                            continue
+                        enriched = dict(item)
+                        enriched["assignments"] = transformed.get("assignments") or {}
+                        enriched["pulls"] = transformed.get("pulls") or {}
+                        matched_candidates += 1
+                        q.put(enriched)
+                        continue
+                    if item.get("type") == "done" and payload.auto_pulls_enabled and eff_pulls_limit is not None and matched_candidates == 0:
+                        q.put({"type": "status", "status": "ERROR", "detail": _planning_limit_error_detail(eff_pulls_limit)})
+                        continue
                     q.put(item)
             except Exception as e:  # met l'erreur dans le flux
                 q.put({"type": "status", "status": "ERROR", "detail": str(e)})

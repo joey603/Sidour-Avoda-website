@@ -1,9 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from .deps import get_db, get_current_user
 from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User
-from .schemas import WorkerCreate, WorkerOut, SiteMessageOut
+from .schemas import WorkerCreate, WorkerOut, SiteMessageOut, WorkerContextOut, WorkerContextUpdatePayload
 import re
 
 router = APIRouter(prefix="/public/sites", tags=["public-workers"])
@@ -18,21 +18,189 @@ def _validate_week_iso(week_iso: str) -> str:
     return wk
 
 
+def _norm_worker_name(value: str | None) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _get_affiliated_site_workers(user: User, db: Session) -> list[SiteWorker]:
+    query = db.query(SiteWorker)
+    phone = (user.phone or "").strip()
+    user_name = _norm_worker_name(user.full_name)
+    filters = [SiteWorker.user_id == user.id]
+    if phone:
+        filters.append(SiteWorker.phone == phone)
+    rows = query.filter(or_(*filters)).all()
+    if rows:
+        return rows
+    return query.filter(func.lower(SiteWorker.name) == user_name).all()
+
+
+def _extract_week_answers(raw_answers: dict | None, week_iso: str | None) -> dict:
+    answers = raw_answers or {}
+    if not isinstance(answers, dict):
+        return {}
+    if week_iso and week_iso in answers and isinstance(answers.get(week_iso), dict):
+        return answers.get(week_iso) or {}
+    if "general" in answers or "perDay" in answers:
+        return {
+            "general": answers.get("general") if isinstance(answers.get("general"), dict) else {},
+            "perDay": answers.get("perDay") if isinstance(answers.get("perDay"), dict) else {},
+        }
+    return answers
+
+
 @router.get("/worker-sites")
 def get_worker_sites(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Endpoint pour obtenir la liste des sites où un travailleur est enregistré"""
     if user.role.value != "worker":
         raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
-    
-    # Récupérer tous les sites où le travailleur est enregistré (par nom)
-    rows = (
-        db.query(Site.id, Site.name)
-        .join(SiteWorker, SiteWorker.site_id == Site.id)
-        .filter(func.lower(SiteWorker.name) == func.lower(user.full_name))
-        .distinct()
-        .all()
+
+    rows = _get_affiliated_site_workers(user, db)
+    site_ids = sorted({int(r.site_id) for r in rows})
+    if not site_ids:
+        return []
+    sites = db.query(Site).filter(Site.id.in_(site_ids)).all()
+    by_id = {int(s.id): s for s in sites}
+    return [{"id": sid, "name": by_id[sid].name} for sid in site_ids if sid in by_id]
+
+
+@router.get("/worker-context", response_model=WorkerContextOut)
+def get_worker_context(
+    week_key: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+
+    wk = _validate_week_iso(week_key) if week_key else None
+    rows = _get_affiliated_site_workers(user, db)
+    site_ids = sorted({int(r.site_id) for r in rows})
+    sites = db.query(Site).filter(Site.id.in_(site_ids)).all() if site_ids else []
+    sites_by_id = {int(s.id): s for s in sites}
+
+    shifts_set: set[str] = set()
+    questions: list[dict] = []
+    merged_availability: dict[str, list[str]] = {k: [] for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]}
+    merged_answers_general: dict[str, object] = {}
+    merged_answers_per_day: dict[str, dict[str, object]] = {}
+    max_shifts_candidates: list[int] = []
+
+    for row in rows:
+        site = sites_by_id.get(int(row.site_id))
+        if not site:
+            continue
+        config = site.config or {}
+        stations = config.get("stations", []) or []
+        local_shifts: set[str] = set()
+        for st in stations:
+            for sh in (st.get("shifts") or []):
+                if sh and sh.get("enabled") and sh.get("name"):
+                    local_shifts.add(str(sh.get("name")))
+            if st.get("perDayCustom"):
+                for ov in ((st.get("dayOverrides") or {}).values()):
+                    if ov and ov.get("active"):
+                        for sh in (ov.get("shifts") or []):
+                            if sh and sh.get("enabled") and sh.get("name"):
+                                local_shifts.add(str(sh.get("name")))
+        shifts_set.update(local_shifts)
+
+        for q in (config.get("questions") or []):
+            qid = str((q or {}).get("id") or "").strip()
+            label = str((q or {}).get("label") or "").strip()
+            if not qid or not label:
+                continue
+            questions.append({
+                "id": f"site:{row.site_id}:{qid}",
+                "label": f"{site.name} • {label}",
+                "type": (q or {}).get("type") or "text",
+                "perDay": bool((q or {}).get("perDay")),
+                "options": (q or {}).get("options") or [],
+                "slider": (q or {}).get("slider"),
+                "source_site_id": int(row.site_id),
+                "source_site_name": site.name,
+                "original_id": qid,
+            })
+
+        avail = row.availability or {}
+        if isinstance(avail, dict):
+            for day_key, shifts_list in avail.items():
+                if isinstance(shifts_list, list):
+                    merged_availability[day_key] = sorted({*merged_availability.get(day_key, []), *[str(x) for x in shifts_list if x]})
+
+        if isinstance(row.max_shifts, int) and row.max_shifts > 0:
+            max_shifts_candidates.append(int(row.max_shifts))
+
+        week_answers = _extract_week_answers(row.answers if isinstance(row.answers, dict) else {}, wk)
+        general = week_answers.get("general") if isinstance(week_answers, dict) else {}
+        per_day = week_answers.get("perDay") if isinstance(week_answers, dict) else {}
+        if isinstance(general, dict):
+            for key, value in general.items():
+                merged_answers_general[f"site:{row.site_id}:{key}"] = value
+        if isinstance(per_day, dict):
+            for key, value in per_day.items():
+                if not isinstance(value, dict):
+                    continue
+                merged_answers_per_day[f"site:{row.site_id}:{key}"] = {str(k): v for k, v in value.items()}
+
+    return WorkerContextOut(
+        worker_name=user.full_name or "",
+        sites=[{"id": sid, "name": sites_by_id[sid].name} for sid in site_ids if sid in sites_by_id],
+        shifts=sorted(shifts_set),
+        questions=questions,
+        availability=merged_availability,
+        answers={"general": merged_answers_general, "perDay": merged_answers_per_day},
+        max_shifts=min(max_shifts_candidates) if max_shifts_candidates else 5,
     )
-    return [{"id": r.id, "name": r.name} for r in rows]
+
+
+@router.post("/worker-context")
+def save_worker_context(
+    payload: WorkerContextUpdatePayload = Body(default=WorkerContextUpdatePayload()),
+    week_key: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+    wk = _validate_week_iso(week_key) if week_key else None
+    rows = _get_affiliated_site_workers(user, db)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Aucun site affilié")
+
+    payload_answers = payload.answers if isinstance(payload.answers, dict) else {}
+    general_answers = payload_answers.get("general") if isinstance(payload_answers.get("general"), dict) else {}
+    per_day_answers = payload_answers.get("perDay") if isinstance(payload_answers.get("perDay"), dict) else {}
+
+    for row in rows:
+        row.availability = payload.availability or {}
+        row.max_shifts = int(payload.max_shifts or 5)
+        if row.user_id is None:
+            row.user_id = user.id
+
+        site_general = {}
+        for key, value in general_answers.items():
+            prefix = f"site:{row.site_id}:"
+            if str(key).startswith(prefix):
+                site_general[str(key)[len(prefix):]] = value
+
+        site_per_day = {}
+        for key, value in per_day_answers.items():
+            prefix = f"site:{row.site_id}:"
+            if str(key).startswith(prefix) and isinstance(value, dict):
+                site_per_day[str(key)[len(prefix):]] = value
+
+        answers_data = {"general": site_general, "perDay": site_per_day}
+        if wk:
+            base = row.answers if isinstance(row.answers, dict) else {}
+            next_answers = dict(base)
+            next_answers[wk] = answers_data
+            row.answers = next_answers
+        else:
+            row.answers = answers_data
+
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/{site_id}/info")
