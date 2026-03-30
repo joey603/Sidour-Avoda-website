@@ -49,12 +49,24 @@ def _extract_week_answers(raw_answers: dict | None, week_iso: str | None) -> dic
     return answers
 
 
+def _normalize_availability_map(raw_value: dict | None) -> dict[str, list[str]]:
+    raw = raw_value or {}
+    out: dict[str, list[str]] = {k: [] for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]}
+    if not isinstance(raw, dict):
+        return out
+    for day_key, shifts_list in raw.items():
+        if day_key not in out or not isinstance(shifts_list, list):
+            continue
+        out[day_key] = sorted({str(x) for x in shifts_list if str(x or "").strip()})
+    return out
+
+
 @router.get("/worker-sites")
 def get_worker_sites(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Endpoint pour obtenir la liste des sites où un travailleur est enregistré"""
     if user.role.value != "worker":
         raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
-
+    
     rows = _get_affiliated_site_workers(user, db)
     site_ids = sorted({int(r.site_id) for r in rows})
     if not site_ids:
@@ -82,6 +94,7 @@ def get_worker_context(
     shifts_set: set[str] = set()
     questions: list[dict] = []
     merged_availability: dict[str, list[str]] = {k: [] for k in ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]}
+    availability_by_site: dict[str, dict[str, list[str]]] = {}
     merged_answers_general: dict[str, object] = {}
     merged_answers_per_day: dict[str, dict[str, object]] = {}
     max_shifts_candidates: list[int] = []
@@ -122,11 +135,10 @@ def get_worker_context(
                 "original_id": qid,
             })
 
-        avail = row.availability or {}
-        if isinstance(avail, dict):
-            for day_key, shifts_list in avail.items():
-                if isinstance(shifts_list, list):
-                    merged_availability[day_key] = sorted({*merged_availability.get(day_key, []), *[str(x) for x in shifts_list if x]})
+        normalized_availability = _normalize_availability_map(row.availability if isinstance(row.availability, dict) else {})
+        availability_by_site[str(row.site_id)] = normalized_availability
+        for day_key, shifts_list in normalized_availability.items():
+            merged_availability[day_key] = sorted({*merged_availability.get(day_key, []), *[str(x) for x in shifts_list if x]})
 
         if isinstance(row.max_shifts, int) and row.max_shifts > 0:
             max_shifts_candidates.append(int(row.max_shifts))
@@ -149,6 +161,7 @@ def get_worker_context(
         shifts=sorted(shifts_set),
         questions=questions,
         availability=merged_availability,
+        availability_by_site=availability_by_site,
         answers={"general": merged_answers_general, "perDay": merged_answers_per_day},
         max_shifts=min(max_shifts_candidates) if max_shifts_candidates else 5,
     )
@@ -171,9 +184,14 @@ def save_worker_context(
     payload_answers = payload.answers if isinstance(payload.answers, dict) else {}
     general_answers = payload_answers.get("general") if isinstance(payload_answers.get("general"), dict) else {}
     per_day_answers = payload_answers.get("perDay") if isinstance(payload_answers.get("perDay"), dict) else {}
+    availability_by_site = payload.availability_by_site if isinstance(payload.availability_by_site, dict) else {}
 
     for row in rows:
-        row.availability = payload.availability or {}
+        site_specific_availability = availability_by_site.get(str(row.site_id))
+        if isinstance(site_specific_availability, dict):
+            row.availability = _normalize_availability_map(site_specific_availability)
+        else:
+            row.availability = _normalize_availability_map(payload.availability if isinstance(payload.availability, dict) else {})
         row.max_shifts = int(payload.max_shifts or 5)
         if row.user_id is None:
             row.user_id = user.id

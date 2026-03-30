@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
@@ -18,6 +18,8 @@ interface Site {
     assigned_count?: number;
     required_count?: number;
     pulls_count?: number;
+    scope?: "auto" | "director" | "shared" | null;
+    requires_manual_save?: boolean;
   } | null;
   config?: {
     autoPlanningLastRun?: {
@@ -38,6 +40,7 @@ interface AutoPlanningConfig {
   hour: number;
   minute: number;
   auto_pulls_enabled?: boolean;
+  auto_save_mode?: "manual" | "director" | "shared";
   last_run_week_iso?: string | null;
   last_run_at?: number | null;
   last_error?: string | null;
@@ -63,9 +66,33 @@ const AUTO_PLANNING_DAY_OPTIONS = [
   { value: 6, label: "שבת" },
 ];
 
+const AUTO_PLANNING_SAVE_MODE_OPTIONS = [
+  {
+    value: "manual",
+    label: "ידני",
+    description: "ברירת מחדל. כל התכנונים נשמרים כטיוטה ומחכים ל-שמור או שמור ואשלח ידני.",
+  },
+  {
+    value: "director",
+    label: "שמור אוטומטית אם מלא",
+    description: "אם תכנון של אתר מלא לחלוטין, הוא יישמר אוטומטית למנהל בלבד.",
+  },
+  {
+    value: "shared",
+    label: "שמור ואשלח אוטומטית אם מלא",
+    description: "אם תכנון של אתר מלא לחלוטין, הוא יישמר ויישלח אוטומטית לעובדים.",
+  },
+] as const;
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error || "");
+}
+
+function getAutoPlanningResultLabel(mode: AutoPlanningConfig["auto_save_mode"] | undefined): string {
+  if (mode === "director") return "תוכניות שנשמרו אוטומטית";
+  if (mode === "shared") return "תוכניות שנשמרו ונשלחו אוטומטית";
+  return "טיוטות";
 }
 
 function getSiteAutoPlanningStatus(site: Site) {
@@ -114,12 +141,31 @@ export default function SitesList() {
   const [autoPlanningSaving, setAutoPlanningSaving] = useState(false);
   const [autoPlanningTesting, setAutoPlanningTesting] = useState(false);
   const [scheduledAutoPlanningRunning, setScheduledAutoPlanningRunning] = useState(false);
+  const [openActionsSiteId, setOpenActionsSiteId] = useState<number | null>(null);
+  const actionsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [autoPlanAction, setAutoPlanAction] = useState<{ siteId: number | null; publish: boolean | null }>({
+    siteId: null,
+    publish: null,
+  });
   const [autoPlanningForm, setAutoPlanningForm] = useState({
     enabled: false,
     day_of_week: 0,
     time: "09:00",
     auto_pulls_enabled: false,
+    auto_save_mode: "manual" as "manual" | "director" | "shared",
   });
+
+  useEffect(() => {
+    if (openActionsSiteId === null) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const el = actionsMenuRef.current;
+      const target = e.target as Node | null;
+      if (!el || !target) return;
+      if (!el.contains(target)) setOpenActionsSiteId(null);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [openActionsSiteId]);
 
   async function fetchSites() {
     try {
@@ -145,6 +191,7 @@ export default function SitesList() {
         day_of_week: Number(config.day_of_week || 0),
         time: `${String(config.hour ?? 9).padStart(2, "0")}:${String(config.minute ?? 0).padStart(2, "0")}`,
         auto_pulls_enabled: !!config.auto_pulls_enabled,
+        auto_save_mode: config.auto_save_mode || "manual",
       });
       return config;
     } catch {
@@ -290,6 +337,7 @@ export default function SitesList() {
       day_of_week: Number(config?.day_of_week || 0),
       time: `${String(config?.hour ?? 9).padStart(2, "0")}:${String(config?.minute ?? 0).padStart(2, "0")}`,
       auto_pulls_enabled: !!config?.auto_pulls_enabled,
+      auto_save_mode: config?.auto_save_mode || "manual",
     });
     setAutoPlanningModalOpen(true);
   }
@@ -317,6 +365,7 @@ export default function SitesList() {
           hour,
           minute,
           auto_pulls_enabled: autoPlanningForm.auto_pulls_enabled,
+          auto_save_mode: autoPlanningForm.auto_save_mode,
         }),
       });
       setAutoPlanningConfig(saved);
@@ -338,19 +387,45 @@ export default function SitesList() {
       });
       setAutoPlanningConfig(result.config);
       await fetchSites();
+      // À la fin de la ריצה, fermer la popup pour laisser l'utilisateur voir directement la liste.
+      setAutoPlanningModalOpen(false);
+      const resultLabel = getAutoPlanningResultLabel(result.config.auto_save_mode);
       if (result.ok) {
         toast.success("ההרצה הידנית הושלמה בהצלחה", {
-          description: `נוצרו ${result.generated_sites} אתרים עבור השבוע ${result.target_week_iso}`,
+          description: `נוצרו ${result.generated_sites} ${resultLabel} לשבוע ${result.target_week_iso}`,
         });
       } else {
         toast.error("ההרצה הידנית הסתיימה עם שגיאות", {
-          description: `נוצרו ${result.generated_sites} אתרים, ${result.errors.length} שגיאות`,
+          description: `נוצרו ${result.generated_sites} ${resultLabel}, ${result.errors.length} שגיאות`,
         });
       }
     } catch (e: unknown) {
       toast.error("שגיאה בהרצה ידנית", { description: getErrorMessage(e) });
+      setAutoPlanningModalOpen(false);
     } finally {
       setAutoPlanningTesting(false);
+    }
+  }
+
+  async function onPromoteAutoPlan(site: Site, publish: boolean) {
+    const weekIso = site.next_week_saved_plan_status?.week_iso;
+    if (!weekIso) {
+      toast.error("לא נמצאה טיוטת תכנון");
+      return;
+    }
+    setAutoPlanAction({ siteId: site.id, publish });
+    try {
+      await apiFetch(`/director/sites/${site.id}/week-plan/promote-auto?week=${encodeURIComponent(weekIso)}&publish=${publish ? "true" : "false"}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+      });
+      setOpenActionsSiteId(null);
+      await fetchSites();
+      toast.success(publish ? "התכנון נשמר ונשלח" : "התכנון נשמר");
+    } catch (e: unknown) {
+      toast.error("שגיאה בשמירת הטיוטה", { description: getErrorMessage(e) });
+    } finally {
+      setAutoPlanAction({ siteId: null, publish: null });
     }
   }
 
@@ -380,6 +455,8 @@ export default function SitesList() {
     };
   }, [autoPlanningConfig]);
 
+  // Si l'auto-planning est désactivé, on n'affiche ni badges ni actions liées,
+  // même si une טיוטה auto existe déjà en base.
   const showAutoPlanningSiteStatuses = !!autoPlanningConfig?.enabled;
 
   return (
@@ -583,10 +660,49 @@ export default function SitesList() {
                                 {getSiteAutoPlanningStatus(s)?.pulls_count} משיכות
                               </span>
                             ) : null}
+                            {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                                ממתין לשמירה
+                              </span>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
                       <div className="flex items-center gap-2">
+                        {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                          <div
+                            className="relative"
+                            ref={openActionsSiteId === s.id ? actionsMenuRef : null}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
+                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1 text-sm text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50"
+                            >
+                              פעולות
+                            </button>
+                            {openActionsSiteId === s.id ? (
+                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[160px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                                <button
+                                  type="button"
+                                  onClick={() => void onPromoteAutoPlan(s, false)}
+                                  disabled={autoPlanAction.siteId === s.id}
+                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                >
+                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void onPromoteAutoPlan(s, true)}
+                                  disabled={autoPlanAction.siteId === s.id}
+                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                >
+                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <button
                           onClick={() => router.push(`/director/planning/${s.id}`)}
                           className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
@@ -643,9 +759,48 @@ export default function SitesList() {
                               {getSiteAutoPlanningStatus(s)?.pulls_count} משיכות
                             </span>
                           ) : null}
+                          {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                              ממתין לשמירה
+                            </span>
+                          ) : null}
                         </div>
                       ) : null}
                       <div className="flex items-center gap-2">
+                        {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                          <div
+                            className="relative"
+                            ref={openActionsSiteId === s.id ? actionsMenuRef : null}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
+                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1 text-sm text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50"
+                            >
+                              פעולות
+                            </button>
+                            {openActionsSiteId === s.id ? (
+                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[160px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                                <button
+                                  type="button"
+                                  onClick={() => void onPromoteAutoPlan(s, false)}
+                                  disabled={autoPlanAction.siteId === s.id}
+                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                >
+                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void onPromoteAutoPlan(s, true)}
+                                  disabled={autoPlanAction.siteId === s.id}
+                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                >
+                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <button
                           onClick={() => router.push(`/director/planning/${s.id}`)}
                           className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
@@ -677,14 +832,14 @@ export default function SitesList() {
       {autoPlanningModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 md:items-center md:p-6" onClick={() => setAutoPlanningModalOpen(false)}>
           <div
-            className="w-full max-w-md rounded-2xl bg-white shadow-2xl dark:bg-zinc-900"
+            className="flex max-h-[88dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base font-semibold">תכנון אוטומטי / שבועי</h3>
-                  <p className="mt-1 text-xs text-zinc-500">ההרצה יוצרת ושומרת את התכנון הראשון עבור השבוע הבא בלבד.</p>
+                  <p className="mt-1 text-xs text-zinc-500">ההרצה יוצרת תכנון לשבוע הבא. אפשר לבחור אם להשאיר הכל ידני, או לשמור אוטומטית רק כאשר התכנון מלא.</p>
                 </div>
                 <button
                   type="button"
@@ -695,11 +850,11 @@ export default function SitesList() {
                 </button>
               </div>
             </div>
-            <div className="space-y-4 px-4 py-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
               <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
                 <div className="space-y-1">
                   <div className="text-sm font-medium">הפעל תכנון אוטומטי</div>
-                  <div className="text-xs text-zinc-500">כאשר פעיל, כל האתרים יקבלו שמירה אוטומטית לשבוע הבא.</div>
+                  <div className="text-xs text-zinc-500">כאשר פעיל, המערכת תריץ תכנון אוטומטי לכל האתרים לשבוע הבא.</div>
                 </div>
                 <input
                   type="checkbox"
@@ -720,6 +875,37 @@ export default function SitesList() {
                   className="h-5 w-5 accent-orange-500"
                 />
               </label>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">אופן שמירה אוטומטית</div>
+                <div className="space-y-2">
+                  {AUTO_PLANNING_SAVE_MODE_OPTIONS.map((option) => (
+                    <label
+                      key={option.value}
+                      className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition-colors ${
+                        autoPlanningForm.auto_save_mode === option.value
+                          ? "border-sky-300 bg-sky-50 dark:border-sky-700 dark:bg-sky-950/30"
+                          : "border-zinc-200 dark:border-zinc-800"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="auto_save_mode"
+                        value={option.value}
+                        checked={autoPlanningForm.auto_save_mode === option.value}
+                        onChange={() => setAutoPlanningForm((prev) => ({ ...prev, auto_save_mode: option.value }))}
+                        className="mt-1 h-4 w-4 accent-sky-600"
+                      />
+                      <div className="space-y-1">
+                        <div className="text-sm font-medium">{option.label}</div>
+                        <div className="text-xs text-zinc-500">{option.description}</div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-xs text-zinc-500">
+                  שומר אוטומטית רק אם האתר מלא. אם נשארו חוסרים, התכנון נשאר ידני ברשימת האתרים.
+                </div>
+              </div>
               <label className="block space-y-1">
                 <span className="text-sm font-medium">יום הפעלה</span>
                 <select
@@ -749,9 +935,11 @@ export default function SitesList() {
                 </div>
               ) : null}
             </div>
-            <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
-              <span className="text-xs text-zinc-500">{autoPlanningConfig?.last_run_week_iso ? `ריצה אחרונה לשבוע ${autoPlanningConfig.last_run_week_iso}` : "טרם בוצעה ריצה אוטומטית"}</span>
-              <div className="flex items-center gap-2">
+            <div className="shrink-0 border-t border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="mb-3 text-xs text-zinc-500">
+                {autoPlanningConfig?.last_run_week_iso ? `ריצה אחרונה לשבוע ${autoPlanningConfig.last_run_week_iso}` : "טרם בוצעה ריצה אוטומטית"}
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={onTestAutoPlanningNow}

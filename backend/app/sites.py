@@ -99,6 +99,9 @@ def _next_effective_run_time(now: datetime, config: DirectorAutoPlanningConfig) 
 
 
 def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> AutoPlanningConfigOut:
+    auto_save_mode = str(getattr(row, "auto_save_mode", "manual") or "manual")
+    if auto_save_mode not in ("manual", "director", "shared"):
+        auto_save_mode = "manual"
     next_run_at = None
     target_week_iso = None
     if row and bool(getattr(row, "enabled", False)):
@@ -111,6 +114,7 @@ def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> A
         hour=int(getattr(row, "hour", 9) or 0),
         minute=int(getattr(row, "minute", 0) or 0),
         auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
+        auto_save_mode=auto_save_mode,
         last_run_week_iso=getattr(row, "last_run_week_iso", None),
         last_run_at=getattr(row, "last_run_at", None),
         last_error=getattr(row, "last_error", None),
@@ -480,9 +484,11 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
 def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, week_iso: str) -> NextWeekSavedPlanStatus:
     assignments = None
     pulls = None
+    scope = None
     if row and isinstance(row.data, dict):
         assignments = row.data.get("assignments")
         pulls = row.data.get("pulls")
+        scope = str(row.scope or "").strip() or None
     if not isinstance(assignments, dict):
         return NextWeekSavedPlanStatus(
             exists=False,
@@ -491,6 +497,8 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
             assigned_count=0,
             required_count=0,
             pulls_count=0,
+            scope=None,
+            requires_manual_save=False,
         )
 
     summary = _summarize_auto_planning_result(
@@ -507,7 +515,26 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
         assigned_count=int(summary.get("assigned_count") or 0),
         required_count=int(summary.get("required_count") or 0),
         pulls_count=len(pulls) if isinstance(pulls, dict) else 0,
+        scope=scope if scope in ("auto", "director", "shared") else None,
+        requires_manual_save=scope == "auto",
     )
+
+
+def _week_plan_rank(row: SiteWeekPlan) -> int:
+    data = row.data if isinstance(row.data, dict) else {}
+    has_assignments = isinstance(data.get("assignments"), dict)
+    # Important: si un plan déjà sauvegardé existe (director/shared) pour cette semaine,
+    # on ne doit pas "préférer" le brouillon auto, sinon on affiche à tort
+    # le badge "ממתין לשמירה".
+    if not has_assignments:
+        return 0
+    if row.scope == "shared":
+        return 300
+    if row.scope == "director":
+        return 200
+    if row.scope == "auto":
+        return 100
+    return 0
 
 
 def _worker_identity_key(row: SiteWorker) -> str:
@@ -637,6 +664,7 @@ def _build_multi_site_generation_context(
             "roles": set(),
             "max_shifts": [],
             "availability": None,
+            "availability_by_site": {},
         })
         site_id = int(row.site_id)
         group["site_ids"].add(site_id)
@@ -650,10 +678,15 @@ def _build_multi_site_generation_context(
             override = current_site_overrides.get(row.name)
         if not isinstance(override, dict):
             override = site_weekly_overrides.get(row.name)
+        site_availability = None
         if isinstance(override, dict):
-            group["availability"] = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
-        if group["availability"] is None and isinstance(row.availability, dict):
-            group["availability"] = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+            site_availability = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
+        elif isinstance(row.availability, dict):
+            site_availability = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+        if isinstance(site_availability, dict):
+            group["availability_by_site"][str(site_id)] = site_availability
+            if site_id == int(root_site_id) or group["availability"] is None:
+                group["availability"] = site_availability
 
     combined_stations: list[dict] = []
     station_map: list[dict] = []
@@ -685,6 +718,7 @@ def _build_multi_site_generation_context(
             "max_shifts": min(group["max_shifts"]) if group["max_shifts"] else 5,
             "roles": sorted(group["roles"]),
             "availability": group["availability"] or {},
+            "availability_by_site": group["availability_by_site"] or {},
         }
         for idx, group in enumerate(worker_groups.values())
     ]
@@ -1040,6 +1074,7 @@ def _run_auto_planning_for_director(
     target_week_iso: str,
     source: str = "auto",
     auto_pulls_enabled: bool = False,
+    auto_save_mode: str = "manual",
 ) -> tuple[int, list[str]]:
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     errors: list[str] = []
@@ -1062,17 +1097,18 @@ def _run_auto_planning_for_director(
                 source,
             )
             payload = _generate_director_week_plan_payload(db, site, target_week_iso, auto_pulls_enabled=auto_pulls_enabled)
-            _save_site_week_plan(db, site.id, target_week_iso, "director", payload)
-            _store_site_auto_planning_status(
+            summary = _summarize_auto_planning_result(
                 site,
-                _summarize_auto_planning_result(
-                    site,
-                    payload.get("assignments"),
-                    target_week_iso,
-                    source,
-                    pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
-                ),
+                payload.get("assignments"),
+                target_week_iso,
+                source,
+                pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
             )
+            target_scope = "auto"
+            if bool(summary.get("complete")) and auto_save_mode in ("director", "shared"):
+                target_scope = auto_save_mode
+            _save_site_week_plan(db, site.id, target_week_iso, target_scope, payload)
+            _store_site_auto_planning_status(site, summary)
             logger.info(
                 "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
                 director_id,
@@ -1147,6 +1183,7 @@ def process_auto_planning_tick(db: Session) -> None:
             target_week_iso,
             "scheduled",
             auto_pulls_enabled=bool(getattr(config, "auto_pulls_enabled", False)),
+            auto_save_mode=str(getattr(config, "auto_save_mode", "manual") or "manual"),
         )
         config.last_run_week_iso = target_week_iso
         config.last_run_at = _now_ms()
@@ -1203,6 +1240,7 @@ def put_auto_planning_config(
             hour=payload.hour,
             minute=payload.minute,
             auto_pulls_enabled=payload.auto_pulls_enabled,
+            auto_save_mode=payload.auto_save_mode,
             updated_at=now,
         )
         db.add(row)
@@ -1212,6 +1250,7 @@ def put_auto_planning_config(
         row.hour = payload.hour
         row.minute = payload.minute
         row.auto_pulls_enabled = payload.auto_pulls_enabled
+        row.auto_save_mode = payload.auto_save_mode
         row.updated_at = now
     # Toute modification de créneau redéfinit le prochain déclenchement planifié.
     row.last_run_week_iso = None
@@ -1245,6 +1284,7 @@ def test_auto_planning_now(
             hour=9,
             minute=0,
             auto_pulls_enabled=False,
+            auto_save_mode="manual",
             updated_at=_now_ms(),
         )
         db.add(row)
@@ -1254,6 +1294,7 @@ def test_auto_planning_now(
         target_week_iso,
         "manual-test",
         auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
+        auto_save_mode=str(getattr(row, "auto_save_mode", "manual") or "manual"),
     )
     # Un test manuel ne doit jamais bloquer l'exécution planifiée du créneau hebdo.
     row.last_run_week_iso = None
@@ -1331,8 +1372,8 @@ def get_week_plan(
     _director_site_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     sc = (scope or "director").strip()
-    if sc not in ("director", "shared"):
-        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    if sc not in ("auto", "director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared)")
     row = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.site_id == site_id)
@@ -1353,8 +1394,8 @@ def put_week_plan(
     _director_site_or_404(db, site_id, user.id)
     wk = _validate_week_iso(payload.week_iso)
     sc = (payload.scope or "director").strip()
-    if sc not in ("director", "shared"):
-        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    if sc not in ("auto", "director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared)")
     now = _now_ms()
     row = (
         db.query(SiteWeekPlan)
@@ -1370,9 +1411,58 @@ def put_week_plan(
     else:
         row = SiteWeekPlan(site_id=site_id, week_iso=wk, scope=sc, data=data or {}, updated_at=now)
         db.add(row)
+    if sc in ("director", "shared"):
+        auto_row = (
+            db.query(SiteWeekPlan)
+            .filter(SiteWeekPlan.site_id == site_id)
+            .filter(SiteWeekPlan.week_iso == wk)
+            .filter(SiteWeekPlan.scope == "auto")
+            .first()
+        )
+        if auto_row:
+            db.delete(auto_row)
     db.commit()
     db.refresh(row)
     return row.data or None
+
+
+@router.post("/{site_id}/week-plan/promote-auto", response_model=dict | None)
+def promote_auto_week_plan(
+    site_id: int,
+    week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    publish: bool = Query(False, description="true => shared, false => director"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    wk = _validate_week_iso(week)
+    auto_row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == "auto")
+        .first()
+    )
+    if not auto_row:
+        raise HTTPException(status_code=404, detail="טיוטת תכנון אוטומטית לא נמצאה")
+    target_scope = "shared" if publish else "director"
+    _save_site_week_plan(
+        db,
+        site_id,
+        wk,
+        target_scope,
+        auto_row.data if isinstance(auto_row.data, dict) else {},
+    )
+    db.delete(auto_row)
+    db.commit()
+    promoted_row = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site_id)
+        .filter(SiteWeekPlan.week_iso == wk)
+        .filter(SiteWeekPlan.scope == target_scope)
+        .first()
+    )
+    return promoted_row.data if promoted_row else None
 
 
 @router.delete("/{site_id}/week-plan", status_code=204)
@@ -1709,25 +1799,13 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
     plan_rows = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.week_iso == next_week_iso)
-        .filter(SiteWeekPlan.scope.in_(["director", "shared"]))
+        .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
         .all()
     )
-    def _row_has_assignments(row: SiteWeekPlan) -> bool:
-        data = row.data if isinstance(row.data, dict) else {}
-        return isinstance(data.get("assignments"), dict)
-
     preferred_plan_by_site: dict[int, SiteWeekPlan] = {}
     for row in plan_rows:
         existing = preferred_plan_by_site.get(row.site_id)
-        if existing is None:
-            preferred_plan_by_site[row.site_id] = row
-            continue
-        existing_has_assignments = _row_has_assignments(existing)
-        row_has_assignments = _row_has_assignments(row)
-        if row_has_assignments and not existing_has_assignments:
-            preferred_plan_by_site[row.site_id] = row
-            continue
-        if row_has_assignments == existing_has_assignments and existing.scope != "shared" and row.scope == "shared":
+        if existing is None or _week_plan_rank(row) > _week_plan_rank(existing):
             preferred_plan_by_site[row.site_id] = row
     return [
         SiteOut(
@@ -2304,7 +2382,7 @@ def get_linked_sites(
             db.query(SiteWeekPlan)
             .filter(SiteWeekPlan.site_id.in_(linked_site_ids))
             .filter(SiteWeekPlan.week_iso == week_iso)
-            .filter(SiteWeekPlan.scope.in_(["director", "shared"]))
+            .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
             .all()
         )
         for row in rows:
@@ -2314,14 +2392,7 @@ def get_linked_sites(
         best_row: SiteWeekPlan | None = None
         best_rank = -1
         for row in site_rows:
-            data = row.data if isinstance(row.data, dict) else {}
-            assignments = data.get("assignments")
-            has_assignments = isinstance(assignments, dict)
-            rank = 0
-            if has_assignments:
-                rank += 10
-            if row.scope == "shared":
-                rank += 1
+            rank = _week_plan_rank(row)
             if rank > best_rank:
                 best_rank = rank
                 best_row = row

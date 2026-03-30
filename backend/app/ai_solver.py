@@ -262,6 +262,39 @@ def solve_schedule(
         for w in W
     ]
 
+    def _station_site_id(t_idx: int) -> int | None:
+        raw_site_id = stations[t_idx].get("site_id")
+        try:
+            return int(raw_site_id) if raw_site_id is not None else None
+        except Exception:
+            return None
+
+    name_to_avail: Dict[str, Dict[str, List[str]]] = {
+        (w.get("name") or ""): (w.get("availability") or {})
+        for w in workers
+    }
+    name_to_avail_by_site: Dict[str, Dict[Any, Dict[str, List[str]]]] = {
+        (w.get("name") or ""): (w.get("availability_by_site") or {})
+        for w in workers
+    }
+
+    def _avail_list_for_worker_idx(w_idx: int, day_key: str, t_idx: int) -> List[str]:
+        worker_name = str(workers[w_idx].get("name") or "")
+        return _avail_list_for_name(worker_name, day_key, t_idx)
+
+    def _avail_list_for_name(name: str, day_key: str, t_idx: int) -> List[str]:
+        site_id = _station_site_id(t_idx)
+        by_site = name_to_avail_by_site.get(name) or {}
+        if site_id is not None and isinstance(by_site, dict):
+            site_avail = by_site.get(str(site_id))
+            if not isinstance(site_avail, dict):
+                site_avail = by_site.get(site_id)
+            day_val = site_avail.get(day_key) if isinstance(site_avail, dict) else None
+            if isinstance(day_val, list):
+                return day_val
+        day_val = (name_to_avail.get(name) or {}).get(day_key)
+        return day_val if isinstance(day_val, list) else []
+
     # Map worker name -> index
     name_to_w: Dict[str, int] = {_norm_name_local(workers[i].get("name")): i for i in range(len(workers))}
 
@@ -298,8 +331,8 @@ def solve_schedule(
                     # Availability filter: if worker not available for (day, shift), force 0
                     day_key = days[d]
                     sh_name = shifts[s]
-                    avail = (workers[w].get("availability") or {}).get(day_key, [])
-                    allowed = sh_name in avail if isinstance(avail, list) else False
+                    avail = _avail_list_for_worker_idx(w, day_key, t)
+                    allowed = sh_name in avail
                     station_allowed_workers = stations[t].get("allowed_workers") or []
                     allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
@@ -658,7 +691,7 @@ def solve_schedule(
                         must_fill_role = sum(deficits.values()) > 0
                         for nm in all_names:
                             # availability
-                            if sh_name not in (name_to_avail.get(nm, {}).get(day_key) or []):
+                            if sh_name not in _avail_list_for_name(nm, day_key, t):
                                 continue
                             # same day / adjacency
                             if name_present_same_day(assignments, day_key, nm):
@@ -770,8 +803,7 @@ def solve_schedule(
                 cand = 0
                 for nm, max_sh in name_to_max.items():
                     # dispo
-                    av = name_to_avail.get(nm) or {}
-                    if sn not in (av.get(dk) or []):
+                    if sn not in _avail_list_for_name(nm, dk, t_idx):
                         continue
                     # pas déjà le même jour
                     if name_present_same_day(assignments, dk, nm):
@@ -918,10 +950,8 @@ def solve_schedule(
     seen.add(sig(assignments))
     # Enforce availability when proposing alternatives
     name_to_avail: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
-    def is_allowed(nm: str, dkey: str, sname: str) -> bool:
-        av = name_to_avail.get(nm) or {}
-        lst = av.get(dkey) or []
-        return sname in lst
+    def is_allowed(nm: str, dkey: str, sname: str, t_idx: int) -> bool:
+        return sname in _avail_list_for_name(nm, dkey, t_idx)
     def name_present_same_day(a, dkey, nm) -> bool:
         for sname in shifts:
             # across all stations
@@ -1013,9 +1043,9 @@ def solve_schedule(
                             if _is_fixed_here(nm2, dkey, s2, t_idx):
                                 continue
                             # respect availability for destinations
-                            if not is_allowed(nm1, dkey, s2):
+                            if not is_allowed(nm1, dkey, s2, t_idx):
                                 continue
-                            if not is_allowed(nm2, dkey, s1):
+                            if not is_allowed(nm2, dkey, s1, t_idx):
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # remove nm1 from s1, nm2 from s2
@@ -1070,7 +1100,7 @@ def solve_schedule(
                         if len(names_to) >= cap_to:
                             continue
                         # respect availability for destination shift
-                        if not is_allowed(nm, dkey, s_to):
+                        if not is_allowed(nm, dkey, s_to, t_idx):
                             continue
                         # ensure nm not assigned elsewhere same day in other station/shift
                         # Temporarily remove nm from s_from and test presence
@@ -1135,9 +1165,9 @@ def solve_schedule(
                             if _is_fixed_here(nm2, d2, sname, t_idx):
                                 continue
                         # respect availability when swapping days
-                        if not is_allowed(nm1, d2, sname):
+                        if not is_allowed(nm1, d2, sname, t_idx):
                             continue
-                        if not is_allowed(nm2, d1, sname):
+                        if not is_allowed(nm2, d1, sname, t_idx):
                             continue
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             # swap dans sname @ t_idx entre d1 et d2
@@ -1253,7 +1283,7 @@ def solve_schedule(
                             # forbid same-day multi-placement
                             if name_present_same_day(cand, dkey, nm):
                                 continue
-                            if not is_allowed(nm, dkey, s_to):
+                            if not is_allowed(nm, dkey, s_to, t_idx):
                                 continue
                             if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                                 continue
@@ -1327,7 +1357,7 @@ def solve_schedule(
                     # guards
                     if name_present_same_day(cand, dnext, nm):
                         continue
-                    if not is_allowed(nm, dnext, s_to):
+                    if not is_allowed(nm, dnext, s_to, t_idx):
                         continue
                     if has_adjacent_in_candidate(cand, nm, dnext, s_to):
                         continue
@@ -1452,8 +1482,8 @@ def solve_schedule_stream(
                 for t in T:
                     day_key = days[d]
                     sh_name = shifts[s]
-                    avail = (workers[w].get("availability") or {}).get(day_key, [])
-                    allowed = sh_name in avail if isinstance(avail, list) else False
+                    avail = _avail_list_for_worker_idx(w, day_key, t)
+                    allowed = sh_name in avail
                     station_allowed_workers = stations[t].get("allowed_workers") or []
                     allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
@@ -1694,7 +1724,7 @@ def solve_schedule_stream(
                         need_role = bool(role_caps) and not can_assign_with_roles(names_here, "__probe__", role_caps)
                         for nm in candidates:
                             # availability
-                            if sn not in (name_to_avail.get(nm, {}).get(dk) or []):
+                            if sn not in _avail_list_for_name(nm, dk, t_idx):
                                 continue
                             # same-day / adjacency
                             if _name_present_same_day(base, dk, nm):
@@ -1876,16 +1906,15 @@ def solve_schedule_stream(
 
     # Global availability map and validator for entire candidate plans
     name_to_avail_all: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
-    def _avail_list_of(name: str, dkey: str) -> List[str]:
-        day_val = (name_to_avail_all.get(name) or {}).get(dkey)
-        return day_val if isinstance(day_val, list) else []
+    def _avail_list_of(name: str, dkey: str, t_idx: int) -> List[str]:
+        return _avail_list_for_name(name, dkey, t_idx)
     def _respects_availability_all(a: Dict[str, Dict[str, List[List[str]]]]) -> bool:
         for dk in days:
             for sn in shifts:
                 per = (a.get(dk, {}).get(sn, []) or [])
-                for lst in per:
+                for t_idx, lst in enumerate(per):
                     for nm in (lst or []):
-                        if sn not in _avail_list_of(nm, dk):
+                        if sn not in _avail_list_of(nm, dk, t_idx):
                             return False
         return True
 
@@ -1939,9 +1968,8 @@ def solve_schedule_stream(
     try:
         # Build per-worker caps/availability based on current assignments
         name_to_avail_stream: Dict[str, Dict[str, List[str]]] = { (w.get("name") or ""): (w.get("availability") or {}) for w in workers }
-        def _avail_list_stream_of(name: str, dkey: str) -> List[str]:
-            day_val = (name_to_avail_stream.get(name) or {}).get(dkey)
-            return day_val if isinstance(day_val, list) else []
+        def _avail_list_stream_of(name: str, dkey: str, t_idx: int) -> List[str]:
+            return _avail_list_for_name(name, dkey, t_idx)
         def _is_night_name_local(n: str) -> bool:
             s = (n or "").strip().lower()
             return s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("\u05dc\u05d9\u05dc\u05d4" in n)
@@ -1978,7 +2006,7 @@ def solve_schedule_stream(
                         if not nm or nm in names_here:
                             continue
                         # respect availability/requests
-                        if sname not in _avail_list_stream_of(nm, dkey):
+                        if sname not in _avail_list_stream_of(nm, dkey, t_idx):
                             continue
                         # same-day uniqueness and adjacency
                         # not already assigned same day across any station
@@ -2265,7 +2293,7 @@ def solve_schedule_stream(
                             _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
                             if name_present_same_day(cand, dkey, nm):
                                 continue
-                            if not is_allowed(nm, dkey, s_to):
+                            if not is_allowed(nm, dkey, s_to, t_idx):
                                 continue
                             if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                                 continue

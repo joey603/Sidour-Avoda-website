@@ -114,8 +114,9 @@ export default function PlanningPage() {
 
   useEffect(() => {
     if (!weekFromQuery) return;
-    if (weekStartRef.current && weekStartRef.current.getTime() === weekFromQuery.getTime()) return;
-    setWeekStart(weekFromQuery);
+    // `weekFromQuery` est recréé en objet `Date` à chaque render.
+    // Pour éviter toute boucle de re-render, ne mettre à jour le state que si le `getTime()` change réellement.
+    setWeekStart((prev) => (prev.getTime() === weekFromQuery.getTime() ? prev : weekFromQuery));
   }, [weekFromQuery]);
 
   // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
@@ -179,6 +180,21 @@ export default function PlanningPage() {
   const [autoPullsLimit, setAutoPullsLimit] = useState<string>("");
   /** ללא = pas de משיכות ; unlimited (מקסימום) = sans plafond ; 1–10 = plafond */
   const autoPullsEnabled = autoPullsLimit !== "";
+
+  // Permet d'actualiser le bouton "מולטי אתרים" dès qu'un worker cross-site est ajouté/supprimé.
+  // Clé basée uniquement sur `linkedSiteIds` (pas sur la disponibilité/answers).
+  const linkedSitesKeyFromWorkers = useMemo(() => {
+    const currentSiteId = Number(params.id);
+    const otherSiteIds = new Set<number>();
+    (workers || []).forEach((w) => {
+      const linked = Array.isArray((w as any)?.linkedSiteIds) ? (w as any).linkedSiteIds : [];
+      linked.forEach((sid: any) => {
+        const n = Number(sid);
+        if (Number.isFinite(n) && n !== currentSiteId) otherSiteIds.add(n);
+      });
+    });
+    return Array.from(otherSiteIds).sort((a, b) => a - b).join(",");
+  }, [workers, params.id]);
   const [linkedSites, setLinkedSites] = useState<LinkedSite[]>([]);
   const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
   const [altIndex, setAltIndex] = useState<number>(0);
@@ -2007,6 +2023,21 @@ export default function PlanningPage() {
     } catch {}
   }
 
+  function updateLinkedPlansStatusInMemory(start: Date, status: string) {
+    const existing = readLinkedPlansFromMemory(start);
+    if (!existing?.plansBySite) return;
+    const nextPlans = Object.fromEntries(
+      Object.entries(existing.plansBySite).map(([siteKey, sitePlan]) => [
+        siteKey,
+        {
+          ...sitePlan,
+          status,
+        },
+      ]),
+    ) as Record<string, LinkedSitePlan>;
+    saveLinkedPlansToMemory(start, nextPlans, Number(existing.activeAltIndex || 0));
+  }
+
   function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null {
     if (typeof window === "undefined") return null;
     try {
@@ -2084,12 +2115,15 @@ export default function PlanningPage() {
   }
 
   function applyLinkedSitePlan(plan: LinkedSitePlan, index: number) {
-    const assignments = resolveAssignmentsForAlternative(plan, index);
-    const pulls = resolvePullsForAlternative(plan, index);
+    const maxIndex = Math.max(0, Array.isArray(plan.alternatives) ? plan.alternatives.length : 0);
+    const safeIndex = Math.max(0, Math.min(index, maxIndex));
+    const assignments = resolveAssignmentsForAlternative(plan, safeIndex);
+    const pulls = resolvePullsForAlternative(plan, safeIndex);
     setSavedWeekPlan(null);
     setEditingSaved(false);
     setPullsByHoleKey(pulls || {});
     setPullsEditor(null);
+    setAiLoading(plan.status === "STREAMING");
     setAiPlan((prev) => {
       const nextAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
       if (
@@ -2116,7 +2150,7 @@ export default function PlanningPage() {
         objective: Number(plan.objective || 0),
       };
     });
-    setAltIndex((prev) => (prev === index ? prev : index));
+    setAltIndex((prev) => (prev === safeIndex ? prev : safeIndex));
     baseAssignmentsRef.current = plan.assignments;
   }
 
@@ -2409,7 +2443,25 @@ export default function PlanningPage() {
         setLinkedSites([]);
       }
     })();
-  }, [params.id, weekStart]);
+  }, [params.id, weekStart, linkedSitesKeyFromWorkers]);
+
+  // Quand la pop-up "מולטי אתרים" s'ouvre, refaire un fetch pour refléter
+  // les suppressions/modifications faites sur les plans des autres sites.
+  useEffect(() => {
+    if (!showLinkedSitesDialog) return;
+    if (typeof window === "undefined") return;
+    (async () => {
+      try {
+        const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        setLinkedSites(Array.isArray(list) ? list : []);
+      } catch {
+        setLinkedSites([]);
+      }
+    })();
+  }, [showLinkedSitesDialog, params.id, weekStart]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2780,6 +2832,35 @@ export default function PlanningPage() {
         }
       } catch {}
 
+      try {
+        const fromAuto = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as any,
+        });
+        if (fromAuto && typeof fromAuto === "object" && fromAuto.assignments) {
+          setActiveSavedPlanKey("db:auto");
+          const pulls = (fromAuto?.pulls && typeof fromAuto.pulls === "object") ? fromAuto.pulls : {};
+          setPullsByHoleKey(pulls);
+          setAiPlan({
+            days: Array.isArray(fromAuto.days) ? fromAuto.days : [],
+            shifts: Array.isArray(fromAuto.shifts) ? fromAuto.shifts : [],
+            stations: Array.isArray(fromAuto.stations) ? fromAuto.stations : [],
+            assignments: fromAuto.assignments,
+            alternatives: Array.isArray(fromAuto.alternatives) ? fromAuto.alternatives : [],
+            pulls,
+            alternativePulls: Array.isArray(fromAuto.alternativePulls)
+              ? fromAuto.alternativePulls
+              : (Array.isArray(fromAuto.alternative_pulls) ? fromAuto.alternative_pulls : []),
+            status: String(fromAuto.status || "DONE"),
+            objective: Number(fromAuto.objective || 0),
+          });
+          baseAssignmentsRef.current = fromAuto.assignments;
+          setAltIndex(0);
+          setManualAssignments(null);
+          return;
+        }
+      } catch {}
+
       // 2) localStorage fallback (legacy)
       const raw = typeof window !== "undefined" ? (localStorage.getItem(keyDirector) || localStorage.getItem(keyShared)) : null;
       if (typeof window !== "undefined") {
@@ -2846,6 +2927,9 @@ export default function PlanningPage() {
     if (aiIdleTimeoutRef.current) {
       clearTimeout(aiIdleTimeoutRef.current);
       aiIdleTimeoutRef.current = null;
+    }
+    if (hasStoredMultiSitePlans(weekStart)) {
+      updateLinkedPlansStatusInMemory(weekStart, "DONE");
     }
     setAiLoading(false);
   }
@@ -3199,15 +3283,6 @@ export default function PlanningPage() {
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
-            {linkedSites.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setShowLinkedSitesDialog(true)}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
-              >
-                מולטי אתרים
-              </button>
-            )}
           </div>
           <button
             type="button"
@@ -3431,6 +3506,9 @@ export default function PlanningPage() {
                                   name: currentWorker?.name || rw.name,
                                   maxShifts: currentMaxShifts,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
+                                    linkedSiteIds: Array.isArray(currentWorker?.linkedSiteIds)
+                                      ? currentWorker.linkedSiteIds
+                                      : (Array.isArray((rw as any).linkedSiteIds) ? (rw as any).linkedSiteIds : []),
                                     availability: merged,
                                     answers: currentWorker?.answers || rw.answers || {},
                                   });
@@ -3497,7 +3575,13 @@ export default function PlanningPage() {
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
-                                  {w.roles.filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())).join(",") || "—"}
+                                  {(() => {
+                                    const visibleRoles = w.roles.filter((rn) => enabledRoleNameSet.has(String(rn || "").trim()));
+                                    if (Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1) {
+                                      visibleRoles.push("מולטי");
+                                    }
+                                    return visibleRoles.join(",") || "—";
+                                  })()}
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
                                   {dayDefs.map((d, i) => {
@@ -3676,6 +3760,8 @@ export default function PlanningPage() {
                               availability: createdWorker.availability || fallbackAvail,
                               answers: createdWorker.answers || {},
                               phone: createdWorker.phone ?? null,
+                              linkedSiteIds: Array.isArray(createdWorker.linked_site_ids) ? createdWorker.linked_site_ids : [],
+                              linkedSiteNames: Array.isArray(createdWorker.linked_site_names) ? createdWorker.linked_site_names : [],
                             };
                             const idx = prev.findIndex((w) => w.id === mapped.id);
                             if (idx >= 0) return prev.map((w) => (w.id === mapped.id ? mapped : w));
@@ -8622,6 +8708,7 @@ export default function PlanningPage() {
                                         siteKey,
                                         {
                                           ...incomingPlan,
+                                        status: incomingPlan.status || "STREAMING",
                                           assignments: incomingPlan.assignments,
                                           alternatives: [],
                                           pulls: incomingPlan.pulls || {},
@@ -8647,6 +8734,7 @@ export default function PlanningPage() {
                                       if (alreadyExists || altExists) return;
                                       mergedPlans[siteKey] = {
                                         ...prevPlan,
+                                        status: incomingPlan.status || prevPlan.status || "STREAMING",
                                         alternatives: [...((prevPlan.alternatives || []) as Record<string, Record<string, string[][]>>[]), incomingPlan.assignments],
                                         alternative_pulls: [...((prevPlan.alternative_pulls || []) as Record<string, PullEntry>[]), (incomingPlan.pulls || {})],
                                       };
@@ -8670,6 +8758,7 @@ export default function PlanningPage() {
                                     mergedPlans[siteKey] = {
                                       ...(prevPlan || incomingPlan),
                                       ...incomingPlan,
+                                      status: incomingPlan.status || prevPlan?.status || "STREAMING",
                                       assignments: promoteIncomingAsBase
                                         ? incomingPlan.assignments
                                         : (prevPlan?.assignments || incomingPlan.assignments),
@@ -8709,6 +8798,9 @@ export default function PlanningPage() {
                               } else if (evt?.type === "status") {
                                 if (evt?.status === "ERROR" && evt?.detail) {
                                   toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
+                                  updateLinkedPlansStatusInMemory(weekStart, "ERROR");
+                                } else {
+                                  updateLinkedPlansStatusInMemory(weekStart, String(evt?.status || "DONE"));
                                 }
                                 setAiLoading(false);
                                 try { await reader.cancel(); } catch {}
@@ -8720,6 +8812,7 @@ export default function PlanningPage() {
                                 stopped = true;
                                 break;
                               } else if (evt?.type === "done") {
+                                updateLinkedPlansStatusInMemory(weekStart, "DONE");
                                 try { await reader.cancel(); } catch {}
                                 if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
                                 aiTimeoutRef.current = null;
@@ -9239,6 +9332,20 @@ export default function PlanningPage() {
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                       <path d="M6 6h12v12H6z" />
+                    </svg>
+                  </button>
+                )}
+                {linkedSites.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowLinkedSitesDialog(true)}
+                    className={
+                      "inline-flex items-center justify-center rounded-md px-4 py-2 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs bg-[#00A8E0] text-white hover:bg-[#0092c6] dark:bg-[#0092c6] dark:hover:bg-[#007fb0]"
+                    }
+                    aria-label="מולטי אתרים"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+                      <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
                     </svg>
                   </button>
                 )}

@@ -30,10 +30,12 @@ type WorkerContextResponse = {
   max_shifts: number;
   roles: string[];
   availability: Record<string, string[]>;
+  availability_by_site?: Record<string, Record<string, string[]>>;
   answers: WorkerContextAnswers | Record<string, AnswerValue>;
 };
 type LocalWorkerContextCache = {
   availability?: Record<string, string[]>;
+  availabilityBySite?: Record<string, Record<string, string[]>>;
   maxShifts?: number;
   answers?: WorkerContextAnswers | Record<string, AnswerValue>;
   sites?: Array<{ id: number; name: string }>;
@@ -43,16 +45,7 @@ type LocalWorkerContextCache = {
 };
 
 export default function WorkerAvailabilityPage() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [sites, setSites] = useState<Array<{ id: number; name: string }>>([]);
-  const [siteName, setSiteName] = useState<string>("");
-  const [shifts, setShifts] = useState<string[]>([]);
-  const [siteQuestions, setSiteQuestions] = useState<SiteQuestion[]>([]);
-  const [answersGeneral, setAnswersGeneral] = useState<Record<string, AnswerValue>>({});
-  const [answersPerDay, setAnswersPerDay] = useState<Record<string, Record<string, AnswerValue>>>({});
-  const [availability, setAvailability] = useState<WorkerAvailability>({
+  const emptyAvailability = (): WorkerAvailability => ({
     sun: [],
     mon: [],
     tue: [],
@@ -61,6 +54,54 @@ export default function WorkerAvailabilityPage() {
     fri: [],
     sat: [],
   });
+  const normalizeAvailability = (value: unknown): WorkerAvailability => {
+    const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    const base = emptyAvailability();
+    (Object.keys(base) as Array<keyof WorkerAvailability>).forEach((dayKey) => {
+      const shiftsList = raw[dayKey];
+      base[dayKey] = Array.isArray(shiftsList)
+        ? Array.from(new Set(shiftsList.map((item) => String(item || "").trim()).filter(Boolean)))
+        : [];
+    });
+    return base;
+  };
+  const normalizeAvailabilityBySite = (
+    value: unknown,
+    siteList: Array<{ id: number; name: string }>,
+    fallback?: WorkerAvailability,
+  ): Record<string, WorkerAvailability> => {
+    const out: Record<string, WorkerAvailability> = {};
+    const raw = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    siteList.forEach((site) => {
+      const siteKey = String(site.id);
+      const siteValue = raw[siteKey];
+      out[siteKey] = normalizeAvailability(siteValue ?? fallback ?? emptyAvailability());
+    });
+    return out;
+  };
+  const mergeAvailabilityBySite = (value: Record<string, WorkerAvailability>): WorkerAvailability => {
+    const merged = emptyAvailability();
+    Object.values(value || {}).forEach((siteAvailability) => {
+      (Object.keys(merged) as Array<keyof WorkerAvailability>).forEach((dayKey) => {
+        merged[dayKey] = Array.from(
+          new Set([...(merged[dayKey] || []), ...((siteAvailability?.[dayKey] || []).map((shift) => String(shift || "").trim()).filter(Boolean))]),
+        );
+      });
+    });
+    return merged;
+  };
+
+  const router = useRouter();
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [sites, setSites] = useState<Array<{ id: number; name: string }>>([]);
+  const [activeSiteId, setActiveSiteId] = useState<number | null>(null);
+  const [siteName, setSiteName] = useState<string>("");
+  const [shifts, setShifts] = useState<string[]>([]);
+  const [siteQuestions, setSiteQuestions] = useState<SiteQuestion[]>([]);
+  const [answersGeneral, setAnswersGeneral] = useState<Record<string, AnswerValue>>({});
+  const [answersPerDay, setAnswersPerDay] = useState<Record<string, Record<string, AnswerValue>>>({});
+  const [availabilityBySite, setAvailabilityBySite] = useState<Record<string, WorkerAvailability>>({});
   const [success, setSuccess] = useState(false);
   const [workerName, setWorkerName] = useState<string>("");
   const [workerId, setWorkerId] = useState<number | null>(null);
@@ -69,6 +110,15 @@ export default function WorkerAvailabilityPage() {
   const [nextWeekStart] = useState<Date>(() => calculateNextWeek().start);
   const [nextWeekEnd] = useState<Date>(() => calculateNextWeek().end);
   const [maxShifts, setMaxShifts] = useState<number>(5);
+
+  useEffect(() => {
+    if (sites.length === 0) {
+      setActiveSiteId(null);
+      return;
+    }
+    if (activeSiteId && sites.some((site) => Number(site.id) === Number(activeSiteId))) return;
+    setActiveSiteId(Number(sites[0].id));
+  }, [sites, activeSiteId]);
 
   // Calculer la semaine prochaine (dimanche prochain à samedi prochain)
   function calculateNextWeek() {
@@ -112,23 +162,28 @@ export default function WorkerAvailabilityPage() {
           if (Array.isArray(parsed.shifts)) setShifts(parsed.shifts);
           if (Array.isArray(parsed.questions)) setSiteQuestions(parsed.questions);
           if (typeof parsed.siteName === "string") setSiteName(parsed.siteName);
-          if (parsed.availability && typeof parsed.availability === 'object') {
-            setAvailability(parsed.availability);
-            if (typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6) {
-              setMaxShifts(parsed.maxShifts);
+          const siteList = Array.isArray(parsed.sites) ? parsed.sites : [];
+          setAvailabilityBySite(
+            normalizeAvailabilityBySite(
+              parsed.availabilityBySite,
+              siteList,
+              parsed.availability && typeof parsed.availability === "object"
+                ? normalizeAvailability(parsed.availability)
+                : emptyAvailability(),
+            ),
+          );
+          if (typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6) {
+            setMaxShifts(parsed.maxShifts);
+          }
+          if (parsed.answers && typeof parsed.answers === "object") {
+            if ("general" in parsed.answers || "perDay" in parsed.answers) {
+              const answers = parsed.answers as WorkerContextAnswers;
+              setAnswersGeneral(answers.general && typeof answers.general === "object" ? answers.general : {});
+              setAnswersPerDay(answers.perDay && typeof answers.perDay === "object" ? answers.perDay : {});
+            } else {
+              setAnswersGeneral(parsed.answers as Record<string, AnswerValue>);
+              setAnswersPerDay({});
             }
-            if (parsed.answers && typeof parsed.answers === "object") {
-              if ("general" in parsed.answers || "perDay" in parsed.answers) {
-                const answers = parsed.answers as WorkerContextAnswers;
-                setAnswersGeneral(answers.general && typeof answers.general === "object" ? answers.general : {});
-                setAnswersPerDay(answers.perDay && typeof answers.perDay === "object" ? answers.perDay : {});
-              } else {
-                setAnswersGeneral(parsed.answers as Record<string, AnswerValue>);
-                setAnswersPerDay({});
-              }
-            }
-          } else {
-            setAvailability(parsed as WorkerAvailability);
           }
           setIsEditing(true);
           setSuccess(true);
@@ -160,10 +215,15 @@ export default function WorkerAvailabilityPage() {
         );
         setShifts(Array.isArray(workerData.shifts) && workerData.shifts.length > 0 ? workerData.shifts : ["06-14", "14-22", "22-06"]);
         setSiteQuestions(Array.isArray(workerData.questions) ? workerData.questions : []);
-        // Charger les זמינות depuis le serveur
-        if (workerData.availability && typeof workerData.availability === 'object') {
-          setAvailability(workerData.availability);
-        }
+        setAvailabilityBySite(
+          normalizeAvailabilityBySite(
+            workerData.availability_by_site,
+            mergedSites,
+            workerData.availability && typeof workerData.availability === "object"
+              ? normalizeAvailability(workerData.availability)
+              : emptyAvailability(),
+          ),
+        );
         if (typeof workerData.max_shifts === 'number' && workerData.max_shifts >= 1 && workerData.max_shifts <= 6) {
           setMaxShifts(workerData.max_shifts);
         }
@@ -195,6 +255,13 @@ export default function WorkerAvailabilityPage() {
         const keyNew = getWeekKey(nextWeekStart, workerId);
         localStorage.setItem(keyNew, JSON.stringify({
           availability: workerData.availability || {},
+          availabilityBySite: normalizeAvailabilityBySite(
+            workerData.availability_by_site,
+            mergedSites,
+            workerData.availability && typeof workerData.availability === "object"
+              ? normalizeAvailability(workerData.availability)
+              : emptyAvailability(),
+          ),
           maxShifts: workerData.max_shifts,
           answers: workerData.answers || {},
           sites: workerData.sites || [],
@@ -252,13 +319,25 @@ export default function WorkerAvailabilityPage() {
     { key: "sat", label: "ש'" },
   ];
 
+  const selectedSiteId = activeSiteId ?? (sites.length > 0 ? Number(sites[0].id) : null);
+  const selectedSiteKey = selectedSiteId != null ? String(selectedSiteId) : "";
+  const selectedSiteName = sites.find((site) => Number(site.id) === Number(selectedSiteId))?.name || "";
+  const selectedAvailability = selectedSiteKey
+    ? (availabilityBySite[selectedSiteKey] || emptyAvailability())
+    : emptyAvailability();
+
   function toggleAvailability(dayKey: string, shiftName: string) {
-    setAvailability((prev) => {
-      const dayShifts = prev[dayKey] || [];
+    if (!selectedSiteKey) return;
+    setAvailabilityBySite((prev) => {
+      const currentSiteAvailability = normalizeAvailability(prev[selectedSiteKey] || emptyAvailability());
+      const dayShifts = currentSiteAvailability[dayKey] || [];
       const hasShift = dayShifts.includes(shiftName);
       return {
         ...prev,
-        [dayKey]: hasShift ? dayShifts.filter((s) => s !== shiftName) : [...dayShifts, shiftName],
+        [selectedSiteKey]: {
+          ...currentSiteAvailability,
+          [dayKey]: hasShift ? dayShifts.filter((s) => s !== shiftName) : [...dayShifts, shiftName],
+        },
       };
     });
   }
@@ -343,12 +422,15 @@ export default function WorkerAvailabilityPage() {
         return;
       }
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
+      const normalizedAvailabilityBySite = normalizeAvailabilityBySite(availabilityBySite, sites);
+      const mergedAvailability = mergeAvailabilityBySite(normalizedAvailabilityBySite);
       await apiFetch(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           max_shifts: maxShifts,
-          availability: availability,
+          availability: mergedAvailability,
+          availability_by_site: normalizedAvailabilityBySite,
           answers: { general: answersGeneral, perDay: answersPerDay },
         }),
       });
@@ -356,7 +438,8 @@ export default function WorkerAvailabilityPage() {
       // Sauvegarder dans localStorage avec la clé de semaine (inclure maxShifts)
       const weekKey = getWeekKey(nextWeekStart, workerId);
       localStorage.setItem(weekKey, JSON.stringify({
-        availability: availability,
+        availability: mergedAvailability,
+        availabilityBySite: normalizedAvailabilityBySite,
         maxShifts: maxShifts,
         answers: { general: answersGeneral, perDay: answersPerDay },
         sites,
@@ -438,7 +521,7 @@ export default function WorkerAvailabilityPage() {
               </p>
             )}
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              {siteName ? "עדכן פעם אחת את זמינותך לכל האתרים המחוברים" : "עדכן את זמינותך השבועית"}
+              {siteName ? "עדכן את זמינותך לכל אתר בנפרד כדי שה-AI יתחשב נכון במולטי-סייט" : "עדכן את זמינותך השבועית"}
             </p>
           </div>
 
@@ -447,12 +530,19 @@ export default function WorkerAvailabilityPage() {
               {sites.length > 1 && (
                 <div className="mb-6 flex flex-wrap justify-center gap-2">
                   {sites.map((site) => (
-                    <span
+                    <button
                       key={site.id}
-                      className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                      type="button"
+                      onClick={() => setActiveSiteId(Number(site.id))}
+                      className={
+                        "rounded-full border px-3 py-1 text-xs font-medium transition-colors " +
+                        (Number(site.id) === Number(selectedSiteId)
+                          ? "border-blue-600 bg-blue-600 text-white dark:border-blue-500 dark:bg-blue-500"
+                          : "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300")
+                      }
                     >
                       {site.name}
-                    </span>
+                    </button>
                   ))}
                 </div>
               )}
@@ -497,6 +587,11 @@ export default function WorkerAvailabilityPage() {
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">
                     זמינות שבועית
                   </label>
+                  {selectedSiteName && (
+                    <div className="mb-3 text-sm font-semibold text-blue-600 dark:text-blue-400">
+                      אתר נבחר: {selectedSiteName}
+                    </div>
+                  )}
                   <div className="space-y-4">
                     {dayDefs.map((day) => (
                       <div key={day.key} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
@@ -512,7 +607,7 @@ export default function WorkerAvailabilityPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           {sortShifts(shifts).map((shift) => {
-                            const isSelected = (availability[day.key] || []).includes(shift);
+                            const isSelected = (selectedAvailability[day.key] || []).includes(shift);
                             return (
                               <button
                                 key={shift}

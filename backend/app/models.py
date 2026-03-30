@@ -47,6 +47,7 @@ class DirectorAutoPlanningConfig(Base):
     hour: Mapped[int] = mapped_column(Integer, default=9, nullable=False)
     minute: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     auto_pulls_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auto_save_mode: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     last_run_week_iso: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     last_run_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=0)

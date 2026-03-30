@@ -169,7 +169,7 @@ def create_app() -> FastAPI:
                     # La table n'existe peut-être pas encore
                     logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
 
-                # Migration pour director_auto_planning_configs: ajouter auto_pulls_enabled
+                # Migration pour director_auto_planning_configs: ajouter auto_pulls_enabled / auto_save_mode
                 try:
                     auto_cols = conn.exec_driver_sql("PRAGMA table_info(director_auto_planning_configs)").fetchall()
                     auto_col_names = {c[1] for c in auto_cols}
@@ -178,13 +178,21 @@ def create_app() -> FastAPI:
                         conn.exec_driver_sql(
                             "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_pulls_enabled BOOLEAN NOT NULL DEFAULT 0"
                         )
+                    if auto_cols and "auto_save_mode" not in auto_col_names:
+                        logger.info("Ajout de la colonne auto_save_mode à director_auto_planning_configs")
+                        conn.exec_driver_sql(
+                            "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                        )
                 except Exception as e:
                     logger.info(f"Table director_auto_planning_configs pas encore créée ou erreur: {e}")
             elif dialect_name == "postgresql":
                 try:
-                    logger.info("Vérification de la colonne auto_pulls_enabled sur director_auto_planning_configs")
+                    logger.info("Vérification des colonnes auto_pulls_enabled / auto_save_mode sur director_auto_planning_configs")
                     conn.exec_driver_sql(
                         "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_pulls_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                    conn.exec_driver_sql(
+                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
                     )
                 except Exception as e:
                     logger.info(f"Migration Postgres director_auto_planning_configs ignorée ou impossible: {e}")

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
 from passlib.context import CryptContext
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal, settings
@@ -62,7 +63,10 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     if req.phone:
         user: User | None = db.query(User).filter(User.phone == req.phone).first()
     elif req.email:
-        user: User | None = db.query(User).filter(User.email == req.email).first()
+        email_key = (req.email or "").strip().lower()
+        if not email_key:
+            raise HTTPException(status_code=400, detail="Email ou téléphone requis")
+        user = db.query(User).filter(func.lower(User.email) == email_key).first()
     else:
         raise HTTPException(status_code=400, detail="Email ou téléphone requis")
     

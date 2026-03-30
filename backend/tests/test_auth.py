@@ -41,6 +41,13 @@ def test_login_invalid_credentials(client):
     assert r.status_code == 401
 
 
+def test_login_email_case_insensitive(client):
+    register(client, email="Case.Test@Example.com")
+    r = login(client, email="case.test@example.com", password="password123")
+    assert r.status_code == 200, r.text
+    assert r.json()["access_token"]
+
+
 def test_role_access_control(client):
     # create one worker and one director
     register(client, email="w@example.com", role="worker")

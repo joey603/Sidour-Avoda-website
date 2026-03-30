@@ -53,6 +53,8 @@ class NextWeekSavedPlanStatus(BaseModel):
     assigned_count: int = 0
     required_count: int = 0
     pulls_count: int = 0
+    scope: Literal["auto", "director", "shared"] | None = None
+    requires_manual_save: bool = False
 
 
 class SiteOut(BaseModel):
@@ -111,6 +113,7 @@ class WorkerContextOut(BaseModel):
     shifts: list[str] = []
     questions: list[WorkerContextQuestion] = []
     availability: dict[str, list[str]] = {}
+    availability_by_site: dict[str, dict[str, list[str]]] = {}
     answers: dict[str, Any] = {}
     max_shifts: int = 5
 
@@ -118,6 +121,7 @@ class WorkerContextOut(BaseModel):
 class WorkerContextUpdatePayload(BaseModel):
     max_shifts: int = 5
     availability: dict[str, list[str]] = {}
+    availability_by_site: dict[str, dict[str, list[str]]] = {}
     answers: dict[str, Any] = {}
 
 
@@ -139,6 +143,7 @@ class AutoPlanningConfigPayload(BaseModel):
     hour: int = Field(default=9, ge=0, le=23)
     minute: int = Field(default=0, ge=0, le=59)
     auto_pulls_enabled: bool = False
+    auto_save_mode: Literal["manual", "director", "shared"] = "manual"
 
 
 class AutoPlanningConfigOut(AutoPlanningConfigPayload):
@@ -152,7 +157,7 @@ class AutoPlanningConfigOut(AutoPlanningConfigPayload):
 class WeekPlanPayload(BaseModel):
     # YYYY-MM-DD (week start)
     week_iso: str = Field(min_length=10, max_length=10, description="YYYY-MM-DD (week start)")
-    scope: Literal["director", "shared"] = "director"
+    scope: Literal["auto", "director", "shared"] = "director"
     # Payload JSON (même structure que le localStorage historique)
     data: dict | None = None
 
