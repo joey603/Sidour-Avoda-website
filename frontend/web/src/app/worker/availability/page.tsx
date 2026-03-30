@@ -653,7 +653,11 @@ export default function WorkerAvailabilityPage() {
                     <div className="space-y-4">
                       {siteQuestions
                         .filter((q) => !q.perDay && (q?.label || "").trim())
-                        .map((q) => (
+                        .map((q) => {
+                          const generalAns = answersGeneral?.[q.id];
+                          const generalSliderValue =
+                            typeof generalAns === "number" ? generalAns : (q.slider?.min ?? 0);
+                          return (
                           <div key={q.id} className="space-y-2">
                             <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
                               {q.label}
@@ -717,18 +721,19 @@ export default function WorkerAvailabilityPage() {
                                   min={q.slider?.min ?? 0}
                                   max={q.slider?.max ?? 10}
                                   step={q.slider?.step ?? 1}
-                                  value={typeof answersGeneral?.[q.id] === "number" ? answersGeneral?.[q.id] : (q.slider?.min ?? 0)}
+                                  value={generalSliderValue}
                                   onChange={(e) => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: Number(e.target.value) }))}
                                   disabled={submitting || (success && isEditing)}
                                   className="w-full"
                                 />
                                 <div className="text-xs text-zinc-600 dark:text-zinc-400">
-                                  ערך: {typeof answersGeneral?.[q.id] === "number" ? answersGeneral?.[q.id] : (q.slider?.min ?? 0)}
+                                  ערך: {generalSliderValue}
                                 </div>
                               </div>
                             )}
                           </div>
-                        ))}
+                          );
+                        })}
                     </div>
                   </div>
                 )}
