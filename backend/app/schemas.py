@@ -113,7 +113,6 @@ class WorkerContextOut(BaseModel):
     shifts: list[str] = []
     questions: list[WorkerContextQuestion] = []
     availability: dict[str, list[str]] = {}
-    availability_by_site: dict[str, dict[str, list[str]]] = {}
     answers: dict[str, Any] = {}
     max_shifts: int = 5
 
@@ -121,7 +120,6 @@ class WorkerContextOut(BaseModel):
 class WorkerContextUpdatePayload(BaseModel):
     max_shifts: int = 5
     availability: dict[str, list[str]] = {}
-    availability_by_site: dict[str, dict[str, list[str]]] = {}
     answers: dict[str, Any] = {}
 
 

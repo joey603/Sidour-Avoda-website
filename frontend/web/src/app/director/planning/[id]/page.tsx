@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
@@ -84,6 +84,7 @@ export default function PlanningPage() {
   const [hiddenWorkerIds, setHiddenWorkerIds] = useState<number[]>([]);
   // Empêcher qu'une réponse "ancienne" (ancienne semaine) n'écrase l'état quand on navigue vite
   const loadWorkersReqIdRef = useRef(0);
+  const currentSiteIdRef = useRef<string>(String(params.id));
   const weekStartRef = useRef<Date | null>(null);
   // Éviter de re-fetch les réponses en boucle dans le modal
   const answersRefreshKeyRef = useRef<string | null>(null);
@@ -109,14 +110,17 @@ export default function PlanningPage() {
     return nextSunday;
   });
   useEffect(() => {
+    currentSiteIdRef.current = String(params.id);
+  }, [params.id]);
+
+  useEffect(() => {
     weekStartRef.current = weekStart;
   }, [weekStart]);
 
   useEffect(() => {
     if (!weekFromQuery) return;
-    // `weekFromQuery` est recréé en objet `Date` à chaque render.
-    // Pour éviter toute boucle de re-render, ne mettre à jour le state que si le `getTime()` change réellement.
-    setWeekStart((prev) => (prev.getTime() === weekFromQuery.getTime() ? prev : weekFromQuery));
+    if (weekStartRef.current && weekStartRef.current.getTime() === weekFromQuery.getTime()) return;
+    setWeekStart(weekFromQuery);
   }, [weekFromQuery]);
 
   // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
@@ -140,6 +144,7 @@ export default function PlanningPage() {
 
   // IA planning result
   const [aiLoading, setAiLoading] = useState(false);
+  const [sharedGenerationRunning, setSharedGenerationRunning] = useState(false);
   type AIPlan = {
     days: string[];
     shifts: string[];
@@ -176,29 +181,15 @@ export default function PlanningPage() {
     activeAltIndex: number;
     plansBySite: Record<string, LinkedSitePlan>;
   };
+  type SharedAssignmentCountFilters = Record<string, Record<string, string>>;
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [autoPullsLimit, setAutoPullsLimit] = useState<string>("");
   /** ללא = pas de משיכות ; unlimited (מקסימום) = sans plafond ; 1–10 = plafond */
   const autoPullsEnabled = autoPullsLimit !== "";
-
-  // Permet d'actualiser le bouton "מולטי אתרים" dès qu'un worker cross-site est ajouté/supprimé.
-  // Clé basée uniquement sur `linkedSiteIds` (pas sur la disponibilité/answers).
-  const linkedSitesKeyFromWorkers = useMemo(() => {
-    const currentSiteId = Number(params.id);
-    const otherSiteIds = new Set<number>();
-    (workers || []).forEach((w) => {
-      const linked = Array.isArray((w as any)?.linkedSiteIds) ? (w as any).linkedSiteIds : [];
-      linked.forEach((sid: any) => {
-        const n = Number(sid);
-        if (Number.isFinite(n) && n !== currentSiteId) otherSiteIds.add(n);
-      });
-    });
-    return Array.from(otherSiteIds).sort((a, b) => a - b).join(",");
-  }, [workers, params.id]);
   const [linkedSites, setLinkedSites] = useState<LinkedSite[]>([]);
   const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
   const [altIndex, setAltIndex] = useState<number>(0);
-  const [assignmentCountFilters, setAssignmentCountFilters] = useState<Record<string, string>>({});
+  const [sharedAssignmentCountFilters, setSharedAssignmentCountFilters] = useState<SharedAssignmentCountFilters>({});
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const prevAltCountRef = useRef<number>(0);
   const aiControllerRef = useRef<AbortController | null>(null);
@@ -234,6 +225,10 @@ export default function PlanningPage() {
   const planKeyDirectorOnly = (siteId: string | number, start: Date) => `plan_director_${siteId}_${isoPlanKey(start)}`;
   const multiSiteMemoryPrefix = "multi_site_generated_";
   const multiSiteMemoryKey = (start: Date) => `${multiSiteMemoryPrefix}${isoPlanKey(start)}`;
+  const multiSiteGenerationPrefix = "multi_site_generating_";
+  const multiSiteGenerationKey = (start: Date) => `${multiSiteGenerationPrefix}${isoPlanKey(start)}`;
+  const multiSiteAssignmentFiltersPrefix = "multi_site_assignment_filters_";
+  const multiSiteAssignmentFiltersKey = (start: Date) => `${multiSiteAssignmentFiltersPrefix}${isoPlanKey(start)}`;
   const multiSiteNavigationFlag = "multi_site_navigation_in_app";
   const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
 
@@ -434,22 +429,30 @@ export default function PlanningPage() {
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
   const hasAiPlan = !!aiPlan;
+  const isAnyGenerationRunning = aiLoading || sharedGenerationRunning;
   const aiAssignmentsVariants = useMemo(() => {
     if (!aiPlan) return [] as Record<string, Record<string, string[][]>>[];
     const base = baseAssignmentsRef.current || aiPlan.assignments;
     if (!base) return [] as Record<string, Record<string, string[][]>>[];
     return [base, ...((aiPlan.alternatives || []).filter(Boolean) as Record<string, Record<string, string[][]>>[])];
   }, [aiPlan]);
+  const assignmentCountFilters = useMemo(
+    () => sharedAssignmentCountFilters[String(params.id)] || {},
+    [sharedAssignmentCountFilters, params.id],
+  );
   const activeAssignmentCountFilters = useMemo(
     () =>
-      Object.entries(assignmentCountFilters).flatMap(([workerName, rawValue]) => {
-        const trimmed = String(rawValue || "").trim();
-        if (!trimmed) return [];
-        const num = Number(trimmed);
-        if (!Number.isFinite(num) || num < 0) return [];
-        return [[workerName, Math.floor(num)] as [string, number]];
+      Object.entries(sharedAssignmentCountFilters).flatMap(([siteId, siteFilters]) => {
+        if (!siteFilters || typeof siteFilters !== "object") return [];
+        return Object.entries(siteFilters).flatMap(([workerName, rawValue]) => {
+          const trimmed = String(rawValue || "").trim();
+          if (!trimmed) return [];
+          const num = Number(trimmed);
+          if (!Number.isFinite(num) || num < 0) return [];
+          return [[siteId, workerName, Math.floor(num)] as [string, string, number]];
+        });
       }),
-    [assignmentCountFilters],
+    [sharedAssignmentCountFilters],
   );
   const aiVariantCounts = useMemo(
     () => aiAssignmentsVariants.map((assignments) => countAssignmentsByWorker(assignments, workers)),
@@ -458,21 +461,56 @@ export default function PlanningPage() {
   const filteredAiPlanIndices = useMemo(() => {
     if (!aiVariantCounts.length) return [] as number[];
     if (activeAssignmentCountFilters.length === 0) return aiVariantCounts.map((_, idx) => idx);
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const countsCache = new Map<string, Map<string, number>>();
+    const getCountsForSite = (siteId: string, idx: number) => {
+      const cacheKey = `${siteId}:${idx}`;
+      if (countsCache.has(cacheKey)) return countsCache.get(cacheKey) || null;
+      let counts: Map<string, number> | null = null;
+      if (siteId === String(params.id)) {
+        counts = aiVariantCounts[idx] || new Map<string, number>();
+      } else {
+        const sitePlan = linkedMemory?.plansBySite?.[siteId];
+        if (sitePlan) counts = countAssignmentsByWorker(resolveAssignmentsForAlternative(sitePlan, idx), []);
+      }
+      if (counts) countsCache.set(cacheKey, counts);
+      return counts;
+    };
     return aiVariantCounts.reduce((acc, counts, idx) => {
-      if (activeAssignmentCountFilters.every(([workerName, target]) => (counts.get(workerName) || 0) === target)) {
+      if (activeAssignmentCountFilters.every(([siteId, workerName, target]) => {
+        const targetCounts = siteId === String(params.id) ? counts : getCountsForSite(siteId, idx);
+        return !!targetCounts && (targetCounts.get(workerName) || 0) === target;
+      })) {
         acc.push(idx);
       }
       return acc;
     }, [] as number[]);
-  }, [aiVariantCounts, activeAssignmentCountFilters]);
+  }, [aiVariantCounts, activeAssignmentCountFilters, weekStart, params.id]);
   const generatedAssignmentCountOptionsByWorker = useMemo(() => {
     const byWorker = new Map<string, Set<number>>();
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const countsCache = new Map<string, Map<string, number>>();
+    const getCountsForSite = (siteId: string, idx: number) => {
+      const cacheKey = `${siteId}:${idx}`;
+      if (countsCache.has(cacheKey)) return countsCache.get(cacheKey) || null;
+      let counts: Map<string, number> | null = null;
+      if (siteId === String(params.id)) {
+        counts = aiVariantCounts[idx] || new Map<string, number>();
+      } else {
+        const sitePlan = linkedMemory?.plansBySite?.[siteId];
+        if (sitePlan) counts = countAssignmentsByWorker(resolveAssignmentsForAlternative(sitePlan, idx), []);
+      }
+      if (counts) countsCache.set(cacheKey, counts);
+      return counts;
+    };
     workers.forEach((w) => {
       const values = new Set<number>();
-      aiVariantCounts.forEach((counts) => {
-        const matchesOtherFilters = activeAssignmentCountFilters.every(
-          ([workerName, target]) => workerName === w.name || (counts.get(workerName) || 0) === target,
-        );
+      aiVariantCounts.forEach((counts, idx) => {
+        const matchesOtherFilters = activeAssignmentCountFilters.every(([siteId, workerName, target]) => {
+          if (siteId === String(params.id) && workerName === w.name) return true;
+          const targetCounts = siteId === String(params.id) ? counts : getCountsForSite(siteId, idx);
+          return !!targetCounts && (targetCounts.get(workerName) || 0) === target;
+        });
         if (matchesOtherFilters) {
           values.add(counts.get(w.name) || 0);
         }
@@ -485,14 +523,9 @@ export default function PlanningPage() {
         Array.from(values).sort((a, b) => a - b),
       ]),
     );
-  }, [aiVariantCounts, activeAssignmentCountFilters, workers]);
+  }, [aiVariantCounts, activeAssignmentCountFilters, workers, weekStart, params.id]);
   const hasActiveAssignmentCountFilters = activeAssignmentCountFilters.length > 0;
   const filteredAiPlanPosition = filteredAiPlanIndices.indexOf(altIndex);
-  useEffect(() => {
-    if (!hasAiPlan || isManual) {
-      setAssignmentCountFilters({});
-    }
-  }, [hasAiPlan, isManual, params.id, weekStart]);
   useEffect(() => {
     if (isManual || !aiPlan) return;
     if (filteredAiPlanIndices.length === 0) return;
@@ -742,6 +775,68 @@ export default function PlanningPage() {
     return dayList.some((sn) => detectShiftKind(String(sn || "")) === targetKind);
   }
 
+  function hasWorkerAssignmentOnOtherLinkedSite(
+    workerName: string,
+    dayKey: string,
+    shiftName: string,
+    mode: "same" | "kind" = "kind",
+  ): boolean {
+    const trimmed = (workerName || "").trim();
+    if (!trimmed) return false;
+    const worker = workers.find((w) => (w.name || "").trim() === trimmed) as Worker | undefined;
+    const linkedSiteIds = Array.isArray(worker?.linkedSiteIds)
+      ? (worker.linkedSiteIds as number[]).map((id: number) => Number(id)).filter(Number.isFinite)
+      : [];
+    if (linkedSiteIds.length <= 1) return false;
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const activeAltIndex = Number(linkedMemory?.activeAltIndex || 0);
+    const targetKind = detectShiftKind(shiftName);
+    for (const linkedSiteId of linkedSiteIds) {
+      if (String(linkedSiteId) === String(params.id)) continue;
+      const plan = linkedMemory?.plansBySite?.[String(linkedSiteId)];
+      const assignments = plan ? resolveAssignmentsForAlternative(plan, activeAltIndex) : null;
+      const shiftsMap = assignments?.[dayKey] || {};
+      for (const candidateShiftName of Object.keys(shiftsMap)) {
+        const matches =
+          mode === "same"
+            ? candidateShiftName === shiftName
+            : (
+                targetKind === "other"
+                  ? candidateShiftName === shiftName
+                  : detectShiftKind(candidateShiftName) === targetKind
+              );
+        if (!matches) continue;
+        const perStation = (shiftsMap as Record<string, string[][]>)[candidateShiftName] || [];
+        if (perStation.some((namesHere) => (namesHere || []).some((nm) => (nm || "").trim() === trimmed))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function getLinkedSiteConflictReason(workerName: string, dayKey: string, shiftName: string): string | null {
+    const trimmed = (workerName || "").trim();
+    if (!trimmed) return null;
+    if (hasWorkerAssignmentOnOtherLinkedSite(trimmed, dayKey, shiftName, "kind")) {
+      return "העובד כבר משובץ במשמרת חופפת באתר מקושר.";
+    }
+    const kind = detectShiftKind(shiftName);
+    if (kind === "morning" && hasWorkerAssignmentOnOtherLinkedSite(trimmed, prevDayKeyOf(dayKey), "night", "kind")) {
+      return "העובד כבר משובץ בלילה קודם באתר מקושר.";
+    }
+    if (kind === "noon" && hasWorkerAssignmentOnOtherLinkedSite(trimmed, dayKey, "morning", "kind")) {
+      return "העובד כבר משובץ בבוקר באותו יום באתר מקושר.";
+    }
+    if (kind === "night" && hasWorkerAssignmentOnOtherLinkedSite(trimmed, dayKey, "noon", "kind")) {
+      return "העובד כבר משובץ בצהריים באותו יום באתר מקושר.";
+    }
+    if (kind === "night" && hasWorkerAssignmentOnOtherLinkedSite(trimmed, nextDayKeyOf(dayKey), "morning", "kind")) {
+      return "העובד כבר משובץ בבוקר שלמחרת באתר מקושר.";
+    }
+    return null;
+  }
+
   function canHighlightDropTarget(
     workerName: string,
     dayKey: string,
@@ -753,6 +848,7 @@ export default function PlanningPage() {
     if (!trimmed) return false;
     if (!isWorkerAvailableForSlot(trimmed, dayKey, shiftName)) return false;
     if (roleHint && !workerHasRole(trimmed, roleHint)) return false;
+    if (getLinkedSiteConflictReason(trimmed, dayKey, shiftName)) return false;
 
     // same day+shift elsewhere
     try {
@@ -929,6 +1025,11 @@ export default function PlanningPage() {
   ) {
     const trimmed = (workerName || "").trim();
     if (!trimmed) return;
+    const linkedSiteConflictReason = getLinkedSiteConflictReason(trimmed, dayKey, shiftName);
+    if (linkedSiteConflictReason) {
+      toast.error("לא ניתן לשבץ", { description: linkedSiteConflictReason });
+      return;
+    }
     const dragSrc = dragSourceRef.current;
     const isMoveFromSlot = !!(isManual && dragSrc && (dragSrc.workerName || "").trim() === trimmed);
     // Vérification de la זמינות: si non demandée, demander confirmation et, si oui, ajouter un overlay rouge
@@ -1875,7 +1976,10 @@ export default function PlanningPage() {
     return totalAssignmentsByWorkerIdentity.get(colorIdentityForWorker(worker)) ?? localCount;
   }
 
-  function countAssignedCells(assignments: Record<string, Record<string, string[][]>> | null | undefined): number {
+  function countAssignedCells(
+    assignments: Record<string, Record<string, string[][]>> | null | undefined,
+    pulls?: Record<string, PullEntry> | null | undefined,
+  ): number {
     if (!assignments || typeof assignments !== "object") return 0;
     let total = 0;
     for (const dayKey of Object.keys(assignments)) {
@@ -1887,7 +1991,8 @@ export default function PlanningPage() {
         }
       }
     }
-    return total;
+    const pullsCount = pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0;
+    return Math.max(0, total - pullsCount);
   }
 
   function countRequiredForCurrentSite(): number {
@@ -1927,12 +2032,15 @@ export default function PlanningPage() {
   const linkedSiteEntries = useMemo(() => {
     const linkedMemory = readLinkedPlansFromMemory(weekStart);
     const currentAssignments = aiPlan?.assignments || savedWeekPlan?.assignments || null;
-    const currentAssigned = countAssignedCells(currentAssignments);
+    const activeAltIndex = Number(linkedMemory?.activeAltIndex ?? altIndex ?? 0);
+    const currentAssigned = countAssignedCells(currentAssignments, pullsByHoleKey);
     const currentRequired = countRequiredForCurrentSite();
     return linkedSites.map((linkedSite) => {
       const memoryPlan = linkedMemory?.plansBySite?.[String(linkedSite.id)];
-      const assigned = typeof memoryPlan?.assigned_count === "number"
-        ? memoryPlan.assigned_count
+      const planAssignments = memoryPlan ? resolveAssignmentsForAlternative(memoryPlan, activeAltIndex) : null;
+      const planPulls = memoryPlan ? resolvePullsForAlternative(memoryPlan, activeAltIndex) : null;
+      const assigned = planAssignments
+        ? countAssignedCells(planAssignments, planPulls)
         : (typeof linkedSite.assigned_count === "number"
           ? linkedSite.assigned_count
           : (String(linkedSite.id) === String(params.id) ? currentAssigned : 0));
@@ -1948,7 +2056,7 @@ export default function PlanningPage() {
         holesCount: Math.max(0, required - assigned),
       };
     });
-  }, [linkedSites, weekStart, aiPlan, savedWeekPlan, site, params.id]);
+  }, [linkedSites, weekStart, aiPlan, savedWeekPlan, site, params.id, pullsByHoleKey, altIndex]);
 
   const linkedSitesTotalHoles = useMemo(
     () => linkedSiteEntries.reduce((sum, linkedSite) => sum + Number(linkedSite.holesCount || 0), 0),
@@ -1957,14 +2065,20 @@ export default function PlanningPage() {
 
   function handleAssignmentCountFilterChange(workerName: string, rawValue: string, maxAllowed?: number) {
     const cleaned = String(rawValue || "").replace(/[^\d]/g, "");
-    setAssignmentCountFilters((prev) => {
+    const siteKey = String(params.id);
+    setSharedAssignmentCountFilters((prev) => {
       const next = { ...prev };
-      if (!cleaned) delete next[workerName];
-      else {
+      const currentSiteFilters = { ...(next[siteKey] || {}) };
+      if (!cleaned) {
+        delete currentSiteFilters[workerName];
+      } else {
         const numeric = Number(cleaned);
         const bounded = Number.isFinite(maxAllowed) ? Math.min(numeric, Number(maxAllowed)) : numeric;
-        next[workerName] = String(bounded);
+        currentSiteFilters[workerName] = String(bounded);
       }
+      if (Object.keys(currentSiteFilters).length > 0) next[siteKey] = currentSiteFilters;
+      else delete next[siteKey];
+      saveSharedAssignmentCountFilters(weekStart, next);
       return next;
     });
   }
@@ -2023,21 +2137,6 @@ export default function PlanningPage() {
     } catch {}
   }
 
-  function updateLinkedPlansStatusInMemory(start: Date, status: string) {
-    const existing = readLinkedPlansFromMemory(start);
-    if (!existing?.plansBySite) return;
-    const nextPlans = Object.fromEntries(
-      Object.entries(existing.plansBySite).map(([siteKey, sitePlan]) => [
-        siteKey,
-        {
-          ...sitePlan,
-          status,
-        },
-      ]),
-    ) as Record<string, LinkedSitePlan>;
-    saveLinkedPlansToMemory(start, nextPlans, Number(existing.activeAltIndex || 0));
-  }
-
   function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null {
     if (typeof window === "undefined") return null;
     try {
@@ -2060,6 +2159,79 @@ export default function PlanningPage() {
     }
   }
 
+  function readSharedAssignmentCountFilters(start: Date): SharedAssignmentCountFilters {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = sessionStorage.getItem(multiSiteAssignmentFiltersKey(start));
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      return parsed as SharedAssignmentCountFilters;
+    } catch {
+      return {};
+    }
+  }
+
+  function saveSharedAssignmentCountFilters(start: Date, filters: SharedAssignmentCountFilters) {
+    if (typeof window === "undefined") return;
+    try {
+      const storageKey = multiSiteAssignmentFiltersKey(start);
+      const hasAnyFilter = Object.values(filters).some(
+        (siteFilters) =>
+          siteFilters &&
+          typeof siteFilters === "object" &&
+          Object.values(siteFilters).some((value) => String(value || "").trim().length > 0),
+      );
+      if (hasAnyFilter) sessionStorage.setItem(storageKey, JSON.stringify(filters));
+      else sessionStorage.removeItem(storageKey);
+      window.dispatchEvent(new CustomEvent("linked-assignment-filters-updated", { detail: { storageKey } }));
+    } catch {}
+  }
+
+  function isSharedGenerationRunning(start: Date): boolean {
+    if (typeof window === "undefined") return false;
+    try {
+      return sessionStorage.getItem(multiSiteGenerationKey(start)) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setSharedGenerationRunningState(start: Date, running: boolean) {
+    if (typeof window === "undefined") return;
+    try {
+      const generationKey = multiSiteGenerationKey(start);
+      if (running) sessionStorage.setItem(generationKey, "1");
+      else sessionStorage.removeItem(generationKey);
+      window.dispatchEvent(new CustomEvent("linked-plans-generation-updated", { detail: { generationKey, running } }));
+    } catch {}
+  }
+
+  function registerSharedGenerationController(start: Date, controller: AbortController | null) {
+    if (typeof window === "undefined") return;
+    try {
+      const w = window as Window & { __linkedSiteGenerationControllers?: Record<string, AbortController | null> };
+      if (!w.__linkedSiteGenerationControllers) w.__linkedSiteGenerationControllers = {};
+      const generationKey = multiSiteGenerationKey(start);
+      if (controller) w.__linkedSiteGenerationControllers[generationKey] = controller;
+      else delete w.__linkedSiteGenerationControllers[generationKey];
+    } catch {}
+  }
+
+  function stopSharedGeneration(start: Date) {
+    if (typeof window === "undefined") return;
+    try {
+      const w = window as Window & { __linkedSiteGenerationControllers?: Record<string, AbortController | null> };
+      const generationKey = multiSiteGenerationKey(start);
+      const controller = w.__linkedSiteGenerationControllers?.[generationKey];
+      if (controller) {
+        try { controller.abort(); } catch {}
+      }
+      registerSharedGenerationController(start, null);
+      setSharedGenerationRunningState(start, false);
+    } catch {}
+  }
+
   function clearLinkedPlansMemory() {
     if (typeof window === "undefined") return;
     try {
@@ -2070,6 +2242,28 @@ export default function PlanningPage() {
       }
       keysToRemove.forEach((key) => sessionStorage.removeItem(key));
     } catch {}
+  }
+
+  async function clearAutoWeeklyPlanningCacheForCurrentContext() {
+    const isoWeek = getWeekKeyISO(weekStart);
+    const siteIds = Array.from(
+      new Set([
+        Number(params.id),
+        ...linkedSites.map((linkedSite) => Number(linkedSite.id)).filter(Number.isFinite),
+      ]),
+    );
+    await Promise.all(
+      siteIds.map(async (siteId) => {
+        try {
+          await apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          });
+        } catch {
+          // Ignore: absence de brouillon auto ou cache déjà nettoyé.
+        }
+      }),
+    );
   }
 
   function hasStoredMultiSitePlans(start: Date): boolean {
@@ -2115,15 +2309,12 @@ export default function PlanningPage() {
   }
 
   function applyLinkedSitePlan(plan: LinkedSitePlan, index: number) {
-    const maxIndex = Math.max(0, Array.isArray(plan.alternatives) ? plan.alternatives.length : 0);
-    const safeIndex = Math.max(0, Math.min(index, maxIndex));
-    const assignments = resolveAssignmentsForAlternative(plan, safeIndex);
-    const pulls = resolvePullsForAlternative(plan, safeIndex);
+    const assignments = resolveAssignmentsForAlternative(plan, index);
+    const pulls = resolvePullsForAlternative(plan, index);
     setSavedWeekPlan(null);
     setEditingSaved(false);
     setPullsByHoleKey(pulls || {});
     setPullsEditor(null);
-    setAiLoading(plan.status === "STREAMING");
     setAiPlan((prev) => {
       const nextAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
       if (
@@ -2150,7 +2341,7 @@ export default function PlanningPage() {
         objective: Number(plan.objective || 0),
       };
     });
-    setAltIndex((prev) => (prev === safeIndex ? prev : safeIndex));
+    setAltIndex((prev) => (prev === index ? prev : index));
     baseAssignmentsRef.current = plan.assignments;
   }
 
@@ -2431,37 +2622,21 @@ export default function PlanningPage() {
     })();
   }, [params.id, router]);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        setLinkedSites(Array.isArray(list) ? list : []);
-      } catch {
-        setLinkedSites([]);
-      }
-    })();
-  }, [params.id, weekStart, linkedSitesKeyFromWorkers]);
+  const refreshLinkedSites = useCallback(async () => {
+    try {
+      const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+      setLinkedSites(Array.isArray(list) ? list : []);
+    } catch {
+      setLinkedSites([]);
+    }
+  }, [params.id, weekStart]);
 
-  // Quand la pop-up "מולטי אתרים" s'ouvre, refaire un fetch pour refléter
-  // les suppressions/modifications faites sur les plans des autres sites.
   useEffect(() => {
-    if (!showLinkedSitesDialog) return;
-    if (typeof window === "undefined") return;
-    (async () => {
-      try {
-        const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        setLinkedSites(Array.isArray(list) ? list : []);
-      } catch {
-        setLinkedSites([]);
-      }
-    })();
-  }, [showLinkedSitesDialog, params.id, weekStart]);
+    void refreshLinkedSites();
+  }, [refreshLinkedSites]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2508,6 +2683,42 @@ export default function PlanningPage() {
       window.removeEventListener("linked-plans-memory-updated", onLinkedPlansUpdated as EventListener);
     };
   }, [params.id, weekStart]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const generationKey = multiSiteGenerationKey(weekStart);
+    const syncGenerationState = () => {
+      setSharedGenerationRunning(isSharedGenerationRunning(weekStart));
+    };
+    syncGenerationState();
+    const onGenerationUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ generationKey?: string }>;
+      if (customEvent.detail?.generationKey && customEvent.detail.generationKey !== generationKey) return;
+      syncGenerationState();
+    };
+    window.addEventListener("linked-plans-generation-updated", onGenerationUpdated as EventListener);
+    return () => {
+      window.removeEventListener("linked-plans-generation-updated", onGenerationUpdated as EventListener);
+    };
+  }, [weekStart]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storageKey = multiSiteAssignmentFiltersKey(weekStart);
+    const syncAssignmentFilters = () => {
+      setSharedAssignmentCountFilters(readSharedAssignmentCountFilters(weekStart));
+    };
+    syncAssignmentFilters();
+    const onAssignmentFiltersUpdated = (event: Event) => {
+      const customEvent = event as CustomEvent<{ storageKey?: string }>;
+      if (customEvent.detail?.storageKey && customEvent.detail.storageKey !== storageKey) return;
+      syncAssignmentFilters();
+    };
+    window.addEventListener("linked-assignment-filters-updated", onAssignmentFiltersUpdated as EventListener);
+    return () => {
+      window.removeEventListener("linked-assignment-filters-updated", onAssignmentFiltersUpdated as EventListener);
+    };
+  }, [weekStart]);
 
   // Calculer la semaine prochaine (identique à la page worker)
   function calculateNextWeek(): Date {
@@ -2782,6 +2993,22 @@ export default function PlanningPage() {
     const keyDirector = planKeyDirectorOnly(params.id, start);
     const keyShared = planKeyShared(params.id, start);
     try {
+      // Priorité absolue au planning multi-sites gardé en mémoire, afin de conserver
+      // l'alternative active et le flux visuel lorsqu'on change de site en cours de génération.
+      const linkedMemoryPlans = hasStoredMultiSitePlans(start) ? readLinkedPlansFromMemory(start) : null;
+      const linkedCurrentPlan = linkedMemoryPlans?.plansBySite?.[String(params.id)];
+      if (linkedCurrentPlan && linkedCurrentPlan.assignments) {
+        setSavedPlanLoading(true);
+        setSavedWeekPlan(null);
+        setEditingSaved(false);
+        setPullsModeStationIdx(null);
+        setPullsEditor(null);
+        setActiveSavedPlanKey(null);
+        applyLinkedSitePlan(linkedCurrentPlan, linkedMemoryPlans?.activeAltIndex || 0);
+        setManualAssignments(null);
+        return;
+      }
+
       setSavedPlanLoading(true);
       setSavedWeekPlan(null);
       setEditingSaved(false);
@@ -2789,15 +3016,6 @@ export default function PlanningPage() {
       setPullsModeStationIdx(null);
       setPullsEditor(null);
       setActiveSavedPlanKey(null);
-
-      // Priorité au planning multi-sites gardé en mémoire tant qu'il n'a pas été sauvegardé.
-      const linkedMemoryPlans = hasStoredMultiSitePlans(start) ? readLinkedPlansFromMemory(start) : null;
-      const linkedCurrentPlan = linkedMemoryPlans?.plansBySite?.[String(params.id)];
-      if (linkedCurrentPlan && linkedCurrentPlan.assignments) {
-        applyLinkedSitePlan(linkedCurrentPlan, linkedMemoryPlans?.activeAltIndex || 0);
-        setManualAssignments(null);
-        return;
-      }
 
       // 1) DB (director first, then shared)
       try {
@@ -2912,6 +3130,8 @@ export default function PlanningPage() {
   }, [weekStart, isCalendarOpen]);
 
   function stopAiGeneration() {
+    const activeWeekStart = weekStartRef.current || weekStart;
+    stopSharedGeneration(activeWeekStart);
     if (aiControllerRef.current) {
       try {
         aiControllerRef.current.abort();
@@ -2928,10 +3148,8 @@ export default function PlanningPage() {
       clearTimeout(aiIdleTimeoutRef.current);
       aiIdleTimeoutRef.current = null;
     }
-    if (hasStoredMultiSitePlans(weekStart)) {
-      updateLinkedPlansStatusInMemory(weekStart, "DONE");
-    }
     setAiLoading(false);
+    setSharedGenerationRunning(false);
   }
 
   useEffect(() => {
@@ -2940,7 +3158,6 @@ export default function PlanningPage() {
     setAiPlan(null);
     setAltIndex(0);
     baseAssignmentsRef.current = null;
-    setAssignmentCountFilters({});
   }, [isSavedMode, editingSaved]);
 
   function triggerGenerateButton() {
@@ -3506,9 +3723,6 @@ export default function PlanningPage() {
                                   name: currentWorker?.name || rw.name,
                                   maxShifts: currentMaxShifts,
                                   roles: Array.isArray(rw.roles) ? rw.roles : [],
-                                    linkedSiteIds: Array.isArray(currentWorker?.linkedSiteIds)
-                                      ? currentWorker.linkedSiteIds
-                                      : (Array.isArray((rw as any).linkedSiteIds) ? (rw as any).linkedSiteIds : []),
                                     availability: merged,
                                     answers: currentWorker?.answers || rw.answers || {},
                                   });
@@ -3575,13 +3789,7 @@ export default function PlanningPage() {
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
-                                  {(() => {
-                                    const visibleRoles = w.roles.filter((rn) => enabledRoleNameSet.has(String(rn || "").trim()));
-                                    if (Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1) {
-                                      visibleRoles.push("מולטי");
-                                    }
-                                    return visibleRoles.join(",") || "—";
-                                  })()}
+                                  {w.roles.filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())).join(",") || "—"}
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
                                   {dayDefs.map((d, i) => {
@@ -3760,8 +3968,6 @@ export default function PlanningPage() {
                               availability: createdWorker.availability || fallbackAvail,
                               answers: createdWorker.answers || {},
                               phone: createdWorker.phone ?? null,
-                              linkedSiteIds: Array.isArray(createdWorker.linked_site_ids) ? createdWorker.linked_site_ids : [],
-                              linkedSiteNames: Array.isArray(createdWorker.linked_site_names) ? createdWorker.linked_site_names : [],
                             };
                             const idx = prev.findIndex((w) => w.id === mapped.id);
                             if (idx >= 0) return prev.map((w) => (w.id === mapped.id ? mapped : w));
@@ -4179,6 +4385,7 @@ export default function PlanningPage() {
                               method: "DELETE",
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             });
+                            await refreshLinkedSites();
                             toast.success("העובד נמחק בהצלחה");
                             setIsAddModalOpen(false);
                             setEditingWorkerId(null);
@@ -4286,6 +4493,7 @@ export default function PlanningPage() {
                                 linkedSiteNames: Array.isArray(updated.linked_site_names) ? updated.linked_site_names : [],
                               };
                               setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
+                              await refreshLinkedSites();
                               toast.success("עובד עודכן בהצלחה!");
                               try {
                                 const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
@@ -4349,11 +4557,13 @@ export default function PlanningPage() {
                             if (existingIndex >= 0) {
                               // Worker réutilisé - mettre à jour
                               setWorkers((prev) => prev.map((x) => (x.id === result.id ? mapped : x)));
+                              await refreshLinkedSites();
                               toast.success("עובד עודכן בהצלחה!");
                             } else {
                               // Nouveau worker - ajouter
-                            setWorkers((prev) => [...prev, mapped]);
-                            toast.success("עובד נוסף בהצלחה!");
+                              setWorkers((prev) => [...prev, mapped]);
+                              await refreshLinkedSites();
+                              toast.success("עובד נוסף בהצלחה!");
                             }
                           }
                           // Save weekly override for this specific week
@@ -6847,8 +7057,9 @@ export default function PlanningPage() {
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
                                                                     "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (canPullThisRole ? " ring-2 ring-orange-400" : "") +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
-                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "")
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` && (!draggingWorkerName || canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint)) ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "") +
+                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " opacity-50 cursor-not-allowed" : "")
                                                                   }
                                                                   style={{ borderColor: rc.border }}
                                                                   onClick={(e) => {
@@ -6940,8 +7151,9 @@ export default function PlanningPage() {
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
                                                                     "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (pullsActiveHere && isPullable ? " ring-2 ring-orange-400" : "") +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
-                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "")
+                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` && (!draggingWorkerName || canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null)) ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "") +
+                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " opacity-50 cursor-not-allowed" : "")
                                                                   }
                                                                   onClick={(e) => {
                                                                     e.stopPropagation();
@@ -7621,7 +7833,10 @@ export default function PlanningPage() {
                               </span>
                               <button
                                 type="button"
-                                onClick={() => setAssignmentCountFilters({})}
+                                onClick={() => {
+                                  setSharedAssignmentCountFilters({});
+                                  saveSharedAssignmentCountFilters(weekStart, {});
+                                }}
                                 className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
                               >
                                 איפוס סינון
@@ -8560,6 +8775,7 @@ export default function PlanningPage() {
                     try {
                       // eslint-disable-next-line no-console
                       console.log("[BTN] click start");
+                      await clearAutoWeeklyPlanningCacheForCurrentContext();
                       clearLinkedPlansMemory();
                       setAiLoading(true);
                       setAiPlan(null);
@@ -8570,9 +8786,15 @@ export default function PlanningPage() {
                       setAltIndex(0);
                       const controller = new AbortController();
                       aiControllerRef.current = controller;
+                      registerSharedGenerationController(weekStart, controller);
+                      setSharedGenerationRunningState(weekStart, true);
+                      setSharedGenerationRunning(true);
                       const timeoutId = setTimeout(() => {
                         try { controller.abort(); } catch {}
                         setAiLoading(false);
+                        registerSharedGenerationController(weekStart, null);
+                        setSharedGenerationRunningState(weekStart, false);
+                        setSharedGenerationRunning(false);
                       }, 120000);
                       aiTimeoutRef.current = timeoutId;
                       // Inactivité: si aucune frame reçue pendant X ms, terminer proprement
@@ -8583,9 +8805,12 @@ export default function PlanningPage() {
                           console.log("[AI][SSE] idle timeout → finalize");
                           setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
                           setAiLoading(false);
+                          setSharedGenerationRunning(false);
                           try { await reader.cancel?.(); } catch {}
                           try { controller.abort(); } catch {}
                           aiControllerRef.current = null;
+                          registerSharedGenerationController(weekStart, null);
+                          setSharedGenerationRunningState(weekStart, false);
                           if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
                           aiTimeoutRef.current = null;
                           if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
@@ -8682,7 +8907,7 @@ export default function PlanningPage() {
                                 setLinkedSites(evt.linked_sites);
                               }
                               if (evt?.type === "base" && evt?.site_plans && typeof evt.site_plans === "object") {
-                                const current = evt.site_plans[String(params.id)];
+                                const current = evt.site_plans[currentSiteIdRef.current];
                                 if (exceedsPullsLimit(current?.pulls)) {
                                   continue;
                                 }
@@ -8694,12 +8919,13 @@ export default function PlanningPage() {
                                 }
                               } else if (evt?.type === "alternative" && evt?.site_plans && typeof evt.site_plans === "object") {
                                 armIdle();
-                                const currentIncomingPlan = (evt.site_plans as Record<string, LinkedSitePlan>)[String(params.id)];
+                                const currentIncomingPlan = (evt.site_plans as Record<string, LinkedSitePlan>)[currentSiteIdRef.current];
                                 if (exceedsPullsLimit(currentIncomingPlan?.pulls)) {
                                   continue;
                                 }
                                 const existingMemory = readLinkedPlansFromMemory(weekStart);
                                 const mergedPlans = { ...(existingMemory?.plansBySite || {}) } as Record<string, LinkedSitePlan>;
+                                const activeIndex = Number(existingMemory?.activeAltIndex || 0);
                                 if (autoPullsEnabled && Object.keys(mergedPlans).length > 0) {
                                   const quality = compareLinkedSitePlansQuality(mergedPlans, evt.site_plans as Record<string, LinkedSitePlan>);
                                   if (quality < 0) {
@@ -8707,42 +8933,48 @@ export default function PlanningPage() {
                                       Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).map(([siteKey, incomingPlan]) => [
                                         siteKey,
                                         {
+                                          ...(mergedPlans[siteKey] || incomingPlan),
                                           ...incomingPlan,
-                                        status: incomingPlan.status || "STREAMING",
                                           assignments: incomingPlan.assignments,
-                                          alternatives: [],
+                                          alternatives: [
+                                            ...((mergedPlans[siteKey]?.assignments ? [mergedPlans[siteKey].assignments] : []) as Record<string, Record<string, string[][]>>[]),
+                                            ...((mergedPlans[siteKey]?.alternatives || []) as Record<string, Record<string, string[][]>>[]),
+                                          ],
                                           pulls: incomingPlan.pulls || {},
-                                          alternative_pulls: [],
+                                          alternative_pulls: [
+                                            ...((mergedPlans[siteKey]?.pulls ? [mergedPlans[siteKey].pulls] : []) as Record<string, PullEntry>[]),
+                                            ...((mergedPlans[siteKey]?.alternative_pulls || []) as Record<string, PullEntry>[]),
+                                          ],
                                         },
                                       ]),
                                     ) as Record<string, LinkedSitePlan>;
-                                    saveLinkedPlansToMemory(weekStart, nextPlans, 0);
-                                    const current = nextPlans[String(params.id)];
-                                    if (current?.assignments) applyLinkedSitePlan(current, 0);
+                                    const nextActiveIndex = activeIndex + 1;
+                                    saveLinkedPlansToMemory(weekStart, nextPlans, nextActiveIndex);
+                                    const current = nextPlans[currentSiteIdRef.current];
+                                    if (current?.assignments) applyLinkedSitePlan(current, nextActiveIndex);
                                   } else if (quality === 0) {
+                                    // Garder un index d'alternative global aligné entre tous les sites liés,
+                                    // même si une alternative donnée produit localement le même planning.
                                     Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).forEach(([siteKey, incomingPlan]) => {
                                       const prevPlan = mergedPlans[siteKey];
-                                      if (!prevPlan) return;
-                                      const alreadyExists =
-                                        sameAssignmentsMap(prevPlan.assignments, incomingPlan.assignments) &&
-                                        samePullsMap(prevPlan.pulls || {}, incomingPlan.pulls || {});
-                                      const altExists = ((prevPlan.alternatives || []) as Record<string, Record<string, string[][]>>[])
-                                        .some((alt, idx) =>
-                                          sameAssignmentsMap(alt, incomingPlan.assignments) &&
-                                          samePullsMap(((prevPlan.alternative_pulls || [])[idx] || {}) as Record<string, PullEntry>, incomingPlan.pulls || {}),
-                                        );
-                                      if (alreadyExists || altExists) return;
                                       mergedPlans[siteKey] = {
-                                        ...prevPlan,
-                                        status: incomingPlan.status || prevPlan.status || "STREAMING",
-                                        alternatives: [...((prevPlan.alternatives || []) as Record<string, Record<string, string[][]>>[]), incomingPlan.assignments],
-                                        alternative_pulls: [...((prevPlan.alternative_pulls || []) as Record<string, PullEntry>[]), (incomingPlan.pulls || {})],
+                                        ...(prevPlan || incomingPlan),
+                                        assignments: prevPlan?.assignments || incomingPlan.assignments,
+                                        pulls: prevPlan?.pulls || incomingPlan.pulls || {},
+                                        alternatives: [
+                                          ...((prevPlan?.alternatives || []) as Record<string, Record<string, string[][]>>[]),
+                                          incomingPlan.assignments,
+                                        ],
+                                        alternative_pulls: [
+                                          ...((prevPlan?.alternative_pulls || []) as Record<string, PullEntry>[]),
+                                          (incomingPlan.pulls || {}),
+                                        ],
                                       };
                                     });
                                     saveLinkedPlansToMemory(weekStart, mergedPlans, Number(existingMemory?.activeAltIndex || 0));
                                   }
                                 } else {
-                                  const currentExistingPlan = mergedPlans[String(params.id)];
+                                  const currentExistingPlan = mergedPlans[currentSiteIdRef.current];
                                   const promoteIncomingAsBase =
                                     !streamPullPriorityPromotedRef.current &&
                                     !!currentExistingPlan?.assignments &&
@@ -8758,7 +8990,6 @@ export default function PlanningPage() {
                                     mergedPlans[siteKey] = {
                                       ...(prevPlan || incomingPlan),
                                       ...incomingPlan,
-                                      status: incomingPlan.status || prevPlan?.status || "STREAMING",
                                       assignments: promoteIncomingAsBase
                                         ? incomingPlan.assignments
                                         : (prevPlan?.assignments || incomingPlan.assignments),
@@ -8788,31 +9019,30 @@ export default function PlanningPage() {
                                   if (promoteIncomingAsBase) {
                                     streamPullPriorityPromotedRef.current = true;
                                   }
-                                  const activeIndex = Number(existingMemory?.activeAltIndex || 0);
-                                  saveLinkedPlansToMemory(weekStart, mergedPlans, promoteIncomingAsBase ? 0 : activeIndex);
-                                  const current = mergedPlans[String(params.id)];
+                                  const nextActiveIndex = promoteIncomingAsBase ? activeIndex + 1 : activeIndex;
+                                  saveLinkedPlansToMemory(weekStart, mergedPlans, nextActiveIndex);
+                                  const current = mergedPlans[currentSiteIdRef.current];
                                   if (current?.assignments) {
-                                    applyLinkedSitePlan(current, promoteIncomingAsBase ? 0 : activeIndex);
+                                    applyLinkedSitePlan(current, nextActiveIndex);
                                   }
                                 }
                               } else if (evt?.type === "status") {
                                 if (evt?.status === "ERROR" && evt?.detail) {
                                   toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
-                                  updateLinkedPlansStatusInMemory(weekStart, "ERROR");
-                                } else {
-                                  updateLinkedPlansStatusInMemory(weekStart, String(evt?.status || "DONE"));
                                 }
                                 setAiLoading(false);
+                                setSharedGenerationRunning(false);
                                 try { await reader.cancel(); } catch {}
                                 if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
                                 aiTimeoutRef.current = null;
                                 if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
                                 aiIdleTimeoutRef.current = null;
                                 aiControllerRef.current = null;
+                                registerSharedGenerationController(weekStart, null);
+                                setSharedGenerationRunningState(weekStart, false);
                                 stopped = true;
                                 break;
                               } else if (evt?.type === "done") {
-                                updateLinkedPlansStatusInMemory(weekStart, "DONE");
                                 try { await reader.cancel(); } catch {}
                                 if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
                                 aiTimeoutRef.current = null;
@@ -8821,6 +9051,9 @@ export default function PlanningPage() {
                                 aiControllerRef.current = null;
                                 stopped = true;
                                 setAiLoading(false);
+                                setSharedGenerationRunning(false);
+                                registerSharedGenerationController(weekStart, null);
+                                setSharedGenerationRunningState(weekStart, false);
                                 setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
                                 toast.success("התכנון הושלם");
                                 break;
@@ -8977,12 +9210,15 @@ export default function PlanningPage() {
                                 toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
                               }
                               setAiLoading(false);
+                              setSharedGenerationRunning(false);
                               try { await reader.cancel(); } catch {}
                               if (aiTimeoutRef.current) clearTimeout(aiTimeoutRef.current);
                               aiTimeoutRef.current = null;
                               if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
                               aiIdleTimeoutRef.current = null;
                               aiControllerRef.current = null;
+                              registerSharedGenerationController(weekStart, null);
+                              setSharedGenerationRunningState(weekStart, false);
                               stopped = true;
                               break;
                             } else if (evt?.type === "done") {
@@ -8996,6 +9232,9 @@ export default function PlanningPage() {
                               aiControllerRef.current = null;
                               stopped = true;
                               setAiLoading(false);
+                              setSharedGenerationRunning(false);
+                              registerSharedGenerationController(weekStart, null);
+                              setSharedGenerationRunningState(weekStart, false);
                               setAiPlan((prev) => (prev ? { ...prev, status: "DONE" } : prev));
                               toast.success("התכנון הושלם");
                               break;
@@ -9033,6 +9272,9 @@ export default function PlanningPage() {
                       aiTimeoutRef.current = null;
                       aiIdleTimeoutRef.current = null;
                       setAiLoading(false);
+                      setSharedGenerationRunning(false);
+                      registerSharedGenerationController(weekStart, null);
+                      setSharedGenerationRunningState(weekStart, false);
                     }
                   }}
                   className={
@@ -9041,9 +9283,9 @@ export default function PlanningPage() {
                       ? "bg-zinc-300 cursor-not-allowed dark:bg-zinc-700"
                       : "bg-[#00A8E0] hover:bg-[#0092c6]")
                   }
-                  disabled={(isSavedMode && !editingSaved) || aiLoading}
+                  disabled={(isSavedMode && !editingSaved) || isAnyGenerationRunning}
                 >
-                  {aiLoading ? "יוצר..." : "יצירת תכנון"}
+                  {isAnyGenerationRunning ? "יוצר..." : "יצירת תכנון"}
                 </button>
                 {showGenDialog && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -9319,7 +9561,7 @@ export default function PlanningPage() {
               {/* Left: Mobile landscape = 2 lignes centrées */}
               <div className="flex items-center justify-center md:justify-center gap-2 md:gap-3 flex-wrap order-2 md:order-1">
                 <div className="flex items-center justify-center gap-2 flex-wrap w-full md:w-auto [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
-                {aiLoading && (
+                {isAnyGenerationRunning && (
                   <button
                     type="button"
                     onClick={() => {
@@ -9335,24 +9577,10 @@ export default function PlanningPage() {
                     </svg>
                   </button>
                 )}
-                {linkedSites.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowLinkedSitesDialog(true)}
-                    className={
-                      "inline-flex items-center justify-center rounded-md px-4 py-2 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs bg-[#00A8E0] text-white hover:bg-[#0092c6] dark:bg-[#0092c6] dark:hover:bg-[#007fb0]"
-                    }
-                    aria-label="מולטי אתרים"
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
-                      <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
-                    </svg>
-                  </button>
-                )}
                 <div
                   className={
                     "inline-flex overflow-hidden rounded-md border disabled:opacity-60 " +
-                    (aiLoading || (isSavedMode && !editingSaved) || isManual
+                    (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
                       ? "border-zinc-300 dark:border-zinc-600"
                       : "border-[#00A8E0]")
                   }
@@ -9364,15 +9592,15 @@ export default function PlanningPage() {
                         triggerGenerateButton();
                       } catch {}
                     }}
-                    disabled={aiLoading || (isSavedMode && !editingSaved) || isManual}
+                    disabled={isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual}
                     className={
                       "inline-flex items-center gap-2 rounded-none border-0 px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                      (aiLoading || (isSavedMode && !editingSaved) || isManual
+                      (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
                         ? "bg-zinc-300 text-zinc-600 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400"
                         : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
                     }
                   >
-                    {aiLoading ? (
+                    {isAnyGenerationRunning ? (
                       <>
                         <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                           <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
@@ -9391,7 +9619,7 @@ export default function PlanningPage() {
                   <div
                     className={
                       "flex min-w-[2rem] flex-col items-center justify-center border-l px-0.5 py-0 [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
-                      (aiLoading || (isSavedMode && !editingSaved) || isManual
+                      (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
                         ? "border-zinc-300 bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800"
                         : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
                     }
@@ -9402,12 +9630,25 @@ export default function PlanningPage() {
                     <PullsLimitPicker
                       value={autoPullsLimit}
                       onChange={setAutoPullsLimit}
-                      disabled={aiLoading || isManual || (isSavedMode && !editingSaved)}
+                      disabled={isAnyGenerationRunning || isManual || (isSavedMode && !editingSaved)}
                       className="w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none text-orange-600 outline-none placeholder:text-orange-600/70 disabled:opacity-50 dark:text-orange-400 dark:placeholder:text-orange-400/70 [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px]"
                       title="מגבלת משיכות"
                     />
                   </div>
                 </div>
+                {linkedSites.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowLinkedSitesDialog(true)}
+                    className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1"
+                    aria-label="מולטי אתרים"
+                    title="מולטי אתרים"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z" />
+                    </svg>
+                  </button>
+                )}
                 {(!isSavedMode || editingSaved) && (
             <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                     <button
@@ -9972,7 +10213,7 @@ export default function PlanningPage() {
             <div className="mb-3 text-sm">
               {`העובד משויך גם לאתרים נוספים: ${linkedAvailabilityConfirmSites.join(", ")}.`}
               <br />
-              האם לעדכן את הזמינות גם באתרים המקושרים?
+              הזמינות תתעדכן אוטומטית גם באתרים המקושרים.
             </div>
             <div className="flex items-center justify-center gap-2">
               <button
@@ -9984,18 +10225,6 @@ export default function PlanningPage() {
                 }}
               >
                 ביטול
-              </button>
-              <button
-                type="button"
-                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={async () => {
-                  const run = pendingLinkedAvailabilitySaveRef.current;
-                  pendingLinkedAvailabilitySaveRef.current = null;
-                  setLinkedAvailabilityConfirmSites(null);
-                  if (run) await run(false);
-                }}
-              >
-                לא
               </button>
               <button
                 type="button"

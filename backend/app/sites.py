@@ -664,7 +664,6 @@ def _build_multi_site_generation_context(
             "roles": set(),
             "max_shifts": [],
             "availability": None,
-            "availability_by_site": {},
         })
         site_id = int(row.site_id)
         group["site_ids"].add(site_id)
@@ -678,15 +677,10 @@ def _build_multi_site_generation_context(
             override = current_site_overrides.get(row.name)
         if not isinstance(override, dict):
             override = site_weekly_overrides.get(row.name)
-        site_availability = None
         if isinstance(override, dict):
-            site_availability = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
-        elif isinstance(row.availability, dict):
-            site_availability = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
-        if isinstance(site_availability, dict):
-            group["availability_by_site"][str(site_id)] = site_availability
-            if site_id == int(root_site_id) or group["availability"] is None:
-                group["availability"] = site_availability
+            group["availability"] = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
+        if group["availability"] is None and isinstance(row.availability, dict):
+            group["availability"] = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
 
     combined_stations: list[dict] = []
     station_map: list[dict] = []
@@ -718,7 +712,6 @@ def _build_multi_site_generation_context(
             "max_shifts": min(group["max_shifts"]) if group["max_shifts"] else 5,
             "roles": sorted(group["roles"]),
             "availability": group["availability"] or {},
-            "availability_by_site": group["availability_by_site"] or {},
         }
         for idx, group in enumerate(worker_groups.values())
     ]
@@ -1469,15 +1462,15 @@ def promote_auto_week_plan(
 def delete_week_plan(
     site_id: int,
     week: str = Query(..., description="YYYY-MM-DD (week start)"),
-    scope: str = Query("director", description="director|shared"),
+    scope: str = Query("director", description="auto|director|shared"),
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
     _director_site_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     sc = (scope or "director").strip()
-    if sc not in ("director", "shared"):
-        raise HTTPException(status_code=400, detail="scope invalide (director|shared)")
+    if sc not in ("auto", "director", "shared"):
+        raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared)")
     row = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.site_id == site_id)
