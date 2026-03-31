@@ -239,6 +239,14 @@ export default function PlanningPage() {
     roleName?: string | null; // si roles: les 2 travailleurs doivent partager ce rôle
   };
   const [pullsByHoleKey, setPullsByHoleKey] = useState<Record<string, PullEntry>>({});
+  const displayedPullsByHoleKey = useMemo(
+    () => (
+      isSavedMode && !editingSaved && savedWeekPlan?.pulls && typeof savedWeekPlan.pulls === "object"
+        ? (savedWeekPlan.pulls as Record<string, PullEntry>)
+        : pullsByHoleKey
+    ),
+    [isSavedMode, editingSaved, savedWeekPlan, pullsByHoleKey],
+  );
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
   const [pullsEditor, setPullsEditor] = useState<null | {
     key: string;
@@ -4966,16 +4974,67 @@ export default function PlanningPage() {
                                       };
                                       
                                       // Extraire les jours travaillés avec station, shift et horaire si le filtre est activé
-                                      const getWorkDays = (): Array<{ dayKey: string; station: string; shift: string; hours: string | null }> => {
+                                      const getWorkDays = (): Array<{ dayKey: string; station: string; shift: string; hours: string | null; pullHighlightKind?: "cell" | "before" | "after" | null }> => {
                                         if (!filterByWorkDays || !isSavedMode || !savedWeekPlan?.assignments) return [];
                                         
                                         const assignments = savedWeekPlan.assignments;
                                         const stations = (site?.config?.stations || []) as any[];
-                                        const workDays: Array<{ dayKey: string; station: string; shift: string; hours: string | null }> = [];
+                                        const workDays: Array<{ dayKey: string; station: string; shift: string; hours: string | null; pullHighlightKind?: "cell" | "before" | "after" | null }> = [];
                                         const workerNameTrimmed = (w.name || "").trim();
+                                        const dayKeysOrdered = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+                                        const shiftNamesOrdered: string[] = Array.from(
+                                          new Set(
+                                            (site?.config?.stations || [])
+                                              .flatMap((stationCfg: any) => (stationCfg?.shifts || [])
+                                                .filter((sh: any) => sh?.enabled)
+                                                .map((sh: any) => sh?.name))
+                                              .filter(Boolean),
+                                          ),
+                                        );
+                                        const getPullHighlightKindForEntry = (
+                                          dayKey: string,
+                                          shiftName: string,
+                                          stationIndex: number,
+                                        ): "cell" | "before" | "after" | null => {
+                                          const dayIdx = dayKeysOrdered.indexOf(dayKey);
+                                          const shiftIdx = shiftNamesOrdered.indexOf(shiftName);
+                                          if (dayIdx < 0 || shiftIdx < 0) return null;
+                                          let found: "cell" | "before" | "after" | null = null;
+                                          Object.entries(displayedPullsByHoleKey || {}).forEach(([pullKey, entryAny]) => {
+                                            if (found === "cell") return;
+                                            const parts = String(pullKey || "").split("|");
+                                            if (parts.length < 3) return;
+                                            const [pullDayKey, pullShiftName, pullStationIdxRaw] = parts;
+                                            if (Number(pullStationIdxRaw) !== Number(stationIndex)) return;
+                                            const entry = entryAny as any;
+                                            const beforeName = String(entry?.before?.name || "").trim();
+                                            const afterName = String(entry?.after?.name || "").trim();
+                                            const pullDayIdx = dayKeysOrdered.indexOf(pullDayKey);
+                                            const pullShiftIdx = shiftNamesOrdered.indexOf(pullShiftName);
+                                            if (pullDayIdx < 0 || pullShiftIdx < 0) return;
+                                            const pullPrevCoord = (pullDayIdx === 0 && pullShiftIdx === 0)
+                                              ? null
+                                              : (pullShiftIdx === 0 ? { dayIdx: pullDayIdx - 1, shiftIdx: shiftNamesOrdered.length - 1 } : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx - 1 });
+                                            const pullNextCoord = (pullDayIdx === dayKeysOrdered.length - 1 && pullShiftIdx === shiftNamesOrdered.length - 1)
+                                              ? null
+                                              : (pullShiftIdx === shiftNamesOrdered.length - 1 ? { dayIdx: pullDayIdx + 1, shiftIdx: 0 } : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx + 1 });
+                                            if (pullDayKey === dayKey && pullShiftName === shiftName) {
+                                              if (beforeName === workerNameTrimmed || afterName === workerNameTrimmed) {
+                                                found = "cell";
+                                              }
+                                              return;
+                                            }
+                                            if (!found && beforeName === workerNameTrimmed && pullPrevCoord && pullPrevCoord.dayIdx === dayIdx && pullPrevCoord.shiftIdx === shiftIdx) {
+                                              found = "before";
+                                            }
+                                            if (!found && afterName === workerNameTrimmed && pullNextCoord && pullNextCoord.dayIdx === dayIdx && pullNextCoord.shiftIdx === shiftIdx) {
+                                              found = "after";
+                                            }
+                                          });
+                                          return found;
+                                        };
                                         
-                                        const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
-                                        dayKeys.forEach((dayKey) => {
+                                        dayKeysOrdered.forEach((dayKey) => {
                                           const dayAssignments = assignments[dayKey] || {};
                                           Object.entries(dayAssignments).forEach(([shiftName, stationArray]) => {
                                             if (!Array.isArray(stationArray)) return;
@@ -4988,8 +5047,9 @@ export default function PlanningPage() {
                                                 const stationName = stationConfig?.name || `עמדה ${stationIndex + 1}`;
                                                 // Extraire l'horaire depuis la config ou depuis le nom du shift
                                                 const hours = hoursFromConfig(stationConfig, shiftName) || hoursOf(shiftName) || shiftName;
+                                                const pullHighlightKind = getPullHighlightKindForEntry(dayKey, shiftName, stationIndex);
                                                 // Ajouter chaque assignation (même jour peut avoir plusieurs shifts/stations)
-                                                workDays.push({ dayKey, station: stationName, shift: shiftName, hours });
+                                                workDays.push({ dayKey, station: stationName, shift: shiftName, hours, pullHighlightKind });
                                               }
                                             });
                                           });
@@ -5037,7 +5097,15 @@ export default function PlanningPage() {
                                                     {workDayInfos.length > 0 && (
                                                       <div className="mt-1 space-y-0.5">
                                                         {workDayInfos.map((wdi, idx) => (
-                                                          <span key={idx} className="block text-xs text-zinc-500 dark:text-zinc-400">
+                                                          <span
+                                                            key={idx}
+                                                            className={
+                                                              "block text-xs " +
+                                                              (wdi.pullHighlightKind
+                                                                ? "rounded-md border border-orange-400 px-1.5 py-0.5 text-zinc-700 dark:border-orange-400 dark:text-zinc-200"
+                                                                : "text-zinc-500 dark:text-zinc-400")
+                                                            }
+                                                          >
                                                             {wdi.station} - {wdi.shift} {wdi.hours && `(${wdi.hours})`}
                                                           </span>
                                                         ))}
@@ -6434,6 +6502,51 @@ export default function PlanningPage() {
                                       };
                                       const prevNames = prevCoord ? neighborNames(dayCols[prevCoord.dayIdx]?.key, shiftNamesAll[prevCoord.shiftIdx]) : [];
                                       const nextNames = nextCoord ? neighborNames(dayCols[nextCoord.dayIdx]?.key, shiftNamesAll[nextCoord.shiftIdx]) : [];
+                                      const sameCoord = (
+                                        a: { dayIdx: number; shiftIdx: number } | null,
+                                        bDayIdx: number,
+                                        bShiftIdx: number,
+                                      ) => !!a && a.dayIdx === bDayIdx && a.shiftIdx === bShiftIdx;
+                                      const pullHighlightKindByName = new Map<string, "cell" | "before" | "after">();
+                                      Object.entries(pullsByHoleKey || {}).forEach(([pullKey, entryAny]) => {
+                                        const parts = String(pullKey || "").split("|");
+                                        if (parts.length < 3) return;
+                                        const [pullDayKey, pullShiftName, pullStationIdxRaw] = parts;
+                                        if (Number(pullStationIdxRaw) !== Number(idx)) return;
+                                        const pullDayIdx = dayCols.findIndex((col) => col?.key === pullDayKey);
+                                        const pullShiftIdx = shiftNamesAll.indexOf(pullShiftName);
+                                        if (pullDayIdx < 0 || pullShiftIdx < 0) return;
+                                        const pullPrevCoord = (pullDayIdx === 0 && pullShiftIdx === 0)
+                                          ? null
+                                          : (pullShiftIdx === 0 ? { dayIdx: pullDayIdx - 1, shiftIdx: shiftsCount - 1 } : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx - 1 });
+                                        const pullNextCoord = (pullDayIdx === 6 && pullShiftIdx === shiftsCount - 1)
+                                          ? null
+                                          : (pullShiftIdx === shiftsCount - 1 ? { dayIdx: pullDayIdx + 1, shiftIdx: 0 } : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx + 1 });
+                                        const entry = entryAny as any;
+                                        const beforeName = String(entry?.before?.name || "").trim();
+                                        const afterName = String(entry?.after?.name || "").trim();
+                                        if (pullDayKey === d.key && pullShiftName === sn) {
+                                          if (beforeName) pullHighlightKindByName.set(beforeName, "cell");
+                                          if (afterName) pullHighlightKindByName.set(afterName, "cell");
+                                          return;
+                                        }
+                                        if (beforeName && sameCoord(pullPrevCoord, dayIdx, shiftIdx)) {
+                                          pullHighlightKindByName.set(beforeName, "before");
+                                        }
+                                        if (afterName && sameCoord(pullNextCoord, dayIdx, shiftIdx)) {
+                                          pullHighlightKindByName.set(afterName, "after");
+                                        }
+                                      });
+                                      const pullHighlightClassForName = (workerName: string) => {
+                                        const relation = pullHighlightKindByName.get(String(workerName || "").trim());
+                                        if (!relation) return "";
+                                        if (relation === "cell") {
+                                          return blockSavedViewPullBubble(workerName)
+                                            ? " ring-2 ring-orange-400 cursor-default"
+                                            : " ring-2 ring-orange-400 cursor-pointer";
+                                        }
+                                        return " ring-2 ring-orange-400";
+                                      };
                                       const remainingCapacity = Math.max(0, required - assignedCount);
                                       // Pull possible seulement si on a AU MOINS un candidat "avant" et un candidat "après"
                                       // qui ne sont pas déjà utilisés dans la case, et que l'on peut former une paire de 2 noms différents.
@@ -6703,28 +6816,7 @@ export default function PlanningPage() {
                                                                     "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "") +
-                                                                    (() => {
-                                                                      // Comme en automatique: n'afficher le contour orange des משיכות
-                                                                      // que quand le mode משיכות est actif sur cette עמדה.
-                                                                      if (pullsModeStationIdx !== idx) return "";
-                                                                      const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                      const norm = (s: any) =>
-                                                                        String(s || "")
-                                                                          .normalize("NFKC")
-                                                                          .trim()
-                                                                          .replace(/\s+/g, " ");
-                                                                      const nmN = norm(nm);
-                                                                      const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
-                                                                        if (!k.startsWith(cellPrefix)) return false;
-                                                                        const e: any = entry;
-                                                                        return norm(e?.before?.name) === nmN || norm(e?.after?.name) === nmN;
-                                                                      });
-                                                                      return match
-                                                                        ? (blockSavedViewPullBubble(nm)
-                                                                          ? " ring-2 ring-orange-400 cursor-default"
-                                                                          : " ring-2 ring-orange-400 cursor-pointer")
-                                                                        : "";
-                                                                    })()
+                                                                    pullHighlightClassForName(nm)
                                                                   }
                                                                   style={{ backgroundColor: c.bg, borderColor: (rc?.border || c.border), color: c.text }}
                                                                   draggable={!blockSavedViewPullBubble(nm)}
@@ -7319,20 +7411,7 @@ export default function PlanningPage() {
                                                           const chipClass =
                                                             // Auto: aligner l'expansion desktop sur le mode manuel (la chip s'étire au hover/focus).
                                                             "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
-                                                            (() => {
-                                                              if (pullsModeStationIdx !== idx) return "";
-                                                              const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                              const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
-                                                                if (!k.startsWith(cellPrefix)) return false;
-                                                                const e: any = entry;
-                                                                return e?.before?.name === nm || e?.after?.name === nm;
-                                                              });
-                                                              return match
-                                                                ? (blockSavedViewPullBubble(nm)
-                                                                  ? " ring-2 ring-orange-400 cursor-default"
-                                                                  : " ring-2 ring-orange-400 cursor-pointer")
-                                                                : "";
-                                                            })();
+                                                            pullHighlightClassForName(nm);
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
@@ -9617,21 +9696,38 @@ export default function PlanningPage() {
                     )}
                   </button>
                   <div
+                    onClick={(e) => {
+                      if (isAnyGenerationRunning || isManual || (isSavedMode && !editingSaved)) return;
+                      const trigger = (e.currentTarget as HTMLDivElement).querySelector('[data-pulls-picker-trigger="1"]') as HTMLButtonElement | null;
+                      trigger?.click();
+                    }}
                     className={
-                      "flex min-w-[2rem] flex-col items-center justify-center border-l px-0.5 py-0 [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
+                      "flex min-w-[2rem] flex-col items-center justify-center border-l px-0.5 py-0 cursor-pointer [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
                       (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
-                        ? "border-zinc-300 bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800"
-                        : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
+                        ? "border-zinc-300 bg-zinc-100 cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800"
+                        : autoPullsEnabled
+                          ? "border-orange-500 bg-orange-500 dark:border-orange-500 dark:bg-orange-500"
+                          : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
                     }
                   >
-                    <span className="text-[9px] font-medium leading-none text-orange-600 dark:text-orange-400 [@media(orientation:landscape)_and_(max-width:1024px)]:text-[8px]">
+                    <span
+                      className={
+                        "text-[9px] font-medium leading-none [@media(orientation:landscape)_and_(max-width:1024px)]:text-[8px] " +
+                        (autoPullsEnabled ? "text-white" : "text-orange-600 dark:text-orange-400")
+                      }
+                    >
                       משיכות
                     </span>
                     <PullsLimitPicker
                       value={autoPullsLimit}
                       onChange={setAutoPullsLimit}
                       disabled={isAnyGenerationRunning || isManual || (isSavedMode && !editingSaved)}
-                      className="w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none text-orange-600 outline-none placeholder:text-orange-600/70 disabled:opacity-50 dark:text-orange-400 dark:placeholder:text-orange-400/70 [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px]"
+                      className={
+                        "w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none disabled:opacity-50 [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
+                        (autoPullsEnabled
+                          ? "text-white placeholder:text-white/70"
+                          : "text-orange-600 placeholder:text-orange-600/70 dark:text-orange-400 dark:placeholder:text-orange-400/70")
+                      }
                       title="מגבלת משיכות"
                     />
                   </div>

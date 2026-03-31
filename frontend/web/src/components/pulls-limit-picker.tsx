@@ -71,28 +71,29 @@ export default function PullsLimitPicker({
     setSelectedValue(value);
   };
 
-  const listSize = PULLS_OPTIONS.length;
-
   return (
     <>
-      <input
-        type="text"
-        value={labelForValue(value)}
-        onPointerDown={(e) => {
+      <button
+        type="button"
+        onClick={(e) => {
           if (disabled) return;
           e.preventDefault();
           e.stopPropagation();
           openPopup();
         }}
-        readOnly
         disabled={disabled}
-        className={`${className} cursor-pointer`}
-        inputMode="none"
+        data-pulls-picker-trigger="1"
+        className={`${className} inline-flex items-center justify-center gap-1 cursor-pointer`}
         title={title}
         aria-label={title}
         aria-haspopup="dialog"
         aria-expanded={showPopup}
-      />
+      >
+        <span>{labelForValue(value)}</span>
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden>
+          <path d="M12 7 19 17H5l7-10Z" />
+        </svg>
+      </button>
       {showPopup &&
         portalEl &&
         createPortal(
@@ -114,30 +115,35 @@ export default function PullsLimitPicker({
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">משיכות</h3>
               </div>
               <div className="px-4 pb-3 pt-2">
-                <div className="flex items-center justify-center">
-                  <select
-                    value={selectedValue}
-                    onChange={(e) => setSelectedValue(e.target.value)}
-                    className="box-border w-full max-w-[11rem] rounded-md border border-zinc-300 bg-white px-2 py-0 text-center text-sm leading-6 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-                    style={{ height: `${listSize}lh`, maxHeight: `${listSize}lh` }}
-                    size={listSize}
-                  >
-                    {PULLS_OPTIONS.map((o) => (
-                      <option key={o.value === "" ? "empty" : o.value} value={o.value}>
+                <div className="mx-auto flex w-full max-w-[11rem] flex-col gap-1">
+                  {PULLS_OPTIONS.map((o) => {
+                    const isSelected = selectedValue === o.value;
+                    return (
+                      <button
+                        key={o.value === "" ? "empty" : o.value}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedValue(o.value);
+                        }}
+                        className={
+                          "rounded-md border px-3 py-2 text-center text-sm font-medium transition-colors " +
+                          (isSelected
+                            ? "border-[#00A8E0] bg-sky-50 text-[#0077a3] dark:border-sky-500 dark:bg-sky-950/40 dark:text-sky-300"
+                            : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700")
+                        }
+                        aria-pressed={isSelected}
+                      >
                         {o.label}
-                      </option>
-                    ))}
-                  </select>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               <div className="flex items-center justify-end gap-2 border-t px-4 py-3 dark:border-zinc-800">
                 <button
                   type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setShowPopup(false);
-                  }}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -149,11 +155,6 @@ export default function PullsLimitPicker({
                 </button>
                 <button
                   type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleSave();
-                  }}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
