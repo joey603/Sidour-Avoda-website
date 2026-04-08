@@ -167,6 +167,7 @@ class AIPlanningRequest(BaseModel):
     num_alternatives: int | None = 20
     auto_pulls_enabled: bool = False
     pulls_limit: int | None = Field(default=None, ge=1)
+    pulls_limits_by_site: dict[str, int | None] | None = None
     # Optional map of fixed assignments: assignments[day][shift][station_index] -> list[str]
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
     # Optional: exclude specific day keys from planning (e.g., past days of the current week)

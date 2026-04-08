@@ -537,6 +537,17 @@ def _week_plan_rank(row: SiteWeekPlan) -> int:
     return 0
 
 
+def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
+    best_row: SiteWeekPlan | None = None
+    best_rank = -1
+    for row in site_rows:
+        rank = _week_plan_rank(row)
+        if rank > best_rank:
+            best_rank = rank
+            best_row = row
+    return best_row
+
+
 def _worker_identity_key(row: SiteWorker) -> str:
     if getattr(row, "user_id", None):
         return f"user:{int(row.user_id)}"
@@ -652,6 +663,17 @@ def _build_multi_site_generation_context(
         int(row.site_id): (row.availability or {})
         for row in weekly_rows
     }
+    saved_plan_rows = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id.in_(connected_site_ids))
+        .filter(SiteWeekPlan.week_iso == week_iso)
+        .filter(SiteWeekPlan.scope.in_(["director", "shared"]))
+        .all()
+        if connected_site_ids else []
+    )
+    saved_plan_rows_by_site: dict[int, list[SiteWeekPlan]] = {}
+    for row in saved_plan_rows:
+        saved_plan_rows_by_site.setdefault(int(row.site_id), []).append(row)
 
     worker_groups: dict[str, dict] = {}
     current_site_overrides = weekly_availability or {}
@@ -716,38 +738,51 @@ def _build_multi_site_generation_context(
         for idx, group in enumerate(worker_groups.values())
     ]
 
-    combined_fixed: dict[str, dict[str, list[list[str]]]] | None = None
+    fixed_assignments_by_site: dict[int, dict[str, dict[str, list[list[str]]]]] = {}
+    for site_id in connected_site_ids:
+        if int(site_id) == int(root_site_id):
+            continue
+        preferred_row = _preferred_week_plan(saved_plan_rows_by_site.get(int(site_id), []))
+        preferred_data = preferred_row.data if preferred_row and isinstance(preferred_row.data, dict) else {}
+        preferred_assignments = preferred_data.get("assignments")
+        if isinstance(preferred_assignments, dict):
+            fixed_assignments_by_site[int(site_id)] = preferred_assignments
     if fixed_assignments:
+        fixed_assignments_by_site[int(root_site_id)] = fixed_assignments
+
+    combined_fixed: dict[str, dict[str, list[list[str]]]] | None = None
+    if fixed_assignments_by_site:
         root_site = sites_by_id.get(int(root_site_id))
         if root_site:
             from .ai_solver import build_capacities_from_config
             root_days, root_shifts, _root_stations = build_capacities_from_config(root_site.config or {}, exclude_days)
-            name_to_solver = {}
+            name_to_solver_by_site: dict[int, dict[str, str]] = {}
             for key, group in worker_groups.items():
-                site_name = group["site_display_names"].get(int(root_site_id))
-                if site_name:
-                    name_to_solver[str(site_name)] = group["solver_name"]
+                for site_id, site_name in group["site_display_names"].items():
+                    name_to_solver_by_site.setdefault(int(site_id), {})[str(site_name)] = group["solver_name"]
             combined_fixed = {day: {sh: [[] for _ in combined_stations] for sh in root_shifts} for day in root_days}
-            station_index_map = {
-                meta["site_station_index"]: idx
-                for idx, meta in enumerate(station_map)
-                if int(meta["site_id"]) == int(root_site_id)
-            }
-            for day_key, shifts_map in (fixed_assignments or {}).items():
-                if day_key not in combined_fixed or not isinstance(shifts_map, dict):
-                    continue
-                for shift_name, per_station in shifts_map.items():
-                    if shift_name not in combined_fixed[day_key] or not isinstance(per_station, list):
+            station_index_map_by_site: dict[int, dict[int, int]] = {}
+            for idx, meta in enumerate(station_map):
+                site_id = int(meta["site_id"])
+                station_index_map_by_site.setdefault(site_id, {})[int(meta["site_station_index"])] = idx
+            for site_id, site_fixed_assignments in fixed_assignments_by_site.items():
+                station_index_map = station_index_map_by_site.get(int(site_id), {})
+                name_to_solver = name_to_solver_by_site.get(int(site_id), {})
+                for day_key, shifts_map in (site_fixed_assignments or {}).items():
+                    if day_key not in combined_fixed or not isinstance(shifts_map, dict):
                         continue
-                    for local_idx, cell in enumerate(per_station):
-                        combined_idx = station_index_map.get(local_idx)
-                        if combined_idx is None or not isinstance(cell, list):
+                    for shift_name, per_station in shifts_map.items():
+                        if shift_name not in combined_fixed[day_key] or not isinstance(per_station, list):
                             continue
-                        combined_fixed[day_key][shift_name][combined_idx] = [
-                            name_to_solver.get(str(name), str(name))
-                            for name in cell
-                            if str(name or "").strip()
-                        ]
+                        for local_idx, cell in enumerate(per_station):
+                            combined_idx = station_index_map.get(local_idx)
+                            if combined_idx is None or not isinstance(cell, list):
+                                continue
+                            combined_fixed[day_key][shift_name][combined_idx] = [
+                                name_to_solver.get(str(name), str(name))
+                                for name in cell
+                                if str(name or "").strip()
+                            ]
 
     display_name_by_solver_site: dict[tuple[str, int], str] = {}
     for group in worker_groups.values():
@@ -900,6 +935,7 @@ def _apply_auto_pulls_to_site_plans(
     sites_by_id: dict[int, Site],
     site_plans: dict[str, dict],
     pulls_limit: int | None = None,
+    pulls_limits_by_site: dict[int, int | None] | None = None,
 ) -> dict[str, dict]:
     if not site_plans:
         return site_plans
@@ -915,12 +951,18 @@ def _apply_auto_pulls_to_site_plans(
         if not site:
             continue
         site_rows = rows_by_site.get(site_id, [])
+        if pulls_limits_by_site is not None and site_id not in pulls_limits_by_site:
+            site_plan["pulls"] = {}
+            if site_plan.get("alternatives") is not None:
+                site_plan["alternative_pulls"] = [{} for _ in (site_plan.get("alternatives") or [])]
+            continue
+        effective_site_limit = pulls_limits_by_site.get(site_id) if pulls_limits_by_site is not None else pulls_limit
 
         base_payload = _apply_auto_pulls_to_payload(
             site,
             site_rows,
             {"assignments": deepcopy(site_plan.get("assignments") or {}), "pulls": {}},
-            pulls_limit=pulls_limit,
+            pulls_limit=effective_site_limit,
         )
         site_plan["assignments"] = base_payload.get("assignments") or {}
         site_plan["pulls"] = base_payload.get("pulls") or {}
@@ -936,7 +978,7 @@ def _apply_auto_pulls_to_site_plans(
                 site,
                 site_rows,
                 {"assignments": deepcopy(alt_assignments or {}), "pulls": {}},
-                pulls_limit=pulls_limit,
+                pulls_limit=effective_site_limit,
             )
             next_alternatives.append(alt_payload.get("assignments") or {})
             alternative_pulls.append(alt_payload.get("pulls") or {})
@@ -960,6 +1002,54 @@ def _planning_limit_error_detail(pulls_limit: int) -> str:
     if int(pulls_limit) == 1:
         return "לא נמצא תכנון עם עד משיכה אחת"
     return f"לא נמצא תכנון עם עד {int(pulls_limit)} משיכות"
+
+
+def _normalize_pulls_limits_by_site(raw_value: dict | None) -> dict[int, int | None]:
+    normalized: dict[int, int | None] = {}
+    if not isinstance(raw_value, dict):
+        return normalized
+    for site_key, raw_limit in raw_value.items():
+        try:
+            site_id = int(site_key)
+        except Exception:
+            continue
+        if raw_limit is None:
+            normalized[site_id] = None
+            continue
+        try:
+            limit = int(raw_limit)
+        except Exception:
+            continue
+        if limit >= 1:
+            normalized[site_id] = limit
+    return normalized
+
+
+def _site_pulls_limit_matches(
+    site_id: int,
+    pulls: dict | None,
+    default_pulls_limit: int | None = None,
+    pulls_limits_by_site: dict[int, int | None] | None = None,
+) -> bool:
+    if pulls_limits_by_site is not None:
+        if site_id not in pulls_limits_by_site:
+            return _pulls_count(pulls) == 0
+        return _matches_pulls_limit(pulls, pulls_limits_by_site.get(site_id))
+    return _matches_pulls_limit(pulls, default_pulls_limit)
+
+
+def _planning_limit_error_detail_for_request(
+    pulls_limit: int | None = None,
+    pulls_limits_by_site: dict[int, int | None] | None = None,
+) -> str:
+    if pulls_limits_by_site:
+        enabled_limits = [limit for limit in pulls_limits_by_site.values() if limit is not None]
+        if len(pulls_limits_by_site) == 1 and len(enabled_limits) == 1:
+            return _planning_limit_error_detail(enabled_limits[0])
+        return "לא נמצא תכנון עם מגבלות המשיכות שנבחרו באתרים המקושרים"
+    if pulls_limit is not None:
+        return _planning_limit_error_detail(pulls_limit)
+    return "לא נמצא תכנון עם מגבלות המשיכות שנבחרו"
 
 
 def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
@@ -2435,6 +2525,7 @@ def ai_generate_linked_planning(
         fixed_assignments=payload.fixed_assignments if payload else None,
         num_alternatives=payload.num_alternatives if payload else 20,
     )
+    pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
     if payload and payload.auto_pulls_enabled:
         context = _build_multi_site_generation_context(
             db,
@@ -2450,27 +2541,40 @@ def ai_generate_linked_planning(
             context["sites_by_id"],
             result.get("site_plans") or {},
             pulls_limit=payload.pulls_limit if payload else None,
+            pulls_limits_by_site=pulls_limits_by_site or None,
         )
         pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
-        if pulls_limit is not None:
+        if pulls_limit is not None or pulls_limits_by_site:
             site_plans = result.get("site_plans") or {}
             candidate_count = 1 + max((len(site_plan.get("alternatives") or []) for site_plan in site_plans.values()), default=0)
             accepted_indices: list[int] = []
             for candidate_idx in range(candidate_count):
                 matches_all_sites = True
-                for site_plan in site_plans.values():
+                for site_key, site_plan in site_plans.items():
+                    current_site_id = int(site_key)
                     if candidate_idx == 0:
                         candidate_pulls = site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {}
                     else:
                         alt_pulls_list = site_plan.get("alternative_pulls") or []
                         candidate_pulls = (alt_pulls_list[candidate_idx - 1] or {}) if candidate_idx - 1 < len(alt_pulls_list) else None
-                    if not _matches_pulls_limit(candidate_pulls if isinstance(candidate_pulls, dict) else {}, pulls_limit):
+                    if not _site_pulls_limit_matches(
+                        current_site_id,
+                        candidate_pulls if isinstance(candidate_pulls, dict) else {},
+                        default_pulls_limit=pulls_limit,
+                        pulls_limits_by_site=pulls_limits_by_site or None,
+                    ):
                         matches_all_sites = False
                         break
                 if matches_all_sites:
                     accepted_indices.append(candidate_idx)
             if not accepted_indices:
-                raise HTTPException(status_code=422, detail=_planning_limit_error_detail(pulls_limit))
+                raise HTTPException(
+                    status_code=422,
+                    detail=_planning_limit_error_detail_for_request(
+                        pulls_limit=pulls_limit,
+                        pulls_limits_by_site=pulls_limits_by_site or None,
+                    ),
+                )
             filtered_site_plans: dict[str, dict] = {}
             for site_key, site_plan in site_plans.items():
                 next_site_plan = dict(site_plan)
@@ -2522,6 +2626,7 @@ async def ai_generate_linked_planning_stream(
                 q_num_alternatives = body.get("num_alternatives")
                 q_time_limit_seconds = body.get("time_limit_seconds")
                 q_max_nights_per_worker = body.get("max_nights_per_worker")
+                payload.pulls_limits_by_site = body.get("pulls_limits_by_site") if isinstance(body.get("pulls_limits_by_site"), dict) else None
                 if body and "weekly_availability" in body:
                     cleaned_wa = {}
                     for worker_name, worker_avail in (body.get("weekly_availability") or {}).items():
@@ -2542,6 +2647,7 @@ async def ai_generate_linked_planning_stream(
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
+    eff_pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
 
     context = _build_multi_site_generation_context(
         db,
@@ -2589,12 +2695,21 @@ async def ai_generate_linked_planning_stream(
                                 context["sites_by_id"],
                                 split_site_plans,
                                 pulls_limit=eff_pulls_limit,
+                                pulls_limits_by_site=eff_pulls_limits_by_site or None,
                             )
-                        if eff_pulls_limit is not None:
+                        if eff_pulls_limit is not None or eff_pulls_limits_by_site:
                             if not split_site_plans:
                                 continue
-                            plans = list(split_site_plans.values())
-                            if not plans or not all(_matches_pulls_limit(plan.get("pulls"), eff_pulls_limit) for plan in plans):
+                            plans = list(split_site_plans.items())
+                            if not plans or not all(
+                                _site_pulls_limit_matches(
+                                    int(site_key),
+                                    site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {},
+                                    default_pulls_limit=eff_pulls_limit,
+                                    pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                                )
+                                for site_key, site_plan in plans
+                            ):
                                 continue
                             matched_candidates += 1
                         q.put({
@@ -2605,11 +2720,14 @@ async def ai_generate_linked_planning_stream(
                             "site_plans": split_site_plans,
                         })
                     else:
-                        if item.get("type") == "done" and eff_pulls_limit is not None and matched_candidates == 0:
+                        if item.get("type") == "done" and (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
                             q.put({
                                 "type": "status",
                                 "status": "ERROR",
-                                "detail": _planning_limit_error_detail(eff_pulls_limit),
+                                "detail": _planning_limit_error_detail_for_request(
+                                    pulls_limit=eff_pulls_limit,
+                                    pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                                ),
                                 "linked_sites": linked_sites,
                             })
                             continue

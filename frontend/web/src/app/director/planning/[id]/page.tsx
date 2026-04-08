@@ -181,13 +181,36 @@ export default function PlanningPage() {
     activeAltIndex: number;
     plansBySite: Record<string, LinkedSitePlan>;
   };
+  type SavedWeekPlanState = {
+    assignments: Record<string, Record<string, string[][]>>;
+    isManual?: boolean;
+    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]>; answers?: Record<string, any> }>;
+    pulls?: Record<
+      string,
+      {
+        before: { name: string; start: string; end: string };
+        after: { name: string; start: string; end: string };
+        roleName?: string | null;
+      }
+    >;
+  };
   type SharedAssignmentCountFilters = Record<string, Record<string, string>>;
+  type MultiSitePullsMode = "current_only" | "custom_sites";
+  type MultiSitePlanAction = "edit" | "delete" | "save_director" | "save_shared";
+  type MultiSitePlanActionScope = "current_only" | "all_sites";
   const [aiPlan, setAiPlan] = useState<AIPlan | null>(null);
   const [autoPullsLimit, setAutoPullsLimit] = useState<string>("");
   /** ללא = pas de משיכות ; unlimited (מקסימום) = sans plafond ; 1–10 = plafond */
   const autoPullsEnabled = autoPullsLimit !== "";
   const [linkedSites, setLinkedSites] = useState<LinkedSite[]>([]);
   const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
+  const [showMultiSitePullsDialog, setShowMultiSitePullsDialog] = useState(false);
+  const [multiSitePlanActionDialog, setMultiSitePlanActionDialog] = useState<null | {
+    action: MultiSitePlanAction;
+    scope: MultiSitePlanActionScope;
+  }>(null);
+  const [multiSitePullsMode, setMultiSitePullsMode] = useState<MultiSitePullsMode>("current_only");
+  const [multiSitePullsLimits, setMultiSitePullsLimits] = useState<Record<string, string>>({});
   const [altIndex, setAltIndex] = useState<number>(0);
   const [sharedAssignmentCountFilters, setSharedAssignmentCountFilters] = useState<SharedAssignmentCountFilters>({});
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
@@ -196,21 +219,11 @@ export default function PlanningPage() {
   const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const aiIdleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const streamPullPriorityPromotedRef = useRef(false);
+  const multiSitePullsDialogBypassRef = useRef(false);
+  const multiSitePullsRequestRef = useRef<Record<string, string> | null>(null);
 
   // Snapshot sauvegardé pour la semaine (assignations + éventuelle liste travailleurs)
-  const [savedWeekPlan, setSavedWeekPlan] = useState<null | {
-    assignments: Record<string, Record<string, string[][]>>,
-    isManual?: boolean,
-    workers?: Array<{ id: number; name: string; max_shifts?: number; roles?: string[]; availability?: Record<string, string[]>; answers?: Record<string, any> }>,
-    pulls?: Record<
-      string,
-      {
-        before: { name: string; start: string; end: string };
-        after: { name: string; start: string; end: string };
-        roleName?: string | null;
-      }
-    >
-  }>(null);
+  const [savedWeekPlan, setSavedWeekPlan] = useState<SavedWeekPlanState | null>(null);
   const isSavedMode = !!savedWeekPlan?.assignments;
   // Mode édition après chargement d'une grille sauvegardée
   const [editingSaved, setEditingSaved] = useState(false);
@@ -229,8 +242,51 @@ export default function PlanningPage() {
   const multiSiteGenerationKey = (start: Date) => `${multiSiteGenerationPrefix}${isoPlanKey(start)}`;
   const multiSiteAssignmentFiltersPrefix = "multi_site_assignment_filters_";
   const multiSiteAssignmentFiltersKey = (start: Date) => `${multiSiteAssignmentFiltersPrefix}${isoPlanKey(start)}`;
+  const multiSiteSavedEditPrefix = "multi_site_saved_edit_";
+  const multiSiteSavedEditKey = (start: Date) => `${multiSiteSavedEditPrefix}${isoPlanKey(start)}`;
   const multiSiteNavigationFlag = "multi_site_navigation_in_app";
   const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
+  const multiSitePullsSites = useMemo(() => {
+    const currentId = Number(params.id);
+    const deduped = new Map<number, LinkedSite>();
+    deduped.set(currentId, { id: currentId, name: String(site?.name || "האתר הנוכחי") });
+    linkedSites.forEach((linkedSite) => {
+      if (!linkedSite || typeof linkedSite.id !== "number") return;
+      deduped.set(linkedSite.id, linkedSite);
+    });
+    return Array.from(deduped.values());
+  }, [linkedSites, params.id, site?.name]);
+  const multiSitePullsCurrentSiteLabel = useMemo(
+    () => multiSitePullsSites.find((linkedSite) => linkedSite.id === Number(params.id))?.name || String(site?.name || "האתר הנוכחי"),
+    [multiSitePullsSites, params.id, site?.name],
+  );
+  const multiSiteOtherSitesLabel = useMemo(
+    () => multiSitePullsSites.filter((linkedSite) => linkedSite.id !== Number(params.id)).map((linkedSite) => linkedSite.name).join(", "),
+    [multiSitePullsSites, params.id],
+  );
+  const pullsLimitSelectOptions = useMemo(
+    () => ([
+      { value: "", label: "ללא" },
+      { value: "1", label: "1" },
+      { value: "2", label: "2" },
+      { value: "3", label: "3" },
+      { value: "4", label: "4" },
+      { value: "5", label: "5" },
+      { value: "6", label: "6" },
+      { value: "7", label: "7" },
+      { value: "8", label: "8" },
+      { value: "9", label: "9" },
+      { value: "10", label: "10" },
+      { value: "unlimited", label: "מקסימום" },
+    ]),
+    [],
+  );
+  const multiSiteActionLabelByType: Record<MultiSitePlanAction, string> = {
+    edit: "ערוך",
+    delete: "מחק",
+    save_director: "שמור",
+    save_shared: "שמור ואשלח",
+  };
 
   // --- Pulls ("משיכות") ---
   type PullEntry = {
@@ -3130,6 +3186,12 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, weekStart]);
 
+  useEffect(() => {
+    if (!savedWeekPlan?.assignments || editingSaved) return;
+    if (!isMultiSiteSavedEditActiveForCurrentSite(weekStart)) return;
+    activateSavedPlanEdit(savedWeekPlan);
+  }, [savedWeekPlan, editingSaved, weekStart, params.id]);
+
   // Synchroniser le mois du calendrier avec la semaine sélectionnée
   useEffect(() => {
     if (!isCalendarOpen) {
@@ -3215,7 +3277,230 @@ export default function PlanningPage() {
       console.log('[DBG] triggerGenerateButton: error', e);
     }
   }
-  async function onSavePlan(publishToWorkers: boolean) {
+
+  function readMultiSiteSavedEditSiteIds(start: Date): number[] {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = sessionStorage.getItem(multiSiteSavedEditKey(start));
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed?.siteIds)
+        ? parsed.siteIds.map((siteId: unknown) => Number(siteId)).filter((siteId: number) => Number.isFinite(siteId))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveMultiSiteSavedEditSiteIds(start: Date, siteIds: number[]) {
+    if (typeof window === "undefined") return;
+    const storageKey = multiSiteSavedEditKey(start);
+    try {
+      if (!siteIds.length) {
+        sessionStorage.removeItem(storageKey);
+      } else {
+        sessionStorage.setItem(storageKey, JSON.stringify({ siteIds }));
+      }
+    } catch {}
+  }
+
+  function clearMultiSiteSavedEditState(start: Date) {
+    saveMultiSiteSavedEditSiteIds(start, []);
+  }
+
+  function isMultiSiteSavedEditActiveForCurrentSite(start: Date) {
+    return readMultiSiteSavedEditSiteIds(start).includes(Number(params.id));
+  }
+
+  function buildWorkersSnapshot(sourceWorkers: any[]) {
+    return (sourceWorkers || []).map((w) => ({
+      id: w.id,
+      name: w.name,
+      max_shifts: typeof (w as any).max_shifts === "number" ? (w as any).max_shifts : (w.maxShifts ?? 0),
+      roles: Array.isArray(w.roles) ? w.roles : [],
+      availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+      answers: ((w as any).answers && typeof (w as any).answers === "object") ? (w as any).answers : {},
+      phone: (w as any).phone ?? null,
+      linked_site_ids: Array.isArray((w as any).linked_site_ids) ? (w as any).linked_site_ids : ((w as any).linkedSiteIds || []),
+      linked_site_names: Array.isArray((w as any).linked_site_names) ? (w as any).linked_site_names : ((w as any).linkedSiteNames || []),
+    }));
+  }
+
+  async function fetchWorkersSnapshotForSite(siteId: number) {
+    if (siteId === Number(params.id)) return buildWorkersSnapshot(workers || []);
+    const list = await apiFetch<any[]>(`/director/sites/${siteId}/workers`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+      cache: "no-store" as any,
+    });
+    return buildWorkersSnapshot(Array.isArray(list) ? list : []);
+  }
+
+  async function fetchExistingSavedPlanForSite(siteId: number): Promise<SavedWeekPlanState | null> {
+    const start = new Date(weekStart);
+    const isoWeek = getWeekKeyISO(start);
+    try {
+      const fromDirector = await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+      if (fromDirector?.assignments) {
+        return {
+          assignments: fromDirector.assignments,
+          isManual: !!fromDirector.isManual,
+          workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined,
+          pulls: fromDirector?.pulls && typeof fromDirector.pulls === "object" ? fromDirector.pulls : {},
+        };
+      }
+    } catch {}
+    try {
+      const fromShared = await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+      if (fromShared?.assignments) {
+        return {
+          assignments: fromShared.assignments,
+          isManual: !!fromShared.isManual,
+          workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined,
+          pulls: fromShared?.pulls && typeof fromShared.pulls === "object" ? fromShared.pulls : {},
+        };
+      }
+    } catch {}
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(planKeyDirectorOnly(siteId, start)) || localStorage.getItem(planKeyShared(siteId, start));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.assignments) return null;
+      return {
+        assignments: parsed.assignments,
+        isManual: !!parsed.isManual,
+        workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+        pulls: parsed?.pulls && typeof parsed.pulls === "object" ? parsed.pulls : {},
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function buildWeekPlanPayloadForSite(
+    siteId: number,
+    assignments: Record<string, Record<string, string[][]>> | null,
+    pulls: Record<string, PullEntry>,
+    workersSnapshot: any[],
+    isManualPlan: boolean,
+  ) {
+    const start = new Date(weekStart);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return {
+      siteId,
+      week: { startISO: isoPlanKey(start), endISO: isoPlanKey(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
+      isManual: isManualPlan,
+      assignments,
+      pulls,
+      workers: workersSnapshot,
+    };
+  }
+
+  async function persistWeekPlanForSite(siteId: number, publishToWorkers: boolean, payload: any) {
+    const start = new Date(weekStart);
+    const scope = publishToWorkers ? "shared" : "director";
+    const key = publishToWorkers ? planKeyShared(siteId, start) : planKeyDirectorOnly(siteId, start);
+    try {
+      await apiFetch<any>(`/director/sites/${siteId}/week-plan`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        body: JSON.stringify({ week_iso: getWeekKeyISO(start), scope, data: payload }),
+      });
+      if (siteId === Number(params.id)) {
+        setActiveSavedPlanKey(scope === "shared" ? "db:shared" : "db:director");
+      }
+    } catch {}
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(key, JSON.stringify(payload));
+        if (publishToWorkers) {
+          try { localStorage.removeItem(planKeyDirectorOnly(siteId, start)); } catch {}
+        }
+      } catch {}
+    }
+  }
+
+  function activateSavedPlanEdit(planOverride?: SavedWeekPlanState | null) {
+    const plan = planOverride || savedWeekPlan;
+    if (!plan?.assignments) return;
+    const assignmentsAny: any = plan.assignments;
+    const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
+    const shiftNames = Array.from(
+      new Set(
+        (site?.config?.stations || [])
+          .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+          .filter(Boolean)
+      )
+    );
+    const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
+    setSavedWeekPlan(plan);
+    setPullsByHoleKey((plan.pulls && typeof plan.pulls === "object") ? plan.pulls : {});
+    if (plan.isManual) {
+      setIsManual(true);
+      setManualAssignments(assignmentsAny as any);
+    } else {
+      setIsManual(false);
+      const newPlan = {
+        days: dayKeys,
+        shifts: shiftNames,
+        stations: stationNames,
+        assignments: assignmentsAny,
+        alternatives: [],
+        status: "SAVED_EDIT",
+        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
+      } as any;
+      setAiPlan(newPlan);
+    }
+    if (Array.isArray(plan.workers) && plan.workers.length) {
+      const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
+      const mapped = (plan.workers as any[]).map((w: any) => ({
+        id: w.id,
+        name: String(w.name),
+        maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+        roles: Array.isArray(w.roles) ? w.roles : [],
+        availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+        answers: w.answers || {},
+        phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
+        linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
+        linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
+      }));
+      setWorkers(mapped);
+      try {
+        const merged: Record<string, WorkerAvailability> = {} as any;
+        const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
+        (plan.workers as any[]).forEach((rw: any) => {
+          const baseAvail = (rw.availability || {}) as Record<string, string[]>;
+          const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
+          const out: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+          daysK.forEach((dk) => {
+            const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
+            (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
+            (out as any)[dk] = Array.from(s);
+          });
+          merged[rw.name] = out;
+        });
+        setWeeklyAvailability(merged);
+      } catch {}
+    }
+    setEditingSaved(true);
+  }
+
+  function requestMultiSitePlanAction(action: MultiSitePlanAction) {
+    if (linkedSites.length > 1) {
+      setMultiSitePlanActionDialog({ action, scope: "current_only" });
+      return;
+    }
+    void runMultiSitePlanAction(action, "current_only");
+  }
+
+  async function saveCurrentSitePlan(publishToWorkers: boolean) {
     try {
       const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
       // Si on n'est pas en train d'éditer, on autorise la sauvegarde d'un plan déjà chargé (savedWeekPlan)
@@ -3237,63 +3522,165 @@ export default function PlanningPage() {
         assignmentsSnapshot = effective;
         pullsSnapshot = pullsByHoleKey || {};
       }
-      // Range de semaine
-      const start = new Date(weekStart);
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      const key = publishToWorkers ? planKeyShared(params.id, start) : planKeyDirectorOnly(params.id, start);
-      const payload = {
-        siteId: Number(params.id),
-        week: { startISO: isoPlanKey(start), endISO: isoPlanKey(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
-        isManual: effectiveIsManual,
-        assignments: assignmentsSnapshot,
-        pulls: pullsSnapshot,
-        workers: (workers || []).map((w) => ({
-          id: w.id,
-          name: w.name,
-          max_shifts: typeof (w as any).max_shifts === "number" ? (w as any).max_shifts : (w.maxShifts ?? 0),
-          roles: Array.isArray(w.roles) ? w.roles : [],
-          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-          // IMPORTANT: garder un snapshot des réponses pour le mode ערוך d'un planning sauvegardé
-          answers: ((w as any).answers && typeof (w as any).answers === "object") ? (w as any).answers : {},
-        })),
-      };
-      // Persist DB (shared across devices)
-      try {
-        const scope = publishToWorkers ? "shared" : "director";
-        await apiFetch<any>(`/director/sites/${params.id}/week-plan`, {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          body: JSON.stringify({ week_iso: getWeekKeyISO(start), scope, data: payload }),
-        });
-        setActiveSavedPlanKey(scope === "shared" ? "db:shared" : "db:director");
-      } catch {}
+      const payload = buildWeekPlanPayloadForSite(
+        Number(params.id),
+        assignmentsSnapshot as Record<string, Record<string, string[][]>>,
+        pullsSnapshot,
+        buildWorkersSnapshot(workers || []),
+        effectiveIsManual,
+      );
+      await persistWeekPlanForSite(Number(params.id), publishToWorkers, payload);
 
-      // Legacy localStorage fallback (per-device)
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem(key, JSON.stringify(payload));
-          // Si on publie vers les עובדים, nettoyer le brouillon directeur pour éviter de recharger un ancien draft
-          if (publishToWorkers) {
-            try { localStorage.removeItem(planKeyDirectorOnly(params.id, start)); } catch {}
-          }
-        } catch {}
-      }
       // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
-      setSavedWeekPlan({ assignments: payload.assignments, isManual: payload.isManual, workers: payload.workers, pulls: payload.pulls });
+      setSavedWeekPlan({
+        assignments: assignmentsSnapshot as Record<string, Record<string, string[][]>>,
+        isManual: payload.isManual,
+        workers: payload.workers,
+        pulls: payload.pulls,
+      });
       if (effectiveIsManual) {
         setManualAssignments(assignmentsSnapshot as AssignmentsMap);
       }
       setPullsByHoleKey(pullsSnapshot);
       setEditingSaved(false);
+      clearMultiSiteSavedEditState(weekStart);
       toast.success(publishToWorkers ? "התכנון נשמר ונשלח" : "התכנון נשמר (למנהל בלבד)");
     } catch (e: any) {
       toast.error("שמירה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
     }
   }
 
+  async function saveAllLinkedSitePlans(publishToWorkers: boolean) {
+    try {
+      const linkedMemory = readLinkedPlansFromMemory(weekStart);
+      const activeIndex = Number(linkedMemory?.activeAltIndex || 0);
+      const targetSiteIds = multiSitePullsSites.map((linkedSite) => Number(linkedSite.id)).filter((siteId) => Number.isFinite(siteId));
+      for (const siteId of targetSiteIds) {
+        const sitePlan = linkedMemory?.plansBySite?.[String(siteId)];
+        let assignments: Record<string, Record<string, string[][]>> | null = null;
+        let pulls: Record<string, PullEntry> = {};
+        let workersSnapshot: any[] = [];
+        let isManualPlan = false;
+        if (sitePlan?.assignments) {
+          assignments = resolveAssignmentsForAlternative(sitePlan, activeIndex);
+          pulls = resolvePullsForAlternative(sitePlan, activeIndex);
+          workersSnapshot = await fetchWorkersSnapshotForSite(siteId);
+        } else if (siteId === Number(params.id)) {
+          const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+          const fallbackAssignments = savedWeekPlan?.assignments;
+          const effective = currentAssignments || fallbackAssignments;
+          if (!effective) {
+            toast.error("שמירה נכשלה", { description: "לא נמצא תכנון קיים לשמירה באתר הנוכחי." });
+            return;
+          }
+          assignments = JSON.parse(JSON.stringify(effective));
+          pulls = JSON.parse(JSON.stringify(pullsByHoleKey || {}));
+          workersSnapshot = buildWorkersSnapshot(workers || []);
+          isManualPlan = currentAssignments ? isManual : !!savedWeekPlan?.isManual;
+        } else {
+          const existingSavedPlan = await fetchExistingSavedPlanForSite(siteId);
+          if (!existingSavedPlan?.assignments) {
+            toast.error("שמירה נכשלה", { description: "חסר תכנון שמור באחד האתרים המקושרים, ולכן לא ניתן לשמור את כולם יחד." });
+            return;
+          }
+          assignments = existingSavedPlan.assignments;
+          pulls = existingSavedPlan.pulls || {};
+          workersSnapshot = Array.isArray(existingSavedPlan.workers) && existingSavedPlan.workers.length
+            ? buildWorkersSnapshot(existingSavedPlan.workers as any[])
+            : await fetchWorkersSnapshotForSite(siteId);
+          isManualPlan = !!existingSavedPlan.isManual;
+        }
+        const payload = buildWeekPlanPayloadForSite(siteId, assignments, pulls, workersSnapshot, isManualPlan);
+        await persistWeekPlanForSite(siteId, publishToWorkers, payload);
+        if (siteId === Number(params.id)) {
+          setSavedWeekPlan({
+            assignments: assignments as Record<string, Record<string, string[][]>>,
+            isManual: payload.isManual,
+            workers: payload.workers,
+            pulls: payload.pulls,
+          });
+          setPullsByHoleKey(pulls || {});
+        }
+      }
+      setEditingSaved(false);
+      clearMultiSiteSavedEditState(weekStart);
+      toast.success(publishToWorkers ? "התכנון נשמר ונשלח לכל האתרים המקושרים" : "התכנון נשמר לכל האתרים המקושרים");
+    } catch (e: any) {
+      toast.error("שמירה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+    }
+  }
+
+  async function onSavePlan(publishToWorkers: boolean) {
+    requestMultiSitePlanAction(publishToWorkers ? "save_shared" : "save_director");
+  }
+
+  async function runMultiSitePlanAction(action: MultiSitePlanAction, scope: MultiSitePlanActionScope) {
+    const applyToAll = scope === "all_sites";
+    if (action === "edit") {
+      if (applyToAll) saveMultiSiteSavedEditSiteIds(weekStart, multiSitePullsSites.map((linkedSite) => Number(linkedSite.id)).filter((siteId) => Number.isFinite(siteId)));
+      else clearMultiSiteSavedEditState(weekStart);
+      activateSavedPlanEdit();
+      return;
+    }
+    if (action === "save_director") {
+      if (applyToAll) await saveAllLinkedSitePlans(false);
+      else await saveCurrentSitePlan(false);
+      return;
+    }
+    if (action === "save_shared") {
+      if (applyToAll) await saveAllLinkedSitePlans(true);
+      else await saveCurrentSitePlan(true);
+      return;
+    }
+    if (action === "delete") {
+      if (applyToAll) {
+        const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי מכל האתרים המקושרים? זה ימחק את כל השיבוצים אך ישמור את רשימות העובדים והזמינות שלהם.");
+        if (!confirmed) return;
+        const targetSiteIds = multiSitePullsSites.map((linkedSite) => Number(linkedSite.id)).filter((siteId) => Number.isFinite(siteId));
+        for (const siteId of targetSiteIds) {
+          await deletePlanForSite(siteId, siteId === Number(params.id), true, false);
+        }
+        clearMultiSiteSavedEditState(weekStart);
+        toast.success("התכנון נמחק בכל האתרים המקושרים");
+      } else {
+        await deletePlanForSite(Number(params.id), true);
+      }
+    }
+  }
+
+  function prepareMultiSitePullsDialog() {
+    const defaultValue = autoPullsLimit;
+    const nextLimits = Object.fromEntries(
+      multiSitePullsSites.map((linkedSite) => [String(linkedSite.id), defaultValue]),
+    ) as Record<string, string>;
+    setMultiSitePullsMode("current_only");
+    setMultiSitePullsLimits(nextLimits);
+    setShowMultiSitePullsDialog(true);
+  }
+
+  function buildMultiSitePullsRequestMap(mode: MultiSitePullsMode, draftLimits: Record<string, string>) {
+    const currentSiteId = String(params.id);
+    const sourceEntries =
+      mode === "current_only"
+        ? [[currentSiteId, draftLimits[currentSiteId] ?? autoPullsLimit] as const]
+        : Object.entries(draftLimits || {});
+    const nextEntries = sourceEntries.filter(([, value]) => value !== "");
+    if (!nextEntries.some(([siteId]) => siteId === currentSiteId) && autoPullsLimit !== "") {
+      nextEntries.unshift([currentSiteId, draftLimits[currentSiteId] ?? autoPullsLimit]);
+    }
+    return Object.fromEntries(nextEntries);
+  }
+
+  useEffect(() => {
+    if (autoPullsEnabled) return;
+    multiSitePullsDialogBypassRef.current = false;
+    multiSitePullsRequestRef.current = null;
+    setShowMultiSitePullsDialog(false);
+  }, [autoPullsEnabled]);
+
   async function onCancelEdit() {
     try {
+      clearMultiSiteSavedEditState(weekStart);
       const start = new Date(weekStart);
       const isoWeek = getWeekKeyISO(start);
       const keyFallback = (() => {
@@ -3395,29 +3782,31 @@ export default function PlanningPage() {
     }
   }
 
-  async function onDeletePlan() {
+  async function deletePlanForSite(targetSiteId: number, updateCurrentState: boolean, skipConfirm = false, showSuccessToast = true) {
     try {
-      if (!savedWeekPlan?.assignments) {
+      if (updateCurrentState && !savedWeekPlan?.assignments) {
         toast.error("אין מה למחוק", { description: "לא נמצא תכנון לשמירה למחיקה" });
         return;
       }
-      const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי? זה ימחק את כל השיבוצים אך ישמור את רשימת העובדים והזמינות שלהם.");
-      if (!confirmed) return;
+      if (!skipConfirm) {
+        const confirmed = window.confirm("האם אתה בטוח שברצונך למחוק את התכנון השבועי? זה ימחק את כל השיבוצים אך ישמור את רשימת העובדים והזמינות שלהם.");
+        if (!confirmed) return;
+      }
       const start = new Date(weekStart);
       const isoWeek = getWeekKeyISO(start);
-      const keyShared = planKeyShared(params.id, start);
-      const keyDirector = planKeyDirectorOnly(params.id, start);
+      const keyShared = planKeyShared(targetSiteId, start);
+      const keyDirector = planKeyDirectorOnly(targetSiteId, start);
       // Charger les données actuelles pour garder les workers (DB puis localStorage)
       let parsed: any = null;
       try {
-        parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+        parsed = await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
         });
       } catch {}
       if (!parsed) {
         try {
-          parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          parsed = await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           });
@@ -3431,7 +3820,7 @@ export default function PlanningPage() {
       if (parsed) {
         // Garder les workers, supprimer les assignments (on garde un "record" shared avec assignments=null)
         const payload = {
-          siteId: parsed.siteId ?? Number(params.id),
+          siteId: parsed.siteId ?? targetSiteId,
           week: parsed.week ?? { startISO: isoPlanKey(start) },
           isManual: false,
           assignments: null,
@@ -3439,19 +3828,19 @@ export default function PlanningPage() {
           workers: parsed.workers || [],
         };
         try {
-          await apiFetch<any>(`/director/sites/${params.id}/week-plan`, {
+          await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan`, {
             method: "PUT",
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             body: JSON.stringify({ week_iso: isoWeek, scope: "shared", data: payload }),
           });
           // supprimer le draft director pour éviter confusion
           try {
-            await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+            await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
               method: "DELETE",
               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             });
           } catch {}
-          setActiveSavedPlanKey("db:shared");
+          if (updateCurrentState) setActiveSavedPlanKey("db:shared");
         } catch {}
         if (typeof window !== "undefined") {
           try {
@@ -3462,13 +3851,13 @@ export default function PlanningPage() {
       } else {
         // Si aucune donnée n'existe, supprimer complètement (DB + local)
         try {
-          await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+          await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
             method: "DELETE",
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           });
         } catch {}
         try {
-          await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
             method: "DELETE",
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           });
@@ -3477,20 +3866,26 @@ export default function PlanningPage() {
           try { localStorage.removeItem(keyShared); } catch {}
           try { localStorage.removeItem(keyDirector); } catch {}
         }
-        setActiveSavedPlanKey(null);
+        if (updateCurrentState) setActiveSavedPlanKey(null);
       }
-      // Réinitialiser les états
-      setSavedWeekPlan(null);
-      setEditingSaved(false);
-      setAiPlan(null);
-      setManualAssignments(null);
-      setPullsByHoleKey({});
-      setPullsModeStationIdx(null);
-      setPullsEditor(null);
-      toast.success("התכנון נמחק בהצלחה");
+      if (updateCurrentState) {
+        setSavedWeekPlan(null);
+        setEditingSaved(false);
+        setAiPlan(null);
+        setManualAssignments(null);
+        setPullsByHoleKey({});
+        setPullsModeStationIdx(null);
+        setPullsEditor(null);
+        clearMultiSiteSavedEditState(weekStart);
+        if (showSuccessToast) toast.success("התכנון נמחק בהצלחה");
+      }
     } catch (e: any) {
       toast.error("מחיקה נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
     }
+  }
+
+  async function onDeletePlan() {
+    requestMultiSitePlanAction("delete");
   }
 
   return (
@@ -8849,6 +9244,16 @@ export default function PlanningPage() {
                       }
                       setGenExcludeDays(excludeList);
                     }
+                    if (linkedSites.length > 1 && autoPullsEnabled) {
+                      if (multiSitePullsDialogBypassRef.current) {
+                        multiSitePullsDialogBypassRef.current = false;
+                      } else {
+                        prepareMultiSitePullsDialog();
+                        return;
+                      }
+                    } else {
+                      multiSitePullsRequestRef.current = null;
+                    }
                     
                     let stopped = false;
                     try {
@@ -8940,8 +9345,21 @@ export default function PlanningPage() {
                         console.log("[BTN] weekly_availability to send:", Object.keys(wa), Object.keys(wa).map(k => ({ name: k, days: Object.keys(wa[k] || {}) })));
                         return wa;
                       })();
+                      const effectivePullsLimitsBySite =
+                        linkedSites.length > 1 && autoPullsEnabled
+                          ? Object.fromEntries(
+                              Object.entries(multiSitePullsRequestRef.current || {}).map(([siteId, value]) => [
+                                siteId,
+                                value === "unlimited" ? null : Number(value),
+                              ]),
+                            )
+                          : undefined;
+                      const currentSitePullsValue =
+                        effectivePullsLimitsBySite && Object.prototype.hasOwnProperty.call(effectivePullsLimitsBySite, String(params.id))
+                          ? effectivePullsLimitsBySite[String(params.id)]
+                          : (autoPullsEnabled ? (autoPullsLimit === "unlimited" ? null : Number(autoPullsLimit)) : undefined);
                       const effectivePullsLimit: number | undefined =
-                        autoPullsEnabled && autoPullsLimit !== "unlimited" ? Number(autoPullsLimit) : undefined;
+                        typeof currentSitePullsValue === "number" ? currentSitePullsValue : undefined;
                       const pullsCountOf = (pulls: any) => (pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0);
                       const exceedsPullsLimit = (pulls: any) =>
                         effectivePullsLimit != null && pullsCountOf(pulls) > effectivePullsLimit;
@@ -8958,6 +9376,7 @@ export default function PlanningPage() {
                             num_alternatives: 500,
                             auto_pulls_enabled: autoPullsEnabled,
                             pulls_limit: effectivePullsLimit,
+                            pulls_limits_by_site: effectivePullsLimitsBySite,
                             fixed_assignments: fixed || undefined,
                             exclude_days: effectiveExcludeDays,
                             weekly_availability: weeklyAvailabilityForRequest,
@@ -9215,23 +9634,34 @@ export default function PlanningPage() {
                               }
                               setAiPlan((prev) => {
                                 if (!prev) return prev;
+                                const activeIndex = Math.max(0, Number(altIndex || 0));
+                                const currentDisplayedPulls = activeIndex === 0
+                                  ? (prev.pulls || {})
+                                  : (((prev.alternativePulls || [])[activeIndex - 1] || {}) as Record<string, PullEntry>);
+                                const previousBaseAssignments = baseAssignmentsRef.current || prev.assignments;
                                 if (autoPullsEnabled) {
-                                  const quality = comparePlanQuality(prev.assignments, prev.pulls, evt.assignments, evt.pulls);
+                                  const quality = comparePlanQuality(previousBaseAssignments, prev.pulls, evt.assignments, evt.pulls);
                                   if (quality > 0) return prev;
                                   if (quality < 0) {
                                     baseAssignmentsRef.current = evt.assignments;
-                                    setAltIndex(0);
-                                    setPullsByHoleKey(evt.pulls || {});
+                                    setAltIndex((current) => Math.max(0, Number(current || 0)) + 1);
+                                    setPullsByHoleKey(currentDisplayedPulls || {});
                                     return {
                                       ...prev,
-                                      assignments: evt.assignments,
+                                      assignments: prev.assignments,
                                       pulls: evt.pulls || {},
-                                      alternatives: [],
-                                      alternativePulls: [],
+                                      alternatives: [
+                                        ...((previousBaseAssignments ? [previousBaseAssignments] : []) as Record<string, Record<string, string[][]>>[]),
+                                        ...((prev.alternatives || []) as Record<string, Record<string, string[][]>>[]),
+                                      ],
+                                      alternativePulls: [
+                                        ...((prev.pulls ? [prev.pulls] : []) as Record<string, PullEntry>[]),
+                                        ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
+                                      ],
                                     } as any;
                                   }
                                   const duplicateBase =
-                                    sameAssignmentsMap(prev.assignments, evt.assignments) &&
+                                    sameAssignmentsMap(previousBaseAssignments, evt.assignments) &&
                                     samePullsMap(prev.pulls || {}, evt.pulls || {});
                                   const duplicateAlt = ((prev.alternatives || []) as Record<string, Record<string, string[][]>>[])
                                     .some((alt, idx) =>
@@ -9258,7 +9688,7 @@ export default function PlanningPage() {
                                 const next = promoteIncomingAsBase
                                   ? {
                                       ...prev,
-                                      assignments: evt.assignments,
+                                      assignments: prev.assignments,
                                       pulls: evt.pulls || {},
                                       alternatives: [
                                         ...(baseAssignmentsRef.current ? [baseAssignmentsRef.current] : []),
@@ -9279,6 +9709,8 @@ export default function PlanningPage() {
                                 if (promoteIncomingAsBase) {
                                   baseAssignmentsRef.current = evt.assignments;
                                   streamPullPriorityPromotedRef.current = true;
+                                  setAltIndex((current) => Math.max(0, Number(current || 0)) + 1);
+                                  setPullsByHoleKey(currentDisplayedPulls || {});
                                 }
                                 return next as any;
                               });
@@ -9366,6 +9798,185 @@ export default function PlanningPage() {
                 >
                   {isAnyGenerationRunning ? "יוצר..." : "יצירת תכנון"}
                 </button>
+                {showMultiSitePullsDialog && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="space-y-2 text-right">
+                        <div className="text-base font-semibold">הגדרת משיכות לאתרים מקושרים</div>
+                        <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                          בחר האם להחיל את המשיכות רק על {multiSitePullsCurrentSiteLabel} או להגדיר מגבלה נפרדת לכל אתר מקושר.
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-200 px-3 py-3 text-right dark:border-zinc-700">
+                          <input
+                            type="radio"
+                            name="multi-site-pulls-mode"
+                            className="mt-1"
+                            checked={multiSitePullsMode === "current_only"}
+                            onChange={() => setMultiSitePullsMode("current_only")}
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">רק באתר הנוכחי</div>
+                            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                              {multiSitePullsCurrentSiteLabel}: {pullsLimitSelectOptions.find((option) => option.value === (multiSitePullsLimits[String(params.id)] ?? autoPullsLimit))?.label || "ללא"}
+                            </div>
+                          </div>
+                        </label>
+                        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-200 px-3 py-3 text-right dark:border-zinc-700">
+                          <input
+                            type="radio"
+                            name="multi-site-pulls-mode"
+                            className="mt-1"
+                            checked={multiSitePullsMode === "custom_sites"}
+                            onChange={() => setMultiSitePullsMode("custom_sites")}
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">להגדיר גם באתרים המקושרים</div>
+                            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                              ברירת המחדל לכל אתר היא הערך שנבחר באתר הנוכחי, וניתן לשנות ידנית לכל אתר.
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+                      <div className="mt-4 max-h-[45dvh] space-y-3 overflow-y-auto rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+                        {multiSitePullsSites.map((linkedSite) => {
+                          const siteKey = String(linkedSite.id);
+                          const disabled = multiSitePullsMode !== "custom_sites" && linkedSite.id !== Number(params.id);
+                          return (
+                            <div
+                              key={siteKey}
+                              className={
+                                "flex items-center justify-between gap-3 rounded-lg px-2 py-1 transition-opacity " +
+                                (disabled ? "opacity-50" : "opacity-100")
+                              }
+                            >
+                              <select
+                                value={multiSitePullsLimits[siteKey] ?? autoPullsLimit}
+                                onChange={(e) => {
+                                  const nextValue = e.target.value;
+                                  setMultiSitePullsLimits((prev) => ({ ...prev, [siteKey]: nextValue }));
+                                }}
+                                disabled={disabled}
+                                className={
+                                  "rounded-md border px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70 " +
+                                  "border-zinc-300 bg-white dark:border-zinc-600 dark:bg-zinc-800"
+                                }
+                              >
+                                {pullsLimitSelectOptions.map((option) => (
+                                  <option key={option.value || "none"} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <div className="text-sm font-medium text-right">
+                                {linkedSite.name}
+                                {linkedSite.id === Number(params.id) ? (
+                                  <span className="mr-2 text-xs font-normal text-zinc-500 dark:text-zinc-400">(נוכחי)</span>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-4 flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => {
+                            multiSitePullsDialogBypassRef.current = false;
+                            multiSitePullsRequestRef.current = null;
+                            setShowMultiSitePullsDialog(false);
+                          }}
+                        >
+                          ביטול
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                          onClick={() => {
+                            const nextRequestMap = buildMultiSitePullsRequestMap(multiSitePullsMode, multiSitePullsLimits);
+                            multiSitePullsRequestRef.current = nextRequestMap;
+                            multiSitePullsDialogBypassRef.current = true;
+                            genDialogBypassRef.current = genUseFixedRef.current ? "fixed" : "reset";
+                            setShowMultiSitePullsDialog(false);
+                            setTimeout(() => { try { triggerGenerateButton(); } catch {} }, 0);
+                          }}
+                        >
+                          המשך
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {multiSitePlanActionDialog && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                    <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="space-y-2 text-right">
+                        <div className="text-base font-semibold">{multiSiteActionLabelByType[multiSitePlanActionDialog.action]} באתרים מקושרים</div>
+                        <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                          האם לבצע את הפעולה רק עבור {multiSitePullsCurrentSiteLabel} או עבור כל האתרים המקושרים?
+                        </div>
+                        {multiSiteOtherSitesLabel ? (
+                          <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                            אתרים מקושרים נוספים: {multiSiteOtherSitesLabel}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-200 px-3 py-3 text-right dark:border-zinc-700">
+                          <input
+                            type="radio"
+                            name="multi-site-plan-action-scope"
+                            className="mt-1"
+                            checked={multiSitePlanActionDialog.scope === "current_only"}
+                            onChange={() => setMultiSitePlanActionDialog((prev) => (prev ? { ...prev, scope: "current_only" } : prev))}
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">רק באתר הנוכחי</div>
+                            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{multiSitePullsCurrentSiteLabel}</div>
+                          </div>
+                        </label>
+                        <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-zinc-200 px-3 py-3 text-right dark:border-zinc-700">
+                          <input
+                            type="radio"
+                            name="multi-site-plan-action-scope"
+                            className="mt-1"
+                            checked={multiSitePlanActionDialog.scope === "all_sites"}
+                            onChange={() => setMultiSitePlanActionDialog((prev) => (prev ? { ...prev, scope: "all_sites" } : prev))}
+                          />
+                          <div className="flex-1">
+                            <div className="text-sm font-medium">בכל האתרים המקושרים</div>
+                            <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                              {multiSitePullsSites.map((linkedSite) => linkedSite.name).join(", ")}
+                            </div>
+                          </div>
+                        </label>
+                      </div>
+                      <div className="mt-4 flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          onClick={() => setMultiSitePlanActionDialog(null)}
+                        >
+                          ביטול
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                          onClick={() => {
+                            const dialogState = multiSitePlanActionDialog;
+                            setMultiSitePlanActionDialog(null);
+                            if (!dialogState) return;
+                            void runMultiSitePlanAction(dialogState.action, dialogState.scope);
+                          }}
+                        >
+                          המשך
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {showGenDialog && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
                     <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
@@ -9869,68 +10480,7 @@ export default function PlanningPage() {
               {!editingSaved && (
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!isSavedMode || !savedWeekPlan || !savedWeekPlan.assignments) return;
-                      const assignmentsAny: any = savedWeekPlan.assignments;
-                      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-                      const shiftNames = Array.from(
-                        new Set(
-                          (site?.config?.stations || [])
-                            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-                            .filter(Boolean)
-                        )
-                      );
-                      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-                      if (savedWeekPlan.isManual) {
-                        setIsManual(true);
-                        setManualAssignments(assignmentsAny as any);
-                      } else {
-                        setIsManual(false);
-                        const newPlan = {
-                          days: dayKeys,
-                          shifts: shiftNames,
-                          stations: stationNames,
-                          assignments: assignmentsAny,
-                          alternatives: [],
-                          status: "SAVED_EDIT",
-                          objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-                        } as any;
-                        setAiPlan(newPlan);
-                      }
-                      if (Array.isArray(savedWeekPlan.workers) && savedWeekPlan.workers.length) {
-                        const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
-                        const mapped = (savedWeekPlan.workers as any[]).map((w: any) => ({
-                          id: w.id,
-                          name: String(w.name),
-                          maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
-                          roles: Array.isArray(w.roles) ? w.roles : [],
-                          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                          answers: w.answers || {},
-          phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
-                          linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
-                          linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
-                        }));
-                        setWorkers(mapped);
-                      // Précharger les זמינות hebdomadaires avec celles du planning sauvegardé (fusion avec overrides existants)
-                      try {
-                        const merged: Record<string, WorkerAvailability> = {} as any;
-                        const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
-                        (savedWeekPlan.workers as any[]).forEach((rw: any) => {
-                          const baseAvail = (rw.availability || {}) as Record<string, string[]>;
-                          const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
-                          const out: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-                          daysK.forEach((dk) => {
-                            const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
-                            (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
-                            (out as any)[dk] = Array.from(s);
-                          });
-                          merged[rw.name] = out;
-                        });
-                        setWeeklyAvailability(merged);
-                      } catch {}
-                    }
-                      setEditingSaved(true);
-                  }}
+                  onClick={() => requestMultiSitePlanAction("edit")}
                   disabled={!isSavedMode}
                   className={
                       "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
