@@ -21,6 +21,16 @@ import Highlight from "@tiptap/extension-highlight";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 
+const EMPTY_WORKER_AVAILABILITY = {
+  sun: [],
+  mon: [],
+  tue: [],
+  wed: [],
+  thu: [],
+  fri: [],
+  sat: [],
+};
+
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -58,15 +68,7 @@ export default function PlanningPage() {
   const [newWorkerName, setNewWorkerName] = useState("");
   const [newWorkerMax, setNewWorkerMax] = useState<number>(5);
   const [newWorkerRoles, setNewWorkerRoles] = useState<string[]>([]);
-  const [newWorkerAvailability, setNewWorkerAvailability] = useState<WorkerAvailability>({
-    sun: [],
-    mon: [],
-    tue: [],
-    wed: [],
-    thu: [],
-    fri: [],
-    sat: [],
-  });
+  const [newWorkerAvailability, setNewWorkerAvailability] = useState<WorkerAvailability>({ ...EMPTY_WORKER_AVAILABILITY });
   // Snapshot de la disponibilité d'origine (celle fournie par le travailleur) au moment de l'édition
   const [originalAvailability, setOriginalAvailability] = useState<WorkerAvailability | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -81,11 +83,13 @@ export default function PlanningPage() {
   // Visibilité des réponses par question (par défaut toutes visibles)
   const [questionVisibility, setQuestionVisibility] = useState<Record<string, boolean>>({});
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [hiddenWorkerIds, setHiddenWorkerIds] = useState<number[]>([]);
   const [preserveLinkedAltSelection, setPreserveLinkedAltSelection] = useState(false);
   // Empêcher qu'une réponse "ancienne" (ancienne semaine) n'écrase l'état quand on navigue vite
   const loadWorkersReqIdRef = useRef(0);
   const loadSavedPlanReqIdRef = useRef(0);
+  const savedPlanBeforeEditRef = useRef<SavedWeekPlanState | null>(null);
   const currentSiteIdRef = useRef<string>(String(params.id));
   const weekStartRef = useRef<Date | null>(null);
   // Éviter de re-fetch les réponses en boucle dans le modal
@@ -250,6 +254,9 @@ export default function PlanningPage() {
   const multiSiteNavigationFlag = "multi_site_navigation_in_app";
   const multiSiteNavigationLogPrefix = "multi_site_navigation_log_";
   const multiSiteNavigationLogKey = (start: Date) => `${multiSiteNavigationLogPrefix}${isoPlanKey(start)}`;
+  const multiSiteSiteCachePrefix = "multi_site_site_cache_";
+  const multiSiteWorkersCachePrefix = "multi_site_workers_cache_";
+  const multiSiteLinkedSitesCachePrefix = "multi_site_linked_sites_cache_";
   const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
   const multiSitePullsSites = useMemo(() => {
     const currentId = Number(params.id);
@@ -431,12 +438,20 @@ export default function PlanningPage() {
       const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
-      setMessages(Array.isArray(res) ? res : []);
+      setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
     } catch {
       setMessages([]);
     } finally {
       setMessagesLoading(false);
     }
+  }
+
+  function sortMessagesChronologically(list: OptionalMessage[]) {
+    return [...list].sort((a, b) => {
+      const createdAtDiff = Number(a?.created_at || 0) - Number(b?.created_at || 0);
+      if (createdAtDiff !== 0) return createdAtDiff;
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    });
   }
 
   useEffect(() => {
@@ -451,7 +466,7 @@ export default function PlanningPage() {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         });
         if (!alive) return;
-        setMessages(Array.isArray(res) ? res : []);
+        setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
       } catch {
         if (!alive) return;
         setMessages([]);
@@ -464,6 +479,21 @@ export default function PlanningPage() {
   }, [params.id, weekStart]);
 
   const visibleMessages = useMemo(() => messages, [messages]);
+  const planningDayKeys = useMemo(() => ["sun","mon","tue","wed","thu","fri","sat"] as const, []);
+  const planningShiftNames = useMemo(
+    () => Array.from(
+      new Set(
+        ((site?.config?.stations || []) as any[])
+          .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
+          .filter(Boolean),
+      ),
+    ),
+    [site?.config?.stations],
+  );
+  const planningStationNames = useMemo(
+    () => (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`),
+    [site?.config?.stations],
+  );
 
   // Mode manuel (drag & drop)
   const [isManual, setIsManual] = useState(false);
@@ -2182,6 +2212,36 @@ export default function PlanningPage() {
     return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
   }
 
+  function multiSiteSiteCacheKey(siteId: string | number) {
+    return `${multiSiteSiteCachePrefix}${siteId}`;
+  }
+
+  function multiSiteWorkersCacheKey(siteId: string | number) {
+    return `${multiSiteWorkersCachePrefix}${siteId}`;
+  }
+
+  function multiSiteLinkedSitesCacheKey(siteId: string | number, start: Date) {
+    return `${multiSiteLinkedSitesCachePrefix}${siteId}_${getWeekKeyISO(start)}`;
+  }
+
+  function readSessionCache<T>(key: string): T | null {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return null;
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSessionCache(key: string, value: unknown) {
+    if (typeof window === "undefined") return;
+    try {
+      sessionStorage.setItem(key, JSON.stringify(value));
+    } catch {}
+  }
+
   function updateWeekStart(nextWeekStart: Date) {
     const normalized = new Date(nextWeekStart);
     normalized.setHours(0, 0, 0, 0);
@@ -2560,7 +2620,7 @@ export default function PlanningPage() {
   }
 
   // Référentiels communs (utilisés par la liste et la modale)
-  const dayDefs = [
+  const dayDefs = useMemo(() => [
     { key: "sun", label: "א'" },
     { key: "mon", label: "ב'" },
     { key: "tue", label: "ג'" },
@@ -2568,7 +2628,26 @@ export default function PlanningPage() {
     { key: "thu", label: "ה'" },
     { key: "fri", label: "ו'" },
     { key: "sat", label: "ש'" },
-  ];
+  ], []);
+
+  function mergeWorkerAvailability(
+    baseAvailability: Record<string, string[]> | undefined,
+    weekOverride: Record<string, string[]> | undefined,
+    isNextWeekDisplay: boolean,
+  ): WorkerAvailability {
+    const merged: WorkerAvailability = { ...EMPTY_WORKER_AVAILABILITY };
+    (dayDefs as Array<{ key: string }>).forEach((dayDef) => {
+      const dayKey = dayDef.key;
+      if (Object.prototype.hasOwnProperty.call(weekOverride || {}, dayKey) && Array.isArray(weekOverride?.[dayKey])) {
+        merged[dayKey] = [...(weekOverride?.[dayKey] || [])];
+      } else if (isNextWeekDisplay) {
+        merged[dayKey] = Array.isArray(baseAvailability?.[dayKey]) ? [...(baseAvailability?.[dayKey] || [])] : [];
+      } else {
+        merged[dayKey] = [];
+      }
+    });
+    return merged;
+  }
 
   const allShiftNames: string[] = Array.from(
     new Set(
@@ -2740,11 +2819,17 @@ export default function PlanningPage() {
       const me = await fetchMe();
       if (!me) return router.replace("/login/director");
       if (me.role !== "director") return router.replace("/worker");
+      const cachedSite = readSessionCache<any>(multiSiteSiteCacheKey(params.id));
+      if (cachedSite && String(cachedSite?.id) === String(params.id)) {
+        setSite(cachedSite);
+        setLoading(false);
+      }
       try {
         const data = await apiFetch(`/director/sites/${params.id}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         });
         setSite(data);
+        writeSessionCache(multiSiteSiteCacheKey(params.id), data);
       } catch (e: any) {
         // Fallback: tenter via la liste si la lecture directe 404 juste après création
         try {
@@ -2753,7 +2838,10 @@ export default function PlanningPage() {
             cache: "no-store" as any,
           });
           const found = list.find((s: any) => String(s.id) === String(params.id));
-          if (found) setSite(found);
+          if (found) {
+            setSite(found);
+            writeSessionCache(multiSiteSiteCacheKey(params.id), found);
+          }
           else setError("אתר לא נמצא");
         } catch (err) {
           setError("שגיאה בטעינת אתר");
@@ -2765,20 +2853,35 @@ export default function PlanningPage() {
   }, [params.id, router]);
 
   const refreshLinkedSites = useCallback(async () => {
+    const cachedLinkedSites = readSessionCache<LinkedSite[]>(multiSiteLinkedSitesCacheKey(params.id, weekStart));
+    if (cachedLinkedSites) {
+      setLinkedSites(Array.isArray(cachedLinkedSites) ? cachedLinkedSites : []);
+    }
     try {
       const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
-      setLinkedSites(Array.isArray(list) ? list : []);
+      const nextList = Array.isArray(list) ? list : [];
+      setLinkedSites(nextList);
+      writeSessionCache(multiSiteLinkedSitesCacheKey(params.id, weekStart), nextList);
     } catch {
-      setLinkedSites([]);
+      if (!cachedLinkedSites) setLinkedSites([]);
     }
   }, [params.id, weekStart]);
 
   useEffect(() => {
     void refreshLinkedSites();
   }, [refreshLinkedSites]);
+
+  useEffect(() => {
+    const weekKey = getWeekKeyISO(weekStart);
+    linkedSites.forEach((linkedSite) => {
+      try {
+        router.prefetch?.(`/director/planning/${linkedSite.id}?week=${encodeURIComponent(weekKey)}`);
+      } catch {}
+    });
+  }, [linkedSites, router, weekStart]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2951,8 +3054,13 @@ export default function PlanningPage() {
   async function loadWorkers() {
     const reqId = ++loadWorkersReqIdRef.current;
     const weekKeyAtCall = weekStart.getTime();
+    const cachedWorkers = readSessionCache<Worker[]>(multiSiteWorkersCacheKey(params.id));
     try {
       setWorkersLoading(true);
+      if (cachedWorkers && reqId === loadWorkersReqIdRef.current) {
+        setWorkers(Array.isArray(cachedWorkers) ? cachedWorkers : []);
+        setWorkersLoading(false);
+      }
       const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
@@ -2975,6 +3083,7 @@ export default function PlanningPage() {
         linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
         linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
       }));
+      writeSessionCache(multiSiteWorkersCacheKey(params.id), mapped);
 
       // --- Handle renames (worker name changed outside planning) ---
       // Build id->previousName map from current workers + saved snapshot
@@ -3148,13 +3257,15 @@ export default function PlanningPage() {
       });
       const byId = new Map<number, any>((list || []).map((w: any) => [Number(w.id), w]));
       // Mettre à jour le state workers
-      setWorkers((prev) =>
-        (prev || []).map((w) => {
+      setWorkers((prev) => {
+        const nextWorkers = (prev || []).map((w) => {
           const apiW = byId.get(Number(w.id));
           if (!apiW) return w;
           return { ...w, answers: apiW.answers || {} };
-        }),
-      );
+        });
+        writeSessionCache(multiSiteWorkersCacheKey(params.id), nextWorkers);
+        return nextWorkers;
+      });
       // Mettre à jour aussi le snapshot du planning sauvegardé si présent
       setSavedWeekPlan((prev) => {
         if (!prev || !Array.isArray(prev.workers) || prev.workers.length === 0) return prev;
@@ -3177,6 +3288,179 @@ export default function PlanningPage() {
     loadWorkers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, weekStart]);
+
+  const workerRowsForTable = useMemo(() => {
+    const currentWeekly = readWeeklyAvailabilityFor(weekStart);
+    const isNextWeekDisplay = isNextWeek(weekStart);
+    const hiddenIds = new Set(hiddenWorkerIds);
+    const currentWorkersById = new Map<number, Worker>((workers || []).map((worker) => [Number(worker.id), worker]));
+
+    const baseWorkers: Worker[] = (savedWeekPlan?.workers || []).length
+      ? (savedWeekPlan!.workers as any[]).map((savedWorker: any) => {
+          const currentWorker = currentWorkersById.get(Number(savedWorker.id));
+          return {
+            id: savedWorker.id,
+            name: currentWorker?.name || savedWorker.name,
+            maxShifts: currentWorker?.maxShifts ?? savedWorker.max_shifts ?? savedWorker.maxShifts ?? 0,
+            roles: Array.isArray(savedWorker.roles) ? savedWorker.roles : [],
+            availability: mergeWorkerAvailability(
+              (savedWorker.availability || EMPTY_WORKER_AVAILABILITY) as Record<string, string[]>,
+              (currentWeekly[savedWorker.name] || {}) as Record<string, string[]>,
+              isNextWeekDisplay,
+            ),
+            answers: currentWorker?.answers || savedWorker.answers || {},
+            phone: currentWorker?.phone ?? savedWorker.phone ?? null,
+            linkedSiteIds: currentWorker?.linkedSiteIds || [],
+            linkedSiteNames: currentWorker?.linkedSiteNames || [],
+          };
+        })
+      : (workers || []).map((worker) => ({
+          ...worker,
+          availability: mergeWorkerAvailability(
+            (worker.availability || EMPTY_WORKER_AVAILABILITY) as Record<string, string[]>,
+            (currentWeekly[worker.name] || {}) as Record<string, string[]>,
+            isNextWeekDisplay,
+          ),
+        }));
+
+    return baseWorkers.filter((worker) => !hiddenIds.has(worker.id));
+  }, [hiddenWorkerIds, savedWeekPlan, weekStart, weeklyAvailability, workers]);
+
+  function openWorkerEditor(worker: Worker) {
+    const nextAvailability = { ...(worker.availability || EMPTY_WORKER_AVAILABILITY) };
+    setEditingWorkerId(worker.id);
+    setNewWorkerName(worker.name);
+    setNewWorkerPhone(worker.phone || "");
+    setNewWorkerMax(worker.maxShifts);
+    setNewWorkerRoles((worker.roles || []).filter((roleName) => enabledRoleNameSet.has(String(roleName || "").trim())));
+    setOriginalAvailability(nextAvailability);
+    setNewWorkerAvailability(nextAvailability);
+    setIsAddModalOpen(true);
+  }
+
+  const editingWorkerResolved = useMemo(() => {
+    if (!editingWorkerId) return null;
+    return (
+      workers.find((worker) => Number(worker.id) === Number(editingWorkerId)) ||
+      ((savedWeekPlan?.workers || []).find((worker: any) => Number(worker?.id) === Number(editingWorkerId)) as any) ||
+      null
+    );
+  }, [editingWorkerId, savedWeekPlan, workers]);
+
+  const editingWorkerLinkedSiteNames = useMemo(() => {
+    const linkedSiteNames = Array.isArray((editingWorkerResolved as any)?.linkedSiteNames)
+      ? (editingWorkerResolved as any).linkedSiteNames || []
+      : (Array.isArray((editingWorkerResolved as any)?.linked_site_names) ? (editingWorkerResolved as any).linked_site_names || [] : []);
+    return Array.from(new Set((linkedSiteNames || []).map((siteName: any) => String(siteName || "").trim()).filter(Boolean))) as string[];
+  }, [editingWorkerResolved]);
+
+  const workerModalQuestionView = useMemo(() => {
+    if (!editingWorkerId) return { hasWeekAnswers: false, generalItems: [], perDayItems: [] };
+    const rawAnswers = (editingWorkerResolved as any)?.answers || {};
+    const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
+    if (!weekAnswers) return { hasWeekAnswers: false, generalItems: [], perDayItems: [] };
+
+    const questions: any[] = (site?.config?.questions || []) as any[];
+    const orderedQuestions = questions.filter((question) => question && question.id && String(question.label || question.question || question.text || "").trim());
+    const generalItems = orderedQuestions
+      .filter((question) => !question.perDay)
+      .map((question) => {
+        const questionId = String(question.id);
+        const value = (weekAnswers.general || {})[questionId];
+        if (value === undefined || value === null || String(value).trim() === "") return null;
+        return {
+          id: questionId,
+          label: String(question.label || question.question || question.text || questionId),
+          value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value),
+        };
+      })
+      .filter(Boolean) as Array<{ id: string; label: string; value: string }>;
+
+    const dayKeyToDate = new Map<string, string>();
+    dayDefs.forEach((dayDef, index) => {
+      const dt = addDays(weekStart, index);
+      dayKeyToDate.set(dayDef.key, `${dayDef.label} (${formatHebDate(dt)})`);
+    });
+
+    const perDayItems = orderedQuestions
+      .filter((question) => !!question.perDay)
+      .map((question) => {
+        const questionId = String(question.id);
+        const perObj = ((weekAnswers.perDay || {})[questionId] || {}) as Record<string, any>;
+        const items = dayDefs
+          .map((dayDef) => {
+            const value = perObj?.[dayDef.key];
+            if (value === undefined || value === null || String(value).trim() === "") return null;
+            return {
+              dayKey: dayDef.key,
+              dayLabel: dayKeyToDate.get(dayDef.key) || dayDef.key,
+              value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value),
+            };
+          })
+          .filter(Boolean) as Array<{ dayKey: string; dayLabel: string; value: string }>;
+        if (!items.length) return null;
+        return {
+          id: questionId,
+          label: String(question.label || question.question || question.text || questionId),
+          items,
+        };
+      })
+      .filter(Boolean) as Array<{ id: string; label: string; items: Array<{ dayKey: string; dayLabel: string; value: string }> }>;
+
+    return {
+      hasWeekAnswers: true,
+      generalItems,
+      perDayItems,
+    };
+  }, [dayDefs, editingWorkerId, editingWorkerResolved, site?.config?.questions, weekStart]);
+
+  const workerModalShiftBuckets = useMemo(() => ({
+    morningName: allShiftNames.find((shiftName) => /בוקר|^0?6|06-14/i.test(shiftName || "")),
+    noonName: allShiftNames.find((shiftName) => /צהריים|14-22|^1?4/i.test(shiftName || "")),
+    nightName: allShiftNames.find((shiftName) => /לילה|22-06|^2?2|night/i.test(shiftName || "")),
+  }), [allShiftNames]);
+
+  const workerModalBulkSelection = useMemo(() => {
+    const isAllSelected = (shiftName?: string) => {
+      if (!shiftName) return false;
+      return dayDefs.every((dayDef) => (newWorkerAvailability[dayDef.key] || []).includes(shiftName));
+    };
+    return {
+      morningAll: isAllSelected(workerModalShiftBuckets.morningName),
+      noonAll: isAllSelected(workerModalShiftBuckets.noonName),
+      nightAll: isAllSelected(workerModalShiftBuckets.nightName),
+    };
+  }, [dayDefs, newWorkerAvailability, workerModalShiftBuckets]);
+
+  const currentWeekWorkersForEditor = useMemo<Worker[]>(() => (
+    (savedWeekPlan?.workers || []).length
+      ? (savedWeekPlan!.workers as any[]).map((savedWorker: any) => ({
+          id: savedWorker.id,
+          name: savedWorker.name,
+          maxShifts: savedWorker.max_shifts ?? savedWorker.maxShifts ?? 0,
+          roles: Array.isArray(savedWorker.roles) ? savedWorker.roles : [],
+          availability: savedWorker.availability || { ...EMPTY_WORKER_AVAILABILITY },
+          answers: savedWorker.answers || {},
+          phone: savedWorker.phone ?? null,
+          linkedSiteIds: Array.isArray(savedWorker.linked_site_ids) ? savedWorker.linked_site_ids : [],
+          linkedSiteNames: Array.isArray(savedWorker.linked_site_names) ? savedWorker.linked_site_names : [],
+        }))
+      : workers
+  ), [savedWeekPlan, workers]);
+
+  function toggleWorkerAvailabilityForAllDays(shiftName?: string, checked?: boolean) {
+    if (!shiftName) return;
+    setNewWorkerAvailability((prev) => {
+      const next: WorkerAvailability = { ...prev } as WorkerAvailability;
+      for (const dayDef of dayDefs) {
+        const currentValues = new Set(next[dayDef.key] || []);
+        if (checked) currentValues.add(shiftName);
+        else currentValues.delete(shiftName);
+        next[dayDef.key] = Array.from(currentValues);
+      }
+      return next;
+    });
+  }
 
   async function loadSavedPlanForWeek() {
     const start = new Date(weekStart);
@@ -3257,74 +3541,76 @@ export default function PlanningPage() {
       setPullsEditor(null);
       setActiveSavedPlanKey(null);
 
-      // 1) DB (director first, then shared)
-      try {
-        const fromDirector = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        if (isStaleRequest()) return;
-        if (fromDirector && typeof fromDirector === "object") {
-          setActiveSavedPlanKey("db:director");
-          const pulls = (fromDirector?.pulls && typeof fromDirector.pulls === "object") ? fromDirector.pulls : undefined;
-          if (fromDirector.assignments) {
-            const nextSavedPlan = { assignments: fromDirector.assignments, isManual: !!fromDirector.isManual, workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined, pulls };
-            setSavedWeekPlan(nextSavedPlan);
-            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
-            if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
-            return;
-          }
+      const localSavedPlan = readLocalSavedPlanForSite(Number(params.id));
+      if (localSavedPlan?.assignments) {
+        const nextSavedPlan = {
+          assignments: localSavedPlan.assignments,
+          isManual: !!localSavedPlan.isManual,
+          workers: Array.isArray(localSavedPlan.workers) ? localSavedPlan.workers : undefined,
+          pulls: localSavedPlan.pulls,
+        };
+        setSavedWeekPlan(nextSavedPlan);
+        if (localSavedPlan.pulls && typeof localSavedPlan.pulls === "object") setPullsByHoleKey(localSavedPlan.pulls);
+        if (typeof window !== "undefined") {
+          try {
+            setActiveSavedPlanKey(localStorage.getItem(keyDirector) ? keyDirector : (localStorage.getItem(keyShared) ? keyShared : null));
+          } catch {}
         }
-      } catch {}
+      }
 
-      try {
-        const fromShared = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        if (isStaleRequest()) return;
-        if (fromShared && typeof fromShared === "object") {
-          setActiveSavedPlanKey("db:shared");
-          const pulls = (fromShared?.pulls && typeof fromShared.pulls === "object") ? fromShared.pulls : undefined;
-          if (fromShared.assignments) {
-            const nextSavedPlan = { assignments: fromShared.assignments, isManual: !!fromShared.isManual, workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined, pulls };
-            setSavedWeekPlan(nextSavedPlan);
-            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
-            if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
-            return;
-          }
-        }
-      } catch {}
+      const [fromDirector, fromShared, fromAuto] = await Promise.all([
+        fetchWeekPlanScope(Number(params.id), isoWeek, "director"),
+        fetchWeekPlanScope(Number(params.id), isoWeek, "shared"),
+        fetchWeekPlanScope(Number(params.id), isoWeek, "auto"),
+      ]);
+      if (isStaleRequest()) return;
 
-      try {
-        const fromAuto = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        if (isStaleRequest()) return;
-        if (fromAuto && typeof fromAuto === "object" && fromAuto.assignments) {
-          setActiveSavedPlanKey("db:auto");
-          const pulls = (fromAuto?.pulls && typeof fromAuto.pulls === "object") ? fromAuto.pulls : {};
-          setPullsByHoleKey(pulls);
-          setAiPlan({
-            days: Array.isArray(fromAuto.days) ? fromAuto.days : [],
-            shifts: Array.isArray(fromAuto.shifts) ? fromAuto.shifts : [],
-            stations: Array.isArray(fromAuto.stations) ? fromAuto.stations : [],
-            assignments: fromAuto.assignments,
-            alternatives: Array.isArray(fromAuto.alternatives) ? fromAuto.alternatives : [],
-            pulls,
-            alternativePulls: Array.isArray(fromAuto.alternativePulls)
-              ? fromAuto.alternativePulls
-              : (Array.isArray(fromAuto.alternative_pulls) ? fromAuto.alternative_pulls : []),
-            status: String(fromAuto.status || "DONE"),
-            objective: Number(fromAuto.objective || 0),
-          });
-          baseAssignmentsRef.current = fromAuto.assignments;
-          setAltIndex(0);
-          setManualAssignments(null);
+      if (fromDirector && typeof fromDirector === "object") {
+        setActiveSavedPlanKey("db:director");
+        const pulls = (fromDirector?.pulls && typeof fromDirector.pulls === "object") ? fromDirector.pulls : undefined;
+        if (fromDirector.assignments) {
+          const nextSavedPlan = { assignments: fromDirector.assignments, isManual: !!fromDirector.isManual, workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined, pulls };
+          setSavedWeekPlan(nextSavedPlan);
+          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+          if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
           return;
         }
-      } catch {}
+      }
+
+      if (fromShared && typeof fromShared === "object") {
+        setActiveSavedPlanKey("db:shared");
+        const pulls = (fromShared?.pulls && typeof fromShared.pulls === "object") ? fromShared.pulls : undefined;
+        if (fromShared.assignments) {
+          const nextSavedPlan = { assignments: fromShared.assignments, isManual: !!fromShared.isManual, workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined, pulls };
+          setSavedWeekPlan(nextSavedPlan);
+          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+          if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
+          return;
+        }
+      }
+
+      if (fromAuto && typeof fromAuto === "object" && fromAuto.assignments) {
+        setActiveSavedPlanKey("db:auto");
+        const pulls = (fromAuto?.pulls && typeof fromAuto.pulls === "object") ? fromAuto.pulls : {};
+        setPullsByHoleKey(pulls);
+        setAiPlan({
+          days: Array.isArray(fromAuto.days) ? fromAuto.days : [],
+          shifts: Array.isArray(fromAuto.shifts) ? fromAuto.shifts : [],
+          stations: Array.isArray(fromAuto.stations) ? fromAuto.stations : [],
+          assignments: fromAuto.assignments,
+          alternatives: Array.isArray(fromAuto.alternatives) ? fromAuto.alternatives : [],
+          pulls,
+          alternativePulls: Array.isArray(fromAuto.alternativePulls)
+            ? fromAuto.alternativePulls
+            : (Array.isArray(fromAuto.alternative_pulls) ? fromAuto.alternative_pulls : []),
+          status: String(fromAuto.status || "DONE"),
+          objective: Number(fromAuto.objective || 0),
+        });
+        baseAssignmentsRef.current = fromAuto.assignments;
+        setAltIndex(0);
+        setManualAssignments(null);
+        return;
+      }
 
       // 2) localStorage fallback (legacy)
       if (isStaleRequest()) return;
@@ -3499,45 +3785,32 @@ export default function PlanningPage() {
 
   async function fetchWorkersSnapshotForSite(siteId: number) {
     if (siteId === Number(params.id)) return buildWorkersSnapshot(workers || []);
+    const cachedWorkers = readSessionCache<Worker[]>(multiSiteWorkersCacheKey(siteId));
+    if (cachedWorkers && cachedWorkers.length) {
+      return buildWorkersSnapshot(cachedWorkers);
+    }
     const list = await apiFetch<any[]>(`/director/sites/${siteId}/workers`, {
       headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       cache: "no-store" as any,
     });
-    return buildWorkersSnapshot(Array.isArray(list) ? list : []);
+    const mapped: Worker[] = (list || []).map((w: any) => ({
+      id: w.id,
+      name: w.name,
+      maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+      roles: Array.isArray(w.roles) ? w.roles : [],
+      availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+      answers: w.answers || {},
+      phone: w.phone ?? null,
+      linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
+      linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
+    }));
+    writeSessionCache(multiSiteWorkersCacheKey(siteId), mapped);
+    return buildWorkersSnapshot(mapped);
   }
 
-  async function fetchExistingSavedPlanForSite(siteId: number): Promise<SavedWeekPlanState | null> {
-    const start = new Date(weekStart);
-    const isoWeek = getWeekKeyISO(start);
-    try {
-      const fromDirector = await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        cache: "no-store" as any,
-      });
-      if (fromDirector?.assignments) {
-        return {
-          assignments: fromDirector.assignments,
-          isManual: !!fromDirector.isManual,
-          workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined,
-          pulls: fromDirector?.pulls && typeof fromDirector.pulls === "object" ? fromDirector.pulls : {},
-        };
-      }
-    } catch {}
-    try {
-      const fromShared = await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        cache: "no-store" as any,
-      });
-      if (fromShared?.assignments) {
-        return {
-          assignments: fromShared.assignments,
-          isManual: !!fromShared.isManual,
-          workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined,
-          pulls: fromShared?.pulls && typeof fromShared.pulls === "object" ? fromShared.pulls : {},
-        };
-      }
-    } catch {}
+  function readLocalSavedPlanForSite(siteId: number): SavedWeekPlanState | null {
     if (typeof window === "undefined") return null;
+    const start = new Date(weekStart);
     try {
       const raw = localStorage.getItem(planKeyDirectorOnly(siteId, start)) || localStorage.getItem(planKeyShared(siteId, start));
       if (!raw) return null;
@@ -3552,6 +3825,45 @@ export default function PlanningPage() {
     } catch {
       return null;
     }
+  }
+
+  async function fetchWeekPlanScope(siteId: number, isoWeek: string, scope: "director" | "shared" | "auto") {
+    try {
+      return await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        cache: "no-store" as any,
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function fetchExistingSavedPlanForSite(siteId: number): Promise<SavedWeekPlanState | null> {
+    const localSavedPlan = readLocalSavedPlanForSite(siteId);
+    if (localSavedPlan?.assignments) return localSavedPlan;
+    const start = new Date(weekStart);
+    const isoWeek = getWeekKeyISO(start);
+    const [fromDirector, fromShared] = await Promise.all([
+      fetchWeekPlanScope(siteId, isoWeek, "director"),
+      fetchWeekPlanScope(siteId, isoWeek, "shared"),
+    ]);
+    if (fromDirector?.assignments) {
+      return {
+        assignments: fromDirector.assignments,
+        isManual: !!fromDirector.isManual,
+        workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined,
+        pulls: fromDirector?.pulls && typeof fromDirector.pulls === "object" ? fromDirector.pulls : {},
+      };
+    }
+    if (fromShared?.assignments) {
+      return {
+        assignments: fromShared.assignments,
+        isManual: !!fromShared.isManual,
+        workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined,
+        pulls: fromShared?.pulls && typeof fromShared.pulls === "object" ? fromShared.pulls : {},
+      };
+    }
+    return null;
   }
 
   function getLinkedPlanCandidateCount(plan: LinkedSitePlan | null | undefined) {
@@ -3640,68 +3952,82 @@ export default function PlanningPage() {
       }
   }
 
-  function activateSavedPlanEdit(planOverride?: SavedWeekPlanState | null) {
-    const plan = planOverride || savedWeekPlan;
-    if (!plan?.assignments) return;
+  function mapSavedPlanWorkersToState(planWorkers?: SavedWeekPlanState["workers"]) {
+    if (!Array.isArray(planWorkers) || planWorkers.length === 0) return null;
+    const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
+    return (planWorkers as any[]).map((w: any) => ({
+      id: w.id,
+      name: String(w.name),
+      maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
+      roles: Array.isArray(w.roles) ? w.roles : [],
+      availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
+      answers: w.answers || {},
+      phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
+      linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
+      linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
+    }));
+  }
+
+  function buildWeeklyAvailabilityFromPlanWorkers(planWorkers?: SavedWeekPlanState["workers"]) {
+    if (!Array.isArray(planWorkers) || planWorkers.length === 0) return null;
+    try {
+      const merged: Record<string, WorkerAvailability> = {} as any;
+      (planWorkers as any[]).forEach((rw: any) => {
+        const baseAvail = (rw.availability || {}) as Record<string, string[]>;
+        const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
+        const out: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
+        planningDayKeys.forEach((dk) => {
+          const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
+          (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
+          (out as any)[dk] = Array.from(s);
+        });
+        merged[rw.name] = out;
+      });
+      return merged;
+    } catch {
+      return null;
+    }
+  }
+
+  function restoreSavedPlanState(plan: SavedWeekPlanState, status: string) {
     const assignmentsAny: any = plan.assignments;
-    const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-    const shiftNames = Array.from(
-      new Set(
-        (site?.config?.stations || [])
-          .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-          .filter(Boolean)
-      )
-    );
-    const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-    setSavedWeekPlan(plan);
-    setPullsByHoleKey((plan.pulls && typeof plan.pulls === "object") ? plan.pulls : {});
+    const pulls = (plan.pulls && typeof plan.pulls === "object") ? plan.pulls : {};
     if (plan.isManual) {
       setIsManual(true);
       setManualAssignments(assignmentsAny as any);
+      setAiPlan(null);
     } else {
       setIsManual(false);
-      const newPlan = {
-        days: dayKeys,
-        shifts: shiftNames,
-        stations: stationNames,
+      setAiPlan({
+        days: [...planningDayKeys],
+        shifts: planningShiftNames,
+        stations: planningStationNames,
         assignments: assignmentsAny,
         alternatives: [],
-        status: "SAVED_EDIT",
+        status,
         objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-      } as any;
-      setAiPlan(newPlan);
+      } as any);
     }
-    if (Array.isArray(plan.workers) && plan.workers.length) {
-      const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
-      const mapped = (plan.workers as any[]).map((w: any) => ({
-        id: w.id,
-        name: String(w.name),
-        maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
-        roles: Array.isArray(w.roles) ? w.roles : [],
-        availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-        answers: w.answers || {},
-        phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
-        linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
-        linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
-      }));
-      setWorkers(mapped);
-      try {
-        const merged: Record<string, WorkerAvailability> = {} as any;
-        const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
-        (plan.workers as any[]).forEach((rw: any) => {
-          const baseAvail = (rw.availability || {}) as Record<string, string[]>;
-          const weekOverride = (weeklyAvailability[rw.name] || {}) as Record<string, string[]>;
-          const out: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-          daysK.forEach((dk) => {
-            const s = new Set<string>(Array.isArray(baseAvail[dk]) ? baseAvail[dk] : []);
-            (Array.isArray(weekOverride[dk]) ? weekOverride[dk] : []).forEach((sn) => s.add(sn));
-            (out as any)[dk] = Array.from(s);
-          });
-          merged[rw.name] = out;
-        });
-        setWeeklyAvailability(merged);
-      } catch {}
-    }
+    const mappedWorkers = mapSavedPlanWorkersToState(plan.workers);
+    if (mappedWorkers) setWorkers(mappedWorkers);
+    const mergedWeeklyAvailability = buildWeeklyAvailabilityFromPlanWorkers(plan.workers);
+    if (mergedWeeklyAvailability) setWeeklyAvailability(mergedWeeklyAvailability);
+    setSavedWeekPlan({
+      assignments: plan.assignments,
+      isManual: !!plan.isManual,
+      workers: Array.isArray(plan.workers) ? plan.workers : undefined,
+      pulls,
+    });
+    setPullsByHoleKey(pulls || {});
+    setPullsModeStationIdx(null);
+    setPullsEditor(null);
+  }
+
+  function activateSavedPlanEdit(planOverride?: SavedWeekPlanState | null) {
+    const plan = planOverride || savedWeekPlan;
+    if (!plan?.assignments) return;
+    savedPlanBeforeEditRef.current = plan;
+    restoreSavedPlanState(plan, "SAVED_EDIT");
     setEditingSaved(true);
   }
 
@@ -3756,6 +4082,7 @@ export default function PlanningPage() {
       }
       setPullsByHoleKey(pullsSnapshot);
       setEditingSaved(false);
+      savedPlanBeforeEditRef.current = null;
       clearMultiSiteSavedEditState(weekStart);
       toast.success(publishToWorkers ? "התכנון נשמר ונשלח" : "התכנון נשמר (למנהל בלבד)");
     } catch (e: any) {
@@ -3768,12 +4095,13 @@ export default function PlanningPage() {
       const linkedMemory = readLinkedPlansFromMemory(weekStart);
       const activeIndex = Number(linkedMemory?.activeAltIndex || 0);
       const targetSiteIds = multiSitePullsSites.map((linkedSite) => Number(linkedSite.id)).filter((siteId) => Number.isFinite(siteId));
-      for (const siteId of targetSiteIds) {
+      const preparedPlans = await Promise.all(targetSiteIds.map(async (siteId) => {
         const sitePlan = linkedMemory?.plansBySite?.[String(siteId)];
         let assignments: Record<string, Record<string, string[][]>> | null = null;
         let pulls: Record<string, PullEntry> = {};
         let workersSnapshot: any[] = [];
         let isManualPlan = false;
+
         if (sitePlan?.assignments) {
           assignments = resolveAssignmentsForAlternative(sitePlan, activeIndex);
           pulls = resolvePullsForAlternative(sitePlan, activeIndex);
@@ -3783,18 +4111,17 @@ export default function PlanningPage() {
           const fallbackAssignments = savedWeekPlan?.assignments;
           const effective = currentAssignments || fallbackAssignments;
           if (!effective) {
-            toast.error("שמירה נכשלה", { description: "לא נמצא תכנון קיים לשמירה באתר הנוכחי." });
-            return;
+            throw new Error("לא נמצא תכנון קיים לשמירה באתר הנוכחי.");
           }
           assignments = JSON.parse(JSON.stringify(effective));
           pulls = JSON.parse(JSON.stringify(pullsByHoleKey || {}));
           workersSnapshot = buildWorkersSnapshot(workers || []);
           isManualPlan = currentAssignments ? isManual : !!savedWeekPlan?.isManual;
         } else {
-          const existingSavedPlan = await fetchExistingSavedPlanForSite(siteId);
+          const localSavedPlan = readLocalSavedPlanForSite(siteId);
+          const existingSavedPlan = localSavedPlan || await fetchExistingSavedPlanForSite(siteId);
           if (!existingSavedPlan?.assignments) {
-            toast.error("שמירה נכשלה", { description: "חסר תכנון שמור באחד האתרים המקושרים, ולכן לא ניתן לשמור את כולם יחד." });
-            return;
+            throw new Error("חסר תכנון שמור באחד האתרים המקושרים, ולכן לא ניתן לשמור את כולם יחד.");
           }
           assignments = existingSavedPlan.assignments;
           pulls = existingSavedPlan.pulls || {};
@@ -3803,19 +4130,25 @@ export default function PlanningPage() {
             : await fetchWorkersSnapshotForSite(siteId);
           isManualPlan = !!existingSavedPlan.isManual;
         }
+
         const payload = buildWeekPlanPayloadForSite(siteId, assignments, pulls, workersSnapshot, isManualPlan);
-        await persistWeekPlanForSite(siteId, publishToWorkers, payload);
-        if (siteId === Number(params.id)) {
-          setSavedWeekPlan({
-            assignments: assignments as Record<string, Record<string, string[][]>>,
-            isManual: payload.isManual,
-            workers: payload.workers,
-            pulls: payload.pulls,
-          });
-          setPullsByHoleKey(pulls || {});
-        }
+        return { siteId, assignments, pulls, payload };
+      }));
+
+      await Promise.all(preparedPlans.map(({ siteId, payload }) => persistWeekPlanForSite(siteId, publishToWorkers, payload)));
+
+      const currentSitePlan = preparedPlans.find(({ siteId }) => siteId === Number(params.id));
+      if (currentSitePlan) {
+        setSavedWeekPlan({
+          assignments: currentSitePlan.assignments as Record<string, Record<string, string[][]>>,
+          isManual: currentSitePlan.payload.isManual,
+          workers: currentSitePlan.payload.workers,
+          pulls: currentSitePlan.payload.pulls,
+        });
+        setPullsByHoleKey(currentSitePlan.pulls || {});
       }
       setEditingSaved(false);
+      savedPlanBeforeEditRef.current = null;
       clearMultiSiteSavedEditState(weekStart);
       toast.success(publishToWorkers ? "התכנון נשמר ונשלח לכל האתרים המקושרים" : "התכנון נשמר לכל האתרים המקושרים");
     } catch (e: any) {
@@ -3894,6 +4227,12 @@ export default function PlanningPage() {
   async function onCancelEdit() {
     try {
       clearMultiSiteSavedEditState(weekStart);
+      if (savedPlanBeforeEditRef.current?.assignments) {
+        restoreSavedPlanState(savedPlanBeforeEditRef.current, "SAVED");
+        setEditingSaved(false);
+        toast.success("השינויים בוטלו");
+        return;
+      }
       const start = new Date(weekStart);
       const isoWeek = getWeekKeyISO(start);
       const keyFallback = (() => {
@@ -3941,53 +4280,16 @@ export default function PlanningPage() {
         return;
       }
       const pulls = (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : {};
-      // Restaurer le plan sauvegardé
-      const assignmentsAny: any = parsed.assignments;
-      const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
-      const shiftNames = Array.from(
-        new Set(
-          (site?.config?.stations || [])
-            .flatMap((st: any) => (st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any) => sh?.name))
-            .filter(Boolean)
-        )
-      );
-      const stationNames = (site?.config?.stations || []).map((st: any, i: number) => st?.name || `עמדה ${i+1}`);
-      if (parsed.isManual) {
-        setIsManual(true);
-        setManualAssignments(assignmentsAny as any);
-      } else {
-        setIsManual(false);
-        const newPlan = {
-          days: dayKeys,
-          shifts: shiftNames,
-          stations: stationNames,
-          assignments: assignmentsAny,
-          alternatives: [],
-          status: "SAVED",
-          objective: typeof (parsed as any)?.objective === "number" ? (parsed as any).objective : 0,
-        } as any;
-        setAiPlan(newPlan);
-      }
-      if (Array.isArray(parsed.workers) && parsed.workers.length) {
-        const existingById = new Map<number, Worker>((workersRef.current || []).map((worker) => [Number(worker.id), worker]));
-        const mapped = (parsed.workers as any[]).map((w: any) => ({
-          id: w.id,
-          name: String(w.name),
-          maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
-          roles: Array.isArray(w.roles) ? w.roles : [],
-          availability: w.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-          answers: w.answers || {},
-          phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
-          linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
-          linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
-        }));
-        setWorkers(mapped);
-      } else {
+      const restoredPlan: SavedWeekPlanState = {
+        assignments: parsed.assignments,
+        isManual: !!parsed.isManual,
+        workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+        pulls,
+      };
+      restoreSavedPlanState(restoredPlan, "SAVED");
+      if (!Array.isArray(parsed.workers) || parsed.workers.length === 0) {
         loadWorkers();
       }
-      // Restaurer savedWeekPlan et sortir du mode ערוך
-      setSavedWeekPlan({ assignments: parsed.assignments, isManual: !!parsed.isManual, workers: Array.isArray(parsed.workers) ? parsed.workers : undefined, pulls });
-      setPullsByHoleKey(pulls || {});
       setEditingSaved(false);
       toast.success("השינויים בוטלו");
     } catch (e: any) {
@@ -4009,25 +4311,34 @@ export default function PlanningPage() {
       const isoWeek = getWeekKeyISO(start);
       const keyShared = planKeyShared(targetSiteId, start);
       const keyDirector = planKeyDirectorOnly(targetSiteId, start);
-      // Charger les données actuelles pour garder les workers (DB puis localStorage)
       let parsed: any = null;
-      try {
-        parsed = await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-      } catch {}
-      if (!parsed) {
-        try {
-          parsed = await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-            cache: "no-store" as any,
-          });
-        } catch {}
-      }
-      if (!parsed) {
-        const raw = typeof window !== "undefined" ? (localStorage.getItem(keyShared) || localStorage.getItem(keyDirector)) : null;
-        parsed = raw ? JSON.parse(raw) : null;
+      if (updateCurrentState && savedWeekPlan?.assignments) {
+        parsed = {
+          siteId: targetSiteId,
+          week: { startISO: isoPlanKey(start) },
+          isManual: !!savedWeekPlan.isManual,
+          assignments: savedWeekPlan.assignments,
+          pulls: savedWeekPlan.pulls || {},
+          workers: Array.isArray(savedWeekPlan.workers) ? savedWeekPlan.workers : [],
+        };
+      } else {
+        const localSavedPlan = readLocalSavedPlanForSite(targetSiteId);
+        if (localSavedPlan) {
+          parsed = {
+            siteId: targetSiteId,
+            week: { startISO: isoPlanKey(start) },
+            isManual: !!localSavedPlan.isManual,
+            assignments: localSavedPlan.assignments,
+            pulls: localSavedPlan.pulls || {},
+            workers: Array.isArray(localSavedPlan.workers) ? localSavedPlan.workers : [],
+          };
+        } else {
+          const [fromShared, fromDirector] = await Promise.all([
+            fetchWeekPlanScope(targetSiteId, isoWeek, "shared"),
+            fetchWeekPlanScope(targetSiteId, isoWeek, "director"),
+          ]);
+          parsed = fromShared || fromDirector || null;
+        }
       }
 
       if (parsed) {
@@ -4063,18 +4374,16 @@ export default function PlanningPage() {
         }
       } else {
         // Si aucune donnée n'existe, supprimer complètement (DB + local)
-        try {
-          await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+        await Promise.allSettled([
+          apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
             method: "DELETE",
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          });
-        } catch {}
-        try {
-          await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          }),
+          apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
             method: "DELETE",
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          });
-        } catch {}
+          }),
+        ]);
         if (typeof window !== "undefined") {
           try { localStorage.removeItem(keyShared); } catch {}
           try { localStorage.removeItem(keyDirector); } catch {}
@@ -4089,6 +4398,7 @@ export default function PlanningPage() {
       setPullsByHoleKey({});
       setPullsModeStationIdx(null);
       setPullsEditor(null);
+        savedPlanBeforeEditRef.current = null;
         clearMultiSiteSavedEditState(weekStart);
         if (showSuccessToast) toast.success("התכנון נמחק בהצלחה");
       }
@@ -4259,38 +4569,6 @@ export default function PlanningPage() {
             <section className="space-y-3">
               <h2 className="text-lg font-semibold text-center">עובדים</h2>
               {(() => {
-                const dayDefs = [
-                  { key: "sun", label: "א'" },
-                  { key: "mon", label: "ב'" },
-                  { key: "tue", label: "ג'" },
-                  { key: "wed", label: "ד'" },
-                  { key: "thu", label: "ה'" },
-                  { key: "fri", label: "ו'" },
-                  { key: "sat", label: "ש'" },
-                ];
-                const allShiftNames: string[] = Array.from(
-                  new Set(
-                    (site?.config?.stations || [])
-                      .flatMap((st: any) => (st?.shifts || [])
-                        .filter((sh: any) => sh?.enabled)
-                        .map((sh: any) => sh?.name))
-                      .filter(Boolean)
-                  )
-                );
-                const allRoleNames: string[] = Array.from(enabledRoleNameSet).sort((a, b) => a.localeCompare(b));
-
-                function toggleNewAvailability(dayKey: string, shift: string) {
-                  setNewWorkerAvailability((prev) => {
-                    const cur = prev[dayKey] || [];
-                    return {
-                      ...prev,
-                      [dayKey]: cur.includes(shift)
-                        ? cur.filter((s) => s !== shift)
-                        : [...cur, shift],
-                    };
-                  });
-                }
-
                 return (
                   <div className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
                     <div className="flex items-center justify-between">
@@ -4352,70 +4630,7 @@ export default function PlanningPage() {
                           </thead>
                           <tbody>
                           {(() => {
-                            // IMPORTANT: en mode ערוך, `weeklyAvailability` peut être stale.
-                            // Toujours lire les overrides depuis le localStorage pour la semaine affichée.
-                            const currentWeekly = readWeeklyAvailabilityFor(weekStart);
-                            const displayWorkers: Worker[] = (savedWeekPlan?.workers || []).length
-                              ? (savedWeekPlan!.workers as any[]).map((rw: any) => {
-                                  // Pour la semaine prochaine, utiliser la base (snapshot) OU weeklyAvailability
-                                  // Pour les autres semaines, afficher uniquement weeklyAvailability (sinon vide)
-                                  const isNextWeekDisplay = isNextWeek(weekStart);
-                                  // Utiliser les זמינות sauvegardées comme base (snapshot)
-                                  const baseAvail = (rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
-                                  // weeklyAvailability sert d'override pour cette semaine
-                                  const weekOverride = (currentWeekly[rw.name] || {}) as Record<string, string[]>;
-                                  const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
-                                  const merged: Record<string, string[]> = {} as any;
-                                  daysK.forEach((dk) => {
-                                    // Si un override existe pour ce jour, l'utiliser (même si vide => modification explicite)
-                                    if (Object.prototype.hasOwnProperty.call(weekOverride, dk) && Array.isArray(weekOverride[dk])) {
-                                      merged[dk] = weekOverride[dk] as any;
-                                    } else if (isNextWeekDisplay) {
-                                      // Pour la semaine prochaine uniquement, utiliser la base
-                                      merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
-                                    } else {
-                                      // Pour les autres semaines, ne pas afficher la base
-                                      merged[dk] = [];
-                                    }
-                                  });
-                                  // Utiliser le maxShifts de l'état workers (mis à jour toutes les 10 secondes) au lieu de celui sauvegardé
-                                  const currentWorker = workers.find((w) => Number(w.id) === Number(rw.id));
-                                  const currentMaxShifts = currentWorker?.maxShifts ?? rw.max_shifts ?? rw.maxShifts ?? 0;
-                                  return ({
-                                  id: rw.id,
-                                  name: currentWorker?.name || rw.name,
-                                  maxShifts: currentMaxShifts,
-                                  roles: Array.isArray(rw.roles) ? rw.roles : [],
-                                    availability: merged,
-                                    answers: currentWorker?.answers || rw.answers || {},
-                                  });
-                                })
-                              : workers.map((bw) => {
-                                  // Pour la semaine prochaine, utiliser les זמינות de la base de données OU weeklyAvailability
-                                  // Pour les autres semaines, utiliser uniquement weeklyAvailability (pas les זמינות de la base de données)
-                                  const isNextWeekDisplay = isNextWeek(weekStart);
-                                  const baseAvail = (bw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }) as Record<string, string[]>;
-                                  const weekOverride = (currentWeekly[bw.name] || {}) as Record<string, string[]>;
-                                  const daysK = ["sun","mon","tue","wed","thu","fri","sat"] as const;
-                                  const merged: Record<string, string[]> = {} as any;
-                                  daysK.forEach((dk) => {
-                                    // Si un override existe pour ce jour, l'utiliser
-                                    if (Object.prototype.hasOwnProperty.call(weekOverride, dk) && Array.isArray(weekOverride[dk])) {
-                                      merged[dk] = weekOverride[dk] as any;
-                                    } else if (isNextWeekDisplay) {
-                                      // Pour la semaine prochaine uniquement, utiliser les זמינות de la base de données
-                                      merged[dk] = Array.isArray(baseAvail[dk]) ? baseAvail[dk] : [];
-                                    } else {
-                                      // Pour les autres semaines, ne pas utiliser les זמינות de la base de données
-                                      merged[dk] = [];
-                                    }
-                                  });
-                                  return {
-                                    ...bw,
-                                    availability: merged,
-                                  };
-                                });
-                            const rows = displayWorkers.filter((w) => !hiddenWorkerIds.includes(w.id));
+                            const rows = workerRowsForTable;
                             if (rows.length === 0) {
                               return (
                                 <tr>
@@ -4427,17 +4642,7 @@ export default function PlanningPage() {
                               <tr
                                 key={w.id}
                                 className="border-b last:border-0 dark:border-zinc-800 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                                onClick={() => {
-                                    setEditingWorkerId(w.id);
-                                    setNewWorkerName(w.name);
-                                    setNewWorkerMax(w.maxShifts);
-                                  setNewWorkerRoles((w.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
-                                    const wa = (weeklyAvailability[w.name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                                    setOriginalAvailability({ ...wa });
-                                    setNewWorkerAvailability({ ...wa });
-                                    setIsAddModalOpen(true);
-                                    void refreshWorkersAnswersFromApi();
-                                }}
+                                onClick={() => openWorkerEditor(w)}
                               >
                                 <td className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 overflow-hidden">
                                   <span
@@ -4552,21 +4757,13 @@ export default function PlanningPage() {
                         }
                         let userCreated = false;
                         try {
-                          // Si un worker avec ce téléphone existe déjà sur ce site, ne rien faire
-                          try {
-                            const existingWorkers = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                              cache: "no-store" as any,
-                            });
-                            const normalizePhoneDigits = (p: any) => String(p || "").replace(/\D/g, "").trim();
-                            const phoneN = normalizePhoneDigits(digitsPhone);
-                            const alreadyOnSite = (existingWorkers || []).some((w: any) => normalizePhoneDigits(w?.phone) === phoneN);
-                            if (alreadyOnSite) {
-                              toast.error("העובד כבר קיים באתר");
-                              return;
-                            }
-                          } catch {
-                            // Si on n'arrive pas à vérifier, on continue le flux normal
+                          // Utiliser la liste locale évite un aller-retour avant la création.
+                          const normalizePhoneDigits = (p: any) => String(p || "").replace(/\D/g, "").trim();
+                          const phoneN = normalizePhoneDigits(digitsPhone);
+                          const alreadyOnSite = workers.some((w: any) => normalizePhoneDigits(w?.phone) === phoneN);
+                          if (alreadyOnSite) {
+                            toast.error("העובד כבר קיים באתר");
+                            return;
                           }
 
                           // Créer l'utilisateur worker
@@ -4728,21 +4925,13 @@ export default function PlanningPage() {
                       </div>
                     </div>
                   </div>
-                  {(() => {
-                    const currentWorker =
-                      workers.find((w) => Number(w.id) === Number(editingWorkerId)) ||
-                      ((savedWeekPlan?.workers || []).find((w: any) => Number(w?.id) === Number(editingWorkerId)) as any);
-                    const linkedSiteNames = Array.isArray(currentWorker?.linkedSiteNames)
-                      ? currentWorker?.linkedSiteNames || []
-                      : (Array.isArray(currentWorker?.linked_site_names) ? currentWorker?.linked_site_names || [] : []);
-                    if (linkedSiteNames.length <= 1) return null;
-                    return (
+                  {editingWorkerLinkedSiteNames.length > 1 && (
                       <div className="mt-3 flex w-full flex-col items-center text-center">
                         <div className="w-full text-center text-[11px] md:text-xs font-medium text-zinc-500 dark:text-zinc-400">
                           משויך לאתרים:
                         </div>
                         <div className="mt-1 flex w-full items-center justify-center gap-1.5 overflow-x-auto whitespace-nowrap pb-1">
-                          {linkedSiteNames.map((siteName: string) => (
+                          {editingWorkerLinkedSiteNames.map((siteName: string) => (
                             <span
                               key={siteName}
                               className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] md:text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
@@ -4752,70 +4941,39 @@ export default function PlanningPage() {
                           ))}
                         </div>
                       </div>
-                    );
-                  })()}
+                    )}
                   <div className="mt-3 text-center">
                     <div className="block text-sm font-semibold mb-1">זמינות לפי יום/משמרת</div>
                     <div className="space-y-2">
-                      {(() => {
-                        const morningName = allShiftNames.find((sn) => /בוקר|^0?6|06-14/i.test(sn || ""));
-                        const noonName = allShiftNames.find((sn) => /צהריים|14-22|^1?4/i.test(sn || ""));
-                        const nightName = allShiftNames.find((sn) => /לילה|22-06|^2?2|night/i.test(sn || ""));
-                        function isAllSelected(shiftName?: string) {
-                          if (!shiftName) return false;
-                          return dayDefs.every((d) => (newWorkerAvailability[d.key] || []).includes(shiftName));
-                        }
-                        function toggleAll(shiftName?: string, checked?: boolean) {
-                          if (!shiftName) return;
-                          setNewWorkerAvailability((prev) => {
-                            const next: WorkerAvailability = { ...prev } as any;
-                            for (const d of dayDefs) {
-                              const cur = new Set(next[d.key] || []);
-                              if (checked) {
-                                cur.add(shiftName);
-                              } else {
-                                cur.delete(shiftName);
-                              }
-                              next[d.key] = Array.from(cur);
-                            }
-                            return next;
-                          });
-                        }
-                        const morningAll = isAllSelected(morningName);
-                        const noonAll = isAllSelected(noonName);
-                        const nightAll = isAllSelected(nightName);
-                        return (
                           <div className="mb-2 flex flex-wrap items-center justify-center gap-4 text-sm">
                             <label className="inline-flex items-center gap-2 opacity-100">
                               <input
                                 type="checkbox"
-                                disabled={!morningName}
-                                checked={!!morningName && morningAll}
-                                onChange={(e) => toggleAll(morningName, e.target.checked)}
+                                disabled={!workerModalShiftBuckets.morningName}
+                                checked={!!workerModalShiftBuckets.morningName && workerModalBulkSelection.morningAll}
+                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.morningName, e.target.checked)}
                               />
                               כל הבוקר
                             </label>
                             <label className="inline-flex items-center gap-2">
                               <input
                                 type="checkbox"
-                                disabled={!noonName}
-                                checked={!!noonName && noonAll}
-                                onChange={(e) => toggleAll(noonName, e.target.checked)}
+                                disabled={!workerModalShiftBuckets.noonName}
+                                checked={!!workerModalShiftBuckets.noonName && workerModalBulkSelection.noonAll}
+                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.noonName, e.target.checked)}
                               />
                               כל הצהריים
                             </label>
                             <label className="inline-flex items-center gap-2">
                               <input
                                 type="checkbox"
-                                disabled={!nightName}
-                                checked={!!nightName && nightAll}
-                                onChange={(e) => toggleAll(nightName, e.target.checked)}
+                                disabled={!workerModalShiftBuckets.nightName}
+                                checked={!!workerModalShiftBuckets.nightName && workerModalBulkSelection.nightAll}
+                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.nightName, e.target.checked)}
                               />
                               כל הלילה
                             </label>
                           </div>
-                        );
-                      })()}
                       {dayDefs.map((d) => (
                         <div key={d.key} className="flex flex-wrap items-center justify-center gap-3 text-sm">
                           <div className="w-10 text-zinc-600 dark:text-zinc-300">{d.label}</div>
@@ -4841,100 +4999,47 @@ export default function PlanningPage() {
                   {/* Réponses aux questions optionnelles (du worker) */}
                   {(() => {
                     if (!editingWorkerId) return null;
-                    const w = workers.find((x) => Number(x.id) === Number(editingWorkerId));
-                    const rawAnswers = (w as any)?.answers || {};
-                    
-                    // Extraire les réponses de la semaine actuelle
-                    const weekAnswers = getAnswersForWeek(rawAnswers, weekStart);
-                    if (!weekAnswers) {
+                    if (!workerModalQuestionView.hasWeekAnswers) {
                       return (
                         <div className="mt-4 rounded-md border border-zinc-200 p-3 text-sm text-center text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
                           אין תשובות לשאלות עבור השבוע הנוכחי
                         </div>
                       );
                     }
-                    
-                    const qs: any[] = (site?.config?.questions || []) as any[];
-                    const labelById = new Map<string, string>();
-                    const perDayById = new Map<string, boolean>();
-                    qs.forEach((q: any) => {
-                      if (q && q.id) {
-                        labelById.set(String(q.id), String(q.label || q.question || q.text || q.id));
-                        perDayById.set(String(q.id), !!q.perDay);
-                      }
-                    });
-
-                    const answersGeneral = weekAnswers.general;
-                    const answersPerDay = weekAnswers.perDay;
-
-                    const qsOrdered: any[] = (qs || []).filter((q) => q && q.id && String(q.label || "").trim());
-                    const qsGeneral = qsOrdered.filter((q) => !q.perDay);
-                    const qsPerDay = qsOrdered.filter((q) => !!q.perDay);
-
-                    const hasGeneral = qsGeneral.some((q) => {
-                      const v = (answersGeneral || {})[q.id];
-                      return !(v === undefined || v === null || String(v).trim() === "");
-                    });
-                    const hasPerDay = qsPerDay.some((q) => {
-                      const per = (answersPerDay || {})[q.id] || {};
-                      return dayDefs.some((d) => {
-                        const v = (per as any)[d.key];
-                        return !(v === undefined || v === null || String(v).trim() === "");
-                      });
-                    });
-                    if (!hasGeneral && !hasPerDay) return null;
-
-                    const dayKeyToDate = new Map<string, string>();
-                    try {
-                      dayDefs.forEach((d, idx) => {
-                        const dt = addDays(weekStart, idx);
-                        dayKeyToDate.set(d.key, `${d.label} (${formatHebDate(dt)})`);
-                      });
-                    } catch {}
+                    if (!workerModalQuestionView.generalItems.length && !workerModalQuestionView.perDayItems.length) return null;
 
                     return (
                       <div className="mt-4 rounded-md border border-zinc-200 p-3 text-sm dark:border-zinc-700">
                         <div className="mb-2 font-semibold">שאלות נוספות</div>
                         <div className="space-y-2">
                           {/* Questions générales dans l'ordre de création */}
-                          {qsGeneral.map((q) => {
-                            const qid = String(q.id);
-                            const v = (answersGeneral || {})[qid];
-                            if (v === undefined || v === null || String(v).trim() === "") return null;
+                          {workerModalQuestionView.generalItems.map((item) => {
                             return (
-                              <div key={`g_${qid}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                                <div className="text-zinc-700 dark:text-zinc-200">{labelById.get(qid) || qid}</div>
+                              <div key={`g_${item.id}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                <div className="text-zinc-700 dark:text-zinc-200">{item.label}</div>
                                 <div className="font-medium text-zinc-900 dark:text-zinc-100">
-                                  {typeof v === "boolean" ? (v ? "כן" : "לא") : String(v)}
+                                  {item.value}
                                 </div>
                               </div>
                             );
                           })}
 
                           {/* Questions par jour dans l'ordre de création */}
-                          {qsPerDay.map((q) => {
-                            const qid = String(q.id);
-                            const perObj = ((answersPerDay || {})[qid] || {}) as Record<string, any>;
-                            const hasAny = dayDefs.some((d) => {
-                              const v = perObj?.[d.key];
-                              return !(v === undefined || v === null || String(v).trim() === "");
-                            });
-                            if (!hasAny) return null;
+                          {workerModalQuestionView.perDayItems.map((item) => {
                             return (
-                              <div key={`p_${qid}`} className="rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
+                              <div key={`p_${item.id}`} className="rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
                                 <div className="mb-1 font-medium text-zinc-800 dark:text-zinc-200">
-                                  {labelById.get(qid) || qid}
+                                  {item.label}
                                 </div>
                                 <div className="space-y-1">
-                                  {dayDefs.map((d) => {
-                                    const v = perObj?.[d.key];
+                                  {item.items.map((dayItem) => {
                                     return (
-                                      <div key={`${qid}_${d.key}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                      <div key={`${item.id}_${dayItem.dayKey}`} className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
                                         <div className="text-zinc-600 dark:text-zinc-300">
-                                          {dayKeyToDate.get(d.key) || d.key}
+                                          {dayItem.dayLabel}
                                         </div>
                                         <div className="font-medium text-zinc-900 dark:text-zinc-100">
-                                          {v === undefined || v === null || String(v).trim() === "" ? "—" : (typeof v === "boolean" ? (v ? "כן" : "לא") : String(v))}
+                                          {dayItem.value}
                                         </div>
                                       </div>
                                     );
@@ -4960,36 +5065,10 @@ export default function PlanningPage() {
                     {isNextWeek(weekStart) && (
                       <button
                         type="button"
-                        onClick={async () => {
-                          // Revenir à la disponibilité d'origine (celle soumise par le travailleur pour la semaine prochaine)
-                          const fallback = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-                          try {
-                            // Recharger les workers depuis l'API pour avoir les זמינות à jour
-                            const freshWorkers = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                            });
-                            const workerFromDb = freshWorkers.find((w: any) =>
-                              editingWorkerId ? Number(w.id) === Number(editingWorkerId) : w.name === newWorkerName,
-                            );
-                            const baseFromDb = workerFromDb?.availability || fallback;
-                            setNewWorkerAvailability({ ...baseFromDb });
-                            // Mettre à jour le state workers aussi
-                            const mapped = freshWorkers.map((w: any) => ({
-                              id: w.id,
-                              name: String(w.name),
-                              maxShifts: w.max_shifts ?? w.maxShifts ?? 0,
-                              roles: Array.isArray(w.roles) ? w.roles : [],
-                              availability: w.availability || fallback,
-                              answers: w.answers || {},
-                              phone: w.phone ?? null,
-                              linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
-                              linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
-                            }));
-                            setWorkers(mapped);
-                            toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
-                          } catch (err) {
-                            toast.error("שגיאה בטעינת הזמינות");
-                          }
+                        onClick={() => {
+                          const baseAvailability = originalAvailability || editingWorkerResolved?.availability || EMPTY_WORKER_AVAILABILITY;
+                          setNewWorkerAvailability({ ...baseAvailability });
+                          toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
                         }}
                         className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                       >
@@ -5020,7 +5099,7 @@ export default function PlanningPage() {
                               method: "DELETE",
                               headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             });
-                            await refreshLinkedSites();
+                            void refreshLinkedSites();
                             toast.success("העובד נמחק בהצלחה");
                             setIsAddModalOpen(false);
                             setEditingWorkerId(null);
@@ -5039,20 +5118,13 @@ export default function PlanningPage() {
                     <button
                       type="button"
                       onClick={async () => {
+                        if (workerModalSaving) return;
+                        setWorkerModalSaving(true);
                         const trimmed = newWorkerName.trim();
                         if (!trimmed) return;
                         const DUP_MSG = "שם עובד כבר קיים באתר";
                         // Utiliser la même logique que displayWorkers : vérifier uniquement dans la liste de la semaine actuelle
-                        const currentWeekWorkers: Worker[] = (savedWeekPlan?.workers || []).length
-                          ? (savedWeekPlan!.workers as any[]).map((rw: any) => ({
-                              id: rw.id,
-                              name: rw.name,
-                              maxShifts: rw.max_shifts ?? rw.maxShifts ?? 0,
-                              roles: Array.isArray(rw.roles) ? rw.roles : [],
-                              availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-                              answers: rw.answers || {},
-                            }))
-                          : workers;
+                        const currentWeekWorkers = currentWeekWorkersForEditor;
                         // Pré-vérification côté client pour éviter un aller-retour inutile
                         if (!editingWorkerId) {
                           // Vérifier d'abord dans la semaine actuelle - si présent, bloquer
@@ -5072,9 +5144,7 @@ export default function PlanningPage() {
                         }
                         try {
                           if (editingWorkerId) {
-                            // Récupérer les réponses actuelles du worker pour les préserver
-                            const currentWorker = workers.find((x) => Number(x.id) === Number(editingWorkerId));
-                            const currentAnswers = (currentWorker as any)?.answers || {};
+                            const currentWorker = editingWorkerResolved;
                             const availabilityChanged = (() => {
                               try {
                                 return JSON.stringify(originalAvailability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] })
@@ -5083,7 +5153,7 @@ export default function PlanningPage() {
                                 return true;
                               }
                             })();
-                            const linkedSiteNames = Array.isArray(currentWorker?.linkedSiteNames) ? currentWorker?.linkedSiteNames || [] : [];
+                            const linkedSiteNames: string[] = Array.isArray(currentWorker?.linkedSiteNames) ? currentWorker?.linkedSiteNames || [] : [];
                             const linkedOtherSiteNames = linkedSiteNames.filter((siteName) => String(siteName) !== String(site?.name || ""));
                             const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
                             const updated = await apiFetch<any>(`/director/sites/${params.id}/workers/${editingWorkerId}`, {
@@ -5093,8 +5163,6 @@ export default function PlanningPage() {
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
-                                // Préserver les réponses existantes (elles sont stockées par semaine dans la structure {week_key: {general: {}, perDay: {}}})
-                                answers: currentAnswers,
                                   week_iso: getWeekKeyISO(weekStart),
                                   weekly_availability: newWorkerAvailability,
                                   propagate_linked_availability: propagateLinkedAvailability,
@@ -5112,7 +5180,7 @@ export default function PlanningPage() {
                                 linkedSiteNames: Array.isArray(updated.linked_site_names) ? updated.linked_site_names : [],
                             };
                             setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
-                              await refreshLinkedSites();
+                              void refreshLinkedSites();
                             toast.success("עובד עודכן בהצלחה!");
                               try {
                                 const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
@@ -5170,12 +5238,12 @@ export default function PlanningPage() {
                             if (existingIndex >= 0) {
                               // Worker réutilisé - mettre à jour
                               setWorkers((prev) => prev.map((x) => (x.id === result.id ? mapped : x)));
-                              await refreshLinkedSites();
+                              void refreshLinkedSites();
                               toast.success("עובד עודכן בהצלחה!");
                             } else {
                               // Nouveau worker - ajouter
                             setWorkers((prev) => [...prev, mapped]);
-                              await refreshLinkedSites();
+                              void refreshLinkedSites();
                             toast.success("עובד נוסף בהצלחה!");
                             }
                           }
@@ -5195,11 +5263,14 @@ export default function PlanningPage() {
                         } catch (e: any) {
                           const msg = String(e?.message || "");
                           toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
+                        } finally {
+                          setWorkerModalSaving(false);
                         }
                       }}
-                      className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                      disabled={workerModalSaving}
+                      className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      שמור
+                      {workerModalSaving ? "שומר..." : "שמור"}
                     </button>
                   </div>
                 </div>
@@ -9147,13 +9218,16 @@ export default function PlanningPage() {
                                 const siteId = Number(params.id);
                                 const wk = isoYMD(weekStart);
                                 if (!siteId) return;
+                                const previousMessages = messages;
+                                setMessages((prev) => prev.filter((msg) => Number(msg.id) !== Number(m.id)));
                                 try {
                                   await apiFetch<string>(`/director/sites/${siteId}/messages/${m.id}?week=${encodeURIComponent(wk)}`, {
                                     method: "DELETE",
                                     headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                                   });
-                                } catch {}
-                                await refreshMessages();
+                                } catch {
+                                  setMessages(previousMessages);
+                                }
                               }}
                             >
                               <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden>
@@ -9184,7 +9258,7 @@ export default function PlanningPage() {
                                       body: JSON.stringify({ scope, week_iso: wk }),
                                     }
                                   );
-                                  setMessages(Array.isArray(res) ? res : []);
+        setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
                                 } catch {}
                               }}
                             />
@@ -9335,11 +9409,11 @@ export default function PlanningPage() {
                                   body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
                                 }
                               );
-                              setMessages(Array.isArray(res) ? res : []);
+                              setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
                               closeMessageModal();
                               return;
                             }
-                            await apiFetch<OptionalMessage>(
+                            const created = await apiFetch<OptionalMessage>(
                               `/director/sites/${siteId}/messages`,
                               {
                                 method: "POST",
@@ -9347,9 +9421,9 @@ export default function PlanningPage() {
                                 body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
                               }
                             );
+                            setMessages((prev) => sortMessagesChronologically([...prev, created]));
                           } catch {}
                           closeMessageModal();
-                          await refreshMessages();
                         }}
                       >
                         {editingMessageId ? "שמור" : "הוסף"}

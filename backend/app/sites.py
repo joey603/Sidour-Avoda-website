@@ -602,6 +602,16 @@ def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) 
     return linked_site_ids or [int(row.site_id)]
 
 
+def _linked_site_ids_by_worker_key(rows: list[SiteWorker]) -> dict[str, list[int]]:
+    key_to_site_ids: dict[str, set[int]] = {}
+    for row in rows:
+        key = _worker_identity_key(row)
+        if not key:
+            continue
+        key_to_site_ids.setdefault(key, set()).add(int(row.site_id))
+    return {key: sorted(site_ids) for key, site_ids in key_to_site_ids.items()}
+
+
 def _prefix_roles_for_combined_station(station_cfg: dict, site_id: int) -> dict:
     cloned = deepcopy(station_cfg)
 
@@ -1505,7 +1515,6 @@ def put_week_plan(
         if auto_row:
             db.delete(auto_row)
     db.commit()
-    db.refresh(row)
     return row.data or None
 
 
@@ -2076,51 +2085,78 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
-    # Récupérer tous les workers users pour trouver les numéros de téléphone
-    all_workers = db.query(User).filter(User.role == UserRole.worker).all()
-    director_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+    director_sites = db.query(Site).filter(Site.director_id == user.id).all()
+    director_site_name_by_id = {int(s.id): s.name for s in director_sites}
+    director_site_ids = [int(s.id) for s in director_sites]
+    director_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all() if director_site_ids else []
+    linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows)
+
+    user_ids = sorted({int(r.user_id) for r in rows if getattr(r, "user_id", None)})
+    users_by_id = {
+        int(u.id): u
+        for u in (
+            db.query(User)
+            .filter(User.id.in_(user_ids))
+            .all()
+            if user_ids
+            else []
+        )
+    }
+    phones = sorted({str(r.phone).strip() for r in rows if getattr(r, "phone", None)})
+    users_by_phone = {
+        str(u.phone).strip(): u
+        for u in (
+            db.query(User)
+            .filter(User.role == UserRole.worker, User.phone.in_(phones))
+            .all()
+            if phones
+            else []
+        )
+        if getattr(u, "phone", None)
+    }
+
+    unmatched_name_keys = {
+        re.sub(r"\s+", " ", str(r.name or "").strip()).lower()
+        for r in rows
+        if not getattr(r, "user_id", None) and not getattr(r, "phone", None)
+    }
+    users_by_name_key: dict[str, User] = {}
+    if unmatched_name_keys:
+        for worker_user in db.query(User).filter(User.role == UserRole.worker).all():
+            user_name_key = re.sub(r"\s+", " ", str(worker_user.full_name or "").strip()).lower()
+            if user_name_key and user_name_key in unmatched_name_keys and user_name_key not in users_by_name_key:
+                users_by_name_key[user_name_key] = worker_user
     result = []
     for r in rows:
         user_worker = None
         phone = None
-        
+
         # PRIORITÉ 1: Utiliser user_id si disponible (lien direct)
         if r.user_id:
-            user_worker = db.get(User, r.user_id)
+            user_worker = users_by_id.get(int(r.user_id))
             if user_worker:
                 phone = user_worker.phone
             else:
                 logger.warning(f"[list_workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
-        
+
         # PRIORITÉ 2: si pas de user_id mais phone présent dans SiteWorker, chercher par téléphone
         if not user_worker and r.phone:
-            user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == r.phone).first()
+            user_worker = users_by_phone.get(str(r.phone).strip())
             if user_worker:
                 phone = user_worker.phone
 
         # PRIORITÉ 3: Si pas de user_id, chercher par nom
         if not user_worker:
             worker_name_clean = re.sub(r'\s+', ' ', (r.name or "").strip()).lower()
-            for u in all_workers:
-                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
-                if user_name_clean == worker_name_clean:
-                    user_worker = u
-                    phone = u.phone
-                    break
+            user_worker = users_by_name_key.get(worker_name_clean)
+            if user_worker:
+                phone = user_worker.phone
 
         if not phone:
             phone = r.phone
-        
-        linked_site_ids = _linked_site_ids_for_worker(db, user.id, r)
+
+        linked_site_ids = linked_site_ids_by_key.get(_worker_identity_key(r), [int(r.site_id)])
         linked_site_names = [director_site_name_by_id[sid] for sid in linked_site_ids if sid in director_site_name_by_id]
-        logger.info(
-            "[list_workers] worker id=%s name=%s site_id=%s linked_site_ids=%s linked_site_names=%s",
-            r.id,
-            r.name,
-            r.site_id,
-            linked_site_ids,
-            linked_site_names,
-        )
         result.append(WorkerOut(
             id=r.id,
             site_id=r.site_id,
@@ -2299,15 +2335,17 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
     old_user_id = w.user_id
     w.name = payload.name
 
-    # Trouver le User worker "source of truth" via les anciennes infos (important quand on renomme)
+    # Trouver le User worker "source of truth" uniquement si nécessaire
+    name_changed = str(payload.name or "") != str(old_name or "")
+    needs_user_lookup = bool(old_user_id) or payload.phone is not None or name_changed
     user_worker: User | None = None
-    if old_user_id:
+    if needs_user_lookup and old_user_id:
         cand = db.get(User, old_user_id)
         if cand and cand.role == UserRole.worker:
             user_worker = cand
-    if not user_worker and old_phone:
+    if needs_user_lookup and not user_worker and old_phone:
         user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == old_phone).first()
-    if not user_worker and old_name:
+    if needs_user_lookup and not user_worker and old_name:
         user_worker = db.query(User).filter(User.role == UserRole.worker, func.lower(User.full_name) == func.lower(old_name)).first()
 
     # Mettre à jour le téléphone si fourni (et propager au User worker pour que la connexion change aussi)
@@ -2337,8 +2375,7 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
                 phone=new_phone,
             )
             db.add(user_worker)
-            db.commit()
-            db.refresh(user_worker)
+            db.flush()
 
         # Propager au user si trouvé/créé
         if user_worker:
@@ -2373,54 +2410,63 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         else:
             # Si ce n'est pas un dict ou si les réponses existantes ne sont pas un dict, remplacer complètement
             w.answers = payload.answers
+    linked_rows_for_return: list[SiteWorker] | None = None
     if payload.week_iso and isinstance(payload.weekly_availability, dict):
         wk = _validate_week_iso(payload.week_iso)
         now = _now_ms()
-
-        def upsert_weekly_availability(target_site_id: int, worker_name: str, availability_value: dict[str, list[str]]) -> None:
-            row = (
-                db.query(SiteWeeklyAvailability)
-                .filter(SiteWeeklyAvailability.site_id == target_site_id)
-                .filter(SiteWeeklyAvailability.week_iso == wk)
-                .first()
-            )
-            data = dict((row.availability or {}) if row else {})
-            data[str(worker_name)] = availability_value
-            if row:
-                row.availability = data
-                row.updated_at = now
-            else:
-                row = SiteWeeklyAvailability(site_id=target_site_id, week_iso=wk, availability=data, updated_at=now)
-                db.add(row)
-
         cleaned_weekly_availability = {
             day_key: [str(shift_name) for shift_name in shifts_list if str(shift_name or "").strip()]
             for day_key, shifts_list in (payload.weekly_availability or {}).items()
             if isinstance(shifts_list, list)
         }
-        upsert_weekly_availability(site_id, w.name, cleaned_weekly_availability)
-
+        target_rows_for_availability: list[SiteWorker] = [w]
         if payload.propagate_linked_availability:
-            linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
-            linked_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids)).all()
-            for linked_row in linked_rows:
-                if _worker_identity_key(linked_row) != _worker_identity_key(w):
-                    continue
-                upsert_weekly_availability(int(linked_row.site_id), linked_row.name, cleaned_weekly_availability)
+            if w.user_id:
+                linked_rows_for_return = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
+            else:
+                linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+                linked_rows_for_return = db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids)).all()
+            target_rows_for_availability = [
+                linked_row
+                for linked_row in linked_rows_for_return
+                if _worker_identity_key(linked_row) == _worker_identity_key(w)
+            ]
+
+        target_site_ids = sorted({int(row.site_id) for row in target_rows_for_availability}) or [int(site_id)]
+        weekly_rows = (
+            db.query(SiteWeeklyAvailability)
+            .filter(SiteWeeklyAvailability.site_id.in_(target_site_ids))
+            .filter(SiteWeeklyAvailability.week_iso == wk)
+            .all()
+        ) if target_site_ids else []
+        weekly_row_by_site_id = {int(row.site_id): row for row in weekly_rows}
+
+        for target_row in target_rows_for_availability:
+            target_site_id = int(target_row.site_id)
+            weekly_row = weekly_row_by_site_id.get(target_site_id)
+            data = dict((weekly_row.availability or {}) if weekly_row else {})
+            data[str(target_row.name)] = cleaned_weekly_availability
+            if weekly_row:
+                weekly_row.availability = data
+                weekly_row.updated_at = now
+            else:
+                weekly_row = SiteWeeklyAvailability(site_id=target_site_id, week_iso=wk, availability=data, updated_at=now)
+                db.add(weekly_row)
+                weekly_row_by_site_id[target_site_id] = weekly_row
     if w.user_id:
-        linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
-        for linked_row in linked_rows:
+        linked_rows_for_return = linked_rows_for_return or db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
+        for linked_row in linked_rows_for_return:
             linked_row.max_shifts = payload.max_shifts
     db.commit()
-    db.refresh(w)
-    phone = None
-    if w.user_id:
-        linked_user = db.get(User, w.user_id)
-        phone = linked_user.phone if linked_user else None
-    if not phone:
-        phone = w.phone
-    linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
-    linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+    phone = user_worker.phone if user_worker and getattr(user_worker, "phone", None) else w.phone
+    if linked_rows_for_return is not None:
+        linked_site_ids = sorted({int(row.site_id) for row in linked_rows_for_return}) or [int(w.site_id)]
+    else:
+        linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+    linked_site_name_by_id = {
+        int(s.id): s.name
+        for s in db.query(Site).filter(Site.director_id == user.id).all()
+    }
     return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
 
 

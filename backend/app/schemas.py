@@ -82,7 +82,13 @@ class WorkerCreate(WorkerBase):
     pass
 
 
-class WorkerUpdate(WorkerBase):
+class WorkerUpdate(BaseModel):
+    name: str
+    max_shifts: int = 5
+    roles: list[str] = []
+    availability: dict[str, list[str]] | None = None
+    answers: dict[str, Any] | None = None
+    phone: str | None = None
     week_iso: str | None = None
     weekly_availability: dict[str, list[str]] | None = None
     propagate_linked_availability: bool = False
