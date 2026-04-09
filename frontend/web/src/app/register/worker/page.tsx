@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
@@ -22,7 +23,7 @@ type WorkerInviteRegistrationOut = {
   phone: string;
 };
 
-export default function WorkerRegisterPage() {
+function WorkerRegisterPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const inviteToken = String(searchParams?.get("inviteToken") || "");
@@ -143,5 +144,19 @@ export default function WorkerRegisterPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function WorkerRegisterPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <LoadingAnimation size={80} />
+        </div>
+      }
+    >
+      <WorkerRegisterPageContent />
+    </Suspense>
   );
 }
