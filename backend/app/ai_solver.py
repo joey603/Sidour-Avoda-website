@@ -1251,7 +1251,7 @@ def solve_schedule(
                             cand = {dk: {sn: [list(lst) for lst in per_st] for sn, per_st in smap.items()} for dk, smap in assignments.items()}
                             _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
                             # forbid same-day multi-placement
-                            if name_present_same_day(cand, dkey, nm):
+                            if _name_present_same_day(cand, dkey, nm):
                                 continue
                             if not is_allowed(nm, dkey, s_to):
                                 continue
@@ -2263,7 +2263,7 @@ def solve_schedule_stream(
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
                             _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
-                            if name_present_same_day(cand, dkey, nm):
+                            if _name_present_same_day(cand, dkey, nm):
                                 continue
                             if not is_allowed(nm, dkey, s_to):
                                 continue

@@ -51,6 +51,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
               window.location.pathname.startsWith("/worker") ||
               window.location.pathname.startsWith("/login/worker") ||
               window.location.pathname.startsWith("/register/worker") ||
+              window.location.pathname.startsWith("/invite/worker") ||
               window.location.pathname.startsWith("/public/workers");
             const target = isWorkerArea
               ? `/login/worker?returnUrl=${encodeURIComponent(cur)}`

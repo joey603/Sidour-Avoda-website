@@ -39,6 +39,45 @@ class LoginRequest(BaseModel):
 class WorkerLoginRequest(BaseModel):
     code: str
     phone: str
+    invite_token: str | None = None
+
+
+class WorkerInviteLinkOut(BaseModel):
+    token: str
+    invite_path: str
+
+
+class WorkerInviteValidationOut(BaseModel):
+    site_id: int
+    site_name: str
+    director_name: str
+    director_code: str
+
+
+class WorkerInviteRegistrationPayload(BaseModel):
+    token: str
+    full_name: str = Field(min_length=2, max_length=255)
+    phone: str = Field(min_length=5, max_length=32)
+
+
+class WorkerInviteRegistrationOut(BaseModel):
+    ok: bool = True
+    already_exists: bool = False
+    site_id: int
+    site_name: str
+    director_code: str
+    phone: str
+
+
+class WorkerInviteClaimPayload(BaseModel):
+    token: str
+
+
+class WorkerInviteClaimOut(BaseModel):
+    ok: bool = True
+    created: bool = False
+    site_id: int
+    site_name: str
 
 
 class SiteCreate(BaseModel):
@@ -99,6 +138,7 @@ class WorkerOut(WorkerBase):
     site_id: int
     linked_site_ids: list[int] = []
     linked_site_names: list[str] = []
+    pending_approval: bool = False
 
 
 class WorkerContextQuestion(BaseModel):

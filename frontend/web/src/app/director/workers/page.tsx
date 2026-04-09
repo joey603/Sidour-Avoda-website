@@ -23,6 +23,22 @@ interface Site {
   workers_count: number;
 }
 
+interface GroupedWorker {
+  key: string;
+  name: string;
+  phone?: string | null;
+  entries: Worker[];
+}
+
+const SITE_BADGE_COLORS = [
+  "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300",
+  "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+  "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300",
+  "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
+  "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+  "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-300",
+];
+
 export default function WorkersList() {
   const router = useRouter();
   const [workers, setWorkers] = useState<Worker[]>([]);
@@ -37,6 +53,7 @@ export default function WorkersList() {
   const [newWorkerPhone, setNewWorkerPhone] = useState("");
   const [addingWorker, setAddingWorker] = useState(false);
 
+  const normalizePhoneDigits = (value: string | null | undefined) => String(value || "").replace(/\D/g, "");
   const normalizedNewWorkerPhone = useMemo(() => String(newWorkerPhone || "").replace(/\D/g, ""), [newWorkerPhone]);
   const isNewWorkerPhoneValid = normalizedNewWorkerPhone.length === 10;
 
@@ -81,19 +98,47 @@ export default function WorkersList() {
     const site = sites.find((s) => s.id === siteId);
     return site?.name || `אתר #${siteId}`;
   };
+  const getSiteBadgeClassName = (siteId: number): string => {
+    const normalizedId = Math.abs(Number(siteId) || 0);
+    return SITE_BADGE_COLORS[normalizedId % SITE_BADGE_COLORS.length];
+  };
 
   const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
 
+  const groupedWorkers = useMemo<GroupedWorker[]>(() => {
+    const grouped = new Map<string, GroupedWorker>();
+    (workers || []).forEach((worker) => {
+      const normalizedPhone = normalizePhoneDigits(worker.phone);
+      const key = normalizedPhone ? `phone:${normalizedPhone}` : `worker:${worker.id}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.entries.push(worker);
+        if (!existing.phone && worker.phone) existing.phone = worker.phone;
+        return;
+      }
+      grouped.set(key, {
+        key,
+        name: worker.name,
+        phone: worker.phone ?? null,
+        entries: [worker],
+      });
+    });
+    return Array.from(grouped.values()).map((group) => ({
+      ...group,
+      entries: [...group.entries].sort((a, b) => getSiteName(a.site_id).localeCompare(getSiteName(b.site_id))),
+    }));
+  }, [workers, sites]);
+
   const filteredWorkers = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
-    if (!q) return workers;
-    return (workers || []).filter((w) => {
-      const name = String(w?.name || "").toLowerCase();
-      const phone = String((w as any)?.phone || "").toLowerCase();
-      const siteName = String(getSiteName(Number(w?.site_id))).toLowerCase();
-      return name.includes(q) || phone.includes(q) || siteName.includes(q);
+    if (!q) return groupedWorkers;
+    return groupedWorkers.filter((worker) => {
+      const name = String(worker?.name || "").toLowerCase();
+      const phone = String(worker?.phone || "").toLowerCase();
+      const siteNames = worker.entries.map((entry) => String(getSiteName(Number(entry.site_id))).toLowerCase());
+      return name.includes(q) || phone.includes(q) || siteNames.some((siteName) => siteName.includes(q));
     });
-  }, [workers, query, sites]);
+  }, [groupedWorkers, query, sites]);
 
   async function handleAddWorker() {
     console.log("[handleAddWorker] Function called with:", { selectedSiteId, name: newWorkerName, phone: newWorkerPhone });
@@ -205,7 +250,7 @@ export default function WorkersList() {
         <section className="grid grid-cols-1 gap-3">
           <div className="rounded-xl border p-4 shadow-sm bg-[#E6F7FF] border-[#B3ECFF]">
             <div className="text-sm text-[#006C8A]">מספר עובדים</div>
-            <div className="mt-1 text-3xl font-bold text-[#004B63]">{workers.length}</div>
+            <div className="mt-1 text-3xl font-bold text-[#004B63]">{groupedWorkers.length}</div>
           </div>
         </section>
 
@@ -339,61 +384,81 @@ export default function WorkersList() {
               {filteredWorkers.length === 0 ? (
                 <p className="py-6 text-sm text-zinc-500">אין עובדים עדיין</p>
               ) : viewMode === "list" ? (
-                <div className="divide-y">
-                  {filteredWorkers.map((worker) => (
-                    <div key={worker.id} className="flex items-center justify-between py-3">
-                      <div className="flex flex-col gap-1 flex-1 min-w-0">
-                        <span
-                          className={"font-medium block w-full truncate text-right self-end"}
-                          dir={isRtlName(worker.name) ? "rtl" : "ltr"}
-                          title={worker.name}
-                        >
-                          {worker.name}
-                        </span>
-                        <span className="text-sm text-zinc-500">אתר: {getSiteName(worker.site_id)}</span>
-                        {worker.roles && worker.roles.length > 0 && (
-                          <span className="text-sm text-zinc-500">תפקידים: {worker.roles.join(", ")}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => {
-                            router.push(`/director/workers/${worker.id}`);
-                          }}
-                          className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                        >
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
-                          </svg>
-                          ערוך
-                        </button>
+                <div dir="rtl" className="-mx-4 max-h-[43rem] overflow-y-auto px-4 divide-y">
+                  {filteredWorkers.map((worker) => {
+                    const primaryEntry = worker.entries[0];
+                    const isRtlWorkerName = isRtlName(worker.name);
+                    return (
+                    <div key={worker.key} className="py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className={`ml-auto flex min-w-0 max-w-[70%] flex-col ${isRtlWorkerName ? "items-end" : "items-start"}`}>
+                          <span
+                            className={`block max-w-full truncate font-medium ${isRtlWorkerName ? "self-end text-right" : "self-start text-left"}`}
+                            dir={isRtlWorkerName ? "rtl" : "ltr"}
+                            title={worker.name}
+                          >
+                            {worker.name}
+                          </span>
+                          <div className={`mt-2 flex max-w-full flex-wrap items-center justify-start gap-2 ${isRtlWorkerName ? "self-end" : "self-start"}`}>
+                            {worker.entries.map((entry) => (
+                              <span
+                                key={entry.id}
+                                className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-0.5 text-xs ${getSiteBadgeClassName(entry.site_id)}`}
+                              >
+                                {getSiteName(entry.site_id)}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => {
+                              router.push(`/director/workers/${primaryEntry.id}`);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          >
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
+                            </svg>
+                            ערוך
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {filteredWorkers.map((worker) => (
-                    <div key={worker.id} className="rounded-xl border p-4 dark:border-zinc-800">
+                <div dir="rtl" className="-mx-4 grid max-h-[32rem] grid-cols-1 gap-3 overflow-y-auto px-4 md:grid-cols-2">
+                  {filteredWorkers.map((worker) => {
+                    const primaryEntry = worker.entries[0];
+                    const isRtlWorkerName = isRtlName(worker.name);
+                    return (
+                    <div key={worker.key} className="rounded-xl border p-4 dark:border-zinc-800">
                       <div className="mb-2 min-w-0">
-                        <div className="flex justify-end min-w-0">
+                        <div className={`flex min-w-0 ${isRtlWorkerName ? "justify-end" : "justify-start"}`}>
                           <span
-                            className="text-base font-semibold truncate min-w-0 w-full text-right"
-                            dir={isRtlName(worker.name) ? "rtl" : "ltr"}
+                            className={`text-base font-semibold truncate min-w-0 max-w-full ${isRtlWorkerName ? "text-right" : "text-left"}`}
+                            dir={isRtlWorkerName ? "rtl" : "ltr"}
                             title={worker.name}
                           >
                             {worker.name}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-sm text-zinc-500 text-right">{getSiteName(worker.site_id)}</div>
+                        <div className={`mt-2 flex flex-wrap items-center justify-start gap-2 ${isRtlWorkerName ? "justify-end" : "justify-start"}`}>
+                          {worker.entries.map((entry) => (
+                            <span
+                              key={entry.id}
+                              className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-1 text-xs ${getSiteBadgeClassName(entry.site_id)}`}
+                            >
+                              {getSiteName(entry.site_id)}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                      {worker.roles && worker.roles.length > 0 && (
-                        <div className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">תפקידים: {worker.roles.join(", ")}</div>
-                      )}
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => {
-                            router.push(`/director/workers/${worker.id}`);
+                            router.push(`/director/workers/${primaryEntry.id}`);
                           }}
                           className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                         >
@@ -404,7 +469,7 @@ export default function WorkersList() {
                         </button>
                       </div>
                     </div>
-                  ))}
+                  )})}
                 </div>
               )}
             </>

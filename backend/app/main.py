@@ -165,6 +165,9 @@ def create_app() -> FastAPI:
                     if "answers" not in site_worker_col_names:
                         logger.info("Ajout de la colonne answers à la table site_workers")
                         conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN answers JSON")
+                    if "pending_approval" not in site_worker_col_names:
+                        logger.info("Ajout de la colonne pending_approval à la table site_workers")
+                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN pending_approval BOOLEAN NOT NULL DEFAULT 0")
                 except Exception as e:
                     # La table n'existe peut-être pas encore
                     logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
@@ -196,6 +199,13 @@ def create_app() -> FastAPI:
                     )
                 except Exception as e:
                     logger.info(f"Migration Postgres director_auto_planning_configs ignorée ou impossible: {e}")
+                try:
+                    logger.info("Vérification de la colonne pending_approval sur site_workers")
+                    conn.exec_driver_sql(
+                        "ALTER TABLE site_workers ADD COLUMN IF NOT EXISTS pending_approval BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                except Exception as e:
+                    logger.info(f"Migration Postgres site_workers.pending_approval ignorée ou impossible: {e}")
     except Exception:
         # Safe to ignore in dev if another process handles migration
         pass

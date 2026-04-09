@@ -629,7 +629,7 @@ export default function SitesList() {
               {filteredSites.length === 0 ? (
                 <p className="py-6 text-sm text-zinc-500">אין אתרים עדיין</p>
               ) : viewMode === "list" ? (
-                <div className="divide-y">
+                <div dir="rtl" className="-mx-4 max-h-[43rem] overflow-y-auto px-4 divide-y">
                   {filteredSites.map((s) => (
                     <div key={s.id} className="flex items-center justify-between py-3">
                       <div className="flex flex-col">
@@ -727,7 +727,7 @@ export default function SitesList() {
                   ))}
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div dir="rtl" className="-mx-4 grid max-h-[32rem] grid-cols-1 gap-3 overflow-y-auto px-4 md:grid-cols-2">
                   {filteredSites.map((s) => (
                     <div key={s.id} className="rounded-xl border p-4 dark:border-zinc-800">
                       <div className="mb-2 flex items-center justify-between">

@@ -112,6 +112,7 @@ class SiteWorker(Base):
     roles: Mapped[dict] = mapped_column(JSON, default=list)  # list[str]
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}
     answers: Mapped[dict] = mapped_column(JSON, default=dict)  # {questionId: answer}
+    pending_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class SiteMessage(Base):

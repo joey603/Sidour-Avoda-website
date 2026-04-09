@@ -15,11 +15,18 @@ jest.mock("@/components/loading-animation", () => ({
 
 const replaceMock = jest.fn();
 let returnUrlMock: string | null = null;
+let inviteTokenMock: string | null = null;
+let phoneMock: string | null = null;
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock }),
   useSearchParams: () => ({
-    get: (key: string) => (key === "returnUrl" ? returnUrlMock : null),
+    get: (key: string) => {
+      if (key === "returnUrl") return returnUrlMock;
+      if (key === "inviteToken") return inviteTokenMock;
+      if (key === "phone") return phoneMock;
+      return null;
+    },
   }),
 }));
 
@@ -33,6 +40,7 @@ jest.mock("@/lib/auth", () => ({
 }));
 
 jest.mock("@/lib/api", () => ({
+  apiFetch: jest.fn(),
   apiFetchWithRetry: jest.fn(),
 }));
 
@@ -40,6 +48,8 @@ describe("worker login submit", () => {
   beforeEach(() => {
     replaceMock.mockReset();
     returnUrlMock = null;
+    inviteTokenMock = null;
+    phoneMock = null;
     jest.clearAllMocks();
   });
 
@@ -51,6 +61,7 @@ describe("worker login submit", () => {
     auth.isTokenExpired.mockReturnValue(false);
     auth.getRoleFromToken.mockReturnValue("worker");
     auth.fetchMe.mockResolvedValue(null);
+    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "346837536" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
     returnUrlMock = "/worker/history";
 
@@ -85,6 +96,7 @@ describe("worker login submit", () => {
     auth.isTokenExpired.mockReturnValue(false);
     auth.getRoleFromToken.mockReturnValue("director");
     auth.fetchMe.mockResolvedValue(null);
+    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "346837536" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "director-token" });
 
     render(<WorkerLoginPage />);
@@ -99,6 +111,40 @@ describe("worker login submit", () => {
     expect(auth.setToken).toHaveBeenCalledWith("director-token");
     expect(auth.setToken).toHaveBeenCalledWith("prev-token");
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it("includes invite token in worker login and redirects to availability", async () => {
+    const auth = require("@/lib/auth");
+    const api = require("@/lib/api");
+
+    auth.getToken.mockReturnValue(null);
+    auth.isTokenExpired.mockReturnValue(false);
+    auth.getRoleFromToken.mockReturnValue("worker");
+    auth.fetchMe.mockResolvedValue(null);
+    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "998877" });
+    api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
+    inviteTokenMock = "secure-token";
+    returnUrlMock = "/worker/availability";
+
+    render(<WorkerLoginPage />);
+
+    const user = userEvent.setup();
+    const inputs = screen.getAllByRole("textbox");
+    await user.type(inputs[1], "0585060398");
+    await user.click(screen.getByRole("button", { name: "התחבר" }));
+
+    await waitFor(() => {
+      expect(api.apiFetchWithRetry).toHaveBeenCalledWith(
+        "/auth/worker-login",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ code: "998877", phone: "0585060398", invite_token: "secure-token" }),
+        }),
+        expect.any(Object),
+      );
+    });
+
+    expect(replaceMock).toHaveBeenCalledWith("/worker/availability");
   });
 });
 

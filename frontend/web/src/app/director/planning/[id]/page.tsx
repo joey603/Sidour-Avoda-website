@@ -45,9 +45,38 @@ export default function PlanningPage() {
     const chars = Array.from(s);
     return chars.length > 10 ? chars.slice(0, 8).join("") + "…" : s;
   };
+  const copyTextWithFallback = async (value: string) => {
+    const text = String(value || "");
+    if (!text) return false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {}
+    try {
+      if (typeof document !== "undefined") {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        textarea.style.pointerEvents = "none";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (success) return true;
+      }
+    } catch {}
+    return false;
+  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [site, setSite] = useState<any>(null);
+  const [workerInviteLinkLoading, setWorkerInviteLinkLoading] = useState(false);
+  const [workerInviteLinkDialog, setWorkerInviteLinkDialog] = useState<string | null>(null);
   type WorkerAvailability = Record<string, string[]>; // key: day key (sun..sat) -> enabled shift names
   type Worker = {
     id: number;
@@ -59,6 +88,7 @@ export default function PlanningPage() {
     phone?: string | null;
     linkedSiteIds?: number[];
     linkedSiteNames?: string[];
+    pendingApproval?: boolean;
   };
   const [workers, setWorkers] = useState<Worker[]>([]);
   const workersRef = useRef<Worker[]>([]);
@@ -72,6 +102,8 @@ export default function PlanningPage() {
   // Snapshot de la disponibilité d'origine (celle fournie par le travailleur) au moment de l'édition
   const [originalAvailability, setOriginalAvailability] = useState<WorkerAvailability | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [pendingInviteWorker, setPendingInviteWorker] = useState<Worker | null>(null);
+  const [pendingInviteActionLoading, setPendingInviteActionLoading] = useState(false);
   const [isCreateUserModalOpen, setIsCreateUserModalOpen] = useState(false);
   const [isFilterWorkersModalOpen, setIsFilterWorkersModalOpen] = useState(false);
   const [newWorkerPhone, setNewWorkerPhone] = useState("");
@@ -88,6 +120,7 @@ export default function PlanningPage() {
   const [preserveLinkedAltSelection, setPreserveLinkedAltSelection] = useState(false);
   // Empêcher qu'une réponse "ancienne" (ancienne semaine) n'écrase l'état quand on navigue vite
   const loadWorkersReqIdRef = useRef(0);
+  const [workersResolvedForPage, setWorkersResolvedForPage] = useState(false);
   const loadSavedPlanReqIdRef = useRef(0);
   const savedPlanBeforeEditRef = useRef<SavedWeekPlanState | null>(null);
   const currentSiteIdRef = useRef<string>(String(params.id));
@@ -168,6 +201,27 @@ export default function PlanningPage() {
     name: string;
     assigned_count?: number;
     required_count?: number;
+  };
+  const sameLinkedSites = (left: LinkedSite[], right: LinkedSite[]) => {
+    if (left === right) return true;
+    if (left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i += 1) {
+      const a = left[i];
+      const b = right[i];
+      if (
+        a?.id !== b?.id ||
+        a?.name !== b?.name ||
+        a?.assigned_count !== b?.assigned_count ||
+        a?.required_count !== b?.required_count
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const updateLinkedSites = (next: LinkedSite[]) => {
+    const normalized = Array.isArray(next) ? next : [];
+    setLinkedSites((prev) => (sameLinkedSites(prev, normalized) ? prev : normalized));
   };
   type LinkedSitePlan = {
     site_id: number;
@@ -2998,7 +3052,7 @@ export default function PlanningPage() {
   const refreshLinkedSites = useCallback(async () => {
     const cachedLinkedSites = readSessionCache<LinkedSite[]>(multiSiteLinkedSitesCacheKey(params.id, weekStart));
     if (cachedLinkedSites) {
-      setLinkedSites(Array.isArray(cachedLinkedSites) ? cachedLinkedSites : []);
+      updateLinkedSites(Array.isArray(cachedLinkedSites) ? cachedLinkedSites : []);
     }
     try {
       const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
@@ -3006,10 +3060,10 @@ export default function PlanningPage() {
         cache: "no-store" as any,
       });
       const nextList = Array.isArray(list) ? list : [];
-      setLinkedSites(nextList);
+      updateLinkedSites(nextList);
       writeSessionCache(multiSiteLinkedSitesCacheKey(params.id, weekStart), nextList);
     } catch {
-      if (!cachedLinkedSites) setLinkedSites([]);
+      if (!cachedLinkedSites) updateLinkedSites([]);
     }
   }, [params.id, weekStart]);
 
@@ -3265,6 +3319,7 @@ export default function PlanningPage() {
         phone: w.phone ?? null,
         linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
         linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
+        pendingApproval: !!(w.pending_approval ?? w.pendingApproval),
       }));
       writeSessionCache(multiSiteWorkersCacheKey(params.id), mapped);
 
@@ -3427,6 +3482,7 @@ export default function PlanningPage() {
       // Ne pas écraser un chargement plus récent (changement de semaine rapide)
       if (reqId === loadWorkersReqIdRef.current && weekStartRef.current && weekStartRef.current.getTime() === weekKeyAtCall) {
         setWorkersLoading(false);
+        setWorkersResolvedForPage(true);
       }
     }
   }
@@ -3465,6 +3521,10 @@ export default function PlanningPage() {
   }
 
   useEffect(() => {
+    setWorkersResolvedForPage(false);
+  }, [params.id]);
+
+  useEffect(() => {
     // Changement de semaine/site: réinitialiser les états temporaires (ex: masquage optimiste après suppression)
     setHiddenWorkerIds([]);
     setDeletingId(null);
@@ -3495,6 +3555,7 @@ export default function PlanningPage() {
             phone: currentWorker?.phone ?? savedWorker.phone ?? null,
             linkedSiteIds: currentWorker?.linkedSiteIds || [],
             linkedSiteNames: currentWorker?.linkedSiteNames || [],
+            pendingApproval: !!currentWorker?.pendingApproval,
           };
         })
       : (workers || []).map((worker) => ({
@@ -3505,20 +3566,40 @@ export default function PlanningPage() {
             isNextWeekDisplay,
           ),
         }));
+    const displayedIds = new Set(baseWorkers.map((worker) => Number(worker.id)));
+    const extraWorkers = (workers || [])
+      .filter((worker) => !displayedIds.has(Number(worker.id)))
+      .map((worker) => ({
+        ...worker,
+        availability: mergeWorkerAvailability(
+          (worker.availability || EMPTY_WORKER_AVAILABILITY) as Record<string, string[]>,
+          (currentWeekly[worker.name] || {}) as Record<string, string[]>,
+          isNextWeekDisplay,
+        ),
+      }));
 
-    return baseWorkers.filter((worker) => !hiddenIds.has(worker.id));
+    return [...baseWorkers, ...extraWorkers].filter((worker) => !hiddenIds.has(worker.id));
   }, [hiddenWorkerIds, savedWeekPlan, weekStart, weeklyAvailability, workers]);
 
   function openWorkerEditor(worker: Worker) {
+    const baseWorker =
+      workers.find((existingWorker) => Number(existingWorker.id) === Number(worker.id)) ||
+      ((savedWeekPlan?.workers || []).find((savedWorker: any) => Number(savedWorker?.id) === Number(worker.id)) as any) ||
+      null;
     const nextAvailability = { ...(worker.availability || EMPTY_WORKER_AVAILABILITY) };
+    const baseAvailability = { ...(((baseWorker as any)?.availability || EMPTY_WORKER_AVAILABILITY) as WorkerAvailability) };
     setEditingWorkerId(worker.id);
     setNewWorkerName(worker.name);
     setNewWorkerPhone(worker.phone || "");
     setNewWorkerMax(worker.maxShifts);
     setNewWorkerRoles((worker.roles || []).filter((roleName) => enabledRoleNameSet.has(String(roleName || "").trim())));
-    setOriginalAvailability(nextAvailability);
+    setOriginalAvailability(baseAvailability);
     setNewWorkerAvailability(nextAvailability);
     setIsAddModalOpen(true);
+  }
+
+  function openPendingInviteApproval(worker: Worker) {
+    setPendingInviteWorker(worker);
   }
 
   const editingWorkerResolved = useMemo(() => {
@@ -3730,13 +3811,13 @@ export default function PlanningPage() {
         return;
       }
       if (isSharedGenerationRunning(start)) {
-        setSavedPlanLoading(true);
-        setSavedWeekPlan(null);
-        setEditingSaved(false);
-        setPullsByHoleKey({});
-        setPullsModeStationIdx(null);
-        setPullsEditor(null);
-        setActiveSavedPlanKey(null);
+      setSavedPlanLoading(true);
+      setSavedWeekPlan(null);
+      setEditingSaved(false);
+      setPullsByHoleKey({});
+      setPullsModeStationIdx(null);
+      setPullsEditor(null);
+      setActiveSavedPlanKey(null);
         setAiPlan(null);
         setManualAssignments(null);
         baseAssignmentsRef.current = null;
@@ -3774,29 +3855,29 @@ export default function PlanningPage() {
       ]);
       if (isStaleRequest()) return;
 
-      if (fromDirector && typeof fromDirector === "object") {
-        setActiveSavedPlanKey("db:director");
-        const pulls = (fromDirector?.pulls && typeof fromDirector.pulls === "object") ? fromDirector.pulls : undefined;
-        if (fromDirector.assignments) {
+        if (fromDirector && typeof fromDirector === "object") {
+          setActiveSavedPlanKey("db:director");
+          const pulls = (fromDirector?.pulls && typeof fromDirector.pulls === "object") ? fromDirector.pulls : undefined;
+          if (fromDirector.assignments) {
           const nextSavedPlan = { assignments: fromDirector.assignments, isManual: !!fromDirector.isManual, workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined, pulls };
           setSavedWeekPlan(nextSavedPlan);
-          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
           if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
-          return;
+            return;
+          }
         }
-      }
 
-      if (fromShared && typeof fromShared === "object") {
-        setActiveSavedPlanKey("db:shared");
-        const pulls = (fromShared?.pulls && typeof fromShared.pulls === "object") ? fromShared.pulls : undefined;
-        if (fromShared.assignments) {
+        if (fromShared && typeof fromShared === "object") {
+          setActiveSavedPlanKey("db:shared");
+          const pulls = (fromShared?.pulls && typeof fromShared.pulls === "object") ? fromShared.pulls : undefined;
+          if (fromShared.assignments) {
           const nextSavedPlan = { assignments: fromShared.assignments, isManual: !!fromShared.isManual, workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined, pulls };
           setSavedWeekPlan(nextSavedPlan);
-          if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
+            if (pulls && typeof pulls === "object") setPullsByHoleKey(pulls);
           if (shouldRestoreSavedEdit) activateSavedPlanEdit(nextSavedPlan);
-          return;
+            return;
+          }
         }
-      }
 
       if (fromAuto && typeof fromAuto === "object" && fromAuto.assignments) {
         setActiveSavedPlanKey("db:auto");
@@ -4012,6 +4093,7 @@ export default function PlanningPage() {
       phone: w.phone ?? null,
       linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
       linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
+      pendingApproval: !!(w.pending_approval ?? w.pendingApproval),
     }));
     writeSessionCache(multiSiteWorkersCacheKey(siteId), mapped);
     return buildWorkersSnapshot(mapped);
@@ -4174,6 +4256,7 @@ export default function PlanningPage() {
       phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
       linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
       linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
+      pendingApproval: !!(w.pending_approval ?? w.pendingApproval ?? existingById.get(Number(w.id))?.pendingApproval),
     }));
   }
 
@@ -4762,7 +4845,126 @@ export default function PlanningPage() {
             </div>
           </div>
         ) : null}
-        {loading ? (
+        {workerInviteLinkDialog ? (
+          <div className="fixed inset-0 z-[84] flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="space-y-2 text-center">
+                <h3 className="text-lg font-semibold">העתק את הלינק לעובד</h3>
+                <p className="text-sm text-zinc-500">
+                  אפשר להעתיק את הלינק ולשלוח אותו לעובד
+                </p>
+              </div>
+              <div className="mt-4 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm break-all dark:border-zinc-700 dark:bg-zinc-950">
+                {workerInviteLinkDialog}
+              </div>
+              <div className="mt-5 flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setWorkerInviteLinkDialog(null)}
+                  className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  סגור
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const copied = await copyTextWithFallback(workerInviteLinkDialog);
+                    if (copied) toast.success("הלינק הועתק");
+                    else toast.error("לא ניתן להעתיק את הלינק אוטומטית");
+                  }}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+                >
+                  העתק
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {pendingInviteWorker ? (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-md rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="space-y-2 text-center">
+                <h3 className="text-lg font-semibold">אישור עובד חדש</h3>
+                <p className="text-sm text-zinc-500">
+                  האם לאשר את הוספת {pendingInviteWorker.name} כעובד באתר?
+                </p>
+              </div>
+              <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                אם תאשר  העובד יהפוך לעובד רגיל באתר. אם תסרב, הוא יישאר רשום במערכת אך לא ישויך  לאתר.
+              </div>
+              <div className="mt-5 flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPendingInviteWorker(null)}
+                  disabled={pendingInviteActionLoading}
+                  className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  ביטול
+                </button>
+                <button
+                  type="button"
+                  disabled={pendingInviteActionLoading}
+                  onClick={async () => {
+                    if (!pendingInviteWorker) return;
+                    try {
+                      setPendingInviteActionLoading(true);
+                      const approved = await apiFetch<any>(`/director/sites/${params.id}/workers/${pendingInviteWorker.id}/approve-invite`, {
+                        method: "POST",
+                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                      });
+                      setWorkers((prev) => prev.map((worker) => (
+                        worker.id === pendingInviteWorker.id
+                          ? {
+                              ...worker,
+                              name: approved.name,
+                              phone: approved.phone ?? null,
+                              linkedSiteIds: Array.isArray(approved.linked_site_ids) ? approved.linked_site_ids : [],
+                              linkedSiteNames: Array.isArray(approved.linked_site_names) ? approved.linked_site_names : [],
+                              pendingApproval: false,
+                            }
+                          : worker
+                      )));
+                      setPendingInviteWorker(null);
+                      toast.success("העובד אושר ונוסף לאתר");
+                    } catch (e: any) {
+                      toast.error("אישור העובד נכשל", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                    } finally {
+                      setPendingInviteActionLoading(false);
+                    }
+                  }}
+                  className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-60"
+                >
+                  אשר הוספה
+                </button>
+                <button
+                  type="button"
+                  disabled={pendingInviteActionLoading}
+                  onClick={async () => {
+                    if (!pendingInviteWorker) return;
+                    try {
+                      setPendingInviteActionLoading(true);
+                      await apiFetch(`/director/sites/${params.id}/workers/${pendingInviteWorker.id}/reject-invite`, {
+                        method: "DELETE",
+                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                      });
+                      setWorkers((prev) => prev.filter((worker) => worker.id !== pendingInviteWorker.id));
+                      setPendingInviteWorker(null);
+                      toast.success("העובד נדחה והוסר מהאתר");
+                    } catch (e: any) {
+                      toast.error("דחיית העובד נכשלה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                    } finally {
+                      setPendingInviteActionLoading(false);
+                    }
+                  }}
+                  className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                >
+                  סרב והסר
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {loading || !workersResolvedForPage ? (
           <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
             <LoadingAnimation size={96} />
           </div>
@@ -4780,14 +4982,45 @@ export default function PlanningPage() {
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>
               <div className="text-lg font-medium">{site?.name}</div>
+              <div className="absolute top-0 left-0 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setWorkerInviteLinkLoading(true);
+                      const result = await apiFetch<{ invite_path: string }>(`/director/sites/${params.id}/worker-invite`, {
+                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                      });
+                      const absoluteUrl = typeof window !== "undefined"
+                        ? `${window.location.origin}${result.invite_path}`
+                        : result.invite_path;
+                      const copied = await copyTextWithFallback(absoluteUrl);
+                      if (copied) {
+                        toast.success("לינק ההרשמה הועתק");
+                      } else {
+                        setWorkerInviteLinkDialog(absoluteUrl);
+                      }
+                    } catch (e: any) {
+                      toast.error("לא ניתן היה ליצור לינק הזמנה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                    } finally {
+                      setWorkerInviteLinkLoading(false);
+                    }
+                  }}
+                  disabled={workerInviteLinkLoading}
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden><path d="M16 5h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3v-2h3V7h-3V5ZM8 7h8v10H8v3l-5-4 5-4v3Zm2 2v6h4V9h-4Z"/></svg>
+                  {workerInviteLinkLoading ? "מציאת לינק..." : "לינק לעובד"}
+                </button>
               <button
                 type="button"
                 onClick={() => router.push(`/director/sites/${site?.id}/edit`)}
-                className="absolute top-0 left-0 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
               >
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
                 עדכן הגדרות
               </button>
+              </div>
             </div>
 
             {/* Tableau travailleurs */}
@@ -4843,7 +5076,7 @@ export default function PlanningPage() {
                     </div>
                     </div>
                       {/* Sur mobile: pas de défilement horizontal (tout doit tenir). Sur desktop: autoriser si besoin. */}
-                      <div className="overflow-x-hidden md:overflow-x-auto">
+                      <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                         <table className="w-full table-fixed border-collapse text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
@@ -4866,8 +5099,17 @@ export default function PlanningPage() {
                             return rows.map((w) => (
                               <tr
                                 key={w.id}
-                                className="border-b last:border-0 dark:border-zinc-800 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                                onClick={() => openWorkerEditor(w)}
+                                className={
+                                  `border-b last:border-0 dark:border-zinc-800 cursor-pointer ${
+                                    w.pendingApproval
+                                      ? "bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-900/40"
+                                      : "hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                  }`
+                                }
+                                onClick={() => {
+                                  if (w.pendingApproval) openPendingInviteApproval(w);
+                                  else openWorkerEditor(w);
+                                }}
                               >
                                 <td className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 overflow-hidden">
                                   <span
@@ -4877,6 +5119,11 @@ export default function PlanningPage() {
                                   >
                                     {w.name}
                                   </span>
+                                  {w.pendingApproval && (
+                                    <span className="mt-1 inline-block rounded-full bg-blue-600/10 px-2 py-0.5 text-[9px] md:text-[10px] text-blue-700 dark:text-blue-300">
+                                      ממתין לאישור
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
@@ -4983,12 +5230,12 @@ export default function PlanningPage() {
                         let userCreated = false;
                         try {
                           // Utiliser la liste locale évite un aller-retour avant la création.
-                          const normalizePhoneDigits = (p: any) => String(p || "").replace(/\D/g, "").trim();
-                          const phoneN = normalizePhoneDigits(digitsPhone);
+                            const normalizePhoneDigits = (p: any) => String(p || "").replace(/\D/g, "").trim();
+                            const phoneN = normalizePhoneDigits(digitsPhone);
                           const alreadyOnSite = workers.some((w: any) => normalizePhoneDigits(w?.phone) === phoneN);
-                          if (alreadyOnSite) {
-                            toast.error("העובד כבר קיים באתר");
-                            return;
+                            if (alreadyOnSite) {
+                              toast.error("העובד כבר קיים באתר");
+                              return;
                           }
 
                           // Créer l'utilisateur worker
@@ -5293,7 +5540,7 @@ export default function PlanningPage() {
                         onClick={() => {
                           const baseAvailability = originalAvailability || editingWorkerResolved?.availability || EMPTY_WORKER_AVAILABILITY;
                           setNewWorkerAvailability({ ...baseAvailability });
-                          toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
+                            toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
                         }}
                         className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                       >
@@ -5403,6 +5650,7 @@ export default function PlanningPage() {
                                 phone: updated.phone ?? null,
                                 linkedSiteIds: Array.isArray(updated.linked_site_ids) ? updated.linked_site_ids : [],
                                 linkedSiteNames: Array.isArray(updated.linked_site_names) ? updated.linked_site_names : [],
+                                pendingApproval: !!(updated.pending_approval ?? updated.pendingApproval),
                             };
                             setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
                               void refreshLinkedSites();
@@ -5411,7 +5659,7 @@ export default function PlanningPage() {
                                 const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
                                 parsed[trimmed] = { ...newWorkerAvailability };
                                 void saveWeeklyAvailability(parsed);
-                                setOriginalAvailability({ ...newWorkerAvailability });
+                                setOriginalAvailability({ ...(mapped.availability || EMPTY_WORKER_AVAILABILITY) });
                               } catch {}
                               setEditingWorkerId(null);
                               setNewWorkerName("");
@@ -5457,6 +5705,7 @@ export default function PlanningPage() {
                               phone: result.phone ?? null,
                               linkedSiteIds: Array.isArray(result.linked_site_ids) ? result.linked_site_ids : [],
                               linkedSiteNames: Array.isArray(result.linked_site_names) ? result.linked_site_names : [],
+                              pendingApproval: !!(result.pending_approval ?? result.pendingApproval),
                             };
                             // Vérifier si le worker existe déjà dans la liste (réutilisé)
                             const existingIndex = workers.findIndex((w) => w.id === result.id);
@@ -5477,7 +5726,7 @@ export default function PlanningPage() {
                             const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };
                             parsed[trimmed] = { ...newWorkerAvailability };
                             void saveWeeklyAvailability(parsed);
-                            setOriginalAvailability({ ...newWorkerAvailability });
+                            setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
                           } catch {}
                           setEditingWorkerId(null);
                           setNewWorkerName("");
@@ -7189,7 +7438,7 @@ export default function PlanningPage() {
                         </div>
                         </div>
                         {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
-                        <div className="overflow-x-hidden md:overflow-x-auto">
+                        <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                           <table className="w-full border-collapse table-fixed text-[8px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
@@ -8985,7 +9234,7 @@ export default function PlanningPage() {
                             .filter(([rName]) => enabledRoleNameSet.has(rName))
                             .sort((a, b) => a[0].localeCompare(b[0]));
                           return (
-                            <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
+                            <div className="mt-4 max-h-[18rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                               <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
@@ -9079,7 +9328,7 @@ export default function PlanningPage() {
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
-                        <div className="overflow-x-hidden md:overflow-x-auto">
+                        <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                           <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
@@ -9190,7 +9439,7 @@ export default function PlanningPage() {
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
-                        <div className="overflow-x-hidden md:overflow-x-auto">
+                        <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                           <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
@@ -9297,7 +9546,7 @@ export default function PlanningPage() {
                               .filter(([rName]) => enabledRoleNameSet.has(rName))
                               .sort((a, b) => a[0].localeCompare(b[0]));
                             return (
-                              <div className="mt-4 overflow-x-hidden md:overflow-x-auto">
+                              <div className="mt-4 max-h-[18rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                                 <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
@@ -9891,7 +10140,7 @@ export default function PlanningPage() {
                               const jsonStr = frame.replace(/^data:\s*/, "");
                               const evt = JSON.parse(jsonStr);
                               if (Array.isArray(evt?.linked_sites)) {
-                                setLinkedSites(evt.linked_sites);
+                                updateLinkedSites(evt.linked_sites);
                               }
                               if (evt?.type === "base" && evt?.site_plans && typeof evt.site_plans === "object") {
                                 const current = evt.site_plans[currentSiteIdRef.current];

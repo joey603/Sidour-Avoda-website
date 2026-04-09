@@ -30,8 +30,10 @@ from .schemas import (
     SiteMessageCreate,
     SiteMessageUpdate,
     SiteMessageOut,
+    WorkerInviteLinkOut,
 )
 from .ai_solver import solve_schedule, solve_schedule_stream
+from .auth import create_worker_invite_token, ensure_director_code
 from passlib.context import CryptContext
 import logging
 import secrets
@@ -560,7 +562,11 @@ def _worker_identity_key(row: SiteWorker) -> str:
 def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int) -> list[int]:
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     site_ids = [int(s.id) for s in sites]
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
+    rows = (
+        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if not bool(getattr(row, "pending_approval", False))]
+        if site_ids
+        else []
+    )
     site_to_keys: dict[int, set[str]] = {}
     key_to_sites: dict[str, set[int]] = {}
     for row in rows:
@@ -661,7 +667,11 @@ def _build_multi_site_generation_context(
     connected_site_ids = _connected_site_ids_for_root(db, director_id, root_site_id)
     sites = db.query(Site).filter(Site.id.in_(connected_site_ids)).all() if connected_site_ids else []
     sites_by_id = {int(s.id): s for s in sites}
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all() if connected_site_ids else []
+    rows = (
+        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all() if not bool(getattr(row, "pending_approval", False))]
+        if connected_site_ids
+        else []
+    )
     weekly_rows = (
         db.query(SiteWeeklyAvailability)
         .filter(SiteWeeklyAvailability.site_id.in_(connected_site_ids))
@@ -1063,7 +1073,7 @@ def _planning_limit_error_detail_for_request(
 
 
 def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all()
+    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all() if not bool(getattr(row, "pending_approval", False))]
     weekly_row = (
         db.query(SiteWeeklyAvailability)
         .filter(SiteWeeklyAvailability.site_id == site.id)
@@ -2044,6 +2054,18 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
     return SiteOut(id=site.id, name=site.name, workers_count=workers_count, config=site.config)
 
 
+@router.get("/{site_id}/worker-invite", response_model=WorkerInviteLinkOut)
+def get_worker_invite_link(site_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    ensure_director_code(user, db)
+    db.commit()
+    db.refresh(user)
+    token = create_worker_invite_token(site_id=int(site.id), director_id=int(user.id))
+    return WorkerInviteLinkOut(token=token, invite_path=f"/invite/worker/{token}")
+
+
 @router.delete("/{site_id}", status_code=204)
 def delete_site(site_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     site: Site | None = db.get(Site, site_id)
@@ -2130,7 +2152,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
     for r in rows:
         user_worker = None
         phone = None
-
+        
         # PRIORITÉ 1: Utiliser user_id si disponible (lien direct)
         if r.user_id:
             user_worker = users_by_id.get(int(r.user_id))
@@ -2138,7 +2160,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
                 phone = user_worker.phone
             else:
                 logger.warning(f"[list_workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
-
+        
         # PRIORITÉ 2: si pas de user_id mais phone présent dans SiteWorker, chercher par téléphone
         if not user_worker and r.phone:
             user_worker = users_by_phone.get(str(r.phone).strip())
@@ -2154,7 +2176,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
 
         if not phone:
             phone = r.phone
-
+        
         linked_site_ids = linked_site_ids_by_key.get(_worker_identity_key(r), [int(r.site_id)])
         linked_site_names = [director_site_name_by_id[sid] for sid in linked_site_ids if sid in director_site_name_by_id]
         result.append(WorkerOut(
@@ -2168,6 +2190,7 @@ def list_workers(site_id: int, user: User = Depends(require_role("director")), d
             phone=phone,
             linked_site_ids=linked_site_ids,
             linked_site_names=linked_site_names,
+            pending_approval=bool(getattr(r, "pending_approval", False)),
         ))
     return result
 
@@ -2275,7 +2298,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                 phone = linked_user.phone if linked_user else None
             linked_site_ids = _linked_site_ids_for_worker(db, user.id, existing)
             linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
-            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
+            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(existing, "pending_approval", False)))
         
         # Créer un nouveau worker avec le lien au User si trouvé
         w = SiteWorker(
@@ -2286,7 +2309,8 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             roles=payload.roles or [], 
             availability=payload.availability or {},
             answers=payload.answers or {},
-            user_id=user_worker.id if user_worker else None
+            user_id=user_worker.id if user_worker else None,
+            pending_approval=False,
         )
         db.add(w)
         db.flush()
@@ -2300,7 +2324,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
         phone = user_worker.phone if user_worker else None
         linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
         linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
-        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
+        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
     except HTTPException:
         raise
     except Exception as e:
@@ -2467,7 +2491,54 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         int(s.id): s.name
         for s in db.query(Site).filter(Site.director_id == user.id).all()
     }
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id])
+    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
+
+
+@router.post("/{site_id}/workers/{worker_id}/approve-invite", response_model=WorkerOut)
+def approve_pending_worker(site_id: int, worker_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    w: SiteWorker | None = db.get(SiteWorker, worker_id)
+    if not w or w.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+    w.pending_approval = False
+    db.commit()
+    db.refresh(w)
+    phone = None
+    if w.user_id:
+        linked_user = db.get(User, w.user_id)
+        phone = linked_user.phone if linked_user else None
+    if not phone:
+        phone = w.phone
+    linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
+    linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
+    return WorkerOut(
+        id=w.id,
+        site_id=w.site_id,
+        name=w.name,
+        max_shifts=w.max_shifts,
+        roles=w.roles or [],
+        availability=w.availability or {},
+        answers=w.answers or {},
+        phone=phone,
+        linked_site_ids=linked_site_ids,
+        linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id],
+        pending_approval=False,
+    )
+
+
+@router.delete("/{site_id}/workers/{worker_id}/reject-invite", status_code=204)
+def reject_pending_worker(site_id: int, worker_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    w: SiteWorker | None = db.get(SiteWorker, worker_id)
+    if not w or w.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+    db.delete(w)
+    db.commit()
+    return None
 
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)
@@ -2816,7 +2887,7 @@ def ai_generate_planning(
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     # Load workers
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if not bool(getattr(row, "pending_approval", False))]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
     workers = []
@@ -2966,7 +3037,7 @@ async def ai_generate_stream(
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if not bool(getattr(row, "pending_approval", False))]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
     workers = []

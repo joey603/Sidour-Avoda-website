@@ -2,9 +2,28 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from .deps import get_db, get_current_user
-from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User
-from .schemas import WorkerCreate, WorkerOut, SiteMessageOut, WorkerContextOut, WorkerContextUpdatePayload
+from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User, UserRole
+from .schemas import (
+    WorkerCreate,
+    WorkerOut,
+    SiteMessageOut,
+    WorkerContextOut,
+    WorkerContextUpdatePayload,
+    WorkerInviteValidationOut,
+    WorkerInviteRegistrationPayload,
+    WorkerInviteRegistrationOut,
+    WorkerInviteClaimPayload,
+    WorkerInviteClaimOut,
+)
+from .auth import (
+    create_worker_invite_token,
+    decode_worker_invite_token,
+    ensure_director_code,
+    ensure_worker_site_membership,
+    pwd_context,
+)
 import re
+import secrets
 
 router = APIRouter(prefix="/public/sites", tags=["public-workers"])
 
@@ -20,6 +39,89 @@ def _validate_week_iso(week_iso: str) -> str:
 
 def _norm_worker_name(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _norm_phone(value: str | None) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isdigit() or ch == "+").strip()
+
+
+def _resolve_invited_site(token: str, db: Session) -> tuple[Site, User]:
+    payload = decode_worker_invite_token(token)
+    site = db.get(Site, int(payload["site_id"]))
+    if not site:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    director = db.get(User, int(payload["director_id"]))
+    if not director or director.role != UserRole.director or int(site.director_id) != int(director.id):
+        raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
+    ensure_director_code(director, db)
+    db.flush()
+    return site, director
+
+
+@router.get("/invitations/{token}", response_model=WorkerInviteValidationOut)
+def validate_worker_invitation(token: str, db: Session = Depends(get_db)):
+    site, director = _resolve_invited_site(token, db)
+    return WorkerInviteValidationOut(
+        site_id=int(site.id),
+        site_name=site.name,
+        director_name=director.full_name,
+        director_code=str(director.director_code or ""),
+    )
+
+
+@router.post("/invitations/register", response_model=WorkerInviteRegistrationOut, status_code=201)
+def register_worker_via_invitation(
+    payload: WorkerInviteRegistrationPayload = Body(...),
+    db: Session = Depends(get_db),
+):
+    site, director = _resolve_invited_site(payload.token, db)
+    normalized_phone = _norm_phone(payload.phone)
+    full_name = re.sub(r"\s+", " ", str(payload.full_name or "").strip())
+    if not normalized_phone or not full_name:
+        raise HTTPException(status_code=400, detail="Nom et téléphone requis")
+
+    existing_user = db.query(User).filter(User.phone == normalized_phone).first()
+    already_exists = False
+    if existing_user:
+        if existing_user.role != UserRole.worker:
+            raise HTTPException(status_code=400, detail="Ce numéro est déjà utilisé par un autre compte")
+        if existing_user.full_name != full_name:
+            existing_user.full_name = full_name
+        already_exists = True
+    else:
+        existing_user = User(
+            email=None,
+            full_name=full_name,
+            hashed_password=pwd_context.hash(secrets.token_urlsafe(24)),
+            role=UserRole.worker,
+            phone=normalized_phone,
+        )
+        db.add(existing_user)
+
+    db.commit()
+    return WorkerInviteRegistrationOut(
+        ok=True,
+        already_exists=already_exists,
+        site_id=int(site.id),
+        site_name=site.name,
+        director_code=str(director.director_code or ""),
+        phone=normalized_phone,
+    )
+
+
+@router.post("/invitations/claim", response_model=WorkerInviteClaimOut)
+def claim_worker_invitation(
+    payload: WorkerInviteClaimPayload = Body(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != UserRole.worker:
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+    site, _director = _resolve_invited_site(payload.token, db)
+    _row, changed = ensure_worker_site_membership(db, site, user, pending_approval=True)
+    if changed:
+        db.commit()
+    return WorkerInviteClaimOut(ok=True, created=changed, site_id=int(site.id), site_name=site.name)
 
 
 def _get_affiliated_site_workers(user: User, db: Session) -> list[SiteWorker]:
@@ -298,6 +400,7 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
             roles=[],
             availability={},
             answers={},
+            pending_approval=False,
         )
     
     # Retourner les réponses de la semaine spécifiée si week_key est fourni
@@ -337,6 +440,7 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
         roles=worker.roles or [],
         availability=worker.availability or {},
         answers=answers,
+        pending_approval=bool(getattr(worker, "pending_approval", False)),
     )
 
 
@@ -485,6 +589,7 @@ def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = 
             roles=existing.roles or [],
             availability=existing.availability or {},
             answers=return_answers,
+            pending_approval=bool(getattr(existing, "pending_approval", False)),
         )
     
     # Créer un nouveau worker
@@ -501,6 +606,7 @@ def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = 
         roles=payload.roles or [],
         availability=payload.availability or {},
         answers=initial_answers,
+        pending_approval=False,
     )
     db.add(w)
     db.commit()
@@ -518,5 +624,6 @@ def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = 
         roles=w.roles or [],
         availability=w.availability or {},
         answers=return_answers,
+        pending_approval=bool(getattr(w, "pending_approval", False)),
     )
 

@@ -37,6 +37,7 @@ export default function WorkerDetailsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [worker, setWorker] = useState<Worker | null>(null);
+  const [allWorkers, setAllWorkers] = useState<Worker[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [siteConfig, setSiteConfig] = useState<any | null>(null);
   const [weekStart, setWeekStart] = useState<Date>(() => {
@@ -62,6 +63,7 @@ export default function WorkerDetailsPage() {
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [savingIdentity, setSavingIdentity] = useState(false);
+  const normalizePhoneDigits = (value: string | null | undefined) => String(value || "").replace(/\D/g, "");
 
   function addDays(d: Date, days: number): Date {
     const n = new Date(d);
@@ -90,6 +92,7 @@ export default function WorkerDetailsPage() {
           }),
         ]);
         setSites(sitesList || []);
+        setAllWorkers(workers || []);
         // eslint-disable-next-line no-console
         console.log("[WorkerDetails] All workers from API:", workers);
         const found = (workers || []).find((w) => String(w.id) === String(params.id));
@@ -206,6 +209,24 @@ export default function WorkerDetailsPage() {
     return s?.name || `אתר #${worker.site_id}`;
   }, [sites, worker]);
 
+  const workerSiteEntries = useMemo(() => {
+    if (!worker) return [];
+    const normalizedPhone = normalizePhoneDigits(worker.phone);
+    const matches = (allWorkers || []).filter((entry) => {
+      if (normalizedPhone) return normalizePhoneDigits(entry.phone) === normalizedPhone;
+      return Number(entry.id) === Number(worker.id);
+    });
+    const uniqueBySite = new Map<number, Worker>();
+    matches.forEach((entry) => {
+      if (!uniqueBySite.has(Number(entry.site_id))) uniqueBySite.set(Number(entry.site_id), entry);
+    });
+    return Array.from(uniqueBySite.values()).sort((a, b) => {
+      return (sites.find((site) => site.id === a.site_id)?.name || "").localeCompare(
+        sites.find((site) => site.id === b.site_id)?.name || "",
+      );
+    });
+  }, [allWorkers, sites, worker]);
+
   return (
     <div className="min-h-screen p-6">
       <div className="mx-auto max-w-3xl space-y-6">
@@ -263,6 +284,26 @@ export default function WorkerDetailsPage() {
           <LoadingAnimation className="py-8" size={80} />
         ) : worker ? (
           <>
+            {workerSiteEntries.length > 1 ? (
+              <div className="rounded-xl border p-4 dark:border-zinc-800">
+                <label className="mb-2 block text-sm font-medium">בחר אתר</label>
+                <select
+                  value={worker.site_id}
+                  onChange={(e) => {
+                    const selectedEntry = workerSiteEntries.find((entry) => Number(entry.site_id) === Number(e.target.value));
+                    if (!selectedEntry || Number(selectedEntry.id) === Number(worker.id)) return;
+                    router.push(`/director/workers/${selectedEntry.id}`);
+                  }}
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800"
+                >
+                  {workerSiteEntries.map((entry) => (
+                    <option key={entry.id} value={entry.site_id}>
+                      {sites.find((site) => site.id === entry.site_id)?.name || `אתר #${entry.site_id}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             {weekPlanLoading ? (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
                 <LoadingAnimation size={96} />
