@@ -345,7 +345,10 @@ export default function WorkerAvailabilityPage() {
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
       await apiFetch(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+        },
         body: JSON.stringify({
           max_shifts: maxShifts,
           availability: availability,

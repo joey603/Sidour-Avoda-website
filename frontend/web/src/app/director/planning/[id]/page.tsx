@@ -2501,6 +2501,149 @@ export default function PlanningPage() {
     return (plan.alternative_pulls || [])[index - 1] || {};
   }
 
+  function reorderLinkedSitePlanCandidates(plan: LinkedSitePlan, orderedIndices: number[]): LinkedSitePlan {
+    const candidates = orderedIndices.map((candidateIndex) => ({
+      assignments: resolveAssignmentsForAlternative(plan, candidateIndex) || {},
+      pulls: resolvePullsForAlternative(plan, candidateIndex) || {},
+    }));
+    const [nextBaseCandidate, ...nextAlternativeCandidates] = candidates;
+    return {
+      ...plan,
+      assignments: nextBaseCandidate?.assignments || plan.assignments,
+      pulls: nextBaseCandidate?.pulls || plan.pulls || {},
+      alternatives: nextAlternativeCandidates.map((candidate) => candidate.assignments || {}),
+      alternative_pulls: nextAlternativeCandidates.map((candidate) => candidate.pulls || {}),
+    };
+  }
+
+  function collectSavedAssignmentsBySite(
+    siteIds: Array<number | string>,
+    excludedSiteId?: number | string,
+    overrides?: Record<string, AssignmentsMap | null | undefined>,
+  ): Record<string, AssignmentsMap> {
+    return Object.fromEntries(
+      siteIds.flatMap((siteId) => {
+        const siteKey = String(siteId);
+        if (excludedSiteId !== undefined && siteKey === String(excludedSiteId)) return [];
+        const overrideAssignments = overrides?.[siteKey];
+        if (overrideAssignments) return [[siteKey, overrideAssignments] as const];
+        const savedPlan = readLocalSavedPlanForSite(Number(siteId));
+        if (!savedPlan?.assignments) return [];
+        return [[siteKey, savedPlan.assignments] as const];
+      }),
+    );
+  }
+
+  function reorderLinkedPlansForFixedSite(
+    plansBySite: Record<string, LinkedSitePlan>,
+    fixedSiteId: number,
+    fixedAssignments: Record<string, Record<string, string[][]>>,
+    preferredIndex: number,
+  ): LinkedPlansMemory | null {
+    const fixedSitePlan = plansBySite[String(fixedSiteId)];
+    if (!fixedSitePlan?.assignments) return null;
+    const totalCandidates = getLinkedPlanCandidateCount(fixedSitePlan);
+    if (totalCandidates <= 1) return null;
+
+    const compatibleIndices: number[] = [];
+    const otherIndices: number[] = [];
+    for (let candidateIndex = 0; candidateIndex < totalCandidates; candidateIndex += 1) {
+      if (sameAssignmentsMap(resolveAssignmentsForAlternative(fixedSitePlan, candidateIndex), fixedAssignments)) {
+        compatibleIndices.push(candidateIndex);
+      } else {
+        otherIndices.push(candidateIndex);
+      }
+    }
+
+    if (compatibleIndices.length === 0) return null;
+
+    const preferredCompatible = compatibleIndices.includes(preferredIndex) ? preferredIndex : compatibleIndices[0];
+    const orderedIndices = [
+      preferredCompatible,
+      ...compatibleIndices.filter((candidateIndex) => candidateIndex !== preferredCompatible),
+      ...otherIndices,
+    ];
+    if (orderedIndices.every((candidateIndex, index) => candidateIndex === index)) {
+      return {
+        activeAltIndex: Math.max(0, orderedIndices.indexOf(preferredCompatible)),
+        plansBySite,
+      };
+    }
+
+    const reorderedPlansBySite = Object.fromEntries(
+      Object.entries(plansBySite).map(([siteKey, sitePlan]) => [
+        siteKey,
+        reorderLinkedSitePlanCandidates(sitePlan, orderedIndices),
+      ]),
+    ) as Record<string, LinkedSitePlan>;
+
+    return {
+      activeAltIndex: Math.max(0, orderedIndices.indexOf(preferredCompatible)),
+      plansBySite: reorderedPlansBySite,
+    };
+  }
+
+  function reorderLinkedPlansForSavedSites(
+    plansBySite: Record<string, LinkedSitePlan>,
+    fixedAssignmentsBySite: Record<string, AssignmentsMap>,
+    preferredIndex: number,
+  ): LinkedPlansMemory | null {
+    const referencePlan = Object.values(plansBySite).find((plan) => getLinkedPlanCandidateCount(plan) > 1);
+    if (!referencePlan?.assignments) return null;
+    const fixedEntries = Object.entries(fixedAssignmentsBySite).filter(
+      ([siteKey, assignments]) => !!plansBySite[siteKey]?.assignments && !!assignments,
+    );
+    if (fixedEntries.length === 0) return null;
+
+    const totalCandidates = getLinkedPlanCandidateCount(referencePlan);
+    if (totalCandidates <= 1) return null;
+
+    const candidateScores = Array.from({ length: totalCandidates }, (_, candidateIndex) => ({
+      candidateIndex,
+      score: fixedEntries.reduce((matchedCount, [siteKey, savedAssignments]) => (
+        sameAssignmentsMap(resolveAssignmentsForAlternative(plansBySite[siteKey], candidateIndex), savedAssignments)
+          ? matchedCount + 1
+          : matchedCount
+      ), 0),
+    }));
+
+    const bestScore = Math.max(...candidateScores.map(({ score }) => score), 0);
+    if (bestScore <= 0) return null;
+
+    const preferredBestIndex = candidateScores.some(
+      ({ candidateIndex, score }) => candidateIndex === preferredIndex && score === bestScore,
+    )
+      ? preferredIndex
+      : (candidateScores.find(({ score }) => score === bestScore)?.candidateIndex ?? 0);
+
+    const orderedIndices = [
+      preferredBestIndex,
+      ...candidateScores
+        .filter(({ candidateIndex, score }) => candidateIndex !== preferredBestIndex && score === bestScore)
+        .map(({ candidateIndex }) => candidateIndex),
+      ...candidateScores
+        .filter(({ score }) => score < bestScore)
+        .sort((a, b) => (b.score - a.score) || (a.candidateIndex - b.candidateIndex))
+        .map(({ candidateIndex }) => candidateIndex),
+    ];
+
+    const nextActiveAltIndex = Math.max(0, orderedIndices.indexOf(preferredBestIndex));
+    const isIdentityOrder = orderedIndices.every((candidateIndex, index) => candidateIndex === index);
+    if (isIdentityOrder && nextActiveAltIndex === preferredIndex) return null;
+
+    return {
+      activeAltIndex: nextActiveAltIndex,
+      plansBySite: isIdentityOrder
+        ? plansBySite
+        : Object.fromEntries(
+            Object.entries(plansBySite).map(([siteKey, sitePlan]) => [
+              siteKey,
+              reorderLinkedSitePlanCandidates(sitePlan, orderedIndices),
+            ]),
+          ) as Record<string, LinkedSitePlan>,
+    };
+  }
+
   function formatMultiSiteAlternativeLabel(plan: LinkedSitePlan | null | undefined, index: number) {
     const total = 1 + (Array.isArray(plan?.alternatives) ? plan.alternatives.length : 0);
     const safeIndex = Math.min(Math.max(0, Number(index || 0)), Math.max(0, total - 1));
@@ -2905,10 +3048,30 @@ export default function PlanningPage() {
   }, []);
 
   useEffect(() => {
-    const storedPlan = getStoredLinkedPlanForSite(weekStart, params.id);
+    if (!isSharedGenerationRunning(weekStart)) {
+      const persistedSavedPlan = readLocalSavedPlanForSite(Number(params.id));
+      if (persistedSavedPlan?.assignments) {
+        restoreSavedPlanState(persistedSavedPlan, "SAVED");
+        return;
+      }
+    }
+    let memoryState = readLinkedPlansFromMemory(weekStart);
+    const fixedAssignmentsBySite = collectSavedAssignmentsBySite(
+      multiSitePullsSites.map((linkedSite) => linkedSite.id),
+      Number(params.id),
+    );
+    const reorderedMemory = memoryState?.plansBySite
+      ? reorderLinkedPlansForSavedSites(memoryState.plansBySite, fixedAssignmentsBySite, Number(memoryState.activeAltIndex || 0))
+      : null;
+    if (reorderedMemory?.plansBySite) {
+      saveLinkedPlansToMemory(weekStart, reorderedMemory.plansBySite, reorderedMemory.activeAltIndex, "navigate-saved-sites-sort");
+      memoryState = reorderedMemory;
+    }
+    const currentStoredPlan = memoryState?.plansBySite?.[String(params.id)];
+    const storedPlan = currentStoredPlan?.assignments ? { storedMemory: memoryState, currentPlan: currentStoredPlan as LinkedSitePlan } : null;
     setPreserveLinkedAltSelection(false);
     if (!storedPlan) return;
-    const { stored, current } = storedPlan;
+    const { storedMemory, currentPlan } = storedPlan;
     try {
       const rawNavigationLog = sessionStorage.getItem(multiSiteNavigationLogKey(weekStart));
       if (rawNavigationLog) {
@@ -2918,17 +3081,37 @@ export default function PlanningPage() {
         }
       }
     } catch {}
-    applyLinkedSitePlan(current, stored?.activeAltIndex || 0);
-  }, [params.id, weekStart]);
+    applyLinkedSitePlan(currentPlan, storedMemory?.activeAltIndex || 0);
+  }, [params.id, weekStart, multiSitePullsSites]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const storageKey = multiSiteMemoryKey(weekStart);
     const syncFromMemory = () => {
-      const storedPlan = getStoredLinkedPlanForSite(weekStart, params.id);
+      if (!isSharedGenerationRunning(weekStart)) {
+        const persistedSavedPlan = readLocalSavedPlanForSite(Number(params.id));
+        if (persistedSavedPlan?.assignments && !editingSaved) {
+          restoreSavedPlanState(persistedSavedPlan, "SAVED");
+          return;
+        }
+      }
+      let memoryState = readLinkedPlansFromMemory(weekStart);
+      const fixedAssignmentsBySite = collectSavedAssignmentsBySite(
+        multiSitePullsSites.map((linkedSite) => linkedSite.id),
+        Number(params.id),
+      );
+      const reorderedMemory = memoryState?.plansBySite
+        ? reorderLinkedPlansForSavedSites(memoryState.plansBySite, fixedAssignmentsBySite, Number(memoryState.activeAltIndex || 0))
+        : null;
+      if (reorderedMemory?.plansBySite) {
+        saveLinkedPlansToMemory(weekStart, reorderedMemory.plansBySite, reorderedMemory.activeAltIndex, "sync-saved-sites-sort");
+        memoryState = reorderedMemory;
+      }
+      const currentStoredPlan = memoryState?.plansBySite?.[String(params.id)];
+      const storedPlan = currentStoredPlan?.assignments ? { storedMemory: memoryState, currentPlan: currentStoredPlan as LinkedSitePlan } : null;
       if (!storedPlan) return;
-      const { stored, current } = storedPlan;
-      applyLinkedSitePlan(current, stored?.activeAltIndex || 0);
+      const { storedMemory, currentPlan } = storedPlan;
+      applyLinkedSitePlan(currentPlan, storedMemory?.activeAltIndex || 0);
     };
     const onLinkedPlansUpdated = (event: Event) => {
       const customEvent = event as CustomEvent<{ storageKey?: string }>;
@@ -2939,7 +3122,7 @@ export default function PlanningPage() {
     return () => {
       window.removeEventListener("linked-plans-memory-updated", onLinkedPlansUpdated as EventListener);
     };
-  }, [params.id, weekStart]);
+  }, [params.id, weekStart, editingSaved, multiSitePullsSites]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3475,11 +3658,38 @@ export default function PlanningPage() {
       currentSiteIdRef.current !== requestSiteId ||
       getWeekKeyISO(weekStartRef.current || start) !== isoWeek;
     try {
+      const localSavedPlan = !isSharedGenerationRunning(start)
+        ? readLocalSavedPlanForSite(Number(params.id))
+        : null;
+      if (localSavedPlan?.assignments) {
+        setSavedPlanLoading(true);
+        setEditingSaved(false);
+        setPullsModeStationIdx(null);
+        setPullsEditor(null);
+        if (typeof window !== "undefined") {
+          try {
+            setActiveSavedPlanKey(localStorage.getItem(keyDirector) ? keyDirector : (localStorage.getItem(keyShared) ? keyShared : null));
+          } catch {}
+        }
+        restoreSavedPlanState(localSavedPlan, "SAVED");
+        return;
+      }
+
       // Priorité absolue au planning multi-sites gardé en mémoire, afin de conserver
       // l'alternative active et le flux visuel lorsqu'on change de site pendant ou après génération.
-      const linkedMemoryPlan = getStoredLinkedPlanForSite(start, params.id);
-      const linkedMemoryPlans = linkedMemoryPlan?.stored || null;
-      let linkedCurrentPlan = linkedMemoryPlan?.current || null;
+      let linkedMemoryPlans = readLinkedPlansFromMemory(start);
+      const fixedAssignmentsBySite = collectSavedAssignmentsBySite(
+        multiSitePullsSites.map((linkedSite) => linkedSite.id),
+        Number(params.id),
+      );
+      const reorderedMemory = linkedMemoryPlans?.plansBySite
+        ? reorderLinkedPlansForSavedSites(linkedMemoryPlans.plansBySite, fixedAssignmentsBySite, Number(linkedMemoryPlans.activeAltIndex || 0))
+        : null;
+      if (reorderedMemory?.plansBySite) {
+        saveLinkedPlansToMemory(start, reorderedMemory.plansBySite, reorderedMemory.activeAltIndex, "load-saved-sites-sort");
+        linkedMemoryPlans = reorderedMemory;
+      }
+      let linkedCurrentPlan = linkedMemoryPlans?.plansBySite?.[String(params.id)] || null;
       const linkedMemoryMaxCandidateCount = Math.max(
         0,
         ...Object.values(linkedMemoryPlans?.plansBySite || {}).map((plan) => getLinkedPlanCandidateCount(plan)),
@@ -3541,7 +3751,6 @@ export default function PlanningPage() {
       setPullsEditor(null);
       setActiveSavedPlanKey(null);
 
-      const localSavedPlan = readLocalSavedPlanForSite(Number(params.id));
       if (localSavedPlan?.assignments) {
         const nextSavedPlan = {
           assignments: localSavedPlan.assignments,
@@ -4070,17 +4279,34 @@ export default function PlanningPage() {
       );
       await persistWeekPlanForSite(Number(params.id), publishToWorkers, payload);
 
-      // Marquer le plan comme sauvegardé (pour activer le contour vert) et sortir du mode ערוך
-      setSavedWeekPlan({
+      // Basculer immédiatement l'UI en mode "plan sauvegardé".
+      restoreSavedPlanState({
         assignments: assignmentsSnapshot as Record<string, Record<string, string[][]>>,
         isManual: payload.isManual,
         workers: payload.workers,
         pulls: payload.pulls,
-      });
-      if (effectiveIsManual) {
-        setManualAssignments(assignmentsSnapshot as AssignmentsMap);
-      }
+      }, "SAVED");
       setPullsByHoleKey(pullsSnapshot);
+      const linkedMemory = readLinkedPlansFromMemory(weekStart);
+      if (linkedMemory?.plansBySite && Object.keys(linkedMemory.plansBySite).length > 1) {
+        const reorderedMemory = reorderLinkedPlansForSavedSites(
+          linkedMemory.plansBySite,
+          collectSavedAssignmentsBySite(
+            multiSitePullsSites.map((linkedSite) => linkedSite.id),
+            undefined,
+            { [String(params.id)]: assignmentsSnapshot as AssignmentsMap },
+          ),
+          Number(linkedMemory.activeAltIndex || altIndex || 0),
+        );
+        if (reorderedMemory?.plansBySite) {
+          saveLinkedPlansToMemory(
+            weekStart,
+            reorderedMemory.plansBySite,
+            reorderedMemory.activeAltIndex,
+            "save-current-site-fixed-sort",
+          );
+        }
+      }
       setEditingSaved(false);
       savedPlanBeforeEditRef.current = null;
       clearMultiSiteSavedEditState(weekStart);
@@ -4139,13 +4365,12 @@ export default function PlanningPage() {
 
       const currentSitePlan = preparedPlans.find(({ siteId }) => siteId === Number(params.id));
       if (currentSitePlan) {
-        setSavedWeekPlan({
+        restoreSavedPlanState({
           assignments: currentSitePlan.assignments as Record<string, Record<string, string[][]>>,
           isManual: currentSitePlan.payload.isManual,
           workers: currentSitePlan.payload.workers,
           pulls: currentSitePlan.payload.pulls,
-        });
-        setPullsByHoleKey(currentSitePlan.pulls || {});
+        }, "SAVED");
       }
       setEditingSaved(false);
       savedPlanBeforeEditRef.current = null;
