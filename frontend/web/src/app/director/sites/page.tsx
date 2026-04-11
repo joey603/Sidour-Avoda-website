@@ -723,9 +723,9 @@ export default function SitesList() {
                                   className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
                                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                                    <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                                   </svg>
-                                  עדכן
+                                  צפה
                                 </button>
                                 {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                                   <>
@@ -756,9 +756,9 @@ export default function SitesList() {
                             className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           >
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                              <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                             </svg>
-                            עדכן
+                            צפה
                           </button>
                         )}
                         <button
@@ -851,9 +851,9 @@ export default function SitesList() {
                                   className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
                                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                                    <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                                   </svg>
-                                  עדכן
+                                  צפה
                                 </button>
                                 {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                                   <>
@@ -884,9 +884,9 @@ export default function SitesList() {
                             className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           >
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                              <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
                             </svg>
-                            עדכן
+                            צפה
                           </button>
                         )}
                         <button

@@ -5146,7 +5146,7 @@ export default function PlanningPage() {
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>
               <div className="text-lg font-medium">{site?.name}</div>
-              <div className="absolute top-0 left-0 flex items-center gap-2">
+              <div className="absolute top-0 left-0 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={async () => {
@@ -5171,19 +5171,23 @@ export default function PlanningPage() {
                     }
                   }}
                   disabled={workerInviteLinkLoading}
-                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300 bg-gradient-to-b from-sky-50 to-sky-100/80 px-3 py-2 text-sm font-medium text-sky-900 shadow-sm transition hover:border-sky-400 hover:from-sky-100 hover:to-sky-100 disabled:opacity-60 dark:border-sky-700 dark:from-sky-950/50 dark:to-sky-950/30 dark:text-sky-100 dark:hover:border-sky-600 dark:hover:from-sky-900/60"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden><path d="M16 5h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3v-2h3V7h-3V5ZM8 7h8v10H8v3l-5-4 5-4v3Zm2 2v6h4V9h-4Z"/></svg>
+                  <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+                    <path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z" />
+                  </svg>
                   {workerInviteLinkLoading ? "מציאת לינק..." : "לינק לעובד"}
                 </button>
-              <button
-                type="button"
-                onClick={() => router.push(`/director/sites/${site?.id}/edit`)}
-                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/></svg>
-                עדכן הגדרות
-              </button>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/director/sites/${site?.id}/edit`)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0 text-zinc-600 dark:text-zinc-400" fill="currentColor" aria-hidden>
+                    <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.07.63-.07.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+                  </svg>
+                  הגדרות
+                </button>
               </div>
             </div>
 
