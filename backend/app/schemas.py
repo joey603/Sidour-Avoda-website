@@ -100,6 +100,7 @@ class SiteOut(BaseModel):
     id: int
     name: str
     workers_count: int
+    pending_workers_count: int = 0
     config: dict | None = None
     next_week_saved_plan_status: NextWeekSavedPlanStatus | None = None
 

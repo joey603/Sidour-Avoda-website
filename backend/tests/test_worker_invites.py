@@ -216,3 +216,50 @@ def test_pending_workers_are_excluded_from_planning_generation(client):
     )
     assert planning_resp.status_code == 200, planning_resp.text
     assert planning_resp.json()["status"] == "NO_WORKERS"
+
+
+def test_pending_invited_workers_only_appear_from_registration_week(client, db_session):
+    register_director_resp = register_user(
+        client,
+        email="director.weekfilter@example.com",
+        full_name="Director Week Filter",
+        password="password123",
+        role="director",
+    )
+    director_code = register_director_resp.json()["director_code"]
+    director_login_resp = login_director(client, email="director.weekfilter@example.com", password="password123")
+    director_token = director_login_resp.json()["access_token"]
+    site_resp = create_site(client, director_token, "Week Filter Site")
+    site_id = site_resp.json()["id"]
+    invite_token = client.get(f"/director/sites/{site_id}/worker-invite", headers=auth_headers(director_token)).json()["token"]
+
+    client.post(
+        "/public/sites/invitations/register",
+        json={"token": invite_token, "full_name": "Week Pending", "phone": "0502224444"},
+    )
+    login_resp = client.post(
+        "/auth/worker-login",
+        json={"code": director_code, "phone": "0502224444", "invite_token": invite_token},
+    )
+    assert login_resp.status_code == 200, login_resp.text
+
+    pending_user = db_session.query(User).filter(User.phone == "0502224444").first()
+    pending_row = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.user_id == pending_user.id).first()
+    assert pending_row is not None
+    pending_row.created_at = 1744286400000  # 2025-04-10T12:00:00Z -> week 2025-04-06
+    db_session.commit()
+
+    previous_week_resp = client.get(
+        f"/director/sites/{site_id}/workers?week=2025-03-30",
+        headers=auth_headers(director_token),
+    )
+    assert previous_week_resp.status_code == 200, previous_week_resp.text
+    assert previous_week_resp.json() == []
+
+    registration_week_resp = client.get(
+        f"/director/sites/{site_id}/workers?week=2025-04-06",
+        headers=auth_headers(director_token),
+    )
+    assert registration_week_resp.status_code == 200, registration_week_resp.text
+    assert len(registration_week_resp.json()) == 1
+    assert registration_week_resp.json()[0]["pending_approval"] is True

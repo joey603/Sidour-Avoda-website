@@ -11,6 +11,7 @@ interface Site {
   id: number;
   name: string;
   workers_count: number;
+  pending_workers_count?: number;
   next_week_saved_plan_status?: {
     exists?: boolean;
     week_iso?: string | null;
@@ -154,6 +155,7 @@ export default function SitesList() {
     auto_pulls_enabled: false,
     auto_save_mode: "manual" as "manual" | "director" | "shared",
   });
+  const autoPlanningControlsDisabled = !autoPlanningForm.enabled;
 
   useEffect(() => {
     if (openActionsSiteId === null) return;
@@ -499,12 +501,12 @@ export default function SitesList() {
               <button
                 type="button"
                 onClick={openAutoPlanningModal}
-                className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
+                className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
                 תכנון אוטומטי 
               </button>
-              <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+              <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white shadow-sm hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                 הוסף אתר
               </button>
@@ -519,12 +521,12 @@ export default function SitesList() {
                 <button
                   type="button"
                   onClick={openAutoPlanningModal}
-                  className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
+                  className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm shadow-sm ${autoPlanningConfig?.enabled ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200" : "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200"}`}
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
                   אוטומטי
                 </button>
-                <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+                <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white shadow-sm hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                   הוסף אתר
                 </button>
@@ -550,7 +552,7 @@ export default function SitesList() {
               />
             </div>
             <div className="flex items-center justify-start">
-              <div className="inline-flex rounded-md border dark:border-zinc-700 overflow-hidden">
+              <div className="inline-flex rounded-md border shadow-sm dark:border-zinc-700 overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setViewMode("list")}
@@ -574,11 +576,21 @@ export default function SitesList() {
               </div>
             </div>
             <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300">
-              <div className="flex flex-col gap-1">
-                <span className="inline-flex items-center gap-2">
-                  <span>תכנון אוטומטי: {autoPlanningSummary.scheduleLabel}</span>
-                  {scheduledAutoPlanningRunning ? <span className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-300"><span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />מריץ תכנון...</span> : null}
-                </span>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-2">
+                    <span>תכנון אוטומטי: {autoPlanningSummary.scheduleLabel}</span>
+                    {scheduledAutoPlanningRunning ? <span className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-300"><span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />מריץ תכנון...</span> : null}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onTestAutoPlanningNow}
+                    disabled={autoPlanningTesting || autoPlanningSaving || autoPlanningControlsDisabled}
+                    className="rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs text-amber-800 shadow-sm hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+                  >
+                    {autoPlanningTesting ? "מריץ..." : "הרץ ידנית"}
+                  </button>
+                </div>
                 {autoPlanningSummary.weekLabel ? <span className="text-center">{autoPlanningSummary.weekLabel}</span> : null}
               </div>
             </div>
@@ -586,7 +598,7 @@ export default function SitesList() {
 
           {/* Desktop: boutons de vue (séparés) */}
           <div className="mb-4 hidden md:flex items-center justify-start">
-            <div className="inline-flex rounded-md border dark:border-zinc-700 overflow-hidden">
+            <div className="inline-flex rounded-md border shadow-sm dark:border-zinc-700 overflow-hidden">
               <button
                 type="button"
                 onClick={() => setViewMode("list")}
@@ -618,7 +630,14 @@ export default function SitesList() {
             </div>
             {autoPlanningSummary.weekLabel ? <div className="justify-self-center text-center whitespace-nowrap">{autoPlanningSummary.weekLabel}</div> : <div />}
             <div className="justify-self-end text-left">
-              {autoPlanningConfig?.last_run_week_iso ? <span>ריצה אחרונה לשבוע: {autoPlanningConfig.last_run_week_iso}</span> : <span>עדיין לא בוצעה ריצה</span>}
+              <button
+                type="button"
+                onClick={onTestAutoPlanningNow}
+                disabled={autoPlanningTesting || autoPlanningSaving || autoPlanningControlsDisabled}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 shadow-sm hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+              >
+                {autoPlanningTesting ? "מריץ..." : "הרץ ידנית"}
+              </button>
             </div>
           </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
@@ -634,7 +653,14 @@ export default function SitesList() {
                     <div key={s.id} className="flex items-center justify-between py-3">
                       <div className="flex flex-col">
                         <span className="font-medium">{s.name}</span>
-                        <span className="text-sm text-zinc-500">מספר עובדים: {s.workers_count}</span>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-zinc-500">
+                          <span>מספר עובדים: {s.workers_count}</span>
+                          {(s.pending_workers_count ?? 0) > 0 ? (
+                            <span className="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              {s.pending_workers_count} ממתין לאישור
+                            </span>
+                          ) : null}
+                        </div>
                         {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s) ? (
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             <span
@@ -669,7 +695,7 @@ export default function SitesList() {
                         ) : null}
                       </div>
                       <div className="flex items-center gap-2">
-                        {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                        {showAutoPlanningSiteStatuses ? (
                           <div
                             className="relative"
                             ref={openActionsSiteId === s.id ? actionsMenuRef : null}
@@ -677,45 +703,68 @@ export default function SitesList() {
                             <button
                               type="button"
                               onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
-                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1 text-sm text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50"
+                              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                              aria-expanded={openActionsSiteId === s.id}
+                              aria-haspopup="menu"
                             >
+                              <svg className="h-3.5 w-3.5 shrink-0 text-zinc-600 dark:text-zinc-700" viewBox="0 0 12 12" fill="currentColor" aria-hidden>
+                                <path d="M6 8L1 3h10L6 8z" />
+                              </svg>
                               פעולות
                             </button>
                             {openActionsSiteId === s.id ? (
-                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[160px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                                 <button
                                   type="button"
-                                  onClick={() => void onPromoteAutoPlan(s, false)}
-                                  disabled={autoPlanAction.siteId === s.id}
-                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                  onClick={() => {
+                                    setOpenActionsSiteId(null);
+                                    router.push(`/director/planning/${s.id}`);
+                                  }}
+                                  className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
-                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                                  </svg>
+                                  עדכן
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void onPromoteAutoPlan(s, true)}
-                                  disabled={autoPlanAction.siteId === s.id}
-                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
-                                >
-                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
-                                </button>
+                                {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void onPromoteAutoPlan(s, false)}
+                                      disabled={autoPlanAction.siteId === s.id}
+                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                    >
+                                      {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void onPromoteAutoPlan(s, true)}
+                                      disabled={autoPlanAction.siteId === s.id}
+                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                    >
+                                      {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
+                                    </button>
+                                  </>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
-                        ) : null}
-                        <button
-                          onClick={() => router.push(`/director/planning/${s.id}`)}
-                          className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                        >
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41ל-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
-                          </svg>
-                          עדכן
-                        </button>
+                        ) : (
+                          <button
+                            onClick={() => router.push(`/director/planning/${s.id}`)}
+                            className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          >
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                            </svg>
+                            עדכן
+                          </button>
+                        )}
                         <button
                           onClick={() => onDelete(s.id)}
                           disabled={deletingId === s.id}
-                          className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
+                          className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                             <path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/>
@@ -732,7 +781,14 @@ export default function SitesList() {
                     <div key={s.id} className="rounded-xl border p-4 dark:border-zinc-800">
                       <div className="mb-2 flex items-center justify-between">
                         <span className="text-base font-semibold">{s.name}</span>
-                        <span className="text-sm text-zinc-500">{s.workers_count} עובדים</span>
+                        <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-zinc-500">
+                          <span>{s.workers_count} עובדים</span>
+                          {(s.pending_workers_count ?? 0) > 0 ? (
+                            <span className="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              {s.pending_workers_count} ממתין לאישור
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s) ? (
                         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -767,7 +823,7 @@ export default function SitesList() {
                         </div>
                       ) : null}
                       <div className="flex items-center gap-2">
-                        {showAutoPlanningSiteStatuses && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                        {showAutoPlanningSiteStatuses ? (
                           <div
                             className="relative"
                             ref={openActionsSiteId === s.id ? actionsMenuRef : null}
@@ -775,45 +831,68 @@ export default function SitesList() {
                             <button
                               type="button"
                               onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
-                              className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1 text-sm text-amber-800 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/50"
+                              className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                              aria-expanded={openActionsSiteId === s.id}
+                              aria-haspopup="menu"
                             >
+                              <svg className="h-3.5 w-3.5 shrink-0 text-zinc-600 dark:text-zinc-700" viewBox="0 0 12 12" fill="currentColor" aria-hidden>
+                                <path d="M6 8L1 3h10L6 8z" />
+                              </svg>
                               פעולות
                             </button>
                             {openActionsSiteId === s.id ? (
-                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[160px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                                 <button
                                   type="button"
-                                  onClick={() => void onPromoteAutoPlan(s, false)}
-                                  disabled={autoPlanAction.siteId === s.id}
-                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                  onClick={() => {
+                                    setOpenActionsSiteId(null);
+                                    router.push(`/director/planning/${s.id}`);
+                                  }}
+                                  className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
-                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                                  </svg>
+                                  עדכן
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void onPromoteAutoPlan(s, true)}
-                                  disabled={autoPlanAction.siteId === s.id}
-                                  className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
-                                >
-                                  {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
-                                </button>
+                                {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void onPromoteAutoPlan(s, false)}
+                                      disabled={autoPlanAction.siteId === s.id}
+                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                    >
+                                      {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void onPromoteAutoPlan(s, true)}
+                                      disabled={autoPlanAction.siteId === s.id}
+                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                    >
+                                      {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
+                                    </button>
+                                  </>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
-                        ) : null}
-                        <button
-                          onClick={() => router.push(`/director/planning/${s.id}`)}
-                          className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                        >
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
-                          </svg>
-                          עדכן
-                        </button>
+                        ) : (
+                          <button
+                            onClick={() => router.push(`/director/planning/${s.id}`)}
+                            className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          >
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                            </svg>
+                            עדכן
+                          </button>
+                        )}
                         <button
                           onClick={() => onDelete(s.id)}
                           disabled={deletingId === s.id}
-                          className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
+                          className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                             <path d="M6 7h12v2H6Zm2 4h8l-1 9H9ZM9 4h6v2H9Z"/>
@@ -844,7 +923,7 @@ export default function SitesList() {
                 <button
                   type="button"
                   onClick={() => setAutoPlanningModalOpen(false)}
-                  className="rounded-md border px-2 py-1 text-sm dark:border-zinc-700"
+                  className="rounded-md border bg-white px-2 py-1 text-sm shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   סגור
                 </button>
@@ -863,7 +942,11 @@ export default function SitesList() {
                   className="h-5 w-5 accent-sky-600"
                 />
               </label>
-              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+              <label
+                className={`flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 transition-opacity dark:border-zinc-800 ${
+                  autoPlanningControlsDisabled ? "opacity-50" : ""
+                }`}
+              >
                 <div className="space-y-1">
                   <div className="text-sm font-medium">משיכה</div>
                   <div className="text-xs text-zinc-500">אם יש חורים, המערכת תנסה להוסיף משיכות אוטומטיות לכל האתרים.</div>
@@ -872,17 +955,18 @@ export default function SitesList() {
                   type="checkbox"
                   checked={autoPlanningForm.auto_pulls_enabled}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, auto_pulls_enabled: e.target.checked }))}
+                  disabled={autoPlanningControlsDisabled}
                   className="h-5 w-5 accent-orange-500"
                 />
               </label>
-              <div className="space-y-2">
+              <div className={`space-y-2 transition-opacity ${autoPlanningControlsDisabled ? "pointer-events-none opacity-50" : ""}`}>
                 <div className="text-sm font-medium">אופן שמירה אוטומטית</div>
                 <div className="space-y-2">
                   {AUTO_PLANNING_SAVE_MODE_OPTIONS.map((option) => (
                     <label
                       key={option.value}
                       className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition-colors ${
-                        autoPlanningForm.auto_save_mode === option.value
+                        !autoPlanningControlsDisabled && autoPlanningForm.auto_save_mode === option.value
                           ? "border-sky-300 bg-sky-50 dark:border-sky-700 dark:bg-sky-950/30"
                           : "border-zinc-200 dark:border-zinc-800"
                       }`}
@@ -893,6 +977,7 @@ export default function SitesList() {
                         value={option.value}
                         checked={autoPlanningForm.auto_save_mode === option.value}
                         onChange={() => setAutoPlanningForm((prev) => ({ ...prev, auto_save_mode: option.value }))}
+                        disabled={autoPlanningControlsDisabled}
                         className="mt-1 h-4 w-4 accent-sky-600"
                       />
                       <div className="space-y-1">
@@ -906,11 +991,12 @@ export default function SitesList() {
                   שומר אוטומטית רק אם האתר מלא. אם נשארו חוסרים, התכנון נשאר ידני ברשימת האתרים.
                 </div>
               </div>
-              <label className="block space-y-1">
+              <label className={`block space-y-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
                 <span className="text-sm font-medium">יום הפעלה</span>
                 <select
                   value={autoPlanningForm.day_of_week}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, day_of_week: Number(e.target.value) }))}
+                  disabled={autoPlanningControlsDisabled}
                   className="h-10 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   {AUTO_PLANNING_DAY_OPTIONS.map((option) => (
@@ -918,7 +1004,7 @@ export default function SitesList() {
                   ))}
                 </select>
               </label>
-              <label className="block space-y-1">
+              <label className={`block space-y-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
                 <span className="text-sm font-medium">שעת הפעלה</span>
                 <input
                   type="time"
@@ -926,6 +1012,7 @@ export default function SitesList() {
                   dir="ltr"
                   value={autoPlanningForm.time}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, time: e.target.value }))}
+                  disabled={autoPlanningControlsDisabled}
                   className="h-10 w-full rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
@@ -942,17 +1029,9 @@ export default function SitesList() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={onTestAutoPlanningNow}
-                  disabled={autoPlanningTesting || autoPlanningSaving}
-                  className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
-                >
-                  {autoPlanningTesting ? "מריץ..." : "הרץ ידנית"}
-                </button>
-                <button
-                  type="button"
                   onClick={() => setAutoPlanningModalOpen(false)}
                   disabled={autoPlanningTesting || autoPlanningSaving}
-                  className="rounded-md border px-3 py-2 text-sm disabled:opacity-60 dark:border-zinc-700"
+                  className="rounded-md border bg-white px-3 py-2 text-sm shadow-sm disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   ביטול
                 </button>
@@ -960,7 +1039,7 @@ export default function SitesList() {
                   type="button"
                   onClick={onSaveAutoPlanning}
                   disabled={autoPlanningSaving || autoPlanningTesting}
-                  className="rounded-md bg-sky-600 px-3 py-2 text-sm text-white hover:bg-sky-700 disabled:opacity-60"
+                  className="rounded-md bg-sky-600 px-3 py-2 text-sm text-white shadow-sm hover:bg-sky-700 disabled:opacity-60"
                 >
                   {autoPlanningSaving ? "שומר..." : "שמור"}
                 </button>

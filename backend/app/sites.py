@@ -69,6 +69,19 @@ def _next_week_iso(dt: datetime) -> str:
     return (_week_start_date(dt) + timedelta(days=7)).date().isoformat()
 
 
+def _site_worker_visible_for_week(row: SiteWorker, week_iso: str | None) -> bool:
+    wk = (week_iso or "").strip()
+    if not wk:
+        return True
+    if not bool(getattr(row, "pending_approval", False)):
+        return True
+    created_at = int(getattr(row, "created_at", 0) or 0)
+    if created_at <= 0:
+        return True
+    created_week_iso = _week_start_date(datetime.fromtimestamp(created_at / 1000)).date().isoformat()
+    return created_week_iso <= wk
+
+
 def _schedule_run_time_for_current_week(now: datetime, day_of_week: int, hour: int, minute: int) -> datetime:
     return _week_start_date(now) + timedelta(days=int(day_of_week), hours=int(hour), minutes=int(minute))
 
@@ -1897,6 +1910,15 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         .all()
     )
     counts = {r.site_id: int(r.workers_count or 0) for r in counts_rows}
+    pending_counts_rows = (
+        db.query(SiteWorker.site_id, func.count(SiteWorker.id).label("pending_workers_count"))
+        .join(Site, Site.id == SiteWorker.site_id)
+        .filter(Site.director_id == user.id)
+        .filter(SiteWorker.pending_approval == True)
+        .group_by(SiteWorker.site_id)
+        .all()
+    )
+    pending_counts = {r.site_id: int(r.pending_workers_count or 0) for r in pending_counts_rows}
     next_week_iso = _next_week_iso(datetime.now())
     plan_rows = (
         db.query(SiteWeekPlan)
@@ -1914,6 +1936,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
             id=s.id,
             name=s.name,
             workers_count=counts.get(s.id, 0),
+            pending_workers_count=pending_counts.get(s.id, 0),
             config=s.config,
             next_week_saved_plan_status=_build_next_week_saved_plan_status(
                 s,
@@ -1935,6 +1958,7 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
         id=site.id,
         name=site.name,
         workers_count=0,
+        pending_workers_count=0,
         config=site.config,
         next_week_saved_plan_status=NextWeekSavedPlanStatus(
             exists=False,
@@ -2051,7 +2075,8 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
-    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, config=site.config)
+    pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
+    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, pending_workers_count=pending_workers_count, config=site.config)
 
 
 @router.get("/{site_id}/worker-invite", response_model=WorkerInviteLinkOut)
@@ -2098,19 +2123,30 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
     db.commit()
     db.refresh(site)
     workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
-    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, config=site.config)
+    pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
+    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, pending_workers_count=pending_workers_count, config=site.config)
 
 
 @router.get("/{site_id}/workers", response_model=list[WorkerOut])
-def list_workers(site_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+def list_workers(
+    site_id: int,
+    week: str | None = Query(None, description="YYYY-MM-DD (week start)"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+    wk = _validate_week_iso(week) if week else None
+    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if _site_worker_visible_for_week(row, wk)]
     director_sites = db.query(Site).filter(Site.director_id == user.id).all()
     director_site_name_by_id = {int(s.id): s.name for s in director_sites}
     director_site_ids = [int(s.id) for s in director_sites]
-    director_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all() if director_site_ids else []
+    director_rows = (
+        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all() if _site_worker_visible_for_week(row, wk)]
+        if director_site_ids
+        else []
+    )
     linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows)
 
     user_ids = sorted({int(r.user_id) for r in rows if getattr(r, "user_id", None)})

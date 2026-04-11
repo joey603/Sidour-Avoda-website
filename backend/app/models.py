@@ -113,6 +113,7 @@ class SiteWorker(Base):
     availability: Mapped[dict] = mapped_column(JSON, default=dict)  # {dayKey: [shiftName]}
     answers: Mapped[dict] = mapped_column(JSON, default=dict)  # {questionId: answer}
     pending_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
 class SiteMessage(Base):

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import re
 import secrets
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
@@ -115,6 +116,7 @@ def ensure_worker_site_membership(
     *,
     pending_approval: bool = False,
 ) -> tuple[SiteWorker, bool]:
+    now_ms = int(time.time() * 1000)
     normalized_phone = _normalize_phone(user.phone)
     normalized_name = _normalize_name(user.full_name)
 
@@ -157,6 +159,7 @@ def ensure_worker_site_membership(
         availability={},
         answers={},
         pending_approval=pending_approval,
+        created_at=now_ms,
     )
     db.add(created)
     db.flush()
