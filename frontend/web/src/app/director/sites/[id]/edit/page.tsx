@@ -133,7 +133,13 @@ export default function EditSitePage() {
     }
   }
 
-  if (initialLoading) return <div className="p-6 text-center"><LoadingAnimation size={80} /></div>;
+  if (initialLoading) {
+    return (
+      <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+        <LoadingAnimation size={96} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen p-6">

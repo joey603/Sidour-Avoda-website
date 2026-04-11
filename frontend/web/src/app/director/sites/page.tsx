@@ -642,7 +642,7 @@ export default function SitesList() {
           </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
           {loading ? (
-            <LoadingAnimation className="py-8" size={60} />
+            <LoadingAnimation className="py-8" size={96} />
           ) : (
             <>
               {filteredSites.length === 0 ? (

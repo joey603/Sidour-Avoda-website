@@ -378,7 +378,7 @@ export default function WorkersList() {
           </div>
           {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
           {loading ? (
-            <LoadingAnimation className="py-8" size={60} />
+            <LoadingAnimation className="py-8" size={96} />
           ) : (
             <>
               {filteredWorkers.length === 0 ? (
