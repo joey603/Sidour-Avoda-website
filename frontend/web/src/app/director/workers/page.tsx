@@ -281,8 +281,9 @@ export default function WorkersList() {
             </div>
             <div className="justify-self-end flex items-center gap-2">
               <button
+                type="button"
                 onClick={() => setIsAddModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 shadow-sm hover:bg-green-100 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200 dark:hover:bg-green-900/50"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
                   <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/>
@@ -297,8 +298,9 @@ export default function WorkersList() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">רשימת עובדים</h2>
               <button
+                type="button"
                 onClick={() => setIsAddModalOpen(true)}
-                className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 shadow-sm hover:bg-green-100 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200 dark:hover:bg-green-900/50"
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
                   <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/>

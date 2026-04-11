@@ -506,7 +506,11 @@ export default function SitesList() {
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
                 תכנון אוטומטי 
               </button>
-              <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white shadow-sm hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+              <button
+                type="button"
+                onClick={onAddClick}
+                className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 shadow-sm hover:bg-green-100 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200 dark:hover:bg-green-900/50"
+              >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                 הוסף אתר
               </button>
@@ -526,7 +530,11 @@ export default function SitesList() {
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M12 2a1 1 0 0 1 1 1v1.07A7.002 7.002 0 0 1 19.93 11H21a1 1 0 1 1 0 2h-1.07A7.002 7.002 0 0 1 13 19.93V21a1 1 0 1 1-2 0v-1.07A7.002 7.002 0 0 1 4.07 13H3a1 1 0 1 1 0-2h1.07A7.002 7.002 0 0 1 11 4.07V3a1 1 0 0 1 1-1Zm0 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm.75 1.5a.75.75 0 0 1 .75.75v3.19l2.03 1.21a.75.75 0 1 1-.76 1.3l-2.39-1.43A.75.75 0 0 1 12 11.88V8.25a.75.75 0 0 1 .75-.75Z"/></svg>
                   אוטומטי
                 </button>
-                <button onClick={onAddClick} className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white shadow-sm hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600">
+                <button
+                  type="button"
+                  onClick={onAddClick}
+                  className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 shadow-sm hover:bg-green-100 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200 dark:hover:bg-green-900/50"
+                >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
                   הוסף אתר
                 </button>
