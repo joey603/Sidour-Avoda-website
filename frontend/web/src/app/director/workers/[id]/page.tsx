@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment } from "react";
 import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import LoadingAnimation from "@/components/loading-animation";
+import { toast } from "sonner";
 
 interface Worker {
   id: number;
@@ -57,12 +58,14 @@ export default function WorkerDetailsPage() {
     pulls?: Record<string, { before: { name: string; start: string; end: string }; after: { name: string; start: string; end: string } }>;
   }>(null);
   const [weekPlanLoading, setWeekPlanLoading] = useState(false);
+  const weekPlanFetchGenRef = useRef(0);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState<Date>(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [editName, setEditName] = useState("");
   const [editPhone, setEditPhone] = useState("");
   const [savingIdentity, setSavingIdentity] = useState(false);
+  const [deletingWorker, setDeletingWorker] = useState(false);
   const normalizePhoneDigits = (value: string | null | undefined) => String(value || "").replace(/\D/g, "");
 
   function addDays(d: Date, days: number): Date {
@@ -111,31 +114,38 @@ export default function WorkerDetailsPage() {
   }, [params.id, router]);
 
   useEffect(() => {
+    if (!worker) return;
+
+    const gen = ++weekPlanFetchGenRef.current;
+    // Loader et reset du plan tout de suite, avant tout await (évite la latence au changement de semaine)
+    setWeekPlan(null);
+    setWeekPlanLoading(true);
+
     (async () => {
-      if (!worker) return;
       try {
         const site = await apiFetch<any>(`/director/sites/${worker.site_id}`, {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
         });
+        if (gen !== weekPlanFetchGenRef.current) return;
         setSiteConfig(site?.config || null);
       } catch {
+        if (gen !== weekPlanFetchGenRef.current) return;
         setSiteConfig(null);
       }
-      // Load published plan (DB) for this site + current week (fallback localStorage)
+
       const start = new Date(weekStart);
       const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
       const key = `plan_${worker.site_id}_${iso(start)}`;
+
       try {
-        // reset before fetching to avoid showing previous week's plan
-        setWeekPlan(null);
-        setWeekPlanLoading(true);
         try {
           const wk = iso(start);
           const fromApi = await apiFetch<any>(`/public/sites/${worker.site_id}/week-plan?week=${encodeURIComponent(wk)}`, {
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           });
+          if (gen !== weekPlanFetchGenRef.current) return;
           if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
             try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
             setWeekPlan({
@@ -147,7 +157,7 @@ export default function WorkerDetailsPage() {
             return;
           }
         } catch {}
-        // Fallback localStorage
+        if (gen !== weekPlanFetchGenRef.current) return;
         const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
         if (raw) {
           const parsed = JSON.parse(raw);
@@ -161,11 +171,15 @@ export default function WorkerDetailsPage() {
             return;
           }
         }
+        if (gen !== weekPlanFetchGenRef.current) return;
         setWeekPlan(null);
       } catch {
+        if (gen !== weekPlanFetchGenRef.current) return;
         setWeekPlan(null);
       } finally {
+        if (gen === weekPlanFetchGenRef.current) {
         setWeekPlanLoading(false);
+        }
       }
     })();
   }, [worker, weekStart]);
@@ -227,56 +241,75 @@ export default function WorkerDetailsPage() {
     });
   }, [allWorkers, sites, worker]);
 
-  return (
-    <div className="min-h-screen p-6">
-      <div className="mx-auto max-w-3xl space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">עריכת עובד</h1>
-          <div className="flex-1 flex items-center justify-center gap-2">
+  const weekRangeLabel = useMemo(() => {
+    const end = addDays(weekStart, 6);
+    return `${formatHebDate(weekStart)} — ${formatHebDate(end)}`;
+  }, [weekStart]);
+
+  const backButton = (
+    <button
+      type="button"
+      onClick={() => router.back()}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+      aria-label="חזרה"
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+        <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+      </svg>
+      חזרה
+    </button>
+  );
+
+  const weekNavRow = (
+    <>
             <button
+        type="button"
               onClick={() => setWeekStart((prev) => addDays(prev, +7))}
-              className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
               aria-label="שבוע הבא"
               title="שבוע הבא"
             >
               →
             </button>
-            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-              {(() => {
-                const end = addDays(weekStart, 6);
-                return `${formatHebDate(weekStart)} — ${formatHebDate(end)}`;
-              })()}
+      <span className="min-w-0 shrink text-center text-xs font-medium text-zinc-700 whitespace-nowrap sm:text-sm dark:text-zinc-200">
+        {weekRangeLabel}
             </span>
             <button
+        type="button"
               onClick={() => setWeekStart((prev) => addDays(prev, -7))}
-              className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
               aria-label="שבוע קודם"
               title="שבוע קודם"
             >
               ←
             </button>
             <button
+        type="button"
               onClick={() => setIsCalendarOpen(true)}
-              className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
               aria-label="בחר שבוע מלוח שנה"
               title="בחר שבוע מלוח שנה"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
-                <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
-                <path d="M7 14h5v5H7z"/>
+          <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
+          <path d="M7 14h5v5H7z" />
               </svg>
             </button>
+    </>
+  );
+
+  return (
+    <div className="min-h-screen p-6">
+      <div className="mx-auto w-full max-w-4xl space-y-6">
+        {/* Titre + retour sur une ligne ; date et navigation semaine sur la ligne suivante (tous écrans) */}
+        <div className="flex flex-col gap-3">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <h1 className="min-w-0 truncate text-xl font-semibold">עריכת עובד</h1>
+            {backButton}
           </div>
-          <button
-            onClick={() => router.back()}
-            className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            aria-label="חזרה"
-          >
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-              <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-            </svg>
-            חזרה
-          </button>
+          <div className="flex min-w-0 w-full items-center justify-center gap-2 px-1 sm:gap-2 sm:px-2">
+            {weekNavRow}
+          </div>
         </div>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
@@ -305,7 +338,7 @@ export default function WorkerDetailsPage() {
               </div>
             ) : null}
             {weekPlanLoading ? (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+              <div className="fixed inset-0 z-50 flex min-h-screen-mobile w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
                 <LoadingAnimation size={96} />
               </div>
             ) : null}
@@ -453,78 +486,100 @@ export default function WorkerDetailsPage() {
                 </div>
               </div>
             )}
+            <div
+              className="w-full rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.08)] dark:border-zinc-700 dark:bg-zinc-950/70 dark:shadow-[0_4px_24px_-4px_rgba(0,0,0,0.45)] sm:p-6 md:p-7"
+            >
             <div className="space-y-6">
-            <section className="rounded-xl border p-4 dark:border-zinc-800">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <div>
-                  <div className="text-sm text-zinc-500">שם עובד</div>
-                  <div className="flex items-center gap-2">
+            <section
+              dir="rtl"
+              className="overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50/80 dark:border-zinc-800 dark:bg-zinc-900/40"
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
+                <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">פרטי עובד</h2>
+                {!isEditingIdentity ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingIdentity(true);
+                      setEditName(effectiveWorker?.name || "");
+                      setEditPhone(effectiveWorker?.phone || "");
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#B3ECFF] bg-white/95 px-3 py-1.5 text-sm font-medium text-[#006C8A] shadow-sm hover:bg-white dark:border-cyan-700 dark:bg-cyan-900/60 dark:text-cyan-100 dark:hover:bg-cyan-900/80"
+                    aria-label="ערוך פרטי עובד"
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z" />
+                    </svg>
+                    עריכה
+                  </button>
+                ) : (
+                  <span className="text-xs font-medium text-[#006C8A]/90 dark:text-cyan-200/90">מצב עריכה</span>
+                )}
+              </div>
+
+              <div className="space-y-0 divide-y divide-zinc-200/90 dark:divide-zinc-800">
+                {/* שם — שורה מלאה */}
+                <div className="bg-white px-4 py-4 dark:bg-zinc-950/30">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">שם עובד</div>
+                  <div className="mt-1.5 min-h-[2rem]">
                     {isEditingIdentity ? (
                       <input
                         value={editName}
                         onChange={(e) => setEditName(e.target.value)}
-                        className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                        className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-base focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-600 dark:bg-zinc-900"
                       />
                     ) : (
-                  <div className="text-base font-medium">{effectiveWorker?.name}</div>
+                      <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{effectiveWorker?.name}</p>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingIdentity(true);
-                        setEditName(effectiveWorker?.name || "");
-                        setEditPhone(effectiveWorker?.phone || "");
-                      }}
-                      className="inline-flex items-center rounded-md border px-2 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                      aria-label="ערוך שם עובד"
-                      title="ערוך"
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
-                      </svg>
-                    </button>
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm text-zinc-500">אתר</div>
-                  <div className="text-base font-medium">{siteName}</div>
+
+                {/* אתר | טלפון — שתי עמודות */}
+                <div className="grid grid-cols-1 gap-0 sm:grid-cols-2 sm:divide-x sm:divide-zinc-200/90 dark:sm:divide-zinc-800">
+                  <div className="bg-white px-4 py-4 dark:bg-zinc-950/30">
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">אתר</div>
+                    <p className="mt-1.5 text-base font-medium text-zinc-900 dark:text-zinc-100">{siteName}</p>
                 </div>
-                <div>
-                  <div className="text-sm text-zinc-500">מספר טלפון</div>
-                  <div className="flex items-center gap-2">
+                  <div className="bg-white px-4 py-4 dark:bg-zinc-950/30">
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">מספר טלפון</div>
+                    <div className="mt-1.5">
                     {isEditingIdentity ? (
                       <input
                         value={editPhone}
                         onChange={(e) => setEditPhone(e.target.value)}
-                        className="h-9 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                      />
-                    ) : (
-                  <div className="text-base font-medium">{effectiveWorker?.phone || "—"}</div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingIdentity(true);
-                        setEditName(effectiveWorker?.name || "");
-                        setEditPhone(effectiveWorker?.phone || "");
-                      }}
-                      className="inline-flex items-center rounded-md border px-2 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                      aria-label="ערוך מספר טלפון"
-                      title="ערוך"
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
-                      </svg>
-                    </button>
+                          dir="ltr"
+                          className="h-10 w-full rounded-lg border border-zinc-300 bg-white px-3 text-base focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-600 dark:bg-zinc-900"
+                        />
+                      ) : (
+                        <p className="text-base font-medium tabular-nums text-zinc-900 dark:text-zinc-100" dir="ltr">
+                          {effectiveWorker?.phone || "—"}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm text-zinc-500">תפקידים</div>
-                  <div className="text-base font-medium">{effectiveWorker?.roles && effectiveWorker.roles.length ? effectiveWorker.roles.join(", ") : "—"}</div>
+
+                {/* תפקידים — שורה מלאה, תגיות */}
+                <div className="bg-white px-4 py-4 dark:bg-zinc-950/30">
+                  <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">תפקידים</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {effectiveWorker?.roles && effectiveWorker.roles.length ? (
+                      effectiveWorker.roles.map((role) => (
+                        <span
+                          key={role}
+                          className="inline-flex items-center rounded-full border border-[#00A8E0]/35 bg-[#00A8E0]/10 px-3 py-1 text-sm font-medium text-[#006a8a] dark:border-[#00A8E0]/40 dark:bg-[#00A8E0]/15 dark:text-[#7dd3ea]"
+                        >
+                          {role}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-sm text-zinc-400">—</span>
+                    )}
+                  </div>
                 </div>
               </div>
               {isEditingIdentity && (
-                <div className="mt-4 flex items-center justify-end gap-2">
+                <div className="flex items-center justify-end gap-2 border-t border-zinc-200/90 bg-zinc-50/90 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/50">
                   <button
                     type="button"
                     onClick={() => {
@@ -532,7 +587,7 @@ export default function WorkerDetailsPage() {
                       setEditName(worker?.name || "");
                       setEditPhone(worker?.phone || "");
                     }}
-                    className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    className="rounded-lg border border-zinc-300 px-4 py-2 text-sm hover:bg-white dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     disabled={savingIdentity}
                   >
                     ביטול
@@ -572,27 +627,89 @@ export default function WorkerDetailsPage() {
                   </button>
                 </div>
               )}
+              <div className="border-t border-zinc-200/90 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950/30">
+                <button
+                  type="button"
+                  disabled={!worker || isEditingIdentity || deletingWorker}
+                  onClick={async () => {
+                    if (!worker) return;
+                    const confirmed = window.confirm(
+                      `למחוק את ${worker.name} מהאתר? ההסרה תחול מהשבוע הנוכחי והלאה; שבועות קודמים נשארים בתכנון השמור.`,
+                    );
+                    if (!confirmed) return;
+                    setDeletingWorker(true);
+                    try {
+                      await apiFetch(`/director/sites/${worker.site_id}/workers/${worker.id}`, {
+                        method: "DELETE",
+                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                      });
+                      toast.success("העובד הוסר מהאתר");
+                      router.push("/director/workers");
+                    } catch (e: any) {
+                      toast.error("שגיאה במחיקה", { description: String(e?.message || "נסה שוב מאוחר יותר.") });
+                    } finally {
+                      setDeletingWorker(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-800 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200 dark:hover:bg-red-950/70"
+                >
+                  {deletingWorker ? (
+                    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent dark:border-red-300" />
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                      <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                    </svg>
+                  )}
+                  מחק עובד
+                </button>
+              </div>
             </section>
 
             {/* Grille hebdomadaire avec surlignage du travailleur */}
-            <section className="rounded-xl border p-4 dark:border-zinc-800">
-              <h2 className="mb-3 text-lg font-semibold">שיבוצים לשבוע הנוכחי</h2>
+            <section
+              dir="rtl"
+              className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/60"
+            >
+              <div className="border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
+                <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">שיבוצים לשבוע הנוכחי</h2>
+                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">לפי התכנון השמור לאתר לשבוע שנבחר למעלה</p>
+              </div>
               {!siteConfig || !weekPlan ? (
-                <p className="text-sm text-zinc-500">אין נתוני תכנון שמורים לשבוע זה.</p>
+                <div className="bg-white px-4 py-8 text-center dark:bg-zinc-950/60">
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">אין נתוני תכנון שמורים לשבוע זה.</p>
+                </div>
               ) : (
+                <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
+                  {(siteConfig?.stations || []).map((st: any, stationIndex: number) => (
+                    <div
+                      key={stationIndex}
+                      className="overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950/40"
+                    >
+                      <div className="border-b border-[#00A8E0]/25 bg-gradient-to-l from-[#00A8E0]/12 to-transparent px-4 py-2.5 dark:from-[#00A8E0]/20 dark:to-transparent">
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          {st?.name || `עמדה ${stationIndex + 1}`}
+                        </span>
+                      </div>
                 <div className="overflow-x-auto">
-                  <div className="min-w-[720px] space-y-3">
-                    {(siteConfig?.stations || []).map((st: any, stationIndex: number) => (
-                      <div key={stationIndex} className="rounded-md border p-3 dark:border-zinc-700">
-                        <div className="mb-2 font-medium">{st?.name || `עמדה ${stationIndex+1}`}</div>
-                        <div className="grid grid-cols-8 gap-2">
-                          <div />
-                          {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => (
-                            <div key={dk} className="text-center text-xs text-zinc-500">{dayLabels[dk]}</div>
+                        <div className="min-w-[720px] p-3">
+                          <div className="grid grid-cols-8 gap-px overflow-hidden rounded-lg border border-zinc-200 bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-700">
+                            <div className="min-h-[2.75rem] bg-zinc-100 dark:bg-zinc-900/90" />
+                            {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((dk) => (
+                              <div
+                                key={dk}
+                                className={
+                                  "flex min-h-[2.75rem] items-center justify-center bg-zinc-100 px-1 py-2 text-center text-[11px] font-semibold leading-tight text-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-200 sm:text-xs " +
+                                  (dk === "sun" || dk === "sat" ? "bg-amber-50/90 text-amber-950 dark:bg-amber-950/35 dark:text-amber-100" : "")
+                                }
+                              >
+                                {dayLabels[dk]}
+                              </div>
                           ))}
                           {(st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any, sIdx: number) => (
                             <Fragment key={`row-${stationIndex}-${sIdx}`}>
-                              <div className="text-xs font-medium flex items-center">{sh?.name}</div>
+                              <div className="flex min-h-[3.25rem] items-center bg-zinc-50 px-2 py-2 text-xs font-semibold text-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 sm:text-[13px]">
+                                {sh?.name}
+                              </div>
                               {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => {
                                 const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
                                 const pulls = (weekPlan as any)?.pulls || {};
@@ -608,8 +725,11 @@ export default function WorkerDetailsPage() {
                                   <div
                                     key={`cell-${stationIndex}-${sIdx}-${dk}`}
                                     className={
-                                      "rounded-md border p-1 min-h-10 dark:border-zinc-700 " +
-                                      (cleanNames.length === 0 ? "bg-zinc-100 dark:bg-zinc-900/40" : "")
+                                      "min-h-[3.25rem] bg-white p-1.5 dark:bg-zinc-950/50 " +
+                                      (dk === "sun" || dk === "sat" ? "bg-amber-50/40 dark:bg-amber-950/15 " : "") +
+                                      (cleanNames.length === 0
+                                        ? "border border-dashed border-zinc-200 dark:border-zinc-700"
+                                        : "border border-zinc-100 dark:border-zinc-800")
                                     }
                                   >
                                     <div className="flex flex-col gap-1">
@@ -619,7 +739,7 @@ export default function WorkerDetailsPage() {
                                           return (
                                             <span
                                               key={`empty-${slotIdx}`}
-                                              className="inline-flex h-6 items-center justify-center rounded-full border px-2 text-xs text-zinc-500 bg-white dark:bg-zinc-900 dark:border-zinc-700"
+                                              className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md border border-dashed border-zinc-200 bg-zinc-50/80 px-2 text-[11px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-900/60"
                                             >
                                               —
                                             </span>
@@ -645,10 +765,10 @@ export default function WorkerDetailsPage() {
                                           <span
                                             key={`nm-${nm}-${slotIdx}`}
                                             className={
-                                              "group relative text-xs inline-flex flex-col items-center rounded px-1 " +
+                                              "group relative inline-flex min-h-[1.75rem] w-full flex-col items-stretch justify-center rounded-md px-1.5 py-1 text-xs shadow-sm " +
                                               (isTargetWorker
-                                                ? "bg-green-500 text-white "
-                                                : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 ") +
+                                                ? "bg-emerald-600 text-white ring-1 ring-emerald-700/30 "
+                                                : "border border-zinc-200 bg-white text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 ") +
                                               ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
                                             }
                                           >
@@ -671,9 +791,9 @@ export default function WorkerDetailsPage() {
                                             >
                                               <span
                                                 className={
-                                                  "inline-flex flex-col items-center rounded px-2 py-1 shadow-lg " +
+                                                  "inline-flex flex-col items-center rounded-md px-2 py-1 shadow-lg " +
                                                   (isTargetWorker
-                                                    ? "bg-green-500 text-white "
+                                                    ? "bg-emerald-600 text-white "
                                                     : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
                                                   ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
                                                 }
@@ -706,51 +826,83 @@ export default function WorkerDetailsPage() {
                           ))}
                         </div>
                       </div>
-                    ))}
+                    </div>
                   </div>
+                ))}
                 </div>
               )}
             </section>
 
-            {/* Tableau des demandes */}
-            <section className="rounded-xl border p-4 dark:border-zinc-800">
-              <h2 className="mb-3 text-lg font-semibold">בקשות העובד</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr className="border-b dark:border-zinc-800">
-                      <th className="px-2 py-2 text-right">שם</th>
-                      <th className="px-2 py-2 text-right">מקס' משמרות</th>
-                      <th className="px-2 py-2 text-right">תפקידים</th>
-                      <th className="px-2 py-2 text-right">זמינות</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b dark:border-zinc-800">
-                      <td className="px-2 py-2">{effectiveWorker?.name}</td>
-                      <td className="px-2 py-2">{effectiveWorker?.max_shifts}</td>
-                      <td className="px-2 py-2">{effectiveWorker?.roles?.length ? effectiveWorker.roles.join(", ") : "—"}</td>
-                      <td className="px-2 py-2">
-                        {Object.keys(dayLabels).map((dk) => (
-                          <span key={dk} className="inline-flex items-center gap-1 mr-2 mb-1">
-                            <span className="text-xs text-zinc-500">{dayLabels[dk]}:</span>
-                            <span className="text-xs">{(effectiveWorker?.availability?.[dk] || []).join(" | ") || "—"}</span>
+            {/* Synthèse disponibilité / fiche travailleur */}
+            <section
+              dir="rtl"
+              className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/60"
+            >
+              <div className="border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
+                <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">בקשות העובד</h2>
+                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">נתונים מהגדרת העובד במערכת (לא לפי שבוע)</p>
+              </div>
+              <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">שם</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{effectiveWorker?.name}</div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">מקס&apos; משמרות</div>
+                    <div className="mt-1 text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
+                      {effectiveWorker?.max_shifts ?? "—"}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50 sm:col-span-1">
+                    <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">תפקידים</div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {effectiveWorker?.roles?.length ? (
+                        effectiveWorker.roles.map((role) => (
+                          <span
+                            key={role}
+                            className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
+                          >
+                            {role}
                           </span>
-                        ))}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                        ))
+                      ) : (
+                        <span className="text-sm text-zinc-400">—</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-[#004B63] dark:text-cyan-100">זמינות לפי יום</div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                    {Object.keys(dayLabels).map((dk) => {
+                      const slots = (effectiveWorker?.availability?.[dk] || []) as string[];
+                      const has = slots.length > 0;
+                      return (
+                        <div
+                          key={dk}
+                          className="rounded-lg border border-zinc-200/90 bg-white px-2.5 py-2 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-950/50"
+                        >
+                          <div className="font-semibold text-[#004B63] dark:text-cyan-100">{dayLabels[dk]}</div>
+                          <div
+                            className={
+                              "mt-1.5 min-h-[1.25rem] text-[11px] leading-snug " +
+                              (has
+                                ? "font-medium text-[#006C8A] dark:text-cyan-200"
+                                : "text-[#006C8A]/55 dark:text-cyan-300/70")
+                            }
+                          >
+                            {has ? slots.join(" · ") : "—"}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </section>
 
-            <div className="flex items-center justify-end gap-2">
-              <button
-                onClick={() => router.push(`/director/sites/${worker.site_id}/edit`)}
-                className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                ערוך באתר
-              </button>
             </div>
             </div>
           </>

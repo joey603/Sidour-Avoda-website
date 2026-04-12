@@ -171,6 +171,9 @@ def create_app() -> FastAPI:
                     if "created_at" not in site_worker_col_names:
                         logger.info("Ajout de la colonne created_at à la table site_workers")
                         conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0")
+                    if "removed_from_week_iso" not in site_worker_col_names:
+                        logger.info("Ajout de la colonne removed_from_week_iso à la table site_workers")
+                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN removed_from_week_iso VARCHAR(10)")
                 except Exception as e:
                     # La table n'existe peut-être pas encore
                     logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
@@ -216,6 +219,13 @@ def create_app() -> FastAPI:
                     )
                 except Exception as e:
                     logger.info(f"Migration Postgres site_workers.created_at ignorée ou impossible: {e}")
+                try:
+                    logger.info("Vérification de la colonne removed_from_week_iso sur site_workers")
+                    conn.exec_driver_sql(
+                        "ALTER TABLE site_workers ADD COLUMN IF NOT EXISTS removed_from_week_iso VARCHAR(10)"
+                    )
+                except Exception as e:
+                    logger.info(f"Migration Postgres site_workers.removed_from_week_iso ignorée ou impossible: {e}")
     except Exception:
         # Safe to ignore in dev if another process handles migration
         pass

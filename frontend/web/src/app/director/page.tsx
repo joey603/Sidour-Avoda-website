@@ -40,7 +40,7 @@ export default function DirectorDashboard() {
 
   if (loading) {
     return (
-      <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+      <div className="fixed inset-0 z-50 flex min-h-screen-mobile w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
         <LoadingAnimation size={96} />
       </div>
     );

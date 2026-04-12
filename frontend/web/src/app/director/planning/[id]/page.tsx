@@ -31,6 +31,40 @@ const EMPTY_WORKER_AVAILABILITY = {
   sat: [],
 };
 
+const AVAILABILITY_DAY_KEYS = Object.keys(EMPTY_WORKER_AVAILABILITY) as Array<keyof typeof EMPTY_WORKER_AVAILABILITY>;
+
+/** Copie profonde des créneaux par jour (évite les références partagées). */
+function cloneWorkerAvailability(
+  av: Record<string, string[]> | null | undefined,
+): Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]> {
+  const base = av || EMPTY_WORKER_AVAILABILITY;
+  const out = {} as Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]>;
+  for (const k of AVAILABILITY_DAY_KEYS) {
+    out[k] = [...(base[k] || [])];
+  }
+  return out;
+}
+
+/** Vrai seulement si la grille jour / משמרת a changé (pas nom, rôles, max_shifts). */
+function isAvailabilityDayShiftChanged(
+  before: Record<string, string[]> | null | undefined,
+  after: Record<string, string[]> | null | undefined,
+) {
+  try {
+    const norm = (x: Record<string, string[]> | null | undefined) => {
+      const b = x || EMPTY_WORKER_AVAILABILITY;
+      const o: Record<string, string[]> = {};
+      for (const k of AVAILABILITY_DAY_KEYS) {
+        o[k] = [...(b[k] || [])].map(String).sort();
+      }
+      return JSON.stringify(o);
+    };
+    return norm(before) !== norm(after);
+  } catch {
+    return true;
+  }
+}
+
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -3676,6 +3710,10 @@ export default function PlanningPage() {
       setIsExistingWorkerModalOpen(false);
       setExistingWorkerQuery("");
       await loadExistingWorkersCatalog();
+      try {
+        sessionStorage.removeItem(multiSiteLinkedSitesCacheKey(params.id, weekStart));
+      } catch {}
+      void refreshLinkedSites();
       toast.success("העובד נוסף לאתר");
     } catch (e: any) {
       toast.error("שגיאה בהוספת עובד קיים", { description: String(e?.message || "") || undefined });
@@ -3746,18 +3784,15 @@ export default function PlanningPage() {
   }, [hiddenWorkerIds, savedWeekPlan, weekStart, weeklyAvailability, workers]);
 
   function openWorkerEditor(worker: Worker) {
-    const baseWorker =
-      workers.find((existingWorker) => Number(existingWorker.id) === Number(worker.id)) ||
-      ((savedWeekPlan?.workers || []).find((savedWorker: any) => Number(savedWorker?.id) === Number(worker.id)) as any) ||
-      null;
-    const nextAvailability = { ...(worker.availability || EMPTY_WORKER_AVAILABILITY) };
-    const baseAvailability = { ...(((baseWorker as any)?.availability || EMPTY_WORKER_AVAILABILITY) as WorkerAvailability) };
+    // Même base que la ligne du tableau (merge hebdo / saved plan) : indispensable pour ne pas
+    // déclencher la pop-up « sites liés » quand seuls nom / rôles changent.
+    const nextAvailability = cloneWorkerAvailability(worker.availability);
     setEditingWorkerId(worker.id);
     setNewWorkerName(worker.name);
     setNewWorkerPhone(worker.phone || "");
     setNewWorkerMax(worker.maxShifts);
     setNewWorkerRoles((worker.roles || []).filter((roleName) => enabledRoleNameSet.has(String(roleName || "").trim())));
-    setOriginalAvailability(baseAvailability);
+    setOriginalAvailability(cloneWorkerAvailability(nextAvailability));
     setNewWorkerAvailability(nextAvailability);
     setIsAddModalOpen(true);
   }
@@ -4884,7 +4919,7 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40 [&_button]:touch-manipulation [&_button]:select-none [&_button]:transition-[transform,filter,opacity] [&_button]:duration-75 [&_button]:active:scale-[0.98] [&_button]:active:brightness-95">
+    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40 [&_button]:shadow-sm [&_button]:touch-manipulation [&_button]:select-none [&_button]:transition-[transform,filter,opacity] [&_button]:duration-75 [&_button]:active:scale-[0.98] [&_button]:active:brightness-95">
       <div
         className={
           "mx-auto w-full max-w-none space-y-6 rounded-xl " +
@@ -5129,7 +5164,7 @@ export default function PlanningPage() {
           </div>
         ) : null}
         {loading || !workersResolvedForPage ? (
-          <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex min-h-screen-mobile w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
             <LoadingAnimation size={96} />
           </div>
         ) : error ? (
@@ -5138,7 +5173,7 @@ export default function PlanningPage() {
           <>
           {/* Lazy loading: keep UI visible, show a centered overlay while week data refreshes */}
           {isRefreshingWeekData ? (
-            <div className="fixed left-0 top-0 z-50 flex h-screen w-screen h-[100dvh] w-[100dvw] items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+            <div className="fixed inset-0 z-50 flex min-h-screen-mobile w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
               <LoadingAnimation size={96} />
             </div>
           ) : null}
@@ -5178,16 +5213,16 @@ export default function PlanningPage() {
                   </svg>
                   {workerInviteLinkLoading ? "מציאת לינק..." : "לינק לעובד"}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => router.push(`/director/sites/${site?.id}/edit`)}
+              <button
+                type="button"
+                onClick={() => router.push(`/director/sites/${site?.id}/edit`)}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0 text-zinc-600 dark:text-zinc-400" fill="currentColor" aria-hidden>
                     <path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.07.63-.07.94s.02.63.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
                   </svg>
                   הגדרות
-                </button>
+              </button>
               </div>
             </div>
 
@@ -5292,6 +5327,11 @@ export default function PlanningPage() {
                                       ממתין לאישור
                                     </span>
                                   )}
+                                  {(w.linkedSiteIds?.length ?? 0) > 1 ? (
+                                    <span className="mt-1 inline-block rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[9px] md:text-[10px] text-violet-800 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
+                                      מולטי אתרים
+                                    </span>
+                                  ) : null}
                                 </td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm">{w.maxShifts}</td>
                                 <td className="px-0.5 md:px-3 py-1 md:py-2 text-center text-[10px] md:text-sm break-words whitespace-normal">
@@ -5881,14 +5921,10 @@ export default function PlanningPage() {
                         try {
                           if (editingWorkerId) {
                             const currentWorker = editingWorkerResolved;
-                            const availabilityChanged = (() => {
-                              try {
-                                return JSON.stringify(originalAvailability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] })
-                                  !== JSON.stringify(newWorkerAvailability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
-                              } catch {
-                                return true;
-                              }
-                            })();
+                            const availabilityChanged = isAvailabilityDayShiftChanged(
+                              originalAvailability || EMPTY_WORKER_AVAILABILITY,
+                              newWorkerAvailability || EMPTY_WORKER_AVAILABILITY,
+                            );
                             const linkedSiteNames: string[] = Array.isArray(currentWorker?.linkedSiteNames) ? currentWorker?.linkedSiteNames || [] : [];
                             const linkedOtherSiteNames = linkedSiteNames.filter((siteName) => String(siteName) !== String(site?.name || ""));
                             const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
@@ -8514,10 +8550,15 @@ export default function PlanningPage() {
                                                                         return base;
                                                                       });
                                                                     }}
-                                                                    className="hidden md:inline-flex h-5 w-5 items-center justify-center rounded-full border text-xs hover:bg-white/50 dark:hover:bg-zinc-800/60 flex-shrink-0"
+                                                                    className="hidden md:inline-flex flex-shrink-0 items-center justify-center md:relative md:z-[2] md:p-2.5 md:-m-2.5 md:hover:[&>span]:bg-white/50 md:dark:hover:[&>span]:bg-zinc-800/60"
+                                                                  >
+                                                                    <span
+                                                                      className="flex h-5 w-5 items-center justify-center rounded-full border text-xs pointer-events-none"
                                                                     style={{ borderColor: (rc?.border || c.border), color: c.text }}
+                                                                      aria-hidden
                                                                   >
                                                                     ×
+                                                                    </span>
                                                                   </button>
                                                                 </span>
                                                               </div>
@@ -8529,24 +8570,34 @@ export default function PlanningPage() {
                                                             // En mode manuel, afficher clairement les slots "pullables"
                                                             // même si le mode משיכות n'est pas activé (pour aider à repérer les trous).
                                                             const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(hint);
+                                                            const slotHoverKey = `${d.key}|${sn}|${idx}|${slotIdx}`;
+                                                            const isSlotHovered = hoverSlotKey === slotHoverKey;
                                                             return (
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
-                                                                className="group/slot w-full flex justify-center py-0.5"
+                                                                className={
+                                                                  "group/slot w-full flex justify-center py-0.5 " +
+                                                                  (draggingWorkerName && isSlotHovered
+                                                                    ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
+                                                                    : "")
+                                                                }
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
-                                                                  setHoverSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                  setHoverSlotKey(slotHoverKey);
                                                                 }}
                                                                 onDragLeave={(e) => {
                                                                   const rect = e.currentTarget.getBoundingClientRect();
                                                                   const x = e.clientX;
                                                                   const y = e.clientY;
                                                                   if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-                                                                    setHoverSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                    setHoverSlotKey((k) => (k === slotHoverKey ? null : k));
                                                                   }
                                                                 }}
-                                                                onDragOver={onSlotDragOver}
+                                                                onDragOver={(e) => {
+                                                                  onSlotDragOver(e);
+                                                                  if (draggingWorkerName) setHoverSlotKey(slotHoverKey);
+                                                                }}
                                                                 onDrop={(e) => onSlotDrop(e, d.key, sn, idx, slotIdx)}
                                                                 data-slot="1"
                                                                 data-dkey={d.key}
@@ -8559,11 +8610,13 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
+                                                                    // L'agrandissement pendant le glisser est sur le wrapper (évite overflow-hidden du span).
                                                                     "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (canPullThisRole ? " ring-2 ring-orange-400" : "") +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` && (!draggingWorkerName || canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint)) ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
-                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " ring-2 ring-green-500" : "") +
-                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) ? " opacity-50 cursor-not-allowed" : "")
+                                                                    (!draggingWorkerName && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) && !isSlotHovered ? " ring-2 ring-green-500" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) && isSlotHovered ? " [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22),0_0_0_2px_rgb(34_197_94)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38),0_0_0_2px_rgb(34_197_94)]" : "") +
+                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) && isSlotHovered ? "ring-2 ring-[#00A8E0] cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]" : "")
                                                                   }
                                                                   style={{ borderColor: rc.border }}
                                                                   onClick={(e) => {
@@ -8623,24 +8676,34 @@ export default function PlanningPage() {
                                                               </div>
                     );
                   }
+                                                          const slotHoverKeyNeu = `${d.key}|${sn}|${idx}|${slotIdx}`;
+                                                          const isSlotHoveredNeu = hoverSlotKey === slotHoverKeyNeu;
                                                           return (
                                                               <div
                                                                 key={"slot-empty-wrapper-" + slotIdx}
-                                                                className="group/slot w-full flex justify-center py-0.5"
+                                                                className={
+                                                                  "group/slot w-full flex justify-center py-0.5 " +
+                                                                  (draggingWorkerName && isSlotHoveredNeu
+                                                                    ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
+                                                                    : "")
+                                                                }
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
-                                                                  setHoverSlotKey(`${d.key}|${sn}|${idx}|${slotIdx}`);
+                                                                  setHoverSlotKey(slotHoverKeyNeu);
                                                                 }}
                                                                 onDragLeave={(e) => {
                                                                   const rect = e.currentTarget.getBoundingClientRect();
                                                                   const x = e.clientX;
                                                                   const y = e.clientY;
                                                                   if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-                                                                    setHoverSlotKey((k) => (k === `${d.key}|${sn}|${idx}|${slotIdx}` ? null : k));
+                                                                    setHoverSlotKey((k) => (k === slotHoverKeyNeu ? null : k));
                                                                   }
                                                                 }}
-                                                                onDragOver={onSlotDragOver}
+                                                                onDragOver={(e) => {
+                                                                  onSlotDragOver(e);
+                                                                  if (draggingWorkerName) setHoverSlotKey(slotHoverKeyNeu);
+                                                                }}
                                                                 onDrop={(e) => onSlotDrop(e, d.key, sn, idx, slotIdx)}
                                                                 data-slot="1"
                                                                 data-dkey={d.key}
@@ -8655,9 +8718,10 @@ export default function PlanningPage() {
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
                                                                     "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (pullsActiveHere && isPullable ? " ring-2 ring-orange-400" : "") +
-                                                                    (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` && (!draggingWorkerName || canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null)) ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
-                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " ring-2 ring-green-500" : "") +
-                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) ? " opacity-50 cursor-not-allowed" : "")
+                                                                    (!draggingWorkerName && isSlotHoveredNeu ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) && !isSlotHoveredNeu ? " ring-2 ring-green-500" : "") +
+                                                                    (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) && isSlotHoveredNeu ? " [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22),0_0_0_2px_rgb(34_197_94)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38),0_0_0_2px_rgb(34_197_94)]" : "") +
+                                                                    (draggingWorkerName && !canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) && isSlotHoveredNeu ? "ring-2 ring-[#00A8E0] cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]" : "")
                                                                   }
                                                                   onClick={(e) => {
                                                                     e.stopPropagation();
@@ -9224,7 +9288,9 @@ export default function PlanningPage() {
                           <div className="mt-3">
                             <div className="mb-1 text-xs text-zinc-600 dark:text-zinc-300 text-center">גרור/י עובד אל תא השיבוץ</div>
                             <div className="flex flex-wrap items-center justify-center gap-2">
-                              {workers.filter((w) => !hiddenWorkerIds.includes(w.id)).map((w) => {
+                              {workers
+                                .filter((w) => !hiddenWorkerIds.includes(w.id) && !w.pendingApproval)
+                                .map((w) => {
                                 const c = colorForName(w.name);
                                 return (
                                   <span
@@ -9552,7 +9618,11 @@ export default function PlanningPage() {
                     workers.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
                     const order = new Map<string, number>();
                     workers.forEach((w, i) => order.set(w.name, i));
-                    const items = Array.from(counts.entries()).sort((a, b) => {
+                    const isPendingApprovalName = (name: string) =>
+                      !!(workers.find((w) => String(w.name || "").trim() === String(name || "").trim())?.pendingApproval);
+                    const items = Array.from(counts.entries())
+                      .filter(([nm]) => !isPendingApprovalName(nm))
+                      .sort((a, b) => {
                       const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
                       const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
                       if (ia !== ib) return ia - ib;
@@ -11540,7 +11610,7 @@ export default function PlanningPage() {
                     className="inline-flex items-center gap-2 rounded-md bg-green-600 px-3 py-2 text-sm text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                   >
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                      <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
                       </svg>
                     שמור ואשלח
                 </button>

@@ -56,6 +56,16 @@ export default function WorkerHistoryPage() {
     availability?: Record<string, string[]>;
   } | null>(null);
 
+  const workerDisplay = useMemo(() => {
+    if (!workerData) return null;
+    return {
+      name: workerName,
+      max_shifts: workerData.max_shifts,
+      roles: workerData.roles,
+      availability: workerData.availability,
+    };
+  }, [workerName, workerData]);
+
   // Nombre de עובדים requis (comme sur le planning directeur)
   function getRequiredFor(st: any, shiftName: string, dayKey: string): number {
     if (!st) return 0;
@@ -295,9 +305,9 @@ export default function WorkerHistoryPage() {
 
   return (
     <div className="min-h-screen p-6">
-      <div className="mx-auto max-w-3xl space-y-6">
+      <div className="mx-auto max-w-4xl space-y-6">
         {weekPlanLoading ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 dark:bg-zinc-950/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex min-h-screen-mobile w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
             <LoadingAnimation size={96} />
           </div>
         ) : null}
@@ -447,7 +457,7 @@ export default function WorkerHistoryPage() {
         )}
 
         {sites.length > 1 && (
-          <div className="rounded-xl border p-4 dark:border-zinc-800">
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/60">
             <label className="block text-sm font-medium mb-2">בחר אתר</label>
             <select
               value={selectedSiteId || ""}
@@ -466,179 +476,253 @@ export default function WorkerHistoryPage() {
 
         {selectedSiteId ? (
           <>
+            <div className="w-full rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.08)] dark:border-zinc-700 dark:bg-zinc-950/70 dark:shadow-[0_4px_24px_-4px_rgba(0,0,0,0.45)] sm:p-6 md:p-7">
+              <div className="space-y-6">
             {/* Grille hebdomadaire avec surlignage du travailleur */}
-            <section className="rounded-xl border p-4 dark:border-zinc-800">
-              <h2 className="mb-3 text-lg font-semibold">שיבוצים לשבוע הנוכחי</h2>
+            <section
+              dir="rtl"
+              className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/60"
+            >
+              <div className="border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
+                <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">שיבוצים לשבוע הנוכחי</h2>
+                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">לפי התכנון השמור לאתר לשבוע שנבחר למעלה</p>
+              </div>
               {!siteConfig || !weekPlan ? (
-                <p className="text-sm text-zinc-500">אין נתוני תכנון שמורים לשבוע זה.</p>
+                <div className="bg-white px-4 py-8 text-center dark:bg-zinc-950/60">
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">אין נתוני תכנון שמורים לשבוע זה.</p>
+                </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <div className="min-w-[720px] space-y-3">
-                    {(siteConfig?.stations || []).map((st: any, stationIndex: number) => (
-                      <div key={stationIndex} className="rounded-md border p-3 dark:border-zinc-700">
-                        <div className="mb-2 font-medium">{st?.name || `עמדה ${stationIndex+1}`}</div>
-                        <div className="grid grid-cols-8 gap-2">
-                          <div />
-                          {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => (
-                            <div key={dk} className="text-center text-xs text-zinc-500">{dayLabels[dk]}</div>
-                          ))}
-                          {(st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any, sIdx: number) => (
-                            <Fragment key={`row-${stationIndex}-${sIdx}`}>
-                              <div className="text-xs font-medium flex items-center">{sh?.name}</div>
-                              {(["sun","mon","tue","wed","thu","fri","sat"]).map((dk) => {
-                                const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
-                                const pulls = (weekPlan as any)?.pulls || {};
-                                const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
-                                const required = getRequiredFor(st, sh?.name, dk);
-                                const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
-                                const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
-                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
-                                return (
-                                  <div
-                                    key={`cell-${stationIndex}-${sIdx}-${dk}`}
-                                    className={
-                                      "rounded-md border p-1 min-h-10 dark:border-zinc-700 " +
-                                      (cleanNames.length === 0 ? "bg-zinc-100 dark:bg-zinc-900/40" : "")
-                                    }
-                                  >
-                                    <div className="flex flex-col gap-1">
-                                      {Array.from({ length: slotCount }).map((_, slotIdx) => {
-                                        const nm = cleanNames[slotIdx];
-                                        if (!nm) {
+                <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
+                  {(siteConfig?.stations || []).map((st: any, stationIndex: number) => (
+                    <div
+                      key={stationIndex}
+                      className="overflow-hidden rounded-xl border border-zinc-200/90 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950/40"
+                    >
+                      <div className="border-b border-[#00A8E0]/25 bg-gradient-to-l from-[#00A8E0]/12 to-transparent px-4 py-2.5 dark:from-[#00A8E0]/20 dark:to-transparent">
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          {st?.name || `עמדה ${stationIndex + 1}`}
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <div className="min-w-[720px] p-3">
+                          <div className="grid grid-cols-8 gap-px overflow-hidden rounded-lg border border-zinc-200 bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-700">
+                            <div className="min-h-[2.75rem] bg-zinc-100 dark:bg-zinc-900/90" />
+                            {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).map((dk) => (
+                              <div
+                                key={dk}
+                                className={
+                                  "flex min-h-[2.75rem] items-center justify-center bg-zinc-100 px-1 py-2 text-center text-[11px] font-semibold leading-tight text-zinc-700 dark:bg-zinc-900/90 dark:text-zinc-200 sm:text-xs " +
+                                  (dk === "sun" || dk === "sat" ? "bg-amber-50/90 text-amber-950 dark:bg-amber-950/35 dark:text-amber-100" : "")
+                                }
+                              >
+                                {dayLabels[dk]}
+                              </div>
+                            ))}
+                            {(st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any, sIdx: number) => (
+                              <Fragment key={`row-${stationIndex}-${sIdx}`}>
+                                <div className="flex min-h-[3.25rem] items-center bg-zinc-50 px-2 py-2 text-xs font-semibold text-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 sm:text-[13px]">
+                                  {sh?.name}
+                                </div>
+                                {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]).map((dk) => {
+                                  const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
+                                  const pulls = (weekPlan as any)?.pulls || {};
+                                  const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                  const required = getRequiredFor(st, sh?.name, dk);
+                                  const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
+                                  const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                  const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                  return (
+                                    <div
+                                      key={`cell-${stationIndex}-${sIdx}-${dk}`}
+                                      className={
+                                        "min-h-[3.25rem] bg-white p-1.5 dark:bg-zinc-950/50 " +
+                                        (dk === "sun" || dk === "sat" ? "bg-amber-50/40 dark:bg-amber-950/15 " : "") +
+                                        (cleanNames.length === 0
+                                          ? "border border-dashed border-zinc-200 dark:border-zinc-700"
+                                          : "border border-zinc-100 dark:border-zinc-800")
+                                      }
+                                    >
+                                      <div className="flex flex-col gap-1">
+                                        {Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                          const nm = cleanNames[slotIdx];
+                                          if (!nm) {
+                                            return (
+                                              <span
+                                                key={`empty-${slotIdx}`}
+                                                className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md border border-dashed border-zinc-200 bg-zinc-50/80 px-2 text-[11px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-900/60"
+                                              >
+                                                —
+                                              </span>
+                                            );
+                                          }
+                                          const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                            if (!String(k).startsWith(cellPrefix)) return false;
+                                            const e: any = entry;
+                                            return e?.before?.name === nm || e?.after?.name === nm;
+                                          });
+                                          const pullTxt = match
+                                            ? (((match as any)[1]?.before?.name === nm)
+                                              ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                              : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                            : null;
+                                          const baseHours =
+                                            (sh?.start && sh?.end)
+                                              ? `${String(sh.start)}-${String(sh.end)}`
+                                              : null;
+                                          const myHours = pullTxt || baseHours;
+                                          const isTargetWorker = nm === workerName;
                                           return (
                                             <span
-                                              key={`empty-${slotIdx}`}
-                                              className="inline-flex h-6 items-center justify-center rounded-full border px-2 text-xs text-zinc-500 bg-white dark:bg-zinc-900 dark:border-zinc-700"
-                                            >
-                                              —
-                                            </span>
-                                          );
-                                        }
-                                        const match = Object.entries(pulls || {}).find(([k, entry]) => {
-                                          if (!String(k).startsWith(cellPrefix)) return false;
-                                          const e: any = entry;
-                                          return e?.before?.name === nm || e?.after?.name === nm;
-                                        });
-                                        const pullTxt = match
-                                          ? (((match as any)[1]?.before?.name === nm)
-                                            ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
-                                            : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
-                                          : null;
-                                        const baseHours =
-                                          (sh?.start && sh?.end)
-                                            ? `${String(sh.start)}-${String(sh.end)}`
-                                            : null;
-                                        const myHours = pullTxt || baseHours;
-                                        return (
-                                          <span
-                                            key={`nm-${nm}-${slotIdx}`}
-                                            className={
-                                              "group relative text-xs inline-flex flex-col items-center rounded px-1 " +
-                                              (nm === workerName
-                                                ? "bg-green-500 text-white "
-                                                : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 ") +
-                                              ((pullTxt && nm === workerName) ? "ring-2 ring-orange-400 " : "")
-                                            }
-                                          >
-                                            <span
-                                              className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                              dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                            >
-                                              {nm}
-                                            </span>
-                                            {nm === workerName && myHours ? (
-                                              <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={myHours}>{myHours}</span>
-                                            ) : (
-                                              pullTxt ? <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={pullTxt}>{pullTxt}</span> : null
-                                            )}
-
-                                            {/* Expansion animée au survol (menu worker) */}
-                                            <span
-                                              aria-hidden
-                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                              key={`nm-${nm}-${slotIdx}`}
+                                              className={
+                                                "group relative inline-flex min-h-[1.75rem] w-full flex-col items-stretch justify-center rounded-md px-1.5 py-1 text-xs shadow-sm " +
+                                                (isTargetWorker
+                                                  ? "bg-emerald-600 text-white ring-1 ring-emerald-700/30 "
+                                                  : "border border-zinc-200 bg-white text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 ") +
+                                                ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
+                                              }
                                             >
                                               <span
-                                                className={
-                                                  "inline-flex flex-col items-center rounded px-2 py-1 shadow-lg " +
-                                                  (nm === workerName
-                                                    ? "bg-green-500 text-white "
-                                                    : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
-                                                  ((pullTxt && nm === workerName) ? "ring-2 ring-orange-400 " : "")
-                                                }
+                                                className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                              >
+                                                {nm}
+                                              </span>
+                                              {isTargetWorker && myHours ? (
+                                                <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={myHours}>
+                                                  {myHours}
+                                                </span>
+                                              ) : null}
+
+                                              <span
+                                                aria-hidden
+                                                className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
                                               >
                                                 <span
-                                                  className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                          >
-                                                  {nm}
+                                                  className={
+                                                    "inline-flex flex-col items-center rounded-md px-2 py-1 shadow-lg " +
+                                                    (isTargetWorker
+                                                      ? "bg-emerald-600 text-white "
+                                                      : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
+                                                    ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
+                                                  }
+                                                >
+                                                  <span
+                                                    className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                  >
+                                                    {nm}
+                                                  </span>
+                                                  {(isTargetWorker && myHours) ? (
+                                                    <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                      {myHours}
+                                                    </span>
+                                                  ) : (pullTxt ? (
+                                                    <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                      {pullTxt}
+                                                    </span>
+                                                  ) : null)}
                                                 </span>
-                                                {(nm === workerName && myHours) ? (
-                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
-                                                    {myHours}
-                                                  </span>
-                                                ) : (pullTxt ? (
-                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
-                                                    {pullTxt}
-                                                  </span>
-                                                ) : null)}
                                               </span>
                                             </span>
-                                          </span>
-                                        );
-                                      })}
+                                          );
+                                        })}
+                                      </div>
                                     </div>
-                                  </div>
-                                );
-                              })}
-                            </Fragment>
-                          ))}
+                                  );
+                                })}
+                              </Fragment>
+                            ))}
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </section>
 
-            {/* Tableau des demandes */}
-            <section className="rounded-xl border p-4 dark:border-zinc-800">
-              <h2 className="mb-3 text-lg font-semibold">בקשות העובד</h2>
-              {workerData ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full border-collapse text-sm">
-                    <thead>
-                      <tr className="border-b dark:border-zinc-800">
-                        <th className="px-2 py-2 text-right">שם</th>
-                        <th className="px-2 py-2 text-right">מקס' משמרות</th>
-                        <th className="px-2 py-2 text-right">תפקידים</th>
-                        <th className="px-2 py-2 text-right">זמינות</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr className="border-b dark:border-zinc-800">
-                        <td className="px-2 py-2">{workerName}</td>
-                        <td className="px-2 py-2">{workerData.max_shifts || "—"}</td>
-                        <td className="px-2 py-2">{workerData.roles?.length ? workerData.roles.join(", ") : "—"}</td>
-                        <td className="px-2 py-2">
-                          {Object.keys(dayLabels).map((dk) => (
-                            <span key={dk} className="inline-flex items-center gap-1 mr-2 mb-1">
-                              <span className="text-xs text-zinc-500">{dayLabels[dk]}:</span>
-                              <span className="text-xs">{(workerData.availability?.[dk] || []).join(" | ") || "—"}</span>
+            {/* Synthèse demandes / fiche travailleur (alignée page directeur) */}
+            <section
+              dir="rtl"
+              className="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950/60"
+            >
+              <div className="border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
+                <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">בקשות העובד</h2>
+                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">נתונים מהגדרת העובד במערכת (לא לפי שבוע)</p>
+              </div>
+              {workerData && workerDisplay ? (
+                <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
+                      <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">שם</div>
+                      <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{workerDisplay.name}</div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
+                      <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">מקס&apos; משמרות</div>
+                      <div className="mt-1 text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
+                        {workerDisplay.max_shifts ?? "—"}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50 sm:col-span-1">
+                      <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">תפקידים</div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {workerDisplay.roles?.length ? (
+                          workerDisplay.roles.map((role) => (
+                            <span
+                              key={role}
+                              className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
+                            >
+                              {role}
                             </span>
-                          ))}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                          ))
+                        ) : (
+                          <span className="text-sm text-zinc-400">—</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-xs font-semibold text-[#004B63] dark:text-cyan-100">זמינות לפי יום</div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+                      {Object.keys(dayLabels).map((dk) => {
+                        const slots = (workerDisplay.availability?.[dk] || []) as string[];
+                        const has = slots.length > 0;
+                        return (
+                          <div
+                            key={dk}
+                            className="rounded-lg border border-zinc-200/90 bg-white px-2.5 py-2 text-xs shadow-sm dark:border-zinc-700 dark:bg-zinc-950/50"
+                          >
+                            <div className="font-semibold text-[#004B63] dark:text-cyan-100">{dayLabels[dk]}</div>
+                            <div
+                              className={
+                                "mt-1.5 min-h-[1.25rem] text-[11px] leading-snug " +
+                                (has
+                                  ? "font-medium text-[#006C8A] dark:text-cyan-200"
+                                  : "text-[#006C8A]/55 dark:text-cyan-300/70")
+                              }
+                            >
+                              {has ? slots.join(" · ") : "—"}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               ) : (
-                <LoadingAnimation className="py-4" size={50} />
+                <div className="bg-white px-4 py-8 dark:bg-zinc-950/60">
+                  <LoadingAnimation className="py-4" size={50} />
+                </div>
               )}
             </section>
+              </div>
+            </div>
           </>
         ) : (
-          <div className="rounded-xl border p-4 dark:border-zinc-800">
-            <p className="text-sm text-zinc-500">
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/60">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
               {sites.length === 0 ? "אין אתרים זמינים" : "נא לבחור אתר"}
             </p>
           </div>

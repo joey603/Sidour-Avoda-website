@@ -417,7 +417,7 @@ export default function WorkersList() {
                             onClick={() => {
                               router.push(`/director/workers/${primaryEntry.id}`);
                             }}
-                            className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                            className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                           >
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                               <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>
@@ -462,7 +462,7 @@ export default function WorkersList() {
                           onClick={() => {
                             router.push(`/director/workers/${primaryEntry.id}`);
                           }}
-                          className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:hover:bg-zinc-800"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75Z"/>

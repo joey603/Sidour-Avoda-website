@@ -154,3 +154,10 @@
   padding: 0 0.1em;
   border-radius: 0.15em;
 }
+
+/* Hauteur viewport fiable sur mobile (Safari : barre d’URL, -webkit-fill-available) pour overlays plein écran */
+.min-h-screen-mobile {
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+}

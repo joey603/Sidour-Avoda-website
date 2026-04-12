@@ -535,9 +535,9 @@ export default function SitesList() {
                   onClick={onAddClick}
                   className="inline-flex items-center gap-2 rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm font-medium text-green-800 shadow-sm hover:bg-green-100 dark:border-green-700 dark:bg-green-950/40 dark:text-green-200 dark:hover:bg-green-900/50"
                 >
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-                  הוסף אתר
-                </button>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+                הוסף אתר
+              </button>
               </div>
             </div>
             <div className="relative w-full">
@@ -721,14 +721,14 @@ export default function SitesList() {
                               פעולות
                             </button>
                             {openActionsSiteId === s.id ? (
-                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                              <div className="absolute right-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 text-right shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
                                     router.push(`/director/planning/${s.id}`);
                                   }}
-                                  className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                  className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
                                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                                     <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
@@ -741,16 +741,22 @@ export default function SitesList() {
                                       type="button"
                                       onClick={() => void onPromoteAutoPlan(s, false)}
                                       disabled={autoPlanAction.siteId === s.id}
-                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                      className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
                                     >
+                                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                        <path d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4zm-5 16a3 3 0 110-6 3 3 0 010 6zm3-10H5V5h10v4z" />
+                                      </svg>
                                       {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => void onPromoteAutoPlan(s, true)}
                                       disabled={autoPlanAction.siteId === s.id}
-                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                      className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
                                     >
+                                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                                      </svg>
                                       {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
                                     </button>
                                   </>
@@ -759,15 +765,15 @@ export default function SitesList() {
                             ) : null}
                           </div>
                         ) : (
-                          <button
-                            onClick={() => router.push(`/director/planning/${s.id}`)}
+                        <button
+                          onClick={() => router.push(`/director/planning/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          >
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                               <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-                            </svg>
+                          </svg>
                             צפה
-                          </button>
+                        </button>
                         )}
                         <button
                           onClick={() => onDelete(s.id)}
@@ -849,14 +855,14 @@ export default function SitesList() {
                               פעולות
                             </button>
                             {openActionsSiteId === s.id ? (
-                              <div className="absolute left-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                              <div className="absolute right-0 top-full z-20 mt-2 min-w-[180px] rounded-lg border border-zinc-200 bg-white p-1 text-right shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                                 <button
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
                                     router.push(`/director/planning/${s.id}`);
                                   }}
-                                  className="flex w-full items-center justify-end gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                  className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
                                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                                     <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
@@ -869,16 +875,22 @@ export default function SitesList() {
                                       type="button"
                                       onClick={() => void onPromoteAutoPlan(s, false)}
                                       disabled={autoPlanAction.siteId === s.id}
-                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
+                                      className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:hover:bg-zinc-800"
                                     >
+                                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                        <path d="M17 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V7l-4-4zm-5 16a3 3 0 110-6 3 3 0 010 6zm3-10H5V5h10v4z" />
+                                      </svg>
                                       {autoPlanAction.siteId === s.id && autoPlanAction.publish === false ? "שומר..." : "שמור"}
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => void onPromoteAutoPlan(s, true)}
                                       disabled={autoPlanAction.siteId === s.id}
-                                      className="flex w-full items-center justify-end rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
+                                      className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm text-green-700 hover:bg-green-50 disabled:opacity-60 dark:text-green-300 dark:hover:bg-green-900/30"
                                     >
+                                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                                      </svg>
                                       {autoPlanAction.siteId === s.id && autoPlanAction.publish === true ? "שומר..." : "שמור ואשלח"}
                                     </button>
                                   </>
@@ -887,15 +899,15 @@ export default function SitesList() {
                             ) : null}
                           </div>
                         ) : (
-                          <button
-                            onClick={() => router.push(`/director/planning/${s.id}`)}
+                        <button
+                          onClick={() => router.push(`/director/planning/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border px-3 py-1 text-sm shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          >
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                               <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-                            </svg>
+                          </svg>
                             צפה
-                          </button>
+                        </button>
                         )}
                         <button
                           onClick={() => onDelete(s.id)}

@@ -69,7 +69,8 @@ describe("/director/workers/[id]", () => {
 
     render(<WorkerDetailsPage />);
 
-    expect(await screen.findByText("עריכת עובד")).toBeInTheDocument();
+    expect((await screen.findAllByText("עריכת עובד")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("פרטי עובד")).toBeInTheDocument();
     expect(await screen.findByText("Alpha Site")).toBeInTheDocument();
     expect(await screen.findByText("0585060398")).toBeInTheDocument();
     expect(await screen.findByText("אין נתוני תכנון שמורים לשבוע זה.")).toBeInTheDocument();
@@ -114,7 +115,7 @@ describe("/director/workers/[id]", () => {
     expect(await screen.findByText("0585060398")).toBeInTheDocument();
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "ערוך מספר טלפון" }));
+    await user.click(screen.getByRole("button", { name: "ערוך פרטי עובד" }));
 
     const phoneInput = screen.getByDisplayValue("0585060398");
     await user.clear(phoneInput);
@@ -204,7 +205,7 @@ describe("/director/workers/[id]", () => {
     ).length;
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "שבוע הבא" }));
+    await user.click(screen.getAllByRole("button", { name: "שבוע הבא" })[0]);
 
     await waitFor(() => {
       const after = (apiFetch as jest.Mock).mock.calls.filter((call: any[]) =>
@@ -214,7 +215,7 @@ describe("/director/workers/[id]", () => {
     });
   });
 
-  it("navigates back and to the site edit page", async () => {
+  it("navigates back from worker details", async () => {
     const { fetchMe } = require("@/lib/auth");
     const { apiFetch } = require("@/lib/api");
 
@@ -242,11 +243,8 @@ describe("/director/workers/[id]", () => {
     await screen.findByText("Alpha Site");
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "חזרה" }));
+    await user.click(screen.getAllByRole("button", { name: "חזרה" })[0]);
     expect(backMock).toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "ערוך באתר" }));
-    expect(pushMock).toHaveBeenCalledWith("/director/sites/1/edit");
   });
 
   it("loads week plan from localStorage fallback and keeps worker identity from DB", async () => {
@@ -357,7 +355,7 @@ describe("/director/workers/[id]", () => {
     await screen.findByText("0585060398");
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "ערוך מספר טלפון" }));
+    await user.click(screen.getByRole("button", { name: "ערוך פרטי עובד" }));
 
     const phoneInput = screen.getByDisplayValue("0585060398");
     await user.clear(phoneInput);

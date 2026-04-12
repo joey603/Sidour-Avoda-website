@@ -114,6 +114,8 @@ class SiteWorker(Base):
     answers: Mapped[dict] = mapped_column(JSON, default=dict)  # {questionId: answer}
     pending_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    # Premier dimanche (YYYY-MM-DD) à partir duquel le travailleur n'apparaît plus dans le planning ; None = actif
+    removed_from_week_iso: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
 
 
 class SiteMessage(Base):

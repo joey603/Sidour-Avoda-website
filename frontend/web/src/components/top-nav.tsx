@@ -134,9 +134,6 @@ export default function TopNav() {
             aria-label="בית"
             aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" className="ml-2">
-              <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-            </svg>
             בית
           </Link>
           <Link
@@ -171,9 +168,6 @@ export default function TopNav() {
             aria-label="בית"
             aria-current={pathname === "/worker" ? "page" : undefined}
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" className="ml-2">
-              <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-            </svg>
             בית
           </Link>
           <Link
@@ -205,9 +199,6 @@ export default function TopNav() {
         className={`${baseBtnMobile} ${pathname === "/" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
         aria-label="בית"
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" className="ml-2">
-          <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-        </svg>
         בית
       </Link>
     );
@@ -250,9 +241,6 @@ export default function TopNav() {
                     aria-label="בית"
                     aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
                   >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" className="ml-1">
-                      <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-                    </svg>
                     בית
                   </Link>
                   <Link
@@ -287,9 +275,6 @@ export default function TopNav() {
                     aria-label="בית"
                     aria-current={pathname === "/worker" ? "page" : undefined}
                   >
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" className="ml-1">
-                      <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-                    </svg>
                     בית
                   </Link>
                   <Link
@@ -321,9 +306,6 @@ export default function TopNav() {
                   className={`${baseBtn} ${pathname === "/" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
                   aria-label="בית"
                 >
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true" className="ml-1">
-                    <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3Z"/>
-                  </svg>
                   בית
                 </Link>
     );

@@ -138,8 +138,8 @@ export default function NewSitePage() {
   }
 
   return (
-    <div className="min-h-screen p-6">
-      <div className="mx-auto relative max-w-4xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="min-h-screen px-1 pt-3 pb-6 sm:px-4 md:p-6">
+      <div className="relative mx-auto w-full max-w-4xl rounded-xl border border-zinc-200 bg-white p-2.5 shadow-sm sm:rounded-2xl sm:p-5 md:p-6 dark:border-zinc-800 dark:bg-zinc-900">
         <button
           type="button"
           onClick={() => router.back()}
@@ -199,9 +199,9 @@ export default function NewSitePage() {
           {stations.length > 0 && (
             <section className="space-y-3">
               <h2 className="text-lg font-semibold">פרטי עמדות</h2>
-              <div className="space-y-3">
+              <div className="space-y-2.5 sm:space-y-3">
                 {stations.map((st, idx) => (
-                  <div key={idx} className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
+                  <div key={idx} className="space-y-2.5 rounded-md border p-2 sm:space-y-3 sm:p-3 dark:border-zinc-700">
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div>
                         <label className="block text-sm font-semibold">שם עמדה #{idx + 1}</label>
@@ -238,8 +238,8 @@ export default function NewSitePage() {
                         </div>
                       )}
                     </div>
-                    <div className="space-y-3">
-                        <div className="flex items-center gap-4 text-sm">
+                    <div className="space-y-2.5 sm:space-y-3">
+                        <div className="flex flex-col gap-2 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2">
                           <label className="inline-flex items-center gap-2">
                             <input
                               type="radio"
@@ -294,8 +294,8 @@ export default function NewSitePage() {
                           <>
                       
                       
-                      <div className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
-                        <div className="flex items-center justify-between">
+                      <div className="space-y-2.5 rounded-md border p-2 sm:space-y-3 sm:p-3 dark:border-zinc-700">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-medium">תפקידים</span>
                           <button
                             type="button"
@@ -411,8 +411,8 @@ export default function NewSitePage() {
                     {st.showDetails && (
                     <div className="md:col-span-2">
                       {!st.perDayCustom ? (
-                        <div className="rounded-md border p-3 space-y-2 dark:border-zinc-700">
-                          <div className="flex items-center justify-between">
+                        <div className="space-y-2 rounded-md border p-2 sm:p-3 dark:border-zinc-700">
+                          <div className="flex items-center justify-between gap-2">
                             <label className="block text-sm font-semibold">ימים פעילים (עמדה)</label>
                             <label className="inline-flex items-center gap-2 text-xs">
                               <input
@@ -471,8 +471,8 @@ export default function NewSitePage() {
                     {st.showDetails && (
                     <div className="md:col-span-2 space-y-2">
                       {!st.perDayCustom ? (
-                        <div className="rounded-md border p-3 space-y-3 dark:border-zinc-700">
-                          <div className="flex items-center justify-between">
+                        <div className="space-y-3 rounded-md border p-2 sm:p-3 dark:border-zinc-700">
+                          <div className="flex items-center justify-between gap-2">
                             <label className="block text-sm font-semibold">משמרות (עמדה)</label>
                           </div>
                           {st.shifts.map((sh, sIdx) => (
@@ -1075,7 +1075,7 @@ export default function NewSitePage() {
 
           
           {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="sticky bottom-0 z-10 -mx-6 border-t bg-white/80 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-zinc-800 dark:bg-zinc-900/80">
+          <div className="sticky bottom-0 z-10 -mx-2.5 border-t bg-white/80 px-2.5 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/60 sm:-mx-5 sm:px-5 md:-mx-6 md:px-6 dark:border-zinc-800 dark:bg-zinc-900/80">
             <div className="flex items-center gap-2">
             <button
               type="submit"

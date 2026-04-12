@@ -235,10 +235,10 @@ export default function WorkerAvailabilityPage() {
         await loadWorkerContextFromServer();
       } catch (e: unknown) {
         toast.error("שגיאה בטעינת נתוני העובד", { description: e instanceof Error ? e.message : "נסה שוב מאוחר יותר." });
-      } finally {
-        setLoading(false);
-      }
+    } finally {
+      setLoading(false);
     }
+  }
     loadContext();
   }, [router, loadWorkerContextFromServer]);
 
@@ -447,18 +447,18 @@ export default function WorkerAvailabilityPage() {
 
           {sites.length > 0 && (
             <>
-              {sites.length > 1 && (
+          {sites.length > 1 && (
                 <div className="mb-6 flex flex-wrap justify-center gap-2">
                   {sites.map((site) => (
                     <span
                       key={site.id}
                       className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
                     >
-                      {site.name}
+                    {site.name}
                     </span>
-                  ))}
-                </div>
-              )}
+                ))}
+            </div>
+          )}
               {success && isEditing && !submitting && (
                 <div className="mb-4 rounded-lg bg-green-50 border border-green-200 p-4 text-center text-green-800 dark:bg-green-900/20 dark:border-green-800 dark:text-green-200">
                   ✓ הזמינות נשמרה בהצלחה לשבוע הבא!

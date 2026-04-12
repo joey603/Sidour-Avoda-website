@@ -70,16 +70,29 @@ def _next_week_iso(dt: datetime) -> str:
 
 
 def _site_worker_visible_for_week(row: SiteWorker, week_iso: str | None) -> bool:
+    """Visible pour une semaine donnée (dimanche = clé, aligné sur le front planning)."""
     wk = (week_iso or "").strip()
     if not wk:
+        # Sans semaine : ne masquer que les retraits déjà effectifs (semaine courante >= removed_from)
+        wk_eff = _week_start_date(datetime.now()).date().isoformat()
+        removed = getattr(row, "removed_from_week_iso", None)
+        if removed:
+            r = str(removed).strip()
+            if r and wk_eff >= r:
+                return False
         return True
-    if not bool(getattr(row, "pending_approval", False)):
-        return True
-    created_at = int(getattr(row, "created_at", 0) or 0)
-    if created_at <= 0:
-        return True
-    created_week_iso = _week_start_date(datetime.fromtimestamp(created_at / 1000)).date().isoformat()
-    return created_week_iso <= wk
+    if bool(getattr(row, "pending_approval", False)):
+        created_at = int(getattr(row, "created_at", 0) or 0)
+        if created_at > 0:
+            created_week_iso = _week_start_date(datetime.fromtimestamp(created_at / 1000)).date().isoformat()
+            if created_week_iso > wk:
+                return False
+    removed = getattr(row, "removed_from_week_iso", None)
+    if removed:
+        r = str(removed).strip()
+        if r and wk >= r:
+            return False
+    return True
 
 
 def _schedule_run_time_for_current_week(now: datetime, day_of_week: int, hour: int, minute: int) -> datetime:
@@ -681,7 +694,11 @@ def _build_multi_site_generation_context(
     sites = db.query(Site).filter(Site.id.in_(connected_site_ids)).all() if connected_site_ids else []
     sites_by_id = {int(s.id): s for s in sites}
     rows = (
-        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all() if not bool(getattr(row, "pending_approval", False))]
+        [
+            row
+            for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all()
+            if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
+        ]
         if connected_site_ids
         else []
     )
@@ -1086,7 +1103,11 @@ def _planning_limit_error_detail_for_request(
 
 
 def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
-    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all() if not bool(getattr(row, "pending_approval", False))]
+    rows = [
+        row
+        for row in db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all()
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
+    ]
     weekly_row = (
         db.query(SiteWeeklyAvailability)
         .filter(SiteWeeklyAvailability.site_id == site.id)
@@ -1980,8 +2001,12 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
     logger.info(f"[all-workers] Director {user.id} has {len(site_ids)} sites: {site_ids}")
     if not site_ids:
         return []
-    # Récupérer tous les travailleurs de ces sites
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+    # Récupérer tous les travailleurs de ces sites (hors retraits effectifs pour la semaine courante)
+    rows = [
+        r
+        for r in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+        if _site_worker_visible_for_week(r, None)
+    ]
     logger.info(f"[all-workers] Found {len(rows)} SiteWorkers: {[(r.id, r.name, r.site_id) for r in rows]}")
     result = []
     # Récupérer tous les workers users une seule fois pour optimiser
@@ -2306,6 +2331,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
         if existing:
             # Si le worker existe déjà, mettre à jour ses données et le lier au User si nécessaire
             logger.info(f"[create-worker] Worker '{payload.name}' already exists (id={existing.id}), updating")
+            existing.removed_from_week_iso = None
             existing.max_shifts = payload.max_shifts
             existing.roles = payload.roles or []
             # IMPORTANT: ne pas écraser les זמינות soumises par le travailleur.
@@ -2580,9 +2606,8 @@ def reject_pending_worker(site_id: int, worker_id: int, user: User = Depends(req
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)
 def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     """
-    Supprime définitivement un travailleur d'un site :
-    - il disparaît des listes,
-    - il n'est plus rattaché au site à partir d'aujourd'hui.
+    Retire le travailleur du planning à partir du dimanche de la semaine en cours (clé semaine de l'app).
+    Les semaines strictement antérieures restent consultables avec ce travailleur dans l'historique.
     """
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
@@ -2591,9 +2616,11 @@ def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_rol
     if not w or w.site_id != site_id:
         raise HTTPException(status_code=404, detail="Travailleur introuvable sur ce site")
 
-    db.delete(w)
+    w.removed_from_week_iso = _week_start_date(datetime.now()).date().isoformat()
     db.commit()
-    logger.info(f"[delete-worker] Deleted worker '{w.name}' (id={worker_id}) from site {site_id}")
+    logger.info(
+        f"[delete-worker] Worker '{w.name}' (id={worker_id}) removed from site {site_id} from week {w.removed_from_week_iso}"
+    )
 
     return Response(status_code=204)
 
@@ -2922,8 +2949,17 @@ def ai_generate_planning(
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    # Load workers
-    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if not bool(getattr(row, "pending_approval", False))]
+    week_for_rows = _week_start_date(datetime.now()).date().isoformat()
+    if payload and getattr(payload, "week_iso", None):
+        try:
+            week_for_rows = _validate_week_iso(payload.week_iso)
+        except HTTPException:
+            pass
+    rows = [
+        row
+        for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_for_rows)
+    ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
     workers = []
@@ -3073,7 +3109,17 @@ async def ai_generate_stream(
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if not bool(getattr(row, "pending_approval", False))]
+    week_for_rows = _week_start_date(datetime.now()).date().isoformat()
+    if payload and getattr(payload, "week_iso", None):
+        try:
+            week_for_rows = _validate_week_iso(payload.week_iso)
+        except HTTPException:
+            pass
+    rows = [
+        row
+        for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_for_rows)
+    ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
     workers = []
