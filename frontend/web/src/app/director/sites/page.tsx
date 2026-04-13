@@ -1011,21 +1011,21 @@ export default function SitesList() {
                   שומר אוטומטית רק אם האתר מלא. אם נשארו חוסרים, התכנון נשאר ידני ברשימת האתרים.
                 </div>
               </div>
-              <label className={`block space-y-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
-                <span className="text-sm font-medium">יום הפעלה</span>
+              <label className={`flex w-full flex-col gap-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
+                <span className="block text-sm font-medium">יום הפעלה</span>
                 <select
                   value={autoPlanningForm.day_of_week}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, day_of_week: Number(e.target.value) }))}
                   disabled={autoPlanningControlsDisabled}
-                  className="h-10 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full min-w-0 rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   {AUTO_PLANNING_DAY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </label>
-              <label className={`block space-y-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
-                <span className="text-sm font-medium">שעת הפעלה</span>
+              <label className={`flex w-full flex-col gap-1 transition-opacity ${autoPlanningControlsDisabled ? "opacity-50" : ""}`}>
+                <span className="block text-sm font-medium">שעת הפעלה</span>
                 <input
                   type="time"
                   step={60}
@@ -1033,7 +1033,7 @@ export default function SitesList() {
                   value={autoPlanningForm.time}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, time: e.target.value }))}
                   disabled={autoPlanningControlsDisabled}
-                  className="h-10 w-full max-w-[9.5rem] rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] sm:max-w-none dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full min-w-0 rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
               {autoPlanningConfig?.last_error ? (
