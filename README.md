@@ -292,6 +292,87 @@ cd frontend/web
 npm test
 ```
 
+### Backend Deployment Script (Oracle / Ubuntu)
+
+Si le backend de production tourne sur un serveur Oracle Ubuntu avec un service `systemd`
+nommé `sidour-backend`, tu peux automatiser la mise à jour avec un script shell.
+
+#### 1. Créer le script sur le serveur
+
+Connecte-toi au serveur puis crée le fichier :
+
+```bash
+nano /home/ubuntu/deploy-backend.sh
+```
+
+Colle ce contenu :
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="/home/ubuntu/Sidour-Avoda-website"
+BACKEND_DIR="$PROJECT_DIR/backend"
+VENV_DIR="$BACKEND_DIR/.venv"
+BRANCH="main"
+SERVICE_NAME="sidour-backend"
+
+echo "==> Déploiement backend"
+cd "$PROJECT_DIR"
+
+echo "==> Git fetch"
+git fetch origin
+
+echo "==> Checkout $BRANCH"
+git checkout "$BRANCH"
+
+echo "==> Pull latest"
+git pull --ff-only origin "$BRANCH"
+
+echo "==> Activer venv"
+source "$VENV_DIR/bin/activate"
+
+echo "==> Installer dépendances"
+pip install -r "$BACKEND_DIR/requirements.txt"
+
+echo "==> Vérification syntaxe Python"
+python3 -m py_compile "$BACKEND_DIR/app/main.py" "$BACKEND_DIR/app/sites.py" "$BACKEND_DIR/app/schemas.py" "$BACKEND_DIR/app/models.py"
+
+echo "==> Restart service $SERVICE_NAME"
+sudo systemctl restart "$SERVICE_NAME"
+
+echo "==> Status service"
+sudo systemctl --no-pager --full status "$SERVICE_NAME"
+
+echo "==> Derniers logs"
+sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager
+
+echo "==> Déploiement terminé"
+```
+
+#### 2. Rendre le script exécutable
+
+```bash
+chmod +x /home/ubuntu/deploy-backend.sh
+```
+
+#### 3. Lancer le script
+
+```bash
+/home/ubuntu/deploy-backend.sh
+```
+
+#### 4. Vérifier que le backend fonctionne
+
+```bash
+sudo systemctl status sidour-backend --no-pager
+sudo journalctl -u sidour-backend -n 50 --no-pager
+curl http://127.0.0.1:8000/docs
+```
+
+Si `sidour-backend` est `active (running)` et que `/docs` répond, le backend déployé
+correspond bien au code poussé.
+
 ### Database Migrations
 
 The application includes automatic SQLite migrations in `main.py`:
