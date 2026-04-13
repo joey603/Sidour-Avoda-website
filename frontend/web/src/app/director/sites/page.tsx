@@ -1033,7 +1033,7 @@ export default function SitesList() {
                   value={autoPlanningForm.time}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, time: e.target.value }))}
                   disabled={autoPlanningControlsDisabled}
-                  className="h-10 w-full rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full max-w-[9.5rem] rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] sm:max-w-none dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
               {autoPlanningConfig?.last_error ? (
