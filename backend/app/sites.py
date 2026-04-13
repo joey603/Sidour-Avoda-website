@@ -126,16 +126,84 @@ def _next_effective_run_time(now: datetime, config: DirectorAutoPlanningConfig) 
     return candidate
 
 
+# Plafond משיכות pour la config תכנון אוטומטי (aligné UI).
+_AUTO_PLANNING_CONFIG_PULLS_MAX = 30
+
+
+def _coerce_pulls_limits_for_storage(raw: dict[str, int | None] | None) -> dict[str, int] | None:
+    if not raw:
+        return None
+    out: dict[str, int] = {}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        try:
+            lim = int(v)
+        except (TypeError, ValueError):
+            continue
+        if lim >= 1:
+            out[str(k)] = min(_AUTO_PLANNING_CONFIG_PULLS_MAX, lim)
+    return out or None
+
+
+def _pull_limits_from_config_row(row: DirectorAutoPlanningConfig | None) -> tuple[int | None, dict[int, int | None] | None]:
+    if not row:
+        return None, None
+    raw_pl = getattr(row, "pulls_limit", None)
+    gpl: int | None = None
+    if raw_pl is not None:
+        try:
+            gpl = int(raw_pl)
+        except (TypeError, ValueError):
+            gpl = None
+        if gpl is not None:
+            if gpl < 1:
+                gpl = None
+            elif gpl > _AUTO_PLANNING_CONFIG_PULLS_MAX:
+                gpl = _AUTO_PLANNING_CONFIG_PULLS_MAX
+    raw_by = getattr(row, "pulls_limits_by_site", None)
+    norm = _normalize_pulls_limits_by_site(raw_by if isinstance(raw_by, dict) else None)
+    if norm:
+        norm = {sid: (None if v is None else min(_AUTO_PLANNING_CONFIG_PULLS_MAX, max(1, int(v)))) for sid, v in norm.items()}
+    return gpl, (norm if norm else None)
+
+
 def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> AutoPlanningConfigOut:
     auto_save_mode = str(getattr(row, "auto_save_mode", "manual") or "manual")
     if auto_save_mode not in ("manual", "director", "shared"):
         auto_save_mode = "manual"
     next_run_at = None
-    target_week_iso = None
+    # Toujours renvoyer la semaine cible pour la barre UI (même תכנון אוטומטי כבוי).
+    target_week_iso = _next_week_iso(datetime.now())
     if row and bool(getattr(row, "enabled", False)):
         next_run_dt = _next_effective_run_time(datetime.now(), row)
         next_run_at = int(next_run_dt.timestamp() * 1000)
         target_week_iso = _next_week_iso(next_run_dt)
+    raw_plim = getattr(row, "pulls_limit", None) if row else None
+    pulls_limit_out: int | None = None
+    if raw_plim is not None:
+        try:
+            pulls_limit_out = int(raw_plim)
+        except Exception:
+            pulls_limit_out = None
+        if pulls_limit_out is not None:
+            if pulls_limit_out < 1:
+                pulls_limit_out = None
+            else:
+                pulls_limit_out = min(_AUTO_PLANNING_CONFIG_PULLS_MAX, pulls_limit_out)
+    raw_by_site = getattr(row, "pulls_limits_by_site", None) if row else None
+    pulls_limits_by_site_out: dict[str, int] | None = None
+    if isinstance(raw_by_site, dict) and raw_by_site:
+        tmp: dict[str, int] = {}
+        for k, v in raw_by_site.items():
+            try:
+                lim = int(v) if v is not None else None
+            except Exception:
+                continue
+            if lim is not None and lim >= 1:
+                tmp[str(int(k)) if str(k).lstrip("-").isdigit() else str(k)] = min(_AUTO_PLANNING_CONFIG_PULLS_MAX, lim)
+        pulls_limits_by_site_out = tmp or None
+
     return AutoPlanningConfigOut(
         enabled=bool(getattr(row, "enabled", False)),
         day_of_week=int(getattr(row, "day_of_week", 0) or 0),
@@ -143,6 +211,8 @@ def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> A
         minute=int(getattr(row, "minute", 0) or 0),
         auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
         auto_save_mode=auto_save_mode,
+        pulls_limit=pulls_limit_out,
+        pulls_limits_by_site=pulls_limits_by_site_out,
         last_run_week_iso=getattr(row, "last_run_week_iso", None),
         last_run_at=getattr(row, "last_run_at", None),
         last_error=getattr(row, "last_error", None),
@@ -585,11 +655,16 @@ def _worker_identity_key(row: SiteWorker) -> str:
     return f"name:{_norm_name_local(getattr(row, 'name', ''))}"
 
 
-def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int) -> list[int]:
+def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int, graph_week_iso: str | None = None) -> list[int]:
+    """Composantes connexes par travailleur identique. Exclut pending et retraits (removed_from) pour la semaine du graphe (None = effectif « maintenant »)."""
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     site_ids = [int(s.id) for s in sites]
     rows = (
-        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if not bool(getattr(row, "pending_approval", False))]
+        [
+            row
+            for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+            if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, graph_week_iso)
+        ]
         if site_ids
         else []
     )
@@ -617,6 +692,61 @@ def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: in
     return sorted(visited)
 
 
+def _linked_site_cluster_map_for_director(db: Session, director_id: int) -> dict[int, list[int]]:
+    """Pour chaque site, liste triée des ids du même groupe multi-sites (≥2) ; [] si isolé."""
+    sites = db.query(Site).filter(Site.director_id == director_id).all()
+    site_ids = [int(s.id) for s in sites]
+    if not site_ids:
+        return {}
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
+    rows = [
+        row
+        for row in rows
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, None)
+    ]
+    key_to_sites: dict[str, set[int]] = {}
+    for row in rows:
+        key = _worker_identity_key(row)
+        if not key:
+            continue
+        key_to_sites.setdefault(key, set()).add(int(row.site_id))
+    parent = {sid: sid for sid in site_ids}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for site_set in key_to_sites.values():
+        ids_sorted = sorted(site_set)
+        if len(ids_sorted) < 2:
+            continue
+        first = ids_sorted[0]
+        for sid in ids_sorted[1:]:
+            union(first, sid)
+
+    root_members: dict[int, list[int]] = {}
+    for sid in site_ids:
+        r = find(sid)
+        root_members.setdefault(r, []).append(sid)
+    out: dict[int, list[int]] = {}
+    for _root, members in root_members.items():
+        msorted = sorted(members)
+        if len(msorted) < 2:
+            for sid in msorted:
+                out[sid] = []
+        else:
+            for sid in msorted:
+                out[sid] = msorted
+    return out
+
+
 def _site_role_key(site_id: int, role_name: str | None) -> str:
     return f"site:{site_id}:{_norm_role_local(role_name)}"
 
@@ -630,13 +760,23 @@ def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) 
         return [int(row.site_id)]
     key = _worker_identity_key(row)
     linked_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all()
-    linked_site_ids = sorted({int(r.site_id) for r in linked_rows if _worker_identity_key(r) == key})
+    linked_site_ids = sorted(
+        {
+            int(r.site_id)
+            for r in linked_rows
+            if _worker_identity_key(r) == key
+            and not bool(getattr(r, "pending_approval", False))
+            and _site_worker_visible_for_week(r, None)
+        }
+    )
     return linked_site_ids or [int(row.site_id)]
 
 
-def _linked_site_ids_by_worker_key(rows: list[SiteWorker]) -> dict[str, list[int]]:
+def _linked_site_ids_by_worker_key(rows: list[SiteWorker], graph_week_iso: str | None = None) -> dict[str, list[int]]:
     key_to_site_ids: dict[str, set[int]] = {}
     for row in rows:
+        if bool(getattr(row, "pending_approval", False)) or not _site_worker_visible_for_week(row, graph_week_iso):
+            continue
         key = _worker_identity_key(row)
         if not key:
             continue
@@ -690,7 +830,7 @@ def _build_multi_site_generation_context(
     exclude_days: list[str] | None = None,
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None,
 ) -> dict:
-    connected_site_ids = _connected_site_ids_for_root(db, director_id, root_site_id)
+    connected_site_ids = _connected_site_ids_for_root(db, director_id, root_site_id, week_iso)
     sites = db.query(Site).filter(Site.id.in_(connected_site_ids)).all() if connected_site_ids else []
     sites_by_id = {int(s.id): s for s in sites}
     rows = (
@@ -1054,6 +1194,17 @@ def _planning_limit_error_detail(pulls_limit: int) -> str:
     return f"לא נמצא תכנון עם עד {int(pulls_limit)} משיכות"
 
 
+def _effective_auto_pulls_limit_for_site(
+    site_id: int,
+    global_limit: int | None,
+    by_site: dict[int, int | None] | None,
+) -> int | None:
+    """Limite משיכות pour un site : entrée explicite dans by_site, sinon limite globale."""
+    if by_site and site_id in by_site:
+        return by_site.get(site_id)
+    return global_limit
+
+
 def _normalize_pulls_limits_by_site(raw_value: dict | None) -> dict[int, int | None]:
     normalized: dict[int, int | None] = {}
     if not isinstance(raw_value, dict):
@@ -1102,7 +1253,13 @@ def _planning_limit_error_detail_for_request(
     return "לא נמצא תכנון עם מגבלות המשיכות שנבחרו"
 
 
-def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str, auto_pulls_enabled: bool = False) -> dict:
+def _generate_director_week_plan_payload(
+    db: Session,
+    site: Site,
+    week_iso: str,
+    auto_pulls_enabled: bool = False,
+    pulls_limit: int | None = None,
+) -> dict:
     rows = [
         row
         for row in db.query(SiteWorker).filter(SiteWorker.site_id == site.id).all()
@@ -1140,7 +1297,7 @@ def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str,
         assignments = {day: {sh: [[] for _ in stations] for sh in shifts} for day in days}
         payload = make_payload(assignments)
         if auto_pulls_enabled:
-            payload = _apply_auto_pulls_to_payload(site, rows, payload)
+            payload = _apply_auto_pulls_to_payload(site, rows, payload, pulls_limit=pulls_limit)
         return payload
 
     result = solve_schedule(
@@ -1167,7 +1324,7 @@ def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str,
 
     for idx, candidate in enumerate(candidate_assignments):
         candidate_payload = make_payload(candidate)
-        candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload)
+        candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload, pulls_limit=pulls_limit)
         summary = _summarize_auto_planning_result(
             site,
             candidate_payload.get("assignments"),
@@ -1201,7 +1358,7 @@ def _generate_director_week_plan_payload(db: Session, site: Site, week_iso: str,
     assignments = result["assignments"]
     payload = make_payload(assignments)
     if auto_pulls_enabled:
-        payload = _apply_auto_pulls_to_payload(site, rows, payload)
+        payload = _apply_auto_pulls_to_payload(site, rows, payload, pulls_limit=pulls_limit)
     return payload
 
 
@@ -1212,6 +1369,8 @@ def _run_auto_planning_for_director(
     source: str = "auto",
     auto_pulls_enabled: bool = False,
     auto_save_mode: str = "manual",
+    pulls_limit: int | None = None,
+    pulls_limits_by_site: dict[int, int | None] | None = None,
 ) -> tuple[int, list[str]]:
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     errors: list[str] = []
@@ -1233,7 +1392,14 @@ def _run_auto_planning_for_director(
                 target_week_iso,
                 source,
             )
-            payload = _generate_director_week_plan_payload(db, site, target_week_iso, auto_pulls_enabled=auto_pulls_enabled)
+            site_pulls_limit = _effective_auto_pulls_limit_for_site(int(site.id), pulls_limit, pulls_limits_by_site)
+            payload = _generate_director_week_plan_payload(
+                db,
+                site,
+                target_week_iso,
+                auto_pulls_enabled=auto_pulls_enabled,
+                pulls_limit=site_pulls_limit,
+            )
             summary = _summarize_auto_planning_result(
                 site,
                 payload.get("assignments"),
@@ -1314,6 +1480,7 @@ def process_auto_planning_tick(db: Session) -> None:
             now.isoformat(),
             next_run_at.isoformat(),
         )
+        gpl, by_site = _pull_limits_from_config_row(config)
         _, errors = _run_auto_planning_for_director(
             db,
             config.director_id,
@@ -1321,6 +1488,8 @@ def process_auto_planning_tick(db: Session) -> None:
             "scheduled",
             auto_pulls_enabled=bool(getattr(config, "auto_pulls_enabled", False)),
             auto_save_mode=str(getattr(config, "auto_save_mode", "manual") or "manual"),
+            pulls_limit=gpl,
+            pulls_limits_by_site=by_site,
         )
         config.last_run_week_iso = target_week_iso
         config.last_run_at = _now_ms()
@@ -1378,6 +1547,8 @@ def put_auto_planning_config(
             minute=payload.minute,
             auto_pulls_enabled=payload.auto_pulls_enabled,
             auto_save_mode=payload.auto_save_mode,
+            pulls_limit=payload.pulls_limit,
+            pulls_limits_by_site=_coerce_pulls_limits_for_storage(payload.pulls_limits_by_site),
             updated_at=now,
         )
         db.add(row)
@@ -1388,6 +1559,8 @@ def put_auto_planning_config(
         row.minute = payload.minute
         row.auto_pulls_enabled = payload.auto_pulls_enabled
         row.auto_save_mode = payload.auto_save_mode
+        row.pulls_limit = payload.pulls_limit
+        row.pulls_limits_by_site = _coerce_pulls_limits_for_storage(payload.pulls_limits_by_site)
         row.updated_at = now
     # Toute modification de créneau redéfinit le prochain déclenchement planifié.
     row.last_run_week_iso = None
@@ -1425,6 +1598,7 @@ def test_auto_planning_now(
             updated_at=_now_ms(),
         )
         db.add(row)
+    gpl, by_site = _pull_limits_from_config_row(row)
     success_count, errors = _run_auto_planning_for_director(
         db,
         user.id,
@@ -1432,6 +1606,8 @@ def test_auto_planning_now(
         "manual-test",
         auto_pulls_enabled=bool(getattr(row, "auto_pulls_enabled", False)),
         auto_save_mode=str(getattr(row, "auto_save_mode", "manual") or "manual"),
+        pulls_limit=gpl,
+        pulls_limits_by_site=by_site,
     )
     # Un test manuel ne doit jamais bloquer l'exécution planifiée du créneau hebdo.
     row.last_run_week_iso = None
@@ -1952,6 +2128,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         existing = preferred_plan_by_site.get(row.site_id)
         if existing is None or _week_plan_rank(row) > _week_plan_rank(existing):
             preferred_plan_by_site[row.site_id] = row
+    linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
     return [
         SiteOut(
             id=s.id,
@@ -1964,6 +2141,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
                 preferred_plan_by_site.get(s.id),
                 next_week_iso,
             ),
+            linked_site_ids=linked_by_site.get(int(s.id), []),
         )
         for s in sites
     ]
@@ -1989,6 +2167,7 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
             required_count=0,
             pulls_count=0,
         ),
+        linked_site_ids=[],
     )
 
 
@@ -2101,7 +2280,15 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
         raise HTTPException(status_code=404, detail="Site introuvable")
     workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
     pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
-    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, pending_workers_count=pending_workers_count, config=site.config)
+    linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
+    return SiteOut(
+        id=site.id,
+        name=site.name,
+        workers_count=workers_count,
+        pending_workers_count=pending_workers_count,
+        config=site.config,
+        linked_site_ids=linked_by_site.get(int(site.id), []),
+    )
 
 
 @router.get("/{site_id}/worker-invite", response_model=WorkerInviteLinkOut)
@@ -2149,7 +2336,15 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
     db.refresh(site)
     workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
     pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
-    return SiteOut(id=site.id, name=site.name, workers_count=workers_count, pending_workers_count=pending_workers_count, config=site.config)
+    linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
+    return SiteOut(
+        id=site.id,
+        name=site.name,
+        workers_count=workers_count,
+        pending_workers_count=pending_workers_count,
+        config=site.config,
+        linked_site_ids=linked_by_site.get(int(site.id), []),
+    )
 
 
 @router.get("/{site_id}/workers", response_model=list[WorkerOut])
@@ -2172,7 +2367,7 @@ def list_workers(
         if director_site_ids
         else []
     )
-    linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows)
+    linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows, wk)
 
     user_ids = sorted({int(r.user_id) for r in rows if getattr(r, "user_id", None)})
     users_by_id = {
@@ -2635,10 +2830,10 @@ def get_linked_sites(
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    linked_site_ids = _connected_site_ids_for_root(db, user.id, site_id)
+    week_iso = _validate_week_iso(week) if week else None
+    linked_site_ids = _connected_site_ids_for_root(db, user.id, site_id, week_iso)
     sites = db.query(Site).filter(Site.id.in_(linked_site_ids)).all() if linked_site_ids else []
     by_id = {int(s.id): s for s in sites}
-    week_iso = _validate_week_iso(week) if week else None
     plan_rows_by_site: dict[int, list[SiteWeekPlan]] = {}
     if week_iso and linked_site_ids:
         rows = (

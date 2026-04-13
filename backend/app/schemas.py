@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Any
 
 
@@ -103,6 +103,10 @@ class SiteOut(BaseModel):
     pending_workers_count: int = 0
     config: dict | None = None
     next_week_saved_plan_status: NextWeekSavedPlanStatus | None = None
+    linked_site_ids: list[int] = Field(
+        default_factory=list,
+        description="Même groupe multi-sites (≥2 sites) : ids triés ; vide si site seul.",
+    )
 
 class SiteUpdate(BaseModel):
     name: str | None = None
@@ -189,6 +193,25 @@ class AutoPlanningConfigPayload(BaseModel):
     minute: int = Field(default=0, ge=0, le=59)
     auto_pulls_enabled: bool = False
     auto_save_mode: Literal["manual", "director", "shared"] = "manual"
+    # Même limite pour tous les sites, ou dict par id de site (clés string). Max 30 משיכות.
+    pulls_limit: int | None = Field(default=None, ge=1, le=30)
+    pulls_limits_by_site: dict[str, int | None] | None = None
+
+    @field_validator("pulls_limits_by_site", mode="before")
+    @classmethod
+    def cap_pulls_limits_by_site(cls, v: object) -> dict[str, int] | None:
+        if v is None or not isinstance(v, dict):
+            return None
+        out: dict[str, int] = {}
+        for k, raw in v.items():
+            if raw is None:
+                continue
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                continue
+            out[str(k)] = max(1, min(30, n))
+        return out or None
 
 
 class AutoPlanningConfigOut(AutoPlanningConfigPayload):

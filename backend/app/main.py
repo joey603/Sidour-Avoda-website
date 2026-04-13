@@ -192,6 +192,14 @@ def create_app() -> FastAPI:
                         conn.exec_driver_sql(
                             "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
                         )
+                    if auto_cols and "pulls_limit" not in auto_col_names:
+                        logger.info("Ajout de la colonne pulls_limit à director_auto_planning_configs")
+                        conn.exec_driver_sql("ALTER TABLE director_auto_planning_configs ADD COLUMN pulls_limit INTEGER")
+                    if auto_cols and "pulls_limits_by_site" not in auto_col_names:
+                        logger.info("Ajout de la colonne pulls_limits_by_site à director_auto_planning_configs")
+                        conn.exec_driver_sql(
+                            "ALTER TABLE director_auto_planning_configs ADD COLUMN pulls_limits_by_site TEXT"
+                        )
                 except Exception as e:
                     logger.info(f"Table director_auto_planning_configs pas encore créée ou erreur: {e}")
             elif dialect_name == "postgresql":
@@ -202,6 +210,12 @@ def create_app() -> FastAPI:
                     )
                     conn.exec_driver_sql(
                         "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
+                    )
+                    conn.exec_driver_sql(
+                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS pulls_limit INTEGER"
+                    )
+                    conn.exec_driver_sql(
+                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS pulls_limits_by_site JSONB"
                     )
                 except Exception as e:
                     logger.info(f"Migration Postgres director_auto_planning_configs ignorée ou impossible: {e}")
