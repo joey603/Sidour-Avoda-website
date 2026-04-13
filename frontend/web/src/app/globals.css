@@ -161,3 +161,9 @@
   min-height: 100dvh;
   min-height: -webkit-fill-available;
 }
+
+.h-screen-mobile {
+  height: 100vh;
+  height: 100dvh;
+  height: -webkit-fill-available;
+}
