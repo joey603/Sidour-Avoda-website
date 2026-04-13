@@ -1017,7 +1017,7 @@ export default function SitesList() {
                   value={autoPlanningForm.day_of_week}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, day_of_week: Number(e.target.value) }))}
                   disabled={autoPlanningControlsDisabled}
-                  className="min-h-[48px] w-full rounded-md border px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-[#00A8E0] sm:h-10 sm:min-h-0 sm:py-2 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full rounded-md border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 >
                   {AUTO_PLANNING_DAY_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
@@ -1033,7 +1033,7 @@ export default function SitesList() {
                   value={autoPlanningForm.time}
                   onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, time: e.target.value }))}
                   disabled={autoPlanningControlsDisabled}
-                  className="box-border min-h-[48px] w-full max-w-full rounded-md border px-3 py-2.5 text-left text-base [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] sm:h-10 sm:min-h-0 sm:py-2 sm:text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                  className="h-10 w-full rounded-md border px-3 text-left text-sm [direction:ltr] focus:outline-none focus:ring-2 focus:ring-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
               {autoPlanningConfig?.last_error ? (
