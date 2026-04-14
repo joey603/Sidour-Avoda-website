@@ -4960,24 +4960,31 @@ export default function PlanningPage() {
         <div className="flex flex-col gap-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+        <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
             </div>
-            <button
-              type="button"
-              onClick={() => router.back()}
+          <button
+            type="button"
+            onClick={() => router.back()}
               className="inline-flex shrink-0 items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="חזור"
-            >
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-            </button>
-          </div>
-          {weekPlanSaveBadgeConfig ? (
-            <div className="sticky top-2 z-[41] w-fit max-w-full">
-              <span
-                className={`${weekPlanSaveBadgeConfig.className} mr-2 max-w-[calc(100vw-2rem)] sm:mr-3 sm:max-w-[calc(100vw-2.25rem)]`}
-              >
-                {weekPlanSaveBadgeConfig.label}
-              </span>
+            aria-label="חזור"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          </button>
+        </div>
+          {weekPlanSaveBadgeConfig || (editingSaved && savedWeekPlan?.assignments) ? (
+            <div className="sticky top-2 z-[41] flex w-fit max-w-full flex-wrap items-center gap-1.5">
+              {editingSaved && savedWeekPlan?.assignments ? (
+                <span className="inline-flex items-center rounded-full border border-sky-400 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-900 dark:border-sky-600 dark:bg-sky-950/50 dark:text-sky-100">
+                  ערוך
+                </span>
+              ) : null}
+              {weekPlanSaveBadgeConfig ? (
+                <span
+                  className={`${weekPlanSaveBadgeConfig.className} mr-2 max-w-[calc(100vw-2rem)] sm:mr-3 sm:max-w-[calc(100vw-2.25rem)]`}
+                >
+                  {weekPlanSaveBadgeConfig.label}
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
