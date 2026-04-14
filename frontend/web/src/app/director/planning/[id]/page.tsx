@@ -189,12 +189,6 @@ export default function PlanningPage() {
   const savedPlanBeforeEditRef = useRef<SavedWeekPlanState | null>(null);
   const currentSiteIdRef = useRef<string>(String(params.id));
   const weekStartRef = useRef<Date | null>(null);
-  const weekPlanBadgeStartAnchorRef = useRef<HTMLDivElement | null>(null);
-  const weekPlanBadgeEndAnchorRef = useRef<HTMLDivElement | null>(null);
-  const weekPlanBadgeSideRef = useRef<HTMLDivElement | null>(null);
-  const weekPlanBadgeBaseTopRef = useRef<number | null>(null);
-  const weekPlanBadgeLastTopRef = useRef<number | null>(null);
-  const weekPlanBadgeLastInlineStartRef = useRef<number | null>(null);
   // Éviter de re-fetch les réponses en boucle dans le modal
   const answersRefreshKeyRef = useRef<string | null>(null);
   const weekQueryParam = searchParams.get("week");
@@ -468,57 +462,6 @@ export default function PlanningPage() {
     }
     return null;
   }, [weekPlanSaveBadgeKind]);
-  const [weekPlanBadgeViewportTop, setWeekPlanBadgeViewportTop] = useState<number | null>(null);
-  const [weekPlanBadgeInlineStart, setWeekPlanBadgeInlineStart] = useState<number | null>(null);
-  useEffect(() => {
-    weekPlanBadgeBaseTopRef.current = null;
-    weekPlanBadgeLastTopRef.current = null;
-    weekPlanBadgeLastInlineStartRef.current = null;
-    if (!weekPlanSaveBadgeConfig) {
-      setWeekPlanBadgeViewportTop(null);
-      setWeekPlanBadgeInlineStart(null);
-      return;
-    }
-    let rafId = 0;
-    const updateBadgePosition = () => {
-      rafId = 0;
-      const startEl = weekPlanBadgeStartAnchorRef.current;
-      const endEl = weekPlanBadgeEndAnchorRef.current;
-      const sideEl = weekPlanBadgeSideRef.current;
-      if (!startEl || !endEl) return;
-      const startTop = startEl.getBoundingClientRect().top;
-      const endTop = endEl.getBoundingClientRect().top;
-      if (weekPlanBadgeBaseTopRef.current == null) {
-        weekPlanBadgeBaseTopRef.current = startTop;
-      }
-      const baseTop = weekPlanBadgeBaseTopRef.current;
-      const nextTop = Math.round(Math.max(0, Math.min(Math.max(startTop, baseTop), endTop)));
-      if (weekPlanBadgeLastTopRef.current !== nextTop) {
-        weekPlanBadgeLastTopRef.current = nextTop;
-        setWeekPlanBadgeViewportTop(nextTop);
-      }
-      if (typeof window !== "undefined" && sideEl) {
-        const sideRect = sideEl.getBoundingClientRect();
-        const nextInlineStart = Math.round(Math.max(12, window.innerWidth - sideRect.right));
-        if (weekPlanBadgeLastInlineStartRef.current !== nextInlineStart) {
-          weekPlanBadgeLastInlineStartRef.current = nextInlineStart;
-          setWeekPlanBadgeInlineStart(nextInlineStart);
-        }
-      }
-    };
-    const scheduleUpdate = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(updateBadgePosition);
-    };
-    scheduleUpdate();
-    window.addEventListener("scroll", scheduleUpdate, { passive: true });
-    window.addEventListener("resize", scheduleUpdate);
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      window.removeEventListener("scroll", scheduleUpdate);
-      window.removeEventListener("resize", scheduleUpdate);
-    };
-  }, [weekPlanSaveBadgeConfig, weekStart, params.id, loading, workersResolvedForPage, error]);
   const pullsLimitSelectOptions = useMemo(
     () => ([
       { value: "", label: "ללא" },
@@ -5014,32 +4957,29 @@ export default function PlanningPage() {
               : ""))
         }
       >
-        <div className="flex items-start justify-between gap-3">
-          <div ref={weekPlanBadgeSideRef} className="relative min-w-0">
-            <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
               <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
-              {weekPlanSaveBadgeConfig ? <div ref={weekPlanBadgeStartAnchorRef} className="h-6 shrink-0" aria-hidden /> : null}
             </div>
-            {weekPlanSaveBadgeConfig && weekPlanBadgeViewportTop != null ? (
+            <button
+              type="button"
+              onClick={() => router.back()}
+              className="inline-flex shrink-0 items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              aria-label="חזור"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+            </button>
+          </div>
+          {weekPlanSaveBadgeConfig ? (
+            <div className="sticky top-2 z-[41] w-fit max-w-full">
               <span
-                className={`${weekPlanSaveBadgeConfig.className} fixed z-[41] max-w-[calc(100vw-1.5rem)]`}
-                style={{
-                  top: weekPlanBadgeViewportTop,
-                  right: weekPlanBadgeInlineStart ?? 12,
-                }}
+                className={`${weekPlanSaveBadgeConfig.className} mr-2 max-w-[calc(100vw-2rem)] sm:mr-3 sm:max-w-[calc(100vw-2.25rem)]`}
               >
                 {weekPlanSaveBadgeConfig.label}
               </span>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            onClick={() => router.back()}
-            className="inline-flex shrink-0 items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-            aria-label="חזור"
-          >
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-          </button>
+            </div>
+          ) : null}
         </div>
         {showLinkedSitesDialog ? (
           <div
@@ -7012,7 +6952,6 @@ export default function PlanningPage() {
               <h2 className="text-lg font-semibold text-center">
                 גריד שבועי לפי עמדה
               </h2>
-              <div ref={weekPlanBadgeEndAnchorRef} aria-hidden className="h-0" />
               <div className="flex items-center justify-center gap-2">
                 <button
                   type="button"
