@@ -263,6 +263,44 @@ export default function PlanningPage() {
   }, [weekStart]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const cfg = await apiFetch<any>("/director/sites/settings/auto-planning", {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+        });
+        if (cancelled) return;
+        setAutoPlanningWeeklyEnabled(!!cfg?.enabled);
+      } catch {
+        if (!cancelled) setAutoPlanningWeeklyEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function bumpAutoWeeklyWorkerChanges(siteIds: number[], weekIso: string) {
+    if (!autoPlanningWeeklyEnabled) return;
+    if (!siteIds.length || !weekIso) return;
+    try {
+      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const byWeek = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, Record<string, number>>;
+      const weekMap = (byWeek[weekIso] && typeof byWeek[weekIso] === "object") ? byWeek[weekIso] : {};
+      const uniqueIds = Array.from(new Set(siteIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)));
+      uniqueIds.forEach((siteId) => {
+        const key = String(siteId);
+        const prev = Number(weekMap[key] || 0);
+        weekMap[key] = prev + 1;
+      });
+      byWeek[weekIso] = weekMap;
+      localStorage.setItem(AUTO_WEEKLY_WORKER_CHANGES_KEY, JSON.stringify(byWeek));
+      window.dispatchEvent(new CustomEvent("auto-planning-worker-changes-updated"));
+    } catch {}
+  }
+
+  useEffect(() => {
     if (!weekFromQuery) return;
     if (weekStartRef.current && weekStartRef.current.getTime() === weekFromQuery.getTime()) return;
     setWeekStart(weekFromQuery);
@@ -290,6 +328,7 @@ export default function PlanningPage() {
   // IA planning result
   const [aiLoading, setAiLoading] = useState(false);
   const [sharedGenerationRunning, setSharedGenerationRunning] = useState(false);
+  const [autoPlanningWeeklyEnabled, setAutoPlanningWeeklyEnabled] = useState(false);
   type AIPlan = {
     days: string[];
     shifts: string[];
@@ -416,6 +455,7 @@ export default function PlanningPage() {
   const multiSiteSiteCachePrefix = "multi_site_site_cache_";
   const multiSiteWorkersCachePrefix = "multi_site_workers_cache_";
   const multiSiteLinkedSitesCachePrefix = "multi_site_linked_sites_cache_";
+  const AUTO_WEEKLY_WORKER_CHANGES_KEY = "auto_weekly_worker_changes_v1";
   const [activeSavedPlanKey, setActiveSavedPlanKey] = useState<string | null>(null);
   const multiSitePullsSites = useMemo(() => {
     const currentId = Number(params.id);
@@ -5974,6 +6014,13 @@ export default function PlanningPage() {
                               originalAvailability || EMPTY_WORKER_AVAILABILITY,
                               newWorkerAvailability || EMPTY_WORKER_AVAILABILITY,
                             );
+                            const maxShiftsChanged = Number(currentWorker?.maxShifts ?? 0) !== Number(newWorkerMax || 0);
+                            const normalizeRoles = (roles: string[]) => (
+                              Array.from(new Set((roles || []).map((roleName) => String(roleName || "").trim()).filter(Boolean))).sort()
+                            );
+                            const rolesBefore = normalizeRoles(Array.isArray(currentWorker?.roles) ? currentWorker!.roles : []);
+                            const rolesAfter = normalizeRoles(Array.isArray(newWorkerRoles) ? newWorkerRoles : []);
+                            const rolesChanged = JSON.stringify(rolesBefore) !== JSON.stringify(rolesAfter);
                             const linkedSiteNames: string[] = Array.isArray(currentWorker?.linkedSiteNames) ? currentWorker?.linkedSiteNames || [] : [];
                             const linkedOtherSiteNames = linkedSiteNames.filter((siteName) => String(siteName) !== String(site?.name || ""));
                             const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
@@ -6003,6 +6050,16 @@ export default function PlanningPage() {
                             };
                             setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
                               void refreshLinkedSites();
+                            if (availabilityChanged || maxShiftsChanged || rolesChanged) {
+                              const isMultiSiteContext = multiSitePullsSites.length > 1;
+                              if (isMultiSiteContext) {
+                                const linkedIds = Array.isArray(mapped.linkedSiteIds) ? mapped.linkedSiteIds : [];
+                                const impactedIds = linkedIds.length > 0
+                                  ? linkedIds
+                                  : multiSitePullsSites.map((linkedSite) => linkedSite.id);
+                                bumpAutoWeeklyWorkerChanges(impactedIds, getWeekKeyISO(weekStart));
+                              }
+                            }
                             toast.success("עובד עודכן בהצלחה!");
                               try {
                                 const parsed = { ...(readWeeklyAvailabilityFor(weekStart) as any) };

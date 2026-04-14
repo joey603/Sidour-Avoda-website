@@ -260,6 +260,7 @@ function getTargetWeekIsoFromRunAt(runAtMs: number): string | null {
 
 export default function SitesList() {
   const router = useRouter();
+  const AUTO_WEEKLY_WORKER_CHANGES_KEY = "auto_weekly_worker_changes_v1";
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -283,6 +284,7 @@ export default function SitesList() {
   const [sitePromoteBadge, setSitePromoteBadge] = useState<Record<number, "saved" | "published">>({});
   /** Après מחק סידור : afficher encore שיבוצים / משיכות jusqu’à sync API */
   const [preservedWeekPlanStats, setPreservedWeekPlanStats] = useState<Record<number, PreservedWeekPlanStats>>({});
+  const [autoWeeklyWorkerChangesByWeek, setAutoWeeklyWorkerChangesByWeek] = useState<Record<string, Record<string, number>>>({});
   const [autoPlanningForm, setAutoPlanningForm] = useState({
     enabled: false,
     day_of_week: 0,
@@ -336,6 +338,52 @@ export default function SitesList() {
       return changed ? next : prev;
     });
   }, [sites]);
+
+  function syncAutoWeeklyWorkerChangesFromStorage() {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      setAutoWeeklyWorkerChangesByWeek((parsed && typeof parsed === "object") ? parsed : {});
+    } catch {
+      setAutoWeeklyWorkerChangesByWeek({});
+    }
+  }
+
+  useEffect(() => {
+    syncAutoWeeklyWorkerChangesFromStorage();
+    function onChangesUpdated() {
+      syncAutoWeeklyWorkerChangesFromStorage();
+    }
+    window.addEventListener("auto-planning-worker-changes-updated", onChangesUpdated as EventListener);
+    return () => {
+      window.removeEventListener("auto-planning-worker-changes-updated", onChangesUpdated as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function getAutoWeeklyWorkerChangesCount(site: Site): number {
+    if (!autoPlanningConfig?.enabled) return 0;
+    const weekIso = getSiteAutoPlanningStatus(site)?.week_iso || site.next_week_saved_plan_status?.week_iso || "";
+    if (!weekIso) return 0;
+    const perWeek = autoWeeklyWorkerChangesByWeek[weekIso];
+    if (!perWeek) return 0;
+    return Number(perWeek[String(site.id)] || 0);
+  }
+
+  function clearAutoWeeklyWorkerChangesForWeek(weekIso: string | null | undefined) {
+    const wk = String(weekIso || "").trim();
+    if (!wk || typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      if (!parsed || typeof parsed !== "object" || !parsed[wk]) return;
+      delete parsed[wk];
+      localStorage.setItem(AUTO_WEEKLY_WORKER_CHANGES_KEY, JSON.stringify(parsed));
+      setAutoWeeklyWorkerChangesByWeek(parsed);
+      window.dispatchEvent(new CustomEvent("auto-planning-worker-changes-updated"));
+    } catch {}
+  }
 
   async function fetchSites() {
     try {
@@ -614,6 +662,7 @@ export default function SitesList() {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
       setAutoPlanningConfig(result.config);
+      clearAutoWeeklyWorkerChangesForWeek(result.target_week_iso);
       await fetchSites();
       // À la fin de la ריצה, fermer la popup pour laisser l'utilisateur voir directement la liste.
       setAutoPlanningModalOpen(false);
@@ -1137,6 +1186,11 @@ export default function SitesList() {
                                 {w.pulls} משיכות
                               </span>
                             ) : null}
+                            {getAutoWeeklyWorkerChangesCount(s) > 0 ? (
+                              <span className="inline-flex items-center rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                                {getAutoWeeklyWorkerChangesCount(s)} שינויים — נדרשת הרצה מחדש
+                              </span>
+                            ) : null}
                             {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                               <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                                 ממתין לשמירה
@@ -1361,6 +1415,11 @@ export default function SitesList() {
                           {w.pulls > 0 ? (
                             <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2 py-1 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
                               {w.pulls} משיכות
+                            </span>
+                          ) : null}
+                          {getAutoWeeklyWorkerChangesCount(s) > 0 ? (
+                            <span className="inline-flex items-center rounded-full border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                              {getAutoWeeklyWorkerChangesCount(s)} שינויים — נדרשת הרצה מחדש
                             </span>
                           ) : null}
                           {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
