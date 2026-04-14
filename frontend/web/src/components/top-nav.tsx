@@ -88,7 +88,43 @@ export default function TopNav() {
   const inactiveClasses =
     "bg-white text-zinc-800 border-zinc-300 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-200 dark:border-zinc-700 dark:hover:bg-zinc-800";
 
+  function clearPlanningDraftCachesOnLogout() {
+    if (typeof window === "undefined") return;
+    try {
+      const prefixesToClear = [
+        "multi_site_generated_",
+        "multi_site_generating_",
+        "multi_site_assignment_filters_",
+        "multi_site_saved_edit_",
+        "multi_site_navigation_log_",
+        "multi_site_site_cache_",
+        "multi_site_workers_cache_",
+        "multi_site_linked_sites_cache_",
+      ];
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i += 1) {
+        const key = sessionStorage.key(i);
+        if (!key) continue;
+        if (key === "multi_site_navigation_in_app") {
+          keysToRemove.push(key);
+          continue;
+        }
+        if (prefixesToClear.some((prefix) => key.startsWith(prefix))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => {
+        try { sessionStorage.removeItem(key); } catch {}
+      });
+    } catch {}
+  }
+
   const handleLinkClick = () => {
+    // En quittant la page planning, on nettoie les brouillons/caches multi-sites
+    // générés depuis "יצירת תכנון" pour éviter de réappliquer un état obsolète.
+    if ((pathname || "").startsWith("/director/planning")) {
+      clearPlanningDraftCachesOnLogout();
+    }
     setMobileMenuOpen(false);
   };
 
@@ -345,6 +381,7 @@ export default function TopNav() {
             <button
               type="button"
               onClick={() => {
+                clearPlanningDraftCachesOnLogout();
                 clearToken();
                 setUserRole(null);
                 router.replace(userRole === "director" ? "/login/director" : "/login/worker");
@@ -407,6 +444,7 @@ export default function TopNav() {
               <button
                 type="button"
                 onClick={() => {
+                  clearPlanningDraftCachesOnLogout();
                   clearToken();
                   setUserRole(null);
                   setMobileMenuOpen(false);
