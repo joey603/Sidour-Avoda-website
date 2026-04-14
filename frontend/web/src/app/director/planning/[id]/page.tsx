@@ -189,6 +189,12 @@ export default function PlanningPage() {
   const savedPlanBeforeEditRef = useRef<SavedWeekPlanState | null>(null);
   const currentSiteIdRef = useRef<string>(String(params.id));
   const weekStartRef = useRef<Date | null>(null);
+  const weekPlanBadgeStartAnchorRef = useRef<HTMLDivElement | null>(null);
+  const weekPlanBadgeEndAnchorRef = useRef<HTMLDivElement | null>(null);
+  const weekPlanBadgeSideRef = useRef<HTMLDivElement | null>(null);
+  const weekPlanBadgeBaseTopRef = useRef<number | null>(null);
+  const weekPlanBadgeLastTopRef = useRef<number | null>(null);
+  const weekPlanBadgeLastInlineStartRef = useRef<number | null>(null);
   // Éviter de re-fetch les réponses en boucle dans le modal
   const answersRefreshKeyRef = useRef<string | null>(null);
   const weekQueryParam = searchParams.get("week");
@@ -435,6 +441,84 @@ export default function PlanningPage() {
     () => multiSitePullsSites.filter((linkedSite) => linkedSite.id !== Number(params.id)).map((linkedSite) => linkedSite.name).join(", "),
     [multiSitePullsSites, params.id],
   );
+  /** Statut persistant du סידור : brouillon directeur vs envoyé aux עובדים (clés DB ou localStorage). */
+  const weekPlanSaveBadgeKind = useMemo<null | "director" | "shared">(() => {
+    if (editingSaved) return null;
+    if (!savedWeekPlan?.assignments) return null;
+    const start = new Date(weekStart);
+    const ks = planKeyShared(params.id, start);
+    const kd = planKeyDirectorOnly(params.id, start);
+    const k = activeSavedPlanKey;
+    if (k === "db:shared" || k === ks) return "shared";
+    if (k === "db:director" || k === kd) return "director";
+    return null;
+  }, [editingSaved, savedWeekPlan?.assignments, weekStart, params.id, activeSavedPlanKey]);
+  const weekPlanSaveBadgeConfig = useMemo<{ label: string; className: string } | null>(() => {
+    if (weekPlanSaveBadgeKind === "director") {
+      return {
+        label: "נשמר (מנהל)",
+        className: "inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+      };
+    }
+    if (weekPlanSaveBadgeKind === "shared") {
+      return {
+        label: "נשמר ונשלח לעובדים",
+        className: "inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300",
+      };
+    }
+    return null;
+  }, [weekPlanSaveBadgeKind]);
+  const [weekPlanBadgeViewportTop, setWeekPlanBadgeViewportTop] = useState<number | null>(null);
+  const [weekPlanBadgeInlineStart, setWeekPlanBadgeInlineStart] = useState<number | null>(null);
+  useEffect(() => {
+    weekPlanBadgeBaseTopRef.current = null;
+    weekPlanBadgeLastTopRef.current = null;
+    weekPlanBadgeLastInlineStartRef.current = null;
+    if (!weekPlanSaveBadgeConfig) {
+      setWeekPlanBadgeViewportTop(null);
+      setWeekPlanBadgeInlineStart(null);
+      return;
+    }
+    let rafId = 0;
+    const updateBadgePosition = () => {
+      rafId = 0;
+      const startEl = weekPlanBadgeStartAnchorRef.current;
+      const endEl = weekPlanBadgeEndAnchorRef.current;
+      const sideEl = weekPlanBadgeSideRef.current;
+      if (!startEl || !endEl) return;
+      const startTop = startEl.getBoundingClientRect().top;
+      const endTop = endEl.getBoundingClientRect().top;
+      if (weekPlanBadgeBaseTopRef.current == null) {
+        weekPlanBadgeBaseTopRef.current = startTop;
+      }
+      const baseTop = weekPlanBadgeBaseTopRef.current;
+      const nextTop = Math.round(Math.max(0, Math.min(Math.max(startTop, baseTop), endTop)));
+      if (weekPlanBadgeLastTopRef.current !== nextTop) {
+        weekPlanBadgeLastTopRef.current = nextTop;
+        setWeekPlanBadgeViewportTop(nextTop);
+      }
+      if (typeof window !== "undefined" && sideEl) {
+        const sideRect = sideEl.getBoundingClientRect();
+        const nextInlineStart = Math.round(Math.max(12, window.innerWidth - sideRect.right));
+        if (weekPlanBadgeLastInlineStartRef.current !== nextInlineStart) {
+          weekPlanBadgeLastInlineStartRef.current = nextInlineStart;
+          setWeekPlanBadgeInlineStart(nextInlineStart);
+        }
+      }
+    };
+    const scheduleUpdate = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updateBadgePosition);
+    };
+    scheduleUpdate();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [weekPlanSaveBadgeConfig, weekStart, params.id, loading, workersResolvedForPage, error]);
   const pullsLimitSelectOptions = useMemo(
     () => ([
       { value: "", label: "ללא" },
@@ -4930,14 +5014,28 @@ export default function PlanningPage() {
               : ""))
         }
       >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+        <div className="flex items-start justify-between gap-3">
+          <div ref={weekPlanBadgeSideRef} className="relative min-w-0">
+            <div className="flex flex-col gap-2">
+              <h1 className="text-2xl font-semibold">יצירת תכנון משמרות</h1>
+              {weekPlanSaveBadgeConfig ? <div ref={weekPlanBadgeStartAnchorRef} className="h-6 shrink-0" aria-hidden /> : null}
+            </div>
+            {weekPlanSaveBadgeConfig && weekPlanBadgeViewportTop != null ? (
+              <span
+                className={`${weekPlanSaveBadgeConfig.className} fixed z-[41] max-w-[calc(100vw-1.5rem)]`}
+                style={{
+                  top: weekPlanBadgeViewportTop,
+                  right: weekPlanBadgeInlineStart ?? 12,
+                }}
+              >
+                {weekPlanSaveBadgeConfig.label}
+              </span>
+            ) : null}
           </div>
           <button
             type="button"
             onClick={() => router.back()}
-            className="inline-flex items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className="inline-flex shrink-0 items-center justify-center rounded-md border px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
             aria-label="חזור"
           >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
@@ -5177,7 +5275,7 @@ export default function PlanningPage() {
               <LoadingAnimation size={96} />
             </div>
           ) : null}
-          <div className="w-full rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
+          <div className="relative w-full rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
             <div className="mb-2 relative">
               <div className="text-sm text-zinc-500">אתר</div>
               <div className="text-lg font-medium">{site?.name}</div>
@@ -6914,6 +7012,7 @@ export default function PlanningPage() {
               <h2 className="text-lg font-semibold text-center">
                 גריד שבועי לפי עמדה
               </h2>
+              <div ref={weekPlanBadgeEndAnchorRef} aria-hidden className="h-0" />
               <div className="flex items-center justify-center gap-2">
                 <button
                   type="button"
@@ -11390,7 +11489,7 @@ export default function PlanningPage() {
                     className={
                       "flex min-w-[2rem] flex-col items-center justify-center border-l px-0.5 py-0 cursor-pointer [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
                       (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
-                        ? "border-zinc-300 bg-zinc-100 cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-800"
+                        ? "border-zinc-400/60 bg-zinc-300 cursor-not-allowed dark:border-zinc-600 dark:bg-zinc-700"
                         : autoPullsEnabled
                           ? "border-orange-500 bg-orange-500 dark:border-orange-500 dark:bg-orange-500"
                           : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
@@ -11399,7 +11498,11 @@ export default function PlanningPage() {
                     <span
                       className={
                         "text-[9px] font-medium leading-none [@media(orientation:landscape)_and_(max-width:1024px)]:text-[8px] " +
-                        (autoPullsEnabled ? "text-white" : "text-orange-600 dark:text-orange-400")
+                        (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
+                          ? "text-zinc-600 dark:text-zinc-400"
+                          : autoPullsEnabled
+                            ? "text-white"
+                            : "text-orange-600 dark:text-orange-400")
                       }
                     >
                       משיכות
@@ -11409,10 +11512,12 @@ export default function PlanningPage() {
                       onChange={setAutoPullsLimit}
                       disabled={isAnyGenerationRunning || isManual || (isSavedMode && !editingSaved)}
                       className={
-                        "w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none disabled:opacity-50 [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
-                        (autoPullsEnabled
-                          ? "text-white placeholder:text-white/70"
-                          : "text-orange-600 placeholder:text-orange-600/70 dark:text-orange-400 dark:placeholder:text-orange-400/70")
+                        "w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
+                        (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
+                          ? "text-zinc-600 placeholder:text-zinc-500 dark:text-zinc-400 dark:placeholder:text-zinc-500 disabled:opacity-100"
+                          : autoPullsEnabled
+                            ? "text-white placeholder:text-white/70 disabled:opacity-50"
+                            : "text-orange-600 placeholder:text-orange-600/70 dark:text-orange-400 dark:placeholder:text-orange-400/70 disabled:opacity-50")
                       }
                       title="מגבלת משיכות"
                     />
