@@ -65,14 +65,54 @@ function isAvailabilityDayShiftChanged(
   }
 }
 
+function normPlanningCellName(s: unknown): string {
+  return String(s ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Pastille שיבוץ קבוע : même index de slot que dans le tableau brut des assignations
+ * (aligné sur fixed_assignments[day][shift][station][slot] côté backend), pas un simple `.includes`
+ * sur toute la ligne (qui pouvait tout marquer si les données étaient mal alignées).
+ */
+function isWorkerDraftFixedAtAssignmentSlot(
+  snap: Record<string, Record<string, string[][]>> | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  rawSlotIndex: number,
+  workerName: string,
+  currentStationRow: string[],
+): boolean {
+  if (!snap || rawSlotIndex < 0) return false;
+  const w = normPlanningCellName(workerName);
+  if (!w) return false;
+  const cur = normPlanningCellName((currentStationRow || [])[rawSlotIndex] ?? "");
+  if (cur !== w) return false;
+  const snapRow = snap[dayKey]?.[shiftName]?.[stationIdx];
+  if (!Array.isArray(snapRow) || rawSlotIndex >= snapRow.length) return false;
+  return normPlanningCellName(snapRow[rawSlotIndex]) === w;
+}
+
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const truncateMobile6 = (value: any) => {
-    const s = String(value ?? "");
+  /** Mobile: dès 5 caractères, n’afficher que 4 + « … » en dessous (pas à côté). */
+  const mobileNameEllipsisBelow = (nm: string) => {
+    const s = String(nm ?? "");
     const chars = Array.from(s);
-    return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
+    if (chars.length <= 6) {
+      return <span>{s}</span>;
+    }
+    return (
+      <span className="flex flex-col items-center justify-center w-full min-w-0 max-w-full">
+        <span className="block w-full max-w-full text-center leading-tight">{chars.slice(0, 4).join("")}</span>
+        <span className="block w-full text-center leading-none">…</span>
+      </span>
+    );
   };
   const truncateSummaryMobile = (value: any) => {
     const s = String(value ?? "");
@@ -306,6 +346,10 @@ export default function PlanningPage() {
     setWeekStart(weekFromQuery);
   }, [weekFromQuery]);
 
+  useEffect(() => {
+    setDraftFixedAssignmentsSnapshot(null);
+  }, [weekStart, params.id]);
+
   // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
   useEffect(() => {
     if (!isAddModalOpen || !editingWorkerId) return;
@@ -426,6 +470,11 @@ export default function PlanningPage() {
   const streamPullPriorityPromotedRef = useRef(false);
   const multiSitePullsDialogBypassRef = useRef(false);
   const multiSitePullsRequestRef = useRef<Record<string, string> | null>(null);
+  /** Dernières cellules « fixes » envoyées à la génération (brouillon auto) — pastilles שיבוץ קבוע */
+  const [draftFixedAssignmentsSnapshot, setDraftFixedAssignmentsSnapshot] = useState<Record<
+    string,
+    Record<string, string[][]>
+  > | null>(null);
 
   // Snapshot sauvegardé pour la semaine (assignations + éventuelle liste travailleurs)
   const [savedWeekPlan, setSavedWeekPlan] = useState<SavedWeekPlanState | null>(null);
@@ -7845,19 +7894,19 @@ export default function PlanningPage() {
                         </div>
                         {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[8px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-0 md:px-2 py-0.5 md:py-2 text-right align-bottom w-10 md:w-28 text-[8px] md:text-sm">משמרת</th>
+                                <th className="px-2 py-2 text-right align-bottom w-14 md:w-28 text-[11px] md:text-sm">משמרת</th>
                                 {dayCols.map((d, i) => {
                                   const date = addDays(weekStart, i);
                                   return (
-                                    <th key={d.key} className="px-0.5 md:px-2 py-0.5 md:py-2 text-center align-bottom">
+                                    <th key={d.key} className="px-2 py-2 text-center align-bottom">
                                       <div className="flex flex-col items-center leading-tight min-w-0">
-                                        <span className="text-[5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
+                                        <span className="text-[7.5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
                                           {formatHebDate(date)}
                                         </span>
-                                        <span className="mt-0.5 text-[8px] md:text-sm">{d.label}</span>
+                                        <span className="mt-0.5 text-[11px] md:text-sm">{d.label}</span>
                                       </div>
                                     </th>
                                   );
@@ -7870,12 +7919,12 @@ export default function PlanningPage() {
                                 const enabled = !!stationShift?.enabled;
                                 return (
                                   <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-0 md:px-2 py-0.5 md:py-2 w-10 md:w-28">
+                                <td className="px-2 py-2 w-14 md:w-28">
                                   <div className="flex flex-col items-start min-w-0">
                                     {(() => {
                                       const h = hoursFromConfig(st, sn) || hoursOf(sn);
                                       return h ? (
-                                        <div className="text-[7px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
+                                        <div className="text-[9px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
                                           {(() => {
                                             const s = String(h || "").trim();
                                             const parts = s.split(/[-–—]/).map((x) => x.trim()).filter(Boolean);
@@ -7892,7 +7941,7 @@ export default function PlanningPage() {
                                         </div>
                                       ) : null;
                                     })()}
-                                    <div className="font-medium text-[6px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
+                                    <div className="font-medium text-[11px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
                                   </div>
                                 </td>
                                     {dayCols.map((d, dayIdx) => {
@@ -8339,7 +8388,7 @@ export default function PlanningPage() {
                                                             return (
                                                               <div
                                                                 key={"slot-nm-wrapper-" + slotIdx}
-                                                                className="group/slot relative w-full flex justify-center py-0.5"
+                                                                className="group/slot relative w-full flex justify-center py-1"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -8367,7 +8416,7 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
                                                                     // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
-                                                                    "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                     pullHighlightClassForName(nm)
@@ -8468,18 +8517,18 @@ export default function PlanningPage() {
                                                                 >
                                                                   <span className="flex flex-col items-center text-center flex-1 min-w-0 w-full overflow-hidden">
                                                                     {roleToShow ? (
-                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                      <span className="block w-full min-w-0 text-[6.5px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                     ) : null}
                                                                     <span
                                                                       className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
                                                                       {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                      <span className="md:hidden">
+                                                                      <span className="md:hidden text-[8.95px]">
                                                                         {expandedSlotKey === expKey ? (
                                                                           <span className="whitespace-nowrap">{nm}</span>
                                                                         ) : (
-                                                                          <span>{truncateMobile6(nm)}</span>
+                                                                          mobileNameEllipsisBelow(nm)
                                                                         )}
                                                                       </span>
                                                                       {/* Desktop: ellipsis classique */}
@@ -8503,7 +8552,7 @@ export default function PlanningPage() {
                                                                         <button
                                                                           type="button"
                                                                           dir="ltr"
-                                                                          className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                          className="text-[6.5px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                           onClick={(e) => {
                                                                             e.stopPropagation();
                                                                             if (isSavedMode && !editingSaved) return;
@@ -8682,7 +8731,7 @@ export default function PlanningPage() {
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
                                                                 className={
-                                                                  "group/slot w-full flex justify-center py-0.5 " +
+                                                                  "group/slot w-full flex justify-center py-1 " +
                                                                   (draggingWorkerName && isSlotHovered
                                                                     ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
                                                                     : "")
@@ -8717,7 +8766,7 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
                                                                     // L'agrandissement pendant le glisser est sur le wrapper (évite overflow-hidden du span).
-                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (canPullThisRole ? " ring-2 ring-orange-400" : "") +
                                                                     (!draggingWorkerName && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) && !isSlotHovered ? " ring-2 ring-green-500" : "") +
@@ -8776,8 +8825,8 @@ export default function PlanningPage() {
                                                                     });
                                                                   }}
                       >
-                                                                  <span className="text-[7px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
-                        <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                  <span className="text-[6.5px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
+                        <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
                                                               </div>
                     );
@@ -8788,7 +8837,7 @@ export default function PlanningPage() {
                                                               <div
                                                                 key={"slot-empty-wrapper-" + slotIdx}
                                                                 className={
-                                                                  "group/slot w-full flex justify-center py-0.5 " +
+                                                                  "group/slot w-full flex justify-center py-1 " +
                                                                   (draggingWorkerName && isSlotHoveredNeu
                                                                     ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
                                                                     : "")
@@ -8822,7 +8871,7 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 text-[7.5px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (pullsActiveHere && isPullable ? " ring-2 ring-orange-400" : "") +
                                                                     (!draggingWorkerName && isSlotHoveredNeu ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) && !isSlotHoveredNeu ? " ring-2 ring-green-500" : "") +
@@ -8885,8 +8934,8 @@ export default function PlanningPage() {
                                                                   style={undefined}
                                                       >
                                                                 {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
-                                                                <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
-                                                                <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                <span className="text-[6.5px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                       </span>
                                                               </div>
                                                           );
@@ -8898,7 +8947,14 @@ export default function PlanningPage() {
                                                       const reqRoles = roleRequirements(st, sn, d.key);
                                                       // Créer un plan de slots avec positions fixes pour les rôles
                                                       // Chaque rôle requis a un slot fixe, même s'il est vide
-                                                      type SlotType = { type: 'assigned' | 'role-empty' | 'neutral-empty', name?: string, role?: string | null, roleHint?: string };
+                                                      type SlotType = {
+                                                        type: 'assigned' | 'role-empty' | 'neutral-empty';
+                                                        name?: string;
+                                                        role?: string | null;
+                                                        roleHint?: string;
+                                                        /** Index dans le tableau brut des noms (assignedNames) pour le cadenas שיבוץ קבוע */
+                                                        rawAssignmentIndex?: number;
+                                                      };
                                                       const slots: SlotType[] = [];
                                                       // Si une משיכה existe avec un roleName, on ajoute 1 slot supplémentaire dans CE rôle
                                                       // (pour que before/after soient collés, sans être séparés par d'autres rôles).
@@ -8937,7 +8993,7 @@ export default function PlanningPage() {
                                                           for (let j = 0; j < slots.length; j++) {
                                                             if (usedSlots.has(j)) continue;
                                                             if (slots[j].roleHint === assignedRole) {
-                                                              slots[j] = { type: 'assigned', name: nm, role: assignedRole };
+                                                              slots[j] = { type: 'assigned', name: nm, role: assignedRole, rawAssignmentIndex: i };
                                                               usedSlots.add(j);
                                                               assignedPerRole.set(assignedRole, (assignedPerRole.get(assignedRole) || 0) - 1);
                                                               break;
@@ -8961,14 +9017,14 @@ export default function PlanningPage() {
                                                       
                                                       // Remplir les slots sans rôle avec les assignations restantes
                                                       let neutralSlotIdx = totalRoleSlots;
-                                                      assignedWithoutRole.forEach(({ name }) => {
+                                                      assignedWithoutRole.forEach(({ name, index }) => {
                                                         if (neutralSlotIdx < slots.length) {
-                                                          slots[neutralSlotIdx] = { type: 'assigned', name: name, role: null };
+                                                          slots[neutralSlotIdx] = { type: 'assigned', name: name, role: null, rawAssignmentIndex: index };
                                                           neutralSlotIdx++;
                                                         }
                                                       });
                                                       
-                                                      const renderChip = (nm: string, i: number, rn: string | null) => {
+                                                      const renderChip = (nm: string, i: number, rn: string | null, rawAssignmentIndex?: number) => {
                                                           const c = colorForName(nm);
                                                           const nmKey = String(nm || "")
                                                             .normalize("NFKC")
@@ -8992,13 +9048,32 @@ export default function PlanningPage() {
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
                                                             // Auto: aligner l'expansion desktop sur le mode manuel (la chip s'étire au hover/focus).
-                                                            "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                            // Pas de « relative » ici : le pictogramme שיבוץ קבוע est sur le contour (parent relatif).
+                                                            "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                             pullHighlightClassForName(nm);
+                                                          const rawRi =
+                                                            typeof rawAssignmentIndex === "number" && rawAssignmentIndex >= 0
+                                                              ? rawAssignmentIndex
+                                                              : assignedNames.findIndex((x) => normPlanningCellName(x) === normPlanningCellName(nm));
+                                                          const showDraftFixedPin =
+                                                            !!draftFixedAssignmentsSnapshot &&
+                                                            (!isSavedMode || editingSaved) &&
+                                                            rawRi >= 0 &&
+                                                            isWorkerDraftFixedAtAssignmentSlot(
+                                                              draftFixedAssignmentsSnapshot,
+                                                              d.key,
+                                                              sn,
+                                                              idx,
+                                                              rawRi,
+                                                              nm,
+                                                              assignedNames,
+                                                            );
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
-                                                              className="group/slot relative w-full flex justify-center py-0.5"
+                                                              className="group/slot relative w-full flex justify-center py-1"
                                                             >
+                                                            <div className="relative inline-block w-auto min-w-0 max-w-[6rem] md:max-w-[6rem] md:w-full">
                                                             <span
                                                               key={"nm-" + i}
                                                               className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
@@ -9090,18 +9165,18 @@ export default function PlanningPage() {
                                                             >
                                                               <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0 w-full overflow-hidden">
                                                                 {roleToShow ? (
-                                                                  <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                  <span className="block w-full min-w-0 text-[6.5px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
                                                                 <span
                                                                   className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
                                                                   {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                  <span className="md:hidden">
+                                                                  <span className="md:hidden text-[8.95px]">
                                                                     {expandedSlotKey === expKey ? (
                                                                       <span className="whitespace-nowrap">{nm}</span>
                                                                     ) : (
-                                                                      <span>{truncateMobile6(nm)}</span>
+                                                                      mobileNameEllipsisBelow(nm)
                                                                     )}
                                                                   </span>
                                                                   {/* Desktop: ellipsis classique */}
@@ -9125,7 +9200,7 @@ export default function PlanningPage() {
                                                                     <button
                                                                       type="button"
                                                                       dir="ltr"
-                                                                      className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                      className="text-[6.5px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                       onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         if (isSavedMode && !editingSaved) return;
@@ -9187,28 +9262,40 @@ export default function PlanningPage() {
                                                                 })()}
                                                               </span>
                                                             </span>
+                                                            {showDraftFixedPin ? (
+                                                              <span
+                                                                className="pointer-events-none absolute -top-px -end-px z-[5] flex h-2.5 w-2.5 items-center justify-center rounded-full bg-amber-100 text-amber-900 ring-1 ring-white md:-top-0.5 md:-end-0.5 md:h-3.5 md:w-3.5 md:ring-2 dark:bg-amber-800 dark:text-amber-100 dark:ring-zinc-900"
+                                                                title="שיבוץ קבוע"
+                                                                aria-hidden
+                                                              >
+                                                                <svg viewBox="0 0 24 24" className="h-1.5 w-1.5 md:h-2 md:w-2" fill="currentColor" aria-hidden>
+                                                                  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+                                                                </svg>
+                                                              </span>
+                                                            ) : null}
+                                                            </div>
                                                             </div>
                                                           );
                                                       };
                                                       
                                                       return (
-                                                        <div className="flex flex-col items-center gap-0.5 md:gap-1 w-full px-1 md:px-2 py-0.5 md:py-1">
+                                                        <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
                                                           {slots.map((slot, slotIdx) => {
                                                             if (slot.type === 'assigned' && slot.name) {
-                                                              return renderChip(slot.name, slotIdx, slot.role ?? null);
+                                                              return renderChip(slot.name, slotIdx, slot.role ?? null, slot.rawAssignmentIndex);
                                                             } else if (slot.type === 'role-empty' && slot.roleHint) {
                                                               const c = colorForRole(slot.roleHint);
                                                               const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(slot.roleHint);
                                                               return (
                                                                 <div
                                                                   key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
-                                                                  className="group/slot w-full flex justify-center py-0.5"
+                                                                  className="group/slot w-full flex justify-center py-1"
                                                                 >
                                                                   <span
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
@@ -9270,8 +9357,8 @@ export default function PlanningPage() {
                                                                       });
                                                                     }}
                                                                   >
-                                                                    <span className="text-[7px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
-                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                    <span className="text-[6.5px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
+                                                                    <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -9280,13 +9367,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={"empty-wrapper-" + slotIdx}
-                                                                  className="group/slot w-full flex justify-center py-0.5"
+                                                                  className="group/slot w-full flex justify-center py-1"
                                                                 >
                                                                   <span
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 text-[7.5px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
@@ -9350,8 +9437,8 @@ export default function PlanningPage() {
                                                                     }}
                                                                   >
                                                                     {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
-                                                                    <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
-                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                    <span className="text-[6.5px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                    <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -9517,7 +9604,7 @@ export default function PlanningPage() {
                             אין חלופות שתואמות את מספרי המשמרות שנבחרו.
                           </div>
                         )}
-                        <div className="overflow-x-hidden md:overflow-x-auto">
+                        <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                         <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
@@ -9589,6 +9676,7 @@ export default function PlanningPage() {
                             })}
                           </tbody>
                         </table>
+                        </div>
                         {(() => {
                           // Récap par תפקיד
                           const roleTotals = new Map<string, number>();
@@ -9670,7 +9758,7 @@ export default function PlanningPage() {
                             .filter(([rName]) => enabledRoleNameSet.has(rName))
                             .sort((a, b) => a[0].localeCompare(b[0]));
                           return (
-                            <div className="mt-4 max-h-[18rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
+                            <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                               <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
@@ -9695,7 +9783,6 @@ export default function PlanningPage() {
                             </div>
                           );
                         })()}
-                      </div>
                       </>
                     );
                   })()}
@@ -9908,6 +9995,7 @@ export default function PlanningPage() {
                               })}
                             </tbody>
                           </table>
+                          </div>
                           {(() => {
                             // Récap par תפקיד
                             const roleTotals = new Map<string, number>();
@@ -9986,7 +10074,7 @@ export default function PlanningPage() {
                               .filter(([rName]) => enabledRoleNameSet.has(rName))
                               .sort((a, b) => a[0].localeCompare(b[0]));
                             return (
-                              <div className="mt-4 max-h-[18rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
+                              <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
                                 <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
@@ -10011,7 +10099,6 @@ export default function PlanningPage() {
                               </div>
                             );
                           })()}
-                        </div>
                       </>
                     );
                   })()}
@@ -10443,7 +10530,11 @@ export default function PlanningPage() {
                     } else {
                       multiSitePullsRequestRef.current = null;
                     }
-                    
+
+                    /** Avant tout await : après setGenUseFixed(false) le useEffect peut remettre la ref à false,
+                     * ce qui annulait fixed_assignments. On fige l’intention ici. */
+                    const snapshotGenUseFixed = genUseFixedRef.current;
+
                     let stopped = false;
                     try {
                       await clearAutoWeeklyPlanningCacheForCurrentContext();
@@ -10489,15 +10580,21 @@ export default function PlanningPage() {
                         }, 3000); // 3s d'inactivité
                       };
                       // Construire les cellules fixées (préaffectations)
-                      // Priorité: manuel > planning sauvegardé (non en édition) > plan AI courant
-                      // Mais seulement si l'utilisateur a choisi de les garder comme fixes (genUseFixed)
+                      // Priorité: manuel > planning sauvegardé (non en édition) > plan AI de l’alternative affichée
+                      // Utiliser snapshotGenUseFixed (voir plus haut), pas genUseFixedRef après await.
                       const fixed = (() => {
-                        if (!genUseFixedRef.current) return null;
+                        if (!snapshotGenUseFixed) return null;
                         const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
                         const pickSource = () => {
                           // Toujours préférer les assignations manuelles si présentes, même si on vient de basculer en auto
                           if (nonEmpty(manualAssignments)) return { src: 'manual', data: manualAssignments } as const;
                           if (savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return { src: 'saved', data: savedWeekPlan.assignments as any } as const;
+                          // Grille auto : prendre la variante actuellement sélectionnée (altIndex), pas seulement le candidat de base
+                          if (!isManual && aiPlan && aiAssignmentsVariants.length) {
+                            const safeIdx = Math.min(Math.max(0, Number(altIndex) || 0), aiAssignmentsVariants.length - 1);
+                            const visible = aiAssignmentsVariants[safeIdx];
+                            if (visible && nonEmpty(visible as any)) return { src: 'ai', data: visible as any } as const;
+                          }
                           if (aiPlan?.assignments && nonEmpty(aiPlan.assignments as any)) return { src: 'ai', data: aiPlan.assignments as any } as const;
                           return null;
                         };
@@ -10518,6 +10615,10 @@ export default function PlanningPage() {
                         });
                         return out;
                       })();
+
+                      setDraftFixedAssignmentsSnapshot(
+                        fixed && typeof fixed === "object" ? (JSON.parse(JSON.stringify(fixed)) as Record<string, Record<string, string[][]>>) : null,
+                      );
 
                       const effectiveExcludeDays = (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined);
                       const weeklyAvailabilityForRequest = (() => {

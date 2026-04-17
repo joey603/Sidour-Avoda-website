@@ -9,6 +9,14 @@ import LoadingAnimation from "@/components/loading-animation";
 import TimePicker from "@/components/time-picker";
 import NumberPicker from "@/components/number-picker";
 import OptionListPicker from "@/components/option-list-picker";
+import {
+  SiteBadgeIconChanges,
+  SiteBadgeIconPendingApproval,
+  SiteBadgeIconPublished,
+  SiteBadgeIconPulls,
+  SiteBadgeIconSavePending,
+  SiteBadgeIconSavedDirector,
+} from "@/components/site-list-site-badges";
 
 interface Site {
   id: number;
@@ -911,6 +919,14 @@ export default function SitesList() {
   const showAutoPlanningSiteStatuses = !!autoPlanningConfig?.enabled;
 
   /**
+   * Badges « נשמר (מנהל) » / « נשמר ונשלח » sous la ligne de statut : visibles sans auto,
+   * et aussi avec תכנון אוטומטי lorsque l’enregistrement reste ידני (יצירת טיוטה + שמור / שמור ואשלח).
+   * Masqués en שמירה אוטומטית (director/shared) pour éviter la redondance avec l’automatisation.
+   */
+  const showSavedScopeStatusBadges =
+    !showAutoPlanningSiteStatuses || autoPlanningConfig?.auto_save_mode === "manual";
+
+  /**
    * Avec תכנון אוטומטי : ligne שיבוצים / משיכות pour tout état (טיוטה, שמור, etc.).
    * Sans auto : afficher שיבוצים / משיכות seulement si סידור נשמר למנהל, נשמר ונשלח,
    * badge après promote, ou stats conservées après מחק סידור (toujours depuis une sauvegarde).
@@ -1146,14 +1162,16 @@ export default function SitesList() {
                         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-zinc-500">
                           <span>מספר עובדים: {s.workers_count}</span>
                           {(s.pending_workers_count ?? 0) > 0 ? (
-                            <span className="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              <SiteBadgeIconPendingApproval />
                               {s.pending_workers_count} ממתין לאישור
                             </span>
                           ) : null}
                         </div>
                         {!shouldShowWeekPlanningStatusRow(s) && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                           <div className="mt-1 flex flex-wrap items-center gap-2">
-                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                              <SiteBadgeIconSavePending />
                               ממתין לשמירה
                             </span>
                           </div>
@@ -1164,7 +1182,7 @@ export default function SitesList() {
                             return (
                           <div className="mt-1 flex flex-wrap items-center gap-2">
                             <span
-                              className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-0.5 text-xs ${
+                              className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${
                                 w.showAssignmentsLine
                                   ? w.complete
                                   ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300"
@@ -1172,7 +1190,7 @@ export default function SitesList() {
                                   : "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                               }`}
                             >
-                              <span className="font-semibold">
+                              <span className="font-semibold tabular-nums">
                                 {w.showAssignmentsLine ? (w.complete ? "V" : "X") : "•"}
                               </span>
                               <span>
@@ -1182,43 +1200,50 @@ export default function SitesList() {
                               </span>
                             </span>
                             {w.pulls > 0 ? (
-                              <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                                <SiteBadgeIconPulls />
                                 {w.pulls} משיכות
                               </span>
                             ) : null}
                             {getAutoWeeklyWorkerChangesCount(s) > 0 ? (
-                              <span className="inline-flex items-center rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                                <SiteBadgeIconChanges />
                                 {getAutoWeeklyWorkerChangesCount(s)} שינויים — נדרשת הרצה מחדש
                               </span>
                             ) : null}
                             {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
-                              <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                                <SiteBadgeIconSavePending />
                                 ממתין לשמירה
                               </span>
                             ) : null}
                             {sitePromoteBadge[s.id] === "saved" ? (
-                              <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                <SiteBadgeIconSavedDirector />
                                 נשמר (מנהל)
                               </span>
                             ) : null}
                             {sitePromoteBadge[s.id] === "published" ? (
-                              <span className="inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                                <SiteBadgeIconPublished />
                                 נשמר ונשלח לעובדים
                               </span>
                             ) : null}
-                            {!showAutoPlanningSiteStatuses &&
+                            {showSavedScopeStatusBadges &&
                             !sitePromoteBadge[s.id] &&
                             getSiteAutoPlanningStatus(s)?.exists &&
                             getSiteAutoPlanningStatus(s)?.scope === "director" ? (
-                              <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                <SiteBadgeIconSavedDirector />
                                 נשמר (מנהל)
                               </span>
                             ) : null}
-                            {!showAutoPlanningSiteStatuses &&
+                            {showSavedScopeStatusBadges &&
                             !sitePromoteBadge[s.id] &&
                             getSiteAutoPlanningStatus(s)?.exists &&
                             getSiteAutoPlanningStatus(s)?.scope === "shared" ? (
-                              <span className="inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                              <span className="inline-flex items-center gap-1 rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                                <SiteBadgeIconPublished />
                                 נשמר ונשלח לעובדים
                               </span>
                             ) : null}
@@ -1376,7 +1401,8 @@ export default function SitesList() {
                         <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-zinc-500">
                           <span>{s.workers_count} עובדים</span>
                           {(s.pending_workers_count ?? 0) > 0 ? (
-                            <span className="inline-flex items-center rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-xs text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
+                              <SiteBadgeIconPendingApproval className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               {s.pending_workers_count} ממתין לאישור
                             </span>
                           ) : null}
@@ -1384,7 +1410,8 @@ export default function SitesList() {
                       </div>
                       {!shouldShowWeekPlanningStatusRow(s) && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                         <div className="mb-3 flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                            <SiteBadgeIconSavePending className="h-3.5 w-3.5 shrink-0 opacity-90" />
                             ממתין לשמירה
                           </span>
                         </div>
@@ -1395,7 +1422,7 @@ export default function SitesList() {
                           return (
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <div
-                            className={`inline-flex items-center gap-2 rounded-full border px-2 py-1 text-xs ${
+                            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${
                               w.showAssignmentsLine
                                 ? w.complete
                                 ? "border-green-300 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-950/40 dark:text-green-300"
@@ -1403,7 +1430,7 @@ export default function SitesList() {
                                 : "border-zinc-300 bg-zinc-100 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                             }`}
                           >
-                            <span className="font-semibold">
+                            <span className="font-semibold tabular-nums">
                               {w.showAssignmentsLine ? (w.complete ? "V" : "X") : "•"}
                             </span>
                             <span>
@@ -1413,43 +1440,50 @@ export default function SitesList() {
                             </span>
                           </div>
                           {w.pulls > 0 ? (
-                            <span className="inline-flex items-center rounded-full border border-orange-300 bg-orange-50 px-2 py-1 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2 py-1 text-xs text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300">
+                              <SiteBadgeIconPulls className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               {w.pulls} משיכות
                             </span>
                           ) : null}
                           {getAutoWeeklyWorkerChangesCount(s) > 0 ? (
-                            <span className="inline-flex items-center rounded-full border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                              <SiteBadgeIconChanges className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               {getAutoWeeklyWorkerChangesCount(s)} שינויים — נדרשת הרצה מחדש
                             </span>
                           ) : null}
                           {getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
-                            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                              <SiteBadgeIconSavePending className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               ממתין לשמירה
                             </span>
                           ) : null}
                           {sitePromoteBadge[s.id] === "saved" ? (
-                            <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                              <SiteBadgeIconSavedDirector className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               נשמר (מנהל)
                             </span>
                           ) : null}
                           {sitePromoteBadge[s.id] === "published" ? (
-                            <span className="inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-1 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-teal-300 bg-teal-50 px-2 py-1 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                              <SiteBadgeIconPublished className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               נשמר ונשלח לעובדים
                             </span>
                           ) : null}
-                          {!showAutoPlanningSiteStatuses &&
+                          {showSavedScopeStatusBadges &&
                           !sitePromoteBadge[s.id] &&
                           getSiteAutoPlanningStatus(s)?.exists &&
                           getSiteAutoPlanningStatus(s)?.scope === "director" ? (
-                            <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                              <SiteBadgeIconSavedDirector className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               נשמר (מנהל)
                             </span>
                           ) : null}
-                          {!showAutoPlanningSiteStatuses &&
+                          {showSavedScopeStatusBadges &&
                           !sitePromoteBadge[s.id] &&
                           getSiteAutoPlanningStatus(s)?.exists &&
                           getSiteAutoPlanningStatus(s)?.scope === "shared" ? (
-                            <span className="inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-1 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                            <span className="inline-flex items-center gap-1 rounded-full border border-teal-300 bg-teal-50 px-2 py-1 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300">
+                              <SiteBadgeIconPublished className="h-3.5 w-3.5 shrink-0 opacity-90" />
                               נשמר ונשלח לעובדים
                             </span>
                           ) : null}
