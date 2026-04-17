@@ -100,19 +100,14 @@ export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  /** Mobile: dès 5 caractères, n’afficher que 4 + « … » en dessous (pas à côté). */
+  /** Mobile: dès 5 caractères, afficher 4 + « … » sur la même ligne. */
   const mobileNameEllipsisBelow = (nm: string) => {
     const s = String(nm ?? "");
     const chars = Array.from(s);
     if (chars.length <= 6) {
       return <span>{s}</span>;
     }
-    return (
-      <span className="flex flex-col items-center justify-center w-full min-w-0 max-w-full">
-        <span className="block w-full max-w-full text-center leading-tight">{chars.slice(0, 4).join("")}</span>
-        <span className="block w-full text-center leading-none">…</span>
-      </span>
-    );
+    return <span>{chars.slice(0, 4).join("")}…</span>;
   };
   const truncateSummaryMobile = (value: any) => {
     const s = String(value ?? "");
@@ -1998,7 +1993,7 @@ export default function PlanningPage() {
     const col = colorForName(name);
     return (
       <span
-        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
+        className="inline-flex min-h-9 w-fit max-w-[6rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm"
         style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
       >
         <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
@@ -2006,7 +2001,7 @@ export default function PlanningPage() {
             className={"block min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(name) ? "text-right" : "text-left")}
             dir={isRtlName(name) ? "rtl" : "ltr"}
           >
-            <span className="md:hidden text-[8px]">{truncateSummaryMobile(name)}</span>
+            <span className="md:hidden text-[10.5px]">{truncateSummaryMobile(name)}</span>
             <span className="hidden md:block truncate text-[8px] md:text-sm">{name}</span>
           </span>
         </span>
@@ -2018,12 +2013,12 @@ export default function PlanningPage() {
     const rc = colorForRole(roleName);
     return (
       <span
-        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border bg-white px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
+        className="inline-flex min-h-9 w-fit max-w-[6rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border bg-white px-3 py-1 shadow-sm"
         style={{ borderColor: rc.border, color: rc.text }}
       >
         <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
           <span className="block min-w-0 max-w-full leading-tight text-center">
-            <span className="md:hidden text-[8px]">{truncateSummaryMobile(roleName)}</span>
+            <span className="md:hidden text-[10.5px]">{truncateSummaryMobile(roleName)}</span>
             <span className="hidden md:block truncate text-[8px] md:text-sm">{roleName}</span>
           </span>
         </span>
@@ -9073,7 +9068,12 @@ export default function PlanningPage() {
                                                               key={"chip-wrapper-" + i}
                                                               className="group/slot relative w-full flex justify-center py-1"
                                                             >
-                                                            <div className="relative inline-block w-auto min-w-0 max-w-[6rem] md:max-w-[6rem] md:w-full">
+                                                            <div
+                                                              className={
+                                                                "relative inline-block w-auto min-w-0 max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:w-full transition-[max-width] duration-200 ease-out " +
+                                                                (expandedSlotKey === expKey ? "max-w-[18rem] " : "")
+                                                              }
+                                                            >
                                                             <span
                                                               key={"nm-" + i}
                                                               className={chipClass + (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "")}
@@ -9452,7 +9452,7 @@ export default function PlanningPage() {
                                               ) : null}
                                               <span
                                                 className={
-                                                "text-[9px] md:text-xs " + (
+                                                "inline-flex max-md:whitespace-nowrap max-md:justify-center tabular-nums text-[8px] md:text-xs " + (
                                                     assignedCount < required
                                                     ? "text-red-600 dark:text-red-400"
                                                       : (required > 0 && assignedCount >= required
@@ -9463,7 +9463,9 @@ export default function PlanningPage() {
                                               >
                                                 {"שיבוצים: "}{assignedCount}
                                               </span>
-                                              <span className="text-[9px] md:text-xs text-zinc-500">נדרש: {required}</span>
+                                              <span className="inline-flex max-md:whitespace-nowrap max-md:justify-center tabular-nums text-[8px] md:text-xs text-zinc-500">
+                                                נדרש: {required}
+                                              </span>
                                           </div>
                                         ) : (
                                           <span className="text-[9px] md:text-xs">לא פעיל</span>
@@ -9567,14 +9569,14 @@ export default function PlanningPage() {
                         return a[0].localeCompare(b[0]);
                       });
                     if (workers.length === 0) {
-                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
+                      return <div className="text-[11px] md:text-sm text-zinc-500">אין שיבוצים</div>;
                     }
                     const generatedPlansTotal = aiAssignmentsVariants.length;
                     const matchingPlansTotal = filteredAiPlanIndices.length;
                     const allowCountFiltering = generatedPlansTotal > 1;
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
+                        <div className="mb-2 flex items-center justify-between gap-3 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
                           <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
                           {allowCountFiltering && hasActiveAssignmentCountFilters && (
                             <div className="flex items-center gap-2">
@@ -9595,23 +9597,23 @@ export default function PlanningPage() {
                             </div>
                           )}
                         </div>
-                        <div className="mb-2 flex items-center justify-end gap-3 text-xs md:text-sm flex-wrap">
+                        <div className="mb-2 flex items-center justify-end gap-3 text-[11px] md:text-sm flex-wrap">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         {allowCountFiltering && matchingPlansTotal === 0 && (
-                          <div className="mb-2 text-sm text-amber-600 dark:text-amber-400">
+                          <div className="mb-2 text-[11px] md:text-sm text-amber-600 dark:text-amber-400">
                             אין חלופות שתואמות את מספרי המשמרות שנבחרו.
                           </div>
                         )}
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                        <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+                        <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
-                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                              <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
+                              <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                               {showMultiSiteTotalColumn && (
-                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
+                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
                               )}
                             </tr>
                           </thead>
@@ -9623,10 +9625,10 @@ export default function PlanningPage() {
                               const isManuallyModified = Object.prototype.hasOwnProperty.call(assignmentCountFilters, nm);
                               return (
                                 <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                  <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                  <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
                                     {renderSummaryWorkerChip(nm)}
                                   </td>
-                                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
+                                  <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">
                                     {allowCountFiltering ? (
                                       <>
                                         <div className="md:hidden">
@@ -9637,7 +9639,7 @@ export default function PlanningPage() {
                                             max={maxAllowed}
                                             placeholder={String(c)}
                                             className={
-                                              "w-14 rounded-md border px-2 py-1 text-center text-[10px] outline-none " +
+                                              "w-14 rounded-md border px-2 py-1 text-center text-[11px] outline-none " +
                                               (isManuallyModified
                                                 ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
                                                 : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
@@ -9653,7 +9655,7 @@ export default function PlanningPage() {
                                           placeholder={String(c)}
                                           onChange={(e) => handleAssignmentCountFilterChange(nm, e.target.value, maxAllowed)}
                                           className={
-                                            "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[10px] md:text-sm outline-none " +
+                                            "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[11px] md:text-sm outline-none " +
                                             (isManuallyModified
                                               ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
                                               : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
@@ -9667,7 +9669,7 @@ export default function PlanningPage() {
                                     )}
                                   </td>
                                   {showMultiSiteTotalColumn && (
-                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                       {totalAssignmentsForSummaryWorker(nm, c)}
                                     </td>
                                   )}
@@ -9759,11 +9761,11 @@ export default function PlanningPage() {
                             .sort((a, b) => a[0].localeCompare(b[0]));
                           return (
                             <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                              <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+                              <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
-                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
+                                    <th className="px-2 py-2 text-center w-32 md:w-64">תפקיד</th>
+                                    <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -9771,10 +9773,10 @@ export default function PlanningPage() {
                                     const rc = colorForRole(rName);
                                     return (
                                       <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                        <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
                                           {renderSummaryRoleChip(rName)}
                                         </td>
-                                        <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
+                                        <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                       </tr>
                                     );
                                   })}
@@ -9790,7 +9792,7 @@ export default function PlanningPage() {
               )}
               {isManual && manualAssignments && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  <div className="mb-2 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     // Build counts from manualAssignments
                     const counts = new Map<string, number>();
@@ -9851,18 +9853,18 @@ export default function PlanningPage() {
                     const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-[11px] md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
-                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                  <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -9870,12 +9872,12 @@ export default function PlanningPage() {
                               {items.map(([nm, c]) => {
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                    <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                     {showMultiSiteTotalColumn && (
-                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                      <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                         {totalAssignmentsForSummaryWorker(nm, c)}
                                       </td>
                                     )}
@@ -9892,7 +9894,7 @@ export default function PlanningPage() {
               )}
               {savedWeekPlan?.assignments && !editingSaved && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  <div className="mb-2 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     const assignments = savedWeekPlan!.assignments as any;
                     const counts = new Map<string, number>();
@@ -9958,22 +9960,22 @@ export default function PlanningPage() {
                     }
                     const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     if (workerList.length === 0) {
-                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
+                      return <div className="text-[11px] md:text-sm text-zinc-500">אין שיבוצים</div>;
                     }
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-[11px] md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
-                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                  <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -9981,12 +9983,12 @@ export default function PlanningPage() {
                               {items.map(([nm, c]) => {
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                    <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                     {showMultiSiteTotalColumn && (
-                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                      <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                         {totalAssignmentsForSummaryWorker(nm, c)}
                                       </td>
                                     )}
@@ -10075,11 +10077,11 @@ export default function PlanningPage() {
                               .sort((a, b) => a[0].localeCompare(b[0]));
                             return (
                               <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                                <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+                                <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
-                                      <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
-                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
+                                      <th className="px-2 py-2 text-center w-32 md:w-64">תפקיד</th>
+                                      <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -10087,10 +10089,10 @@ export default function PlanningPage() {
                                       const rc = colorForRole(rName);
                                       return (
                                         <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                          <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
+                                          <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
                                             {renderSummaryRoleChip(rName)}
                                           </td>
-                                          <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
+                                          <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                         </tr>
                                       );
                                     })}
