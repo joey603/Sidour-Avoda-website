@@ -73,41 +73,50 @@ function normPlanningCellName(s: unknown): string {
 }
 
 /**
- * Pastille שיבוץ קבוע : même index de slot que dans le tableau brut des assignations
- * (aligné sur fixed_assignments[day][shift][station][slot] côté backend), pas un simple `.includes`
- * sur toute la ligne (qui pouvait tout marquer si les données étaient mal alignées).
+ * Noms contenus dans une cellule du snapshot (liste plate).
+ * Tolère un niveau de tableau imbriqué si les données sont mal formées.
  */
-function isWorkerDraftFixedAtAssignmentSlot(
+function draftFixedCellNamesInRow(row: unknown): string[] {
+  if (!Array.isArray(row)) return [];
+  const out: string[] = [];
+  for (const cell of row) {
+    if (Array.isArray(cell)) {
+      for (const inner of cell) {
+        const n = normPlanningCellName(inner);
+        if (n) out.push(n);
+      }
+    } else {
+      const n = normPlanningCellName(cell);
+      if (n) out.push(n);
+    }
+  }
+  return out;
+}
+
+/** Indique si ce nom figurait dans le snapshot שיבוצים קבועים pour cette case (aligné sur le backend fixed_cells). */
+function isWorkerInDraftFixedSnapshot(
   snap: Record<string, Record<string, string[][]>> | null | undefined,
   dayKey: string,
   shiftName: string,
   stationIdx: number,
-  rawSlotIndex: number,
   workerName: string,
-  currentStationRow: string[],
 ): boolean {
-  if (!snap || rawSlotIndex < 0) return false;
-  const w = normPlanningCellName(workerName);
-  if (!w) return false;
-  const cur = normPlanningCellName((currentStationRow || [])[rawSlotIndex] ?? "");
-  if (cur !== w) return false;
-  const snapRow = snap[dayKey]?.[shiftName]?.[stationIdx];
-  if (!Array.isArray(snapRow) || rawSlotIndex >= snapRow.length) return false;
-  return normPlanningCellName(snapRow[rawSlotIndex]) === w;
+  if (!snap) return false;
+  const row = snap[dayKey]?.[shiftName]?.[stationIdx];
+  const names = draftFixedCellNamesInRow(row);
+  const n = normPlanningCellName(workerName);
+  if (!n) return false;
+  return names.includes(n);
 }
 
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  /** Mobile: dès 5 caractères, afficher 4 + « … » sur la même ligne. */
-  const mobileNameEllipsisBelow = (nm: string) => {
-    const s = String(nm ?? "");
+  const truncateMobile6 = (value: any) => {
+    const s = String(value ?? "");
     const chars = Array.from(s);
-    if (chars.length <= 6) {
-      return <span>{s}</span>;
-    }
-    return <span>{chars.slice(0, 4).join("")}…</span>;
+    return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
   };
   const truncateSummaryMobile = (value: any) => {
     const s = String(value ?? "");
@@ -1993,7 +2002,7 @@ export default function PlanningPage() {
     const col = colorForName(name);
     return (
       <span
-        className="inline-flex min-h-9 w-fit max-w-[6rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm"
+        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
         style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
       >
         <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
@@ -2001,7 +2010,7 @@ export default function PlanningPage() {
             className={"block min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(name) ? "text-right" : "text-left")}
             dir={isRtlName(name) ? "rtl" : "ltr"}
           >
-            <span className="md:hidden text-[10.5px]">{truncateSummaryMobile(name)}</span>
+            <span className="md:hidden text-[8px]">{truncateSummaryMobile(name)}</span>
             <span className="hidden md:block truncate text-[8px] md:text-sm">{name}</span>
           </span>
         </span>
@@ -2013,12 +2022,12 @@ export default function PlanningPage() {
     const rc = colorForRole(roleName);
     return (
       <span
-        className="inline-flex min-h-9 w-fit max-w-[6rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border bg-white px-3 py-1 shadow-sm"
+        className="inline-flex min-h-6 md:min-h-9 w-fit max-w-[8rem] md:max-w-[24rem] min-w-0 overflow-hidden items-start rounded-full border bg-white px-1.5 md:px-3 py-0.5 md:py-1 shadow-sm"
         style={{ borderColor: rc.border, color: rc.text }}
       >
         <span className="flex flex-col items-center text-center leading-tight min-w-0 max-w-full overflow-hidden">
           <span className="block min-w-0 max-w-full leading-tight text-center">
-            <span className="md:hidden text-[10.5px]">{truncateSummaryMobile(roleName)}</span>
+            <span className="md:hidden text-[8px]">{truncateSummaryMobile(roleName)}</span>
             <span className="hidden md:block truncate text-[8px] md:text-sm">{roleName}</span>
           </span>
         </span>
@@ -7889,19 +7898,19 @@ export default function PlanningPage() {
                         </div>
                         {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[8px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-right align-bottom w-14 md:w-28 text-[11px] md:text-sm">משמרת</th>
+                                <th className="px-0 md:px-2 py-0.5 md:py-2 text-right align-bottom w-10 md:w-28 text-[8px] md:text-sm">משמרת</th>
                                 {dayCols.map((d, i) => {
                                   const date = addDays(weekStart, i);
                                   return (
-                                    <th key={d.key} className="px-2 py-2 text-center align-bottom">
+                                    <th key={d.key} className="px-0.5 md:px-2 py-0.5 md:py-2 text-center align-bottom">
                                       <div className="flex flex-col items-center leading-tight min-w-0">
-                                        <span className="text-[7.5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
+                                        <span className="text-[5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
                                           {formatHebDate(date)}
                                         </span>
-                                        <span className="mt-0.5 text-[11px] md:text-sm">{d.label}</span>
+                                        <span className="mt-0.5 text-[8px] md:text-sm">{d.label}</span>
                                       </div>
                                     </th>
                                   );
@@ -7914,12 +7923,12 @@ export default function PlanningPage() {
                                 const enabled = !!stationShift?.enabled;
                                 return (
                                   <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
-                                <td className="px-2 py-2 w-14 md:w-28">
+                                <td className="px-0 md:px-2 py-0.5 md:py-2 w-10 md:w-28">
                                   <div className="flex flex-col items-start min-w-0">
                                     {(() => {
                                       const h = hoursFromConfig(st, sn) || hoursOf(sn);
                                       return h ? (
-                                        <div className="text-[9px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
+                                        <div className="text-[7px] md:text-[10px] leading-none text-zinc-500 mb-0.5" dir="ltr">
                                           {(() => {
                                             const s = String(h || "").trim();
                                             const parts = s.split(/[-–—]/).map((x) => x.trim()).filter(Boolean);
@@ -7936,7 +7945,7 @@ export default function PlanningPage() {
                                         </div>
                                       ) : null;
                                     })()}
-                                    <div className="font-medium text-[11px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
+                                    <div className="font-medium text-[6px] md:text-sm whitespace-normal break-words leading-tight">{sn}</div>
                                   </div>
                                 </td>
                                     {dayCols.map((d, dayIdx) => {
@@ -8383,7 +8392,7 @@ export default function PlanningPage() {
                                                             return (
                                                               <div
                                                                 key={"slot-nm-wrapper-" + slotIdx}
-                                                                className="group/slot relative w-full flex justify-center py-1"
+                                                                className="group/slot relative w-full flex justify-center py-0.5"
                                                                 onDragEnter={(e) => {
                                                                   e.preventDefault();
                                                                   e.stopPropagation();
@@ -8411,7 +8420,7 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
                                                                     // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
-                                                                    "relative inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                     pullHighlightClassForName(nm)
@@ -8512,18 +8521,18 @@ export default function PlanningPage() {
                                                                 >
                                                                   <span className="flex flex-col items-center text-center flex-1 min-w-0 w-full overflow-hidden">
                                                                     {roleToShow ? (
-                                                                      <span className="block w-full min-w-0 text-[6.5px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                      <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                     ) : null}
                                                                     <span
                                                                       className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                       dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                     >
                                                                       {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                      <span className="md:hidden text-[8.95px]">
+                                                                      <span className="md:hidden">
                                                                         {expandedSlotKey === expKey ? (
                                                                           <span className="whitespace-nowrap">{nm}</span>
                                                                         ) : (
-                                                                          mobileNameEllipsisBelow(nm)
+                                                                          <span>{truncateMobile6(nm)}</span>
                                                                         )}
                                                                       </span>
                                                                       {/* Desktop: ellipsis classique */}
@@ -8547,7 +8556,7 @@ export default function PlanningPage() {
                                                                         <button
                                                                           type="button"
                                                                           dir="ltr"
-                                                                          className="text-[6.5px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                          className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                           onClick={(e) => {
                                                                             e.stopPropagation();
                                                                             if (isSavedMode && !editingSaved) return;
@@ -8726,7 +8735,7 @@ export default function PlanningPage() {
                                                               <div
                                                                 key={"slot-hint-wrapper-" + slotIdx}
                                                                 className={
-                                                                  "group/slot w-full flex justify-center py-1 " +
+                                                                  "group/slot w-full flex justify-center py-0.5 " +
                                                                   (draggingWorkerName && isSlotHovered
                                                                     ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
                                                                     : "")
@@ -8761,7 +8770,7 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
                                                                     // L'agrandissement pendant le glisser est sur le wrapper (évite overflow-hidden du span).
-                                                                    "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (canPullThisRole ? " ring-2 ring-orange-400" : "") +
                                                                     (!draggingWorkerName && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, hint) && !isSlotHovered ? " ring-2 ring-green-500" : "") +
@@ -8820,8 +8829,8 @@ export default function PlanningPage() {
                                                                     });
                                                                   }}
                       >
-                                                                  <span className="text-[6.5px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
-                        <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                  <span className="text-[7px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
+                        <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                       </span>
                                                               </div>
                     );
@@ -8832,7 +8841,7 @@ export default function PlanningPage() {
                                                               <div
                                                                 key={"slot-empty-wrapper-" + slotIdx}
                                                                 className={
-                                                                  "group/slot w-full flex justify-center py-1 " +
+                                                                  "group/slot w-full flex justify-center py-0.5 " +
                                                                   (draggingWorkerName && isSlotHoveredNeu
                                                                     ? "relative z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
                                                                     : "")
@@ -8866,7 +8875,7 @@ export default function PlanningPage() {
                                                                   tabIndex={0}
                                                                   className={
                                                                     // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                    "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 text-[7.5px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                    "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                     (pullsActiveHere && isPullable ? " ring-2 ring-orange-400" : "") +
                                                                     (!draggingWorkerName && isSlotHoveredNeu ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (draggingWorkerName && canHighlightDropTarget(draggingWorkerName, d.key, sn, idx, null) && !isSlotHoveredNeu ? " ring-2 ring-green-500" : "") +
@@ -8929,8 +8938,8 @@ export default function PlanningPage() {
                                                                   style={undefined}
                                                       >
                                                                 {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
-                                                                <span className="text-[6.5px] md:text-[10px] font-medium opacity-0">—</span>
-                                                                <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                       </span>
                                                               </div>
                                                           );
@@ -8942,14 +8951,7 @@ export default function PlanningPage() {
                                                       const reqRoles = roleRequirements(st, sn, d.key);
                                                       // Créer un plan de slots avec positions fixes pour les rôles
                                                       // Chaque rôle requis a un slot fixe, même s'il est vide
-                                                      type SlotType = {
-                                                        type: 'assigned' | 'role-empty' | 'neutral-empty';
-                                                        name?: string;
-                                                        role?: string | null;
-                                                        roleHint?: string;
-                                                        /** Index dans le tableau brut des noms (assignedNames) pour le cadenas שיבוץ קבוע */
-                                                        rawAssignmentIndex?: number;
-                                                      };
+                                                      type SlotType = { type: 'assigned' | 'role-empty' | 'neutral-empty', name?: string, role?: string | null, roleHint?: string };
                                                       const slots: SlotType[] = [];
                                                       // Si une משיכה existe avec un roleName, on ajoute 1 slot supplémentaire dans CE rôle
                                                       // (pour que before/after soient collés, sans être séparés par d'autres rôles).
@@ -8988,7 +8990,7 @@ export default function PlanningPage() {
                                                           for (let j = 0; j < slots.length; j++) {
                                                             if (usedSlots.has(j)) continue;
                                                             if (slots[j].roleHint === assignedRole) {
-                                                              slots[j] = { type: 'assigned', name: nm, role: assignedRole, rawAssignmentIndex: i };
+                                                              slots[j] = { type: 'assigned', name: nm, role: assignedRole };
                                                               usedSlots.add(j);
                                                               assignedPerRole.set(assignedRole, (assignedPerRole.get(assignedRole) || 0) - 1);
                                                               break;
@@ -9012,14 +9014,14 @@ export default function PlanningPage() {
                                                       
                                                       // Remplir les slots sans rôle avec les assignations restantes
                                                       let neutralSlotIdx = totalRoleSlots;
-                                                      assignedWithoutRole.forEach(({ name, index }) => {
+                                                      assignedWithoutRole.forEach(({ name }) => {
                                                         if (neutralSlotIdx < slots.length) {
-                                                          slots[neutralSlotIdx] = { type: 'assigned', name: name, role: null, rawAssignmentIndex: index };
+                                                          slots[neutralSlotIdx] = { type: 'assigned', name: name, role: null };
                                                           neutralSlotIdx++;
                                                         }
                                                       });
                                                       
-                                                      const renderChip = (nm: string, i: number, rn: string | null, rawAssignmentIndex?: number) => {
+                                                      const renderChip = (nm: string, i: number, rn: string | null) => {
                                                           const c = colorForName(nm);
                                                           const nmKey = String(nm || "")
                                                             .normalize("NFKC")
@@ -9044,34 +9046,37 @@ export default function PlanningPage() {
                                                           const chipClass =
                                                             // Auto: aligner l'expansion desktop sur le mode manuel (la chip s'étire au hover/focus).
                                                             // Pas de « relative » ici : le pictogramme שיבוץ קבוע est sur le contour (parent relatif).
-                                                            "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-3 py-1 shadow-sm gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                            "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                             pullHighlightClassForName(nm);
-                                                          const rawRi =
-                                                            typeof rawAssignmentIndex === "number" && rawAssignmentIndex >= 0
-                                                              ? rawAssignmentIndex
-                                                              : assignedNames.findIndex((x) => normPlanningCellName(x) === normPlanningCellName(nm));
-                                                          const showDraftFixedPin =
-                                                            !!draftFixedAssignmentsSnapshot &&
-                                                            (!isSavedMode || editingSaved) &&
-                                                            rawRi >= 0 &&
-                                                            isWorkerDraftFixedAtAssignmentSlot(
+                                                          const showDraftFixedPin = (() => {
+                                                            if (!draftFixedAssignmentsSnapshot || (isSavedMode && !editingSaved)) return false;
+                                                            const snapNames = draftFixedCellNamesInRow(
+                                                              draftFixedAssignmentsSnapshot[d.key]?.[sn]?.[idx],
+                                                            );
+                                                            if (!snapNames.length) return false;
+                                                            const dispSet = new Set(
+                                                              (assignedNames || []).map((x) => normPlanningCellName(x)).filter(Boolean),
+                                                            );
+                                                            // Si le snapshot contient des noms absents de cette cellule (ex. même tableau
+                                                            // répété pour toutes les עמדות), ne pas afficher le cadenas n'importe où.
+                                                            if (!snapNames.every((x) => dispSet.has(x))) return false;
+                                                            return isWorkerInDraftFixedSnapshot(
                                                               draftFixedAssignmentsSnapshot,
                                                               d.key,
                                                               sn,
                                                               idx,
-                                                              rawRi,
                                                               nm,
-                                                              assignedNames,
                                                             );
+                                                          })();
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
-                                                              className="group/slot relative w-full flex justify-center py-1"
+                                                              className="group/slot relative w-full flex justify-center py-0.5"
                                                             >
                                                             <div
                                                               className={
-                                                                "relative inline-block w-auto min-w-0 max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:w-full transition-[max-width] duration-200 ease-out " +
-                                                                (expandedSlotKey === expKey ? "max-w-[18rem] " : "")
+                                                                "relative inline-block w-auto min-w-0 max-w-[6rem] md:max-w-[6rem] md:w-full md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] " +
+                                                                (expandedSlotKey === expKey ? "w-[18rem] max-w-[18rem] " : "")
                                                               }
                                                             >
                                                             <span
@@ -9165,18 +9170,18 @@ export default function PlanningPage() {
                                                             >
                                                               <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0 w-full overflow-hidden">
                                                                 {roleToShow ? (
-                                                                  <span className="block w-full min-w-0 text-[6.5px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
+                                                                  <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
                                                                 <span
                                                                   className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
                                                                   {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                  <span className="md:hidden text-[8.95px]">
+                                                                  <span className="md:hidden">
                                                                     {expandedSlotKey === expKey ? (
                                                                       <span className="whitespace-nowrap">{nm}</span>
                                                                     ) : (
-                                                                      mobileNameEllipsisBelow(nm)
+                                                                      <span>{truncateMobile6(nm)}</span>
                                                                     )}
                                                                   </span>
                                                                   {/* Desktop: ellipsis classique */}
@@ -9200,7 +9205,7 @@ export default function PlanningPage() {
                                                                     <button
                                                                       type="button"
                                                                       dir="ltr"
-                                                                      className="text-[6.5px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
+                                                                      className="text-[7px] md:text-[10px] leading-tight text-zinc-700/80 dark:text-zinc-300/80 underline decoration-dotted"
                                                                       onClick={(e) => {
                                                                         e.stopPropagation();
                                                                         if (isSavedMode && !editingSaved) return;
@@ -9279,23 +9284,23 @@ export default function PlanningPage() {
                                                       };
                                                       
                                                       return (
-                                                        <div className="flex flex-col items-center gap-1 w-full px-2 py-1">
+                                                        <div className="flex flex-col items-center gap-0.5 md:gap-1 w-full px-1 md:px-2 py-0.5 md:py-1">
                                                           {slots.map((slot, slotIdx) => {
                                                             if (slot.type === 'assigned' && slot.name) {
-                                                              return renderChip(slot.name, slotIdx, slot.role ?? null, slot.rawAssignmentIndex);
+                                                              return renderChip(slot.name, slotIdx, slot.role ?? null);
                                                             } else if (slot.type === 'role-empty' && slot.roleHint) {
                                                               const c = colorForRole(slot.roleHint);
                                                               const canPullThisRole = pullsActiveHere && isPullable && canPullForRole(slot.roleHint);
                                                               return (
                                                                 <div
                                                                   key={`roleph-wrapper-${slot.roleHint}-${slotIdx}`}
-                                                                  className="group/slot w-full flex justify-center py-1"
+                                                                  className="group/slot w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={`roleph-${slot.roleHint}-${slotIdx}`}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 bg-white dark:bg-zinc-900 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (canPullThisRole ? "ring-2 ring-orange-400" : "")
                                                                     }
@@ -9357,8 +9362,8 @@ export default function PlanningPage() {
                                                                       });
                                                                     }}
                                                                   >
-                                                                    <span className="text-[6.5px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
-                                                                    <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                    <span className="text-[7px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
+                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -9367,13 +9372,13 @@ export default function PlanningPage() {
                                                               return (
                                                                 <div
                                                                   key={"empty-wrapper-" + slotIdx}
-                                                                  className="group/slot w-full flex justify-center py-1"
+                                                                  className="group/slot w-full flex justify-center py-0.5"
                                                                 >
                                                                   <span
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-3 py-1 text-[7.5px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] min-w-0 overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
@@ -9437,8 +9442,8 @@ export default function PlanningPage() {
                                                                     }}
                                                                   >
                                                                     {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
-                                                                    <span className="text-[6.5px] md:text-[10px] font-medium opacity-0">—</span>
-                                                                    <span className="text-[7.5px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
+                                                                    <span className="text-[7px] md:text-[10px] font-medium opacity-0">—</span>
+                                                                    <span className="text-[8px] md:text-xs leading-none text-zinc-400 dark:text-zinc-400">—</span>
                                                                   </span>
                                                                 </div>
                                                               );
@@ -9452,7 +9457,7 @@ export default function PlanningPage() {
                                               ) : null}
                                               <span
                                                 className={
-                                                "inline-flex max-md:whitespace-nowrap max-md:justify-center tabular-nums text-[8px] md:text-xs " + (
+                                                "text-[9px] md:text-xs " + (
                                                     assignedCount < required
                                                     ? "text-red-600 dark:text-red-400"
                                                       : (required > 0 && assignedCount >= required
@@ -9463,9 +9468,7 @@ export default function PlanningPage() {
                                               >
                                                 {"שיבוצים: "}{assignedCount}
                                               </span>
-                                              <span className="inline-flex max-md:whitespace-nowrap max-md:justify-center tabular-nums text-[8px] md:text-xs text-zinc-500">
-                                                נדרש: {required}
-                                              </span>
+                                              <span className="text-[9px] md:text-xs text-zinc-500">נדרש: {required}</span>
                                           </div>
                                         ) : (
                                           <span className="text-[9px] md:text-xs">לא פעיל</span>
@@ -9569,14 +9572,14 @@ export default function PlanningPage() {
                         return a[0].localeCompare(b[0]);
                       });
                     if (workers.length === 0) {
-                      return <div className="text-[11px] md:text-sm text-zinc-500">אין שיבוצים</div>;
+                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
                     }
                     const generatedPlansTotal = aiAssignmentsVariants.length;
                     const matchingPlansTotal = filteredAiPlanIndices.length;
                     const allowCountFiltering = generatedPlansTotal > 1;
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-between gap-3 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
+                        <div className="mb-2 flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
                           <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
                           {allowCountFiltering && hasActiveAssignmentCountFilters && (
                             <div className="flex items-center gap-2">
@@ -9597,23 +9600,23 @@ export default function PlanningPage() {
                             </div>
                           )}
                         </div>
-                        <div className="mb-2 flex items-center justify-end gap-3 text-[11px] md:text-sm flex-wrap">
+                        <div className="mb-2 flex items-center justify-end gap-3 text-xs md:text-sm flex-wrap">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         {allowCountFiltering && matchingPlansTotal === 0 && (
-                          <div className="mb-2 text-[11px] md:text-sm text-amber-600 dark:text-amber-400">
+                          <div className="mb-2 text-sm text-amber-600 dark:text-amber-400">
                             אין חלופות שתואמות את מספרי המשמרות שנבחרו.
                           </div>
                         )}
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                        <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                        <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
-                              <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                               {showMultiSiteTotalColumn && (
-                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
                               )}
                             </tr>
                           </thead>
@@ -9625,10 +9628,10 @@ export default function PlanningPage() {
                               const isManuallyModified = Object.prototype.hasOwnProperty.call(assignmentCountFilters, nm);
                               return (
                                 <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                  <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
                                     {renderSummaryWorkerChip(nm)}
                                   </td>
-                                  <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">
+                                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
                                     {allowCountFiltering ? (
                                       <>
                                         <div className="md:hidden">
@@ -9639,7 +9642,7 @@ export default function PlanningPage() {
                                             max={maxAllowed}
                                             placeholder={String(c)}
                                             className={
-                                              "w-14 rounded-md border px-2 py-1 text-center text-[11px] outline-none " +
+                                              "w-14 rounded-md border px-2 py-1 text-center text-[10px] outline-none " +
                                               (isManuallyModified
                                                 ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
                                                 : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
@@ -9655,7 +9658,7 @@ export default function PlanningPage() {
                                           placeholder={String(c)}
                                           onChange={(e) => handleAssignmentCountFilterChange(nm, e.target.value, maxAllowed)}
                                           className={
-                                            "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[11px] md:text-sm outline-none " +
+                                            "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[10px] md:text-sm outline-none " +
                                             (isManuallyModified
                                               ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
                                               : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
@@ -9669,7 +9672,7 @@ export default function PlanningPage() {
                                     )}
                                   </td>
                                   {showMultiSiteTotalColumn && (
-                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                       {totalAssignmentsForSummaryWorker(nm, c)}
                                     </td>
                                   )}
@@ -9761,11 +9764,11 @@ export default function PlanningPage() {
                             .sort((a, b) => a[0].localeCompare(b[0]));
                           return (
                             <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                              <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                              <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-2 py-2 text-center w-32 md:w-64">תפקיד</th>
-                                    <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -9773,10 +9776,10 @@ export default function PlanningPage() {
                                     const rc = colorForRole(rName);
                                     return (
                                       <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                        <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
+                                        <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
                                           {renderSummaryRoleChip(rName)}
                                         </td>
-                                        <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
+                                        <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                       </tr>
                                     );
                                   })}
@@ -9792,7 +9795,7 @@ export default function PlanningPage() {
               )}
               {isManual && manualAssignments && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     // Build counts from manualAssignments
                     const counts = new Map<string, number>();
@@ -9853,18 +9856,18 @@ export default function PlanningPage() {
                     const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-[11px] md:text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
-                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -9872,12 +9875,12 @@ export default function PlanningPage() {
                               {items.map(([nm, c]) => {
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                     {showMultiSiteTotalColumn && (
-                                      <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                         {totalAssignmentsForSummaryWorker(nm, c)}
                                       </td>
                                     )}
@@ -9894,7 +9897,7 @@ export default function PlanningPage() {
               )}
               {savedWeekPlan?.assignments && !editingSaved && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-                  <div className="mb-2 text-[11px] md:text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
+                  <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     const assignments = savedWeekPlan!.assignments as any;
                     const counts = new Map<string, number>();
@@ -9960,22 +9963,22 @@ export default function PlanningPage() {
                     }
                     const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     if (workerList.length === 0) {
-                      return <div className="text-[11px] md:text-sm text-zinc-500">אין שיבוצים</div>;
+                      return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
                     }
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-end gap-6 text-[11px] md:text-sm">
+                        <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
                           <div>סה"כ נדרש: <span className="font-medium">{totalRequired}</span></div>
                           <div>סה"כ שיבוצים: <span className="font-medium">{totalAssigned}</span></div>
                         </div>
                         <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                          <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                          <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="px-2 py-2 text-center w-32 md:w-64">עובד</th>
-                                <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -9983,12 +9986,12 @@ export default function PlanningPage() {
                               {items.map(([nm, c]) => {
                                 return (
                                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
                                       {renderSummaryWorkerChip(nm)}
                                     </td>
-                                    <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
+                                    <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{c}</td>
                                     {showMultiSiteTotalColumn && (
-                                      <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                                      <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
                                         {totalAssignmentsForSummaryWorker(nm, c)}
                                       </td>
                                     )}
@@ -10077,11 +10080,11 @@ export default function PlanningPage() {
                               .sort((a, b) => a[0].localeCompare(b[0]));
                             return (
                               <div className="mt-4 max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-                                <table className="w-full border-collapse table-fixed text-[11px] md:text-sm">
+                                <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
-                                      <th className="px-2 py-2 text-center w-32 md:w-64">תפקיד</th>
-                                      <th className="px-2 py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -10089,10 +10092,10 @@ export default function PlanningPage() {
                                       const rc = colorForRole(rName);
                                       return (
                                         <tr key={rName} className="border-b last:border-0 dark:border-zinc-800">
-                                          <td className="px-2 py-2 w-32 md:w-64 overflow-hidden text-center">
+                                          <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
                                             {renderSummaryRoleChip(rName)}
                                           </td>
-                                          <td className="px-2 py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
+                                          <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">{cnt}</td>
                                         </tr>
                                       );
                                     })}
