@@ -9455,20 +9455,25 @@ export default function PlanningPage() {
                                                   )}
                                                 </div>
                                               ) : null}
-                                              <span
-                                                className={
-                                                "text-[9px] md:text-xs " + (
-                                                    assignedCount < required
-                                                    ? "text-red-600 dark:text-red-400"
-                                                      : (required > 0 && assignedCount >= required
+                                              <div className="mt-0.5 flex w-full min-w-0 flex-col items-center gap-0.5 leading-tight max-md:max-w-[5.5rem] md:max-w-none md:mt-1 md:gap-1">
+                                                <span
+                                                  className={
+                                                    "flex w-full items-center justify-center gap-0.5 whitespace-nowrap text-[7px] md:text-[10px] " +
+                                                    (assignedCount < required
+                                                      ? "text-red-600 dark:text-red-400"
+                                                      : required > 0 && assignedCount >= required
                                                         ? "text-green-600 dark:text-green-400"
                                                         : "")
-                                                )
-                                                }
-                                              >
-                                                {"שיבוצים: "}{assignedCount}
-                                              </span>
-                                              <span className="text-[9px] md:text-xs text-zinc-500">נדרש: {required}</span>
+                                                  }
+                                                >
+                                                  <span>שיבוצים:</span>
+                                                  <span className="font-medium tabular-nums">{assignedCount}</span>
+                                                </span>
+                                                <span className="flex w-full items-center justify-center gap-0.5 whitespace-nowrap text-[7px] text-zinc-500 md:text-[10px]">
+                                                  <span>נדרש:</span>
+                                                  <span className="font-medium tabular-nums text-zinc-600 dark:text-zinc-400">{required}</span>
+                                                </span>
+                                              </div>
                                           </div>
                                         ) : (
                                           <span className="text-[9px] md:text-xs">לא פעיל</span>
