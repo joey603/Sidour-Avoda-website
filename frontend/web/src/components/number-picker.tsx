@@ -73,15 +73,20 @@ export default function NumberPicker({
       <input
         type="text"
         value={value || ""}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          e.stopPropagation();
-          handleOpen();
-        }}
         readOnly
         disabled={disabled}
-        className={`${className} cursor-pointer`}
+        onClick={() => {
+          if (disabled) return;
+          handleOpen();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleOpen();
+          }
+        }}
+        className={`${className} cursor-pointer touch-manipulation`}
         inputMode="none"
         placeholder={placeholder}
       />

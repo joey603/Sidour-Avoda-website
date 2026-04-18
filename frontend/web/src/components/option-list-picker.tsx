@@ -76,15 +76,20 @@ export default function OptionListPicker({
       <input
         type="text"
         value={displayLabel}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          e.stopPropagation();
-          openPopup();
-        }}
         readOnly
         disabled={disabled}
-        className={`${className} cursor-pointer`}
+        onClick={() => {
+          if (disabled) return;
+          openPopup();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openPopup();
+          }
+        }}
+        className={`${className} cursor-pointer touch-manipulation`}
         inputMode="none"
         aria-haspopup="dialog"
         aria-expanded={showPopup}

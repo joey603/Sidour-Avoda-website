@@ -74,15 +74,20 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
       <input
         type="text"
         value={value || ""}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          e.stopPropagation();
-          openPopup();
-        }}
         readOnly
         disabled={disabled}
-        className={`${className} cursor-pointer`}
+        onClick={() => {
+          if (disabled) return;
+          openPopup();
+        }}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openPopup();
+          }
+        }}
+        className={`${className} cursor-pointer touch-manipulation`}
         dir={dir}
         inputMode="none"
         placeholder="HH:MM"

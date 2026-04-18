@@ -11755,7 +11755,7 @@ export default function PlanningPage() {
                       onChange={setAutoPullsLimit}
                       disabled={isAnyGenerationRunning || isManual || (isSavedMode && !editingSaved)}
                       className={
-                        "w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
+                        "!shadow-none w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
                         (isAnyGenerationRunning || (isSavedMode && !editingSaved) || isManual
                           ? "text-zinc-600 placeholder:text-zinc-500 dark:text-zinc-400 dark:placeholder:text-zinc-500 disabled:opacity-100"
                           : autoPullsEnabled
