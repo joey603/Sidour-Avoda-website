@@ -1371,7 +1371,7 @@ export default function SitesList() {
                         </button>
                       </div>
                     </div>
-                        ))}
+                  ))}
                       </div>
                     );
                   })}
@@ -1406,7 +1406,7 @@ export default function SitesList() {
                               {s.pending_workers_count} ממתין לאישור
                             </span>
                           ) : null}
-                        </div>
+                      </div>
                       </div>
                       {!shouldShowWeekPlanningStatusRow(s) && getSiteAutoPlanningStatus(s)?.requires_manual_save ? (
                         <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1610,7 +1610,7 @@ export default function SitesList() {
                         </button>
                       </div>
                     </div>
-                        ))}
+                  ))}
                       </div>
                     );
                   })}

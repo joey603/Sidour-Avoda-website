@@ -109,6 +109,87 @@ function isWorkerInDraftFixedSnapshot(
   return names.includes(n);
 }
 
+/** Affiche le pictogramme שיבוץ קבוע (cadenas) pour ce travailleur dans cette cellule. */
+function shouldShowDraftFixedPinForWorker(
+  snap: Record<string, Record<string, string[][]>> | null | undefined,
+  isSavedMode: boolean,
+  editingSaved: boolean,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  workerName: string,
+  cellAssignedNames: string[],
+): boolean {
+  if (!snap || (isSavedMode && !editingSaved)) return false;
+  const snapNames = draftFixedCellNamesInRow(snap[dayKey]?.[shiftName]?.[stationIdx]);
+  if (!snapNames.length) return false;
+  const dispSet = new Set(cellAssignedNames.map((x) => normPlanningCellName(x)).filter(Boolean));
+  if (!snapNames.every((x) => dispSet.has(x))) return false;
+  return isWorkerInDraftFixedSnapshot(snap, dayKey, shiftName, stationIdx, workerName);
+}
+
+type PlanningAssignmentsMap = Record<string, Record<string, string[][]>>;
+
+function planningCellNames(cell: unknown): string[] {
+  if (!Array.isArray(cell)) return [];
+  return cell
+    .map((name) => String(name ?? "").trim())
+    .filter(Boolean);
+}
+
+function samePlanningCellNames(a: unknown, b: unknown): boolean {
+  const aa = planningCellNames(a).map(normPlanningCellName).sort();
+  const bb = planningCellNames(b).map(normPlanningCellName).sort();
+  if (aa.length !== bb.length) return false;
+  return aa.every((value, idx) => value === bb[idx]);
+}
+
+function buildNonEmptyPlanningAssignmentsSnapshot(
+  source: PlanningAssignmentsMap | null | undefined,
+): PlanningAssignmentsMap | null {
+  if (!source || typeof source !== "object") return null;
+  const out: PlanningAssignmentsMap = {};
+  Object.keys(source).forEach((dayKey) => {
+    const shiftsMap = source[dayKey];
+    if (!shiftsMap || typeof shiftsMap !== "object") return;
+    Object.keys(shiftsMap).forEach((shiftName) => {
+      const perStation = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
+      const nextStations = perStation.map((cell) => planningCellNames(cell));
+      if (!nextStations.some((cell) => cell.length > 0)) return;
+      out[dayKey] = out[dayKey] || {};
+      out[dayKey][shiftName] = nextStations;
+    });
+  });
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function buildChangedNonEmptyPlanningAssignmentsSnapshot(
+  current: PlanningAssignmentsMap | null | undefined,
+  baseline: PlanningAssignmentsMap | null | undefined,
+): PlanningAssignmentsMap | null {
+  if (!current || typeof current !== "object") return null;
+  const out: PlanningAssignmentsMap = {};
+  Object.keys(current).forEach((dayKey) => {
+    const shiftsMap = current[dayKey];
+    if (!shiftsMap || typeof shiftsMap !== "object") return;
+    Object.keys(shiftsMap).forEach((shiftName) => {
+      const currentStations = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
+      const baselineStations = Array.isArray(baseline?.[dayKey]?.[shiftName]) ? (baseline?.[dayKey]?.[shiftName] as string[][]) : [];
+      const maxStations = Math.max(currentStations.length, baselineStations.length);
+      const nextStations: string[][] = Array.from({ length: maxStations }, (_, stationIdx) => {
+        const names = planningCellNames(currentStations[stationIdx]);
+        if (names.length === 0) return [];
+        if (samePlanningCellNames(currentStations[stationIdx], baselineStations[stationIdx])) return [];
+        return names;
+      });
+      if (!nextStations.some((cell) => cell.length > 0)) return;
+      out[dayKey] = out[dayKey] || {};
+      out[dayKey][shiftName] = nextStations;
+    });
+  });
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -352,6 +433,8 @@ export default function PlanningPage() {
 
   useEffect(() => {
     setDraftFixedAssignmentsSnapshot(null);
+    manualModeBaseAssignmentsRef.current = null;
+    pendingManualFixedAssignmentsRef.current = null;
   }, [weekStart, params.id]);
 
   // Quand on ouvre "עריכת עובד", s'assurer que les answers sont bien à jour (même en mode plan sauvegardé)
@@ -776,8 +859,17 @@ export default function PlanningPage() {
 
   // Mode manuel (drag & drop)
   const [isManual, setIsManual] = useState(false);
-  type AssignmentsMap = Record<string, Record<string, string[][]>>;
+  type AssignmentsMap = PlanningAssignmentsMap;
   const [manualAssignments, setManualAssignments] = useState<AssignmentsMap | null>(null);
+  const capturePendingManualFixedAssignments = useCallback(() => {
+    const current = manualAssignments as PlanningAssignmentsMap | null;
+    const baseline = manualModeBaseAssignmentsRef.current;
+    const next = baseline
+      ? buildChangedNonEmptyPlanningAssignmentsSnapshot(current, baseline)
+      : buildNonEmptyPlanningAssignmentsSnapshot(current);
+    pendingManualFixedAssignmentsRef.current = next;
+    return next;
+  }, [manualAssignments]);
   // Role hints per slot in manual mode (preserved from auto)
   type RoleHintsMap = Record<string, Record<string, (string | null)[][]>>;
   const [manualRoleHints, setManualRoleHints] = useState<RoleHintsMap | null>(null);
@@ -785,7 +877,9 @@ export default function PlanningPage() {
   const isAnyGenerationRunning = aiLoading || sharedGenerationRunning;
   const aiAssignmentsVariants = useMemo(() => {
     if (!aiPlan) return [] as Record<string, Record<string, string[][]>>[];
-    const base = baseAssignmentsRef.current || aiPlan.assignments;
+    // Toujours préférer la grille courante de aiPlan (ex. après ידני→אוטומטי « שמור מיקומים ») :
+    // baseAssignmentsRef peut rester celui d’une יצירת תכנון antérieure et écraser l’affichage / le fixed.
+    const base = aiPlan.assignments || baseAssignmentsRef.current;
     if (!base) return [] as Record<string, Record<string, string[][]>>[];
     return [base, ...((aiPlan.alternatives || []).filter(Boolean) as Record<string, Record<string, string[][]>>[])];
   }, [aiPlan]);
@@ -925,6 +1019,8 @@ export default function PlanningPage() {
   const [showGenDialog, setShowGenDialog] = useState(false);
   const [genUseFixed, setGenUseFixed] = useState(false);
   const genUseFixedRef = useRef(false);
+  const manualModeBaseAssignmentsRef = useRef<PlanningAssignmentsMap | null>(null);
+  const pendingManualFixedAssignmentsRef = useRef<PlanningAssignmentsMap | null>(null);
   useEffect(() => { genUseFixedRef.current = genUseFixed; }, [genUseFixed]);
   // Bypass re-opening the generation dialog after user already chose an action
   const genDialogBypassRef = useRef<"fixed" | "reset" | null>(null);
@@ -2449,7 +2545,7 @@ export default function PlanningPage() {
 
   function selectAiPlanIndex(index: number) {
     const assignments = index === 0
-      ? (baseAssignmentsRef.current || aiPlan?.assignments || null)
+      ? (aiPlan?.assignments || baseAssignmentsRef.current || null)
       : ((aiPlan?.alternatives || [])[index - 1] || null);
     const pulls = index === 0
       ? (aiPlan?.pulls || {})
@@ -3088,11 +3184,20 @@ export default function PlanningPage() {
       setPullsModeStationIdx(null);
       return;
     }
+    // En ערוך, la grille vient de restoreSavedPlanState / actions utilisateur — ne pas la reconstruire depuis l’AI vide.
+    if (editingSaved) return;
     const stationsCount = (site?.config?.stations || []).length || 0;
     if (stationsCount <= 0) return;
     const dayKeys = ["sun","mon","tue","wed","thu","fri","sat"];
     const base: AssignmentsMap = {} as any;
     const hintsBase: RoleHintsMap = {} as any;
+    // Après שמור en ידני, aiPlan est mis à null : utiliser aussi le snapshot sauvegardé, sinon l’effet efface toute la grille
+    // et il ne reste visibles que les noms injectés par la logique משיכה.
+    const assignmentSource: AssignmentsMap | null =
+      (aiPlan?.assignments as AssignmentsMap | null | undefined) ||
+      (savedWeekPlan?.assignments && typeof savedWeekPlan.assignments === "object"
+        ? (savedWeekPlan.assignments as AssignmentsMap)
+        : null);
     const getRequiredForLocal = (st: any, shiftName: string, dayKey: string): number => {
       if (!st) return 0;
       if (st.perDayCustom) {
@@ -3122,7 +3227,7 @@ export default function PlanningPage() {
         )
       );
       for (const sn of shiftNamesLocal) {
-        const fromAI = (aiPlan?.assignments as any)?.[d]?.[sn] || [];
+        const fromAI = (assignmentSource as any)?.[d]?.[sn] || [];
         const stationArr: string[][] = [];
         const stationHintsArr: (string | null)[][] = [];
         for (let i = 0; i < stationsCount; i++) {
@@ -3222,7 +3327,7 @@ export default function PlanningPage() {
     setManualAssignments(base);
     setManualRoleHints(hintsBase);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isManual, site?.config?.stations, aiPlan?.assignments]);
+  }, [isManual, site?.config?.stations, aiPlan?.assignments, editingSaved, savedWeekPlan?.assignments]);
 
   const allRoleNames: string[] = Array.from(enabledRoleNameSet).sort((a, b) => a.localeCompare(b));
 
@@ -8420,7 +8525,7 @@ export default function PlanningPage() {
                                                                   className={
                                                                     // Sur mobile, éviter les effets ":hover" qui peuvent impacter plusieurs slots de la même cellule.
                                                                     // Hover uniquement sur desktop (md+). Mobile = expansion via expandedSlotKey.
-                                                                    "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                                    "relative inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                                     (hoverSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                                                     (expandedSlotKey === expKey ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                     pullHighlightClassForName(nm)
@@ -8519,7 +8624,7 @@ export default function PlanningPage() {
                                                                   data-stidx={idx}
                                                                   data-slotidx={slotIdx}
                                                                 >
-                                                                  <span className="flex flex-col items-center text-center flex-1 min-w-0 w-full overflow-hidden">
+                                                                  <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0 w-full overflow-hidden">
                                                                     {roleToShow ? (
                                                                       <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                     ) : null}
@@ -9045,29 +9150,19 @@ export default function PlanningPage() {
                                                           const rc = roleToShow ? colorForRole(roleToShow) : null;
                                                           const chipClass =
                                                             // Auto: aligner l'expansion desktop sur le mode manuel (la chip s'étire au hover/focus).
-                                                            // Pas de « relative » ici : le pictogramme שיבוץ קבוע est sur le contour (parent relatif).
-                                                            "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-start rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
+                                                            // Icône שיבוץ קבוע : cadenas noir inline à côté du nom (items-center évite l’effet « coin »).
+                                                            "inline-flex min-h-6 md:min-h-9 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:focus:max-w-[18rem] min-w-0 overflow-hidden items-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 shadow-sm gap-1 md:gap-2 select-none md:group-hover/slot:z-30 md:focus:z-30 focus:outline-none transition-[max-width,transform] duration-200 ease-out " +
                                                             pullHighlightClassForName(nm);
-                                                          const showDraftFixedPin = (() => {
-                                                            if (!draftFixedAssignmentsSnapshot || (isSavedMode && !editingSaved)) return false;
-                                                            const snapNames = draftFixedCellNamesInRow(
-                                                              draftFixedAssignmentsSnapshot[d.key]?.[sn]?.[idx],
-                                                            );
-                                                            if (!snapNames.length) return false;
-                                                            const dispSet = new Set(
-                                                              (assignedNames || []).map((x) => normPlanningCellName(x)).filter(Boolean),
-                                                            );
-                                                            // Si le snapshot contient des noms absents de cette cellule (ex. même tableau
-                                                            // répété pour toutes les עמדות), ne pas afficher le cadenas n'importe où.
-                                                            if (!snapNames.every((x) => dispSet.has(x))) return false;
-                                                            return isWorkerInDraftFixedSnapshot(
-                                                              draftFixedAssignmentsSnapshot,
-                                                              d.key,
-                                                              sn,
-                                                              idx,
-                                                              nm,
-                                                            );
-                                                          })();
+                                                          const showDraftFixedPin = shouldShowDraftFixedPinForWorker(
+                                                            draftFixedAssignmentsSnapshot,
+                                                            isSavedMode,
+                                                            editingSaved,
+                                                            d.key,
+                                                            sn,
+                                                            idx,
+                                                            nm,
+                                                            assignedNames,
+                                                          );
                                                           return (
                                                             <div
                                                               key={"chip-wrapper-" + i}
@@ -9173,19 +9268,35 @@ export default function PlanningPage() {
                                                                   <span className="block w-full min-w-0 text-[7px] md:text-[10px] font-medium text-zinc-700 dark:text-zinc-300 truncate mb-0.5">{roleToShow}</span>
                                                                 ) : null}
                                                                 <span
-                                                                  className={"block w-full min-w-0 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                  className="flex w-full min-w-0 max-w-full items-center justify-center gap-0.5 leading-tight"
                                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                                 >
-                                                                  {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                  <span className="md:hidden">
-                                                                    {expandedSlotKey === expKey ? (
-                                                                      <span className="whitespace-nowrap">{nm}</span>
-                                                                    ) : (
-                                                                      <span>{truncateMobile6(nm)}</span>
-                                                                    )}
+                                                                  {showDraftFixedPin ? (
+                                                                    <svg
+                                                                      viewBox="0 0 24 24"
+                                                                      className="pointer-events-none h-2.5 w-2.5 shrink-0 text-black md:h-3 md:w-3"
+                                                                      fill="currentColor"
+                                                                      aria-hidden
+                                                                    >
+                                                                      <title>שיבוץ קבוע</title>
+                                                                      <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
+                                                                    </svg>
+                                                                  ) : null}
+                                                                  <span
+                                                                    className={"block min-w-0 flex-1 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                  >
+                                                                    {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
+                                                                    <span className="md:hidden">
+                                                                      {expandedSlotKey === expKey ? (
+                                                                        <span className="whitespace-nowrap">{nm}</span>
+                                                                      ) : (
+                                                                        <span>{truncateMobile6(nm)}</span>
+                                                                      )}
+                                                                    </span>
+                                                                    {/* Desktop: ellipsis classique */}
+                                                                    <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
                                                                   </span>
-                                                                  {/* Desktop: ellipsis classique */}
-                                                                  <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
                                                                 </span>
                                                                 {(() => {
                                                                   const cellPrefix = `${d.key}|${sn}|${idx}|`;
@@ -9267,17 +9378,6 @@ export default function PlanningPage() {
                                                                 })()}
                                                               </span>
                                                             </span>
-                                                            {showDraftFixedPin ? (
-                                                              <span
-                                                                className="pointer-events-none absolute -top-px -end-px z-[5] flex h-2.5 w-2.5 items-center justify-center rounded-full bg-amber-100 text-amber-900 ring-1 ring-white md:-top-0.5 md:-end-0.5 md:h-3.5 md:w-3.5 md:ring-2 dark:bg-amber-800 dark:text-amber-100 dark:ring-zinc-900"
-                                                                title="שיבוץ קבוע"
-                                                                aria-hidden
-                                                              >
-                                                                <svg viewBox="0 0 24 24" className="h-1.5 w-1.5 md:h-2 md:w-2" fill="currentColor" aria-hidden>
-                                                                  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" />
-                                                                </svg>
-                                                              </span>
-                                                            ) : null}
                                                             </div>
                                                             </div>
                                                           );
@@ -10499,9 +10599,10 @@ export default function PlanningPage() {
                       return check(manualAssignments) || check(aiPlan?.assignments) || (check(savedWeekPlan?.assignments) && !editingSaved);
                     };
 
-                    const hasSelectableAlternatives = !isManual && filteredAiPlanIndices.length > 1;
-                    const hasContent = checkGridNonEmpty() || hasSelectableAlternatives;
-                    if (hasContent) {
+                    const hasNonemptyNameCells = checkGridNonEmpty();
+                    // Pop-up « שיבוצים קיימים » : uniquement s’il reste au moins une cellule avec un nom
+                    // (pas pour le seul cas « plusieurs alternatives » avec grille vide).
+                    if (hasNonemptyNameCells) {
                       if (genDialogBypassRef.current) {
                         genDialogBypassRef.current = null; // consume bypass and proceed to generation
                       } else {
@@ -10596,34 +10697,35 @@ export default function PlanningPage() {
                         if (!snapshotGenUseFixed) return null;
                         const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
                         const pickSource = () => {
-                          // Toujours préférer les assignations manuelles si présentes, même si on vient de basculer en auto
-                          if (nonEmpty(manualAssignments)) return { src: 'manual', data: manualAssignments } as const;
-                          if (savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return { src: 'saved', data: savedWeekPlan.assignments as any } as const;
-                          // Grille auto : prendre la variante actuellement sélectionnée (altIndex), pas seulement le candidat de base
+                          const pendingManualFixed = pendingManualFixedAssignmentsRef.current;
+                          if (nonEmpty(pendingManualFixed)) return { src: 'manual-fixed', data: pendingManualFixed } as const;
+                          // Toujours préférer les assignations manuelles si présentes ; si on a une base de comparaison,
+                          // ne garder que les cellules non vides réellement modifiées en mode ידני.
+                          if (nonEmpty(manualAssignments)) {
+                            const manualFixed = manualModeBaseAssignmentsRef.current
+                              ? buildChangedNonEmptyPlanningAssignmentsSnapshot(
+                                  manualAssignments as PlanningAssignmentsMap,
+                                  manualModeBaseAssignmentsRef.current,
+                                )
+                              : buildNonEmptyPlanningAssignmentsSnapshot(manualAssignments as PlanningAssignmentsMap);
+                            if (nonEmpty(manualFixed)) return { src: 'manual', data: manualFixed } as const;
+                          }
+                          // Grille auto affichée : avant le planning sauvegardé, sinon on renvoie un brouillon DB périmé
+                          // après éditions ידני puis retour אוטומטי avec « שמור מיקומים ».
                           if (!isManual && aiPlan && aiAssignmentsVariants.length) {
                             const safeIdx = Math.min(Math.max(0, Number(altIndex) || 0), aiAssignmentsVariants.length - 1);
                             const visible = aiAssignmentsVariants[safeIdx];
                             if (visible && nonEmpty(visible as any)) return { src: 'ai', data: visible as any } as const;
                           }
                           if (aiPlan?.assignments && nonEmpty(aiPlan.assignments as any)) return { src: 'ai', data: aiPlan.assignments as any } as const;
+                          if (savedWeekPlan?.assignments && !editingSaved && nonEmpty(savedWeekPlan.assignments)) return { src: 'saved', data: savedWeekPlan.assignments as any } as const;
                           return null;
                         };
                         const chosen = pickSource();
                         if (!chosen) {
                           return null;
                         }
-                        const src = chosen.data as any;
-                        // Nettoyer: ne garder que des chaînes non vides et respecter la forme [day][shift][station][]
-                        const out: any = {};
-                        Object.keys(src || {}).forEach((day) => {
-                          out[day] = out[day] || {};
-                          const shifts = (src as any)[day] || {};
-                          Object.keys(shifts).forEach((sn) => {
-                            const perStation: string[][] = (shifts as any)[sn] || [];
-                            out[day][sn] = perStation.map((arr) => Array.isArray(arr) ? arr.filter((s) => !!s && String(s).trim().length > 0) : []);
-                          });
-                        });
-                        return out;
+                        return buildNonEmptyPlanningAssignmentsSnapshot(chosen.data as PlanningAssignmentsMap);
                       })();
 
                       setDraftFixedAssignmentsSnapshot(
@@ -11293,9 +11395,13 @@ export default function PlanningPage() {
                           type="button"
                           className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           onClick={() => {
+                            // Ne pas réutiliser un ancien brouillon / ref de génération précédente
+                            setDraftFixedAssignmentsSnapshot(null);
+                            pendingManualFixedAssignmentsRef.current = null;
                             genDialogBypassRef.current = "fixed";
                             genUseFixedRef.current = true;
                             setGenUseFixed(true);
+                            if (isManual) capturePendingManualFixedAssignments();
                             setShowGenDialog(false);
                             // Ensure the generate button exists (auto mode)
                             setIsManual(false);
@@ -11308,9 +11414,12 @@ export default function PlanningPage() {
                           type="button"
                           className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                           onClick={() => {
+                            setDraftFixedAssignmentsSnapshot(null);
                             genDialogBypassRef.current = "reset";
                             genUseFixedRef.current = false;
                             setGenUseFixed(false);
+                            pendingManualFixedAssignmentsRef.current = null;
+                            manualModeBaseAssignmentsRef.current = null;
                             setShowGenDialog(false);
                             // Vider la grille puis lancer
                             setPullsByHoleKey({});
@@ -11404,7 +11513,10 @@ export default function PlanningPage() {
                             onClick={() => {
                   // Keep current placements while switching
                   if (modeSwitchTarget === "auto") {
+                    // Effacer tout brouillon auto (cadenas / fixed_cells d’une génération précédente) avant d’appliquer le choix
+                    setDraftFixedAssignmentsSnapshot(null);
                     if (isManual && manualAssignments) {
+                      capturePendingManualFixedAssignments();
                       // Preserve pulls placements when switching back to auto:
                       // ensure both before/after names exist in the target cell slots (without reordering existing slots).
                       let nextAssignments: any = JSON.parse(JSON.stringify(manualAssignments));
@@ -11458,11 +11570,16 @@ export default function PlanningPage() {
                         status: "TEMP",
                         objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
                       } as any);
+                      // Pas de cadenas ici : ils ne reflètent le brouillon « שיבוצים קבועים » qu’après יצירת תכנון
+                    } else {
+                      pendingManualFixedAssignmentsRef.current = null;
                     }
                     setIsManual(false);
                   } else if (modeSwitchTarget === "manual") {
                     try { stopAiGeneration(); } catch {}
+                    pendingManualFixedAssignmentsRef.current = null;
                     if (!isManual && aiPlan?.assignments) {
+                      manualModeBaseAssignmentsRef.current = JSON.parse(JSON.stringify(aiPlan.assignments));
                       // IMPORTANT: deep-clone pour éviter de partager la même référence avec aiPlan,
                       // et garantir que les משיכות déjà appliquées restent visibles en mode ידני.
                       const cloned = JSON.parse(JSON.stringify(aiPlan.assignments));
@@ -11495,6 +11612,8 @@ export default function PlanningPage() {
                       }
                       // Repartir sans indices de rôles "stales" lors du passage en ידני
                       setManualRoleHints(null);
+                    } else if (!isManual) {
+                      manualModeBaseAssignmentsRef.current = null;
                     }
                     // Fermer la popup משיכות si ouverte (mais conserver pullsByHoleKey)
                     setPullsEditor(null);
@@ -11511,8 +11630,12 @@ export default function PlanningPage() {
                 className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                             onClick={() => {
                   // Reset grid when switching
+                  setDraftFixedAssignmentsSnapshot(null);
+                  setGenUseFixed(false);
                   setPullsByHoleKey({});
                   setPullsEditor(null);
+                  pendingManualFixedAssignmentsRef.current = null;
+                  manualModeBaseAssignmentsRef.current = null;
                   if (modeSwitchTarget === "auto") {
                     setAiPlan(null);
                     setIsManual(false);

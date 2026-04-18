@@ -503,7 +503,7 @@ export default function WorkerHistoryPage() {
                           {st?.name || `עמדה ${stationIndex + 1}`}
                         </span>
                       </div>
-                      <div className="overflow-x-auto">
+                <div className="overflow-x-auto">
                         <div className="min-w-[720px] p-3">
                           <div className="grid grid-cols-8 gap-px overflow-hidden rounded-lg border border-zinc-200 bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-700">
                             <div className="min-h-[2.75rem] bg-zinc-100 dark:bg-zinc-900/90" />
@@ -517,127 +517,127 @@ export default function WorkerHistoryPage() {
                               >
                                 {dayLabels[dk]}
                               </div>
-                            ))}
-                            {(st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any, sIdx: number) => (
-                              <Fragment key={`row-${stationIndex}-${sIdx}`}>
+                          ))}
+                          {(st?.shifts || []).filter((sh: any) => sh?.enabled).map((sh: any, sIdx: number) => (
+                            <Fragment key={`row-${stationIndex}-${sIdx}`}>
                                 <div className="flex min-h-[3.25rem] items-center bg-zinc-50 px-2 py-2 text-xs font-semibold text-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 sm:text-[13px]">
                                   {sh?.name}
                                 </div>
                                 {(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]).map((dk) => {
-                                  const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
-                                  const pulls = (weekPlan as any)?.pulls || {};
-                                  const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
-                                  const required = getRequiredFor(st, sh?.name, dk);
-                                  const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
-                                  const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
-                                  const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
-                                  return (
-                                    <div
-                                      key={`cell-${stationIndex}-${sIdx}-${dk}`}
-                                      className={
+                                const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
+                                const pulls = (weekPlan as any)?.pulls || {};
+                                const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
+                                const required = getRequiredFor(st, sh?.name, dk);
+                                const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
+                                const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
+                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                return (
+                                  <div
+                                    key={`cell-${stationIndex}-${sIdx}-${dk}`}
+                                    className={
                                         "min-h-[3.25rem] bg-white p-1.5 dark:bg-zinc-950/50 " +
                                         (dk === "sun" || dk === "sat" ? "bg-amber-50/40 dark:bg-amber-950/15 " : "") +
                                         (cleanNames.length === 0
                                           ? "border border-dashed border-zinc-200 dark:border-zinc-700"
                                           : "border border-zinc-100 dark:border-zinc-800")
-                                      }
-                                    >
-                                      <div className="flex flex-col gap-1">
-                                        {Array.from({ length: slotCount }).map((_, slotIdx) => {
-                                          const nm = cleanNames[slotIdx];
-                                          if (!nm) {
-                                            return (
-                                              <span
-                                                key={`empty-${slotIdx}`}
-                                                className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md border border-dashed border-zinc-200 bg-zinc-50/80 px-2 text-[11px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-900/60"
-                                              >
-                                                —
-                                              </span>
-                                            );
-                                          }
-                                          const match = Object.entries(pulls || {}).find(([k, entry]) => {
-                                            if (!String(k).startsWith(cellPrefix)) return false;
-                                            const e: any = entry;
-                                            return e?.before?.name === nm || e?.after?.name === nm;
-                                          });
-                                          const pullTxt = match
-                                            ? (((match as any)[1]?.before?.name === nm)
-                                              ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
-                                              : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
-                                            : null;
-                                          const baseHours =
-                                            (sh?.start && sh?.end)
-                                              ? `${String(sh.start)}-${String(sh.end)}`
-                                              : null;
-                                          const myHours = pullTxt || baseHours;
-                                          const isTargetWorker = nm === workerName;
+                                    }
+                                  >
+                                    <div className="flex flex-col gap-1">
+                                      {Array.from({ length: slotCount }).map((_, slotIdx) => {
+                                        const nm = cleanNames[slotIdx];
+                                        if (!nm) {
                                           return (
                                             <span
-                                              key={`nm-${nm}-${slotIdx}`}
-                                              className={
+                                              key={`empty-${slotIdx}`}
+                                                className="inline-flex h-7 min-w-[2rem] items-center justify-center rounded-md border border-dashed border-zinc-200 bg-zinc-50/80 px-2 text-[11px] text-zinc-400 dark:border-zinc-600 dark:bg-zinc-900/60"
+                                            >
+                                              —
+                                            </span>
+                                          );
+                                        }
+                                        const match = Object.entries(pulls || {}).find(([k, entry]) => {
+                                          if (!String(k).startsWith(cellPrefix)) return false;
+                                          const e: any = entry;
+                                          return e?.before?.name === nm || e?.after?.name === nm;
+                                        });
+                                        const pullTxt = match
+                                          ? (((match as any)[1]?.before?.name === nm)
+                                            ? `${(match as any)[1].before.start}-${(match as any)[1].before.end}`
+                                            : `${(match as any)[1].after.start}-${(match as any)[1].after.end}`)
+                                          : null;
+                                        const baseHours =
+                                          (sh?.start && sh?.end)
+                                            ? `${String(sh.start)}-${String(sh.end)}`
+                                            : null;
+                                        const myHours = pullTxt || baseHours;
+                                          const isTargetWorker = nm === workerName;
+                                        return (
+                                          <span
+                                            key={`nm-${nm}-${slotIdx}`}
+                                            className={
                                                 "group relative inline-flex min-h-[1.75rem] w-full flex-col items-stretch justify-center rounded-md px-1.5 py-1 text-xs shadow-sm " +
                                                 (isTargetWorker
                                                   ? "bg-emerald-600 text-white ring-1 ring-emerald-700/30 "
                                                   : "border border-zinc-200 bg-white text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200 ") +
                                                 ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
-                                              }
+                                            }
+                                          >
+                                            <span
+                                              className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                              dir={isRtlName(nm) ? "rtl" : "ltr"}
                                             >
-                                              <span
-                                                className={"w-full max-w-full truncate " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                              >
-                                                {nm}
-                                              </span>
+                                              {nm}
+                                            </span>
                                               {isTargetWorker && myHours ? (
                                                 <span dir="ltr" className="text-[10px] leading-tight opacity-90 truncate max-w-full" title={myHours}>
                                                   {myHours}
                                                 </span>
                                               ) : null}
 
+                                            <span
+                                              aria-hidden
+                                              className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
+                                            >
                                               <span
-                                                aria-hidden
-                                                className="pointer-events-none absolute inset-x-0 top-0.1 z-50 flex justify-center opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-100 transition-all duration-200 ease-out"
-                                              >
-                                                <span
-                                                  className={
+                                                className={
                                                     "inline-flex flex-col items-center rounded-md px-2 py-1 shadow-lg " +
                                                     (isTargetWorker
                                                       ? "bg-emerald-600 text-white "
-                                                      : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
+                                                    : "border border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200 bg-white dark:bg-zinc-900 ") +
                                                     ((pullTxt && isTargetWorker) ? "ring-2 ring-orange-400 " : "")
-                                                  }
-                                                >
-                                                  <span
-                                                    className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                  >
-                                                    {nm}
-                                                  </span>
-                                                  {(isTargetWorker && myHours) ? (
-                                                    <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
-                                                      {myHours}
-                                                    </span>
-                                                  ) : (pullTxt ? (
-                                                    <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
-                                                      {pullTxt}
-                                                    </span>
-                                                  ) : null)}
+                                                }
+                                              >
+                                                <span
+                                                  className={"whitespace-nowrap leading-tight " + (isRtlName(nm) ? "text-right" : "text-left")}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                          >
+                                                  {nm}
                                                 </span>
+                                                  {(isTargetWorker && myHours) ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {myHours}
+                                                  </span>
+                                                ) : (pullTxt ? (
+                                                  <span dir="ltr" className="text-[10px] leading-tight opacity-90 whitespace-nowrap">
+                                                    {pullTxt}
+                                                  </span>
+                                                ) : null)}
                                               </span>
                                             </span>
-                                          );
-                                        })}
-                                      </div>
+                                          </span>
+                                        );
+                                      })}
                                     </div>
-                                  );
-                                })}
-                              </Fragment>
-                            ))}
+                                  </div>
+                                );
+                              })}
+                            </Fragment>
+                          ))}
                           </div>
                         </div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
               )}
             </section>
@@ -713,7 +713,7 @@ export default function WorkerHistoryPage() {
                 </div>
               ) : (
                 <div className="bg-white px-4 py-8 dark:bg-zinc-950/60">
-                  <LoadingAnimation className="py-4" size={50} />
+                <LoadingAnimation className="py-4" size={50} />
                 </div>
               )}
             </section>
