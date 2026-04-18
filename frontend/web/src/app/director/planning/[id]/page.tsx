@@ -7815,6 +7815,7 @@ export default function PlanningPage() {
                                 משיכות
                               </button>
                             )}
+                          {isManual ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -7999,6 +8000,7 @@ export default function PlanningPage() {
                           >
                             איפוס עמדה
                           </button>
+                          ) : null}
                         </div>
                         </div>
                         {/* Sur mobile: pas de scroll horizontal, tout doit tenir */}
@@ -9478,7 +9480,7 @@ export default function PlanningPage() {
                                                                     key={"empty-" + slotIdx}
                                                                     className={
                                                                       // Même gabarit que les chips "remplies" (mode téléphone inclus)
-                                                                      "inline-flex min-h-6 min-w-[2.75rem] md:min-h-9 md:min-w-0 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
+                                                                      "inline-flex min-h-6 min-w-[2.15rem] md:min-h-9 md:min-w-0 w-auto md:w-full max-w-[6rem] md:max-w-[6rem] md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] overflow-hidden flex-col items-center justify-center rounded-full border px-1 md:px-3 py-0.5 md:py-1 text-[8px] md:text-xs text-zinc-400 bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 transition-[max-width,transform] duration-200 ease-out cursor-pointer focus:outline-none md:focus:z-30 " +
                                                                       (expandedSlotKey === `${d.key}|${sn}|${idx}|${slotIdx}` ? " w-[18rem] max-w-[18rem] z-30" : "") +
                                                                       (neutralIsPullable ? "ring-2 ring-orange-400" : "")
                                                                     }
@@ -11785,6 +11787,28 @@ export default function PlanningPage() {
                     <button
                       type="button"
                       onClick={() => {
+                        if (!isManual) return;
+                        const nonEmpty = (assignments: any): boolean => {
+                          if (!assignments || typeof assignments !== "object") return false;
+                          for (const dayKey of Object.keys(assignments)) {
+                            const shiftsMap = (assignments as any)[dayKey];
+                            if (!shiftsMap || typeof shiftsMap !== "object") continue;
+                            for (const shiftName of Object.keys(shiftsMap)) {
+                              const perStation = (shiftsMap as any)[shiftName];
+                              if (!Array.isArray(perStation)) continue;
+                              for (const cell of perStation) {
+                                if (Array.isArray(cell) && cell.some((n) => n && String(n).trim().length > 0)) {
+                                  return true;
+                                }
+                              }
+                            }
+                          }
+                          return false;
+                        };
+                        if (!nonEmpty(manualAssignments)) {
+                          setIsManual(false);
+                          return;
+                        }
                         setModeSwitchTarget("auto");
                         setShowModeSwitchDialog(true);
                       }}

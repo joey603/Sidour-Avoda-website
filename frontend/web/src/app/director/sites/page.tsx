@@ -17,6 +17,7 @@ import {
   SiteBadgeIconSavePending,
   SiteBadgeIconSavedDirector,
 } from "@/components/site-list-site-badges";
+import { cn } from "@/lib/utils";
 
 interface Site {
   id: number;
@@ -264,6 +265,41 @@ function getTargetWeekIsoFromRunAt(runAtMs: number): string | null {
   const m = String(startOfWeek.getMonth() + 1).padStart(2, "0");
   const d = String(startOfWeek.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function AutoPlanningFormSwitch(props: {
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+  variant?: "sky" | "orange";
+}) {
+  const { checked, onCheckedChange, disabled, variant = "sky" } = props;
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => {
+        if (!disabled) onCheckedChange(!checked);
+      }}
+      className={cn(
+        // Même gabarit que les toggles création/édition site : h-5 w-9, pastille h-4 w-4
+        "flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-zinc-900",
+        disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+        checked
+          ? variant === "orange"
+            ? "justify-end bg-orange-500 focus-visible:ring-orange-400"
+            : "justify-end bg-[#00A8E0] focus-visible:ring-[#00A8E0]/80"
+          : "justify-start bg-zinc-300 dark:bg-zinc-600",
+      )}
+    >
+      <span
+        className="pointer-events-none block h-4 w-4 rounded-full bg-white shadow-sm ring-1 ring-black/5 dark:ring-white/10"
+        aria-hidden
+      />
+    </button>
+  );
 }
 
 export default function SitesList() {
@@ -1731,16 +1767,15 @@ export default function SitesList() {
               </div>
             </div>
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
-              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
-                <div className="space-y-1">
+              <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
+                <div className="min-w-0 flex-1 space-y-1">
                   <div className="text-sm font-medium">הפעל תכנון אוטומטי</div>
                   <div className="text-xs text-zinc-500">כאשר פעיל, המערכת תריץ תכנון אוטומטי לכל האתרים לשבוע הבא.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <AutoPlanningFormSwitch
                   checked={autoPlanningForm.enabled}
-                  onChange={(e) => setAutoPlanningForm((prev) => ({ ...prev, enabled: e.target.checked }))}
-                  className="h-5 w-5 accent-sky-600"
+                  onCheckedChange={(next) => setAutoPlanningForm((prev) => ({ ...prev, enabled: next }))}
+                  variant="sky"
                 />
               </label>
               <div
@@ -1748,16 +1783,19 @@ export default function SitesList() {
                   autoPlanningControlsDisabled ? "pointer-events-none opacity-50" : ""
                 }`}
               >
-              <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800">
-                <div className="space-y-1">
+              <label
+                className={cn(
+                  "flex items-center justify-between gap-3 rounded-xl border border-zinc-200 px-3 py-3 dark:border-zinc-800",
+                  autoPlanningControlsDisabled ? "cursor-default" : "cursor-pointer",
+                )}
+              >
+                <div className="min-w-0 flex-1 space-y-1">
                   <div className="text-sm font-medium">משיכה</div>
                   <div className="text-xs text-zinc-500">אם יש חורים, המערכת תנסה להוסיף משיכות אוטומטיות לכל האתרים.</div>
                 </div>
-                <input
-                  type="checkbox"
+                <AutoPlanningFormSwitch
                   checked={autoPlanningForm.auto_pulls_enabled}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
+                  onCheckedChange={(checked) => {
                     setAutoPlanningForm((prev) => {
                       if (!checked) return { ...prev, auto_pulls_enabled: false };
                       const by = { ...prev.pulls_limits_by_site };
@@ -1769,7 +1807,7 @@ export default function SitesList() {
                     });
                   }}
                   disabled={autoPlanningControlsDisabled}
-                  className="h-5 w-5 accent-orange-500"
+                  variant="orange"
                 />
               </label>
               {autoPlanningForm.auto_pulls_enabled ? (
