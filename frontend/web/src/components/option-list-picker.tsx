@@ -99,16 +99,15 @@ export default function OptionListPicker({
         createPortal(
           <div
             className="fixed inset-0 z-[100] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
-            onPointerDown={(e) => {
-              e.preventDefault();
+            onClick={(e) => {
               if (Date.now() - openedAtRef.current < 400) return;
-              setShowPopup(false);
+              if (e.target === e.currentTarget) setShowPopup(false);
             }}
           >
             <div
               ref={popupRef}
               className="relative mx-auto w-full max-w-sm shrink-0 rounded-xl border bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
-              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
               dir="rtl"
             >
               <div className="border-b px-4 py-3 dark:border-zinc-800">
@@ -128,7 +127,7 @@ export default function OptionListPicker({
                           setSelectedValue(o.value);
                         }}
                         className={
-                          "rounded-md border px-3 py-2.5 text-right text-sm font-medium transition-colors " +
+                          "touch-manipulation rounded-md border px-3 py-2.5 text-right text-sm font-medium transition-colors " +
                           (isSelected
                             ? "border-[#00A8E0] bg-sky-50 text-[#0077a3] dark:border-sky-500 dark:bg-sky-950/40 dark:text-sky-300"
                             : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700")
@@ -147,33 +146,23 @@ export default function OptionListPicker({
               <div className="flex items-center justify-end gap-2 border-t px-4 py-3 dark:border-zinc-800">
                 <button
                   type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setShowPopup(false);
-                  }}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     setShowPopup(false);
                   }}
-                  className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="touch-manipulation rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   ביטול
                 </button>
                 <button
                   type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleSave();
-                  }}
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     handleSave();
                   }}
-                  className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm font-medium text-white hover:bg-[#0090C0]"
+                  className="touch-manipulation rounded-md bg-[#00A8E0] px-4 py-2 text-sm font-medium text-white hover:bg-[#0090C0]"
                 >
                   שמור
                 </button>
