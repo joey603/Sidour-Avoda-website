@@ -364,6 +364,43 @@ def _split_range_for_pulls(start: str, end: str, max_each_minutes: int = 4 * 60)
     )
 
 
+def _is_morning_shift_name(shift_name: str) -> bool:
+    s = str(shift_name or "").strip()
+    low = s.lower()
+    return ("בוקר" in s) or low.startswith("06") or ("06-14" in low)
+
+
+def _is_noon_shift_name(shift_name: str) -> bool:
+    s = str(shift_name or "").strip()
+    low = s.lower()
+    return ("צהר" in s) or low.startswith("14") or ("14-22" in low)
+
+
+def _is_night_shift_name(shift_name: str) -> bool:
+    s = str(shift_name or "").strip()
+    low = s.lower()
+    return ("לילה" in s) or ("night" in low) or low.startswith("22") or ("22-06" in low)
+
+
+def _pull_target_shift_priority(shift_name: str) -> tuple[int, str]:
+    # Priorité métier: essayer d'abord de combler les trous d'après-midi.
+    if _is_noon_shift_name(shift_name):
+        return (0, str(shift_name or ""))
+    if _is_morning_shift_name(shift_name):
+        return (1, str(shift_name or ""))
+    if _is_night_shift_name(shift_name):
+        return (2, str(shift_name or ""))
+    return (3, str(shift_name or ""))
+
+
+def _boost_generation_budget_for_pulls(
+    time_limit_seconds: int,
+    num_alternatives: int,
+) -> tuple[int, int]:
+    # Les plannings avec משיכות ont plus de combinaisons valides à explorer.
+    return max(int(time_limit_seconds), 20), max(int(num_alternatives), 80)
+
+
 def _summarize_auto_planning_result(
     site: Site,
     assignments: dict | None,
@@ -480,99 +517,111 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
             return (day_idx + 1, 0)
         return (day_idx, shift_idx + 1)
 
+    target_cells: list[tuple[tuple[int, str], int, int, str]] = []
     for station_idx, station in enumerate(stations):
-        if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
-            break
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}
-        cap_roles = station.get("capacity_roles") or {}
         for day_idx, day_key in enumerate(days):
-            if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
-                break
             for shift_idx, shift_name in enumerate(shifts):
-                if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
-                    break
                 required = int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
                 prev_coord = prev_of(day_idx, shift_idx)
                 next_coord = next_of(day_idx, shift_idx)
                 if required <= 0 or not prev_coord or not next_coord:
                     continue
+                target_cells.append((_pull_target_shift_priority(shift_name), station_idx, day_idx, shift_name))
 
-                while True:
-                    if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
-                        break
-                    cell_prefix = f"{day_key}|{shift_name}|{station_idx}|"
-                    existing_pull_keys = [k for k in pulls if str(k).startswith(cell_prefix)]
-                    current_names = get_cell_names(day_key, shift_name, station_idx)
-                    assigned_places = max(0, len(current_names) - len(existing_pull_keys))
-                    if required - assigned_places < 1:
-                        break
+    target_cells.sort(key=lambda item: (item[0], item[2], item[1]))
 
-                    prev_day, prev_shift = days[prev_coord[0]], shifts[prev_coord[1]]
-                    next_day, next_shift = days[next_coord[0]], shifts[next_coord[1]]
-                    prev_prev = prev_of(prev_coord[0], prev_coord[1])
-                    next_next = next_of(next_coord[0], next_coord[1])
-                    prev_names = [nm for nm in get_cell_names(prev_day, prev_shift, station_idx) if nm not in pulled_names_for(prev_day, prev_shift)]
-                    next_names = [nm for nm in get_cell_names(next_day, next_shift, station_idx) if nm not in pulled_names_for(next_day, next_shift)]
-                    used_in_cell = set(current_names)
-                    pulled_before_prev = pulled_names_for(days[prev_prev[0]], shifts[prev_prev[1]]) if prev_prev else set()
-                    pulled_after_next = pulled_names_for(days[next_next[0]], shifts[next_next[1]]) if next_next else set()
+    for _, station_idx, day_idx, shift_name in target_cells:
+        if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+            break
+        station = stations[station_idx]
+        station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
+        cap_map = station.get("capacity") or {}
+        cap_roles = station.get("capacity_roles") or {}
+        day_key = days[day_idx]
+        shift_idx = shifts.index(shift_name)
+        required = int((cap_map.get(day_key, {}) or {}).get(shift_name, 0) or 0)
+        prev_coord = prev_of(day_idx, shift_idx)
+        next_coord = next_of(day_idx, shift_idx)
+        if required <= 0 or not prev_coord or not next_coord:
+            continue
 
-                    before_candidates = [nm for nm in prev_names if nm not in used_in_cell and nm not in pulled_before_prev]
-                    after_candidates = [nm for nm in next_names if nm not in used_in_cell and nm not in pulled_after_next]
-                    both_sides = {nm for nm in before_candidates if nm in set(after_candidates)}
-                    before_candidates = [nm for nm in before_candidates if nm not in both_sides]
-                    after_candidates = [nm for nm in after_candidates if nm not in both_sides]
-                    if not before_candidates or not after_candidates:
-                        break
+        while True:
+            if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
+                break
+            cell_prefix = f"{day_key}|{shift_name}|{station_idx}|"
+            existing_pull_keys = [k for k in pulls if str(k).startswith(cell_prefix)]
+            current_names = get_cell_names(day_key, shift_name, station_idx)
+            assigned_places = max(0, len(current_names) - len(existing_pull_keys))
+            if required - assigned_places < 1:
+                break
 
-                    req_roles = (cap_roles.get(day_key, {}) or {}).get(shift_name, {}) or {}
-                    role_name = None
-                    before_options = before_candidates
-                    after_options = after_candidates
-                    if req_roles:
-                        for rn in [str(x) for x in req_roles.keys() if str(x).strip()]:
-                            b = [nm for nm in before_candidates if worker_has_role(nm, rn)]
-                            a = [nm for nm in after_candidates if worker_has_role(nm, rn)]
-                            if not b or not a:
-                                continue
-                            if len(b) == 1 and len(a) == 1 and b[0] == a[0]:
-                                continue
-                            role_name = rn
-                            before_options = b
-                            after_options = a
-                            break
-                        if not role_name:
-                            break
-                    elif len(before_options) == 1 and len(after_options) == 1 and before_options[0] == after_options[0]:
-                        break
+            prev_day, prev_shift = days[prev_coord[0]], shifts[prev_coord[1]]
+            next_day, next_shift = days[next_coord[0]], shifts[next_coord[1]]
+            prev_prev = prev_of(prev_coord[0], prev_coord[1])
+            next_next = next_of(next_coord[0], next_coord[1])
+            prev_names = [nm for nm in get_cell_names(prev_day, prev_shift, station_idx) if nm not in pulled_names_for(prev_day, prev_shift)]
+            next_names = [nm for nm in get_cell_names(next_day, next_shift, station_idx) if nm not in pulled_names_for(next_day, next_shift)]
+            used_in_cell = set(current_names)
+            pulled_before_prev = pulled_names_for(days[prev_prev[0]], shifts[prev_prev[1]]) if prev_prev else set()
+            pulled_after_next = pulled_names_for(days[next_next[0]], shifts[next_next[1]]) if next_next else set()
 
-                    before_name = before_options[0] if before_options else ""
-                    after_name = next((nm for nm in after_options if nm != before_name), "")
-                    if not before_name or not after_name:
-                        break
+            before_candidates = [nm for nm in prev_names if nm not in used_in_cell and nm not in pulled_before_prev]
+            after_candidates = [nm for nm in next_names if nm not in used_in_cell and nm not in pulled_after_next]
+            both_sides = {nm for nm in before_candidates if nm in set(after_candidates)}
+            before_candidates = [nm for nm in before_candidates if nm not in both_sides]
+            after_candidates = [nm for nm in after_candidates if nm not in both_sides]
+            if not before_candidates or not after_candidates:
+                break
 
-                    hours = _hours_from_config(station_cfg, shift_name, day_key) or _hours_of(shift_name) or "00:00-00:00"
-                    parsed = _parse_hours_range(hours)
-                    shift_start, shift_end = parsed if parsed else ("00:00", "00:00")
-                    before_range, after_range = _split_range_for_pulls(shift_start, shift_end)
+            req_roles = (cap_roles.get(day_key, {}) or {}).get(shift_name, {}) or {}
+            role_name = None
+            before_options = before_candidates
+            after_options = after_candidates
+            if req_roles:
+                for rn in [str(x) for x in req_roles.keys() if str(x).strip()]:
+                    b = [nm for nm in before_candidates if worker_has_role(nm, rn)]
+                    a = [nm for nm in after_candidates if worker_has_role(nm, rn)]
+                    if not b or not a:
+                        continue
+                    if len(b) == 1 and len(a) == 1 and b[0] == a[0]:
+                        continue
+                    role_name = rn
+                    before_options = b
+                    after_options = a
+                    break
+                if not role_name:
+                    break
+            elif len(before_options) == 1 and len(after_options) == 1 and before_options[0] == after_options[0]:
+                break
 
-                    new_pull_count = len(existing_pull_keys) + 1
-                    next_names = list(current_names)
-                    if before_name not in next_names:
-                        next_names.append(before_name)
-                    if after_name not in next_names:
-                        next_names.append(after_name)
-                    if len(next_names) > required + new_pull_count:
-                        break
+            before_name = before_options[0] if before_options else ""
+            after_name = next((nm for nm in after_options if nm != before_name), "")
+            if not before_name or not after_name:
+                break
 
-                    slot_idx = required + len(existing_pull_keys)
-                    pulls[f"{day_key}|{shift_name}|{station_idx}|{slot_idx}"] = {
-                        "before": {"name": before_name, "start": before_range["start"], "end": before_range["end"]},
-                        "after": {"name": after_name, "start": after_range["start"], "end": after_range["end"]},
-                        "roleName": role_name,
-                    }
-                    set_cell_names(day_key, shift_name, station_idx, next_names)
+            hours = _hours_from_config(station_cfg, shift_name, day_key) or _hours_of(shift_name) or "00:00-00:00"
+            parsed = _parse_hours_range(hours)
+            shift_start, shift_end = parsed if parsed else ("00:00", "00:00")
+            before_range, after_range = _split_range_for_pulls(shift_start, shift_end)
+
+            new_pull_count = len(existing_pull_keys) + 1
+            next_names = list(current_names)
+            if before_name not in next_names:
+                next_names.append(before_name)
+            if after_name not in next_names:
+                next_names.append(after_name)
+            if len(next_names) > required + new_pull_count:
+                break
+
+            slot_idx = required + len(existing_pull_keys)
+            pulls[f"{day_key}|{shift_name}|{station_idx}|{slot_idx}"] = {
+                "before": {"name": before_name, "start": before_range["start"], "end": before_range["end"]},
+                "after": {"name": after_name, "start": after_range["start"], "end": after_range["end"]},
+                "roleName": role_name,
+            }
+            set_cell_names(day_key, shift_name, station_idx, next_names)
 
     payload["assignments"] = assignments
     payload["pulls"] = pulls
@@ -1300,12 +1349,14 @@ def _generate_director_week_plan_payload(
             payload = _apply_auto_pulls_to_payload(site, rows, payload, pulls_limit=pulls_limit)
         return payload
 
+    auto_pulls_time_limit, auto_pulls_num_alts = _boost_generation_budget_for_pulls(25, 20)
+
     result = solve_schedule(
         site.config or {},
         workers,
-        time_limit_seconds=25,
+        time_limit_seconds=auto_pulls_time_limit if auto_pulls_enabled else 25,
         max_nights_per_worker=3,
-        num_alternatives=20 if auto_pulls_enabled else 1,
+        num_alternatives=auto_pulls_num_alts if auto_pulls_enabled else 1,
         fixed_assignments=None,
         exclude_days=None,
     )
@@ -3021,6 +3072,8 @@ async def ai_generate_linked_planning_stream(
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
+    if payload and payload.auto_pulls_enabled:
+        eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
     eff_pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
 
@@ -3352,6 +3405,8 @@ async def ai_generate_stream(
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
+    if payload.auto_pulls_enabled:
+        eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
     eff_pulls_limit = int(payload.pulls_limit) if payload.pulls_limit is not None else None
     logger.info("[SSE] start site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%s", site_id, eff_time, eff_max_nights, eff_num_alts, [w["name"] for w in workers])
 
