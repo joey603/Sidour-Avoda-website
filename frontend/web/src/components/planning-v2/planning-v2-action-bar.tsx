@@ -1,0 +1,526 @@
+"use client";
+
+import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import PullsLimitPicker from "@/components/pulls-limit-picker";
+import { apiFetch } from "@/lib/api";
+import { toast } from "sonner";
+import type { V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
+import type { LinkedSiteRow } from "./hooks/use-planning-v2-linked-sites";
+import { assignmentsNonEmpty } from "./lib/assignments-empty";
+import { getWeekKeyISO } from "./lib/week";
+
+const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
+
+type PlanningV2ActionBarProps = {
+  siteId: string;
+  weekStart: Date;
+  weekPlan: V2WeekPlanData;
+  /** Assignations affichées (brouillon IA + serveur) — pour בדיקות מצב */
+  effectiveAssignments: Record<string, Record<string, string[][]>> | null;
+  linkedSites: LinkedSiteRow[];
+  editingSaved: boolean;
+  onEditingSavedChange: (v: boolean) => void;
+  reloadWeekPlan: () => void | Promise<void>;
+  generationRunning: boolean;
+  onRequestGenerate: () => void;
+  onStopGeneration: () => void;
+  autoPullsLimit: string;
+  onAutoPullsLimitChange: (v: string) => void;
+  autoPullsEnabled: boolean;
+  isManual: boolean;
+  onIsManualChange: (v: boolean) => void;
+  onSavePlan: (publishToWorkers: boolean) => void | Promise<void>;
+  onDraftClear?: () => void;
+  /** טיוטת IA ללא שמירה — מאפשר שמור בלי מצב ערוך */
+  draftActive: boolean;
+};
+
+export function PlanningV2ActionBar({
+  siteId,
+  weekStart,
+  weekPlan,
+  effectiveAssignments,
+  linkedSites,
+  editingSaved,
+  onEditingSavedChange,
+  reloadWeekPlan,
+  generationRunning,
+  onRequestGenerate,
+  onStopGeneration,
+  autoPullsLimit,
+  onAutoPullsLimitChange,
+  autoPullsEnabled,
+  isManual,
+  onIsManualChange,
+  onSavePlan,
+  onDraftClear,
+  draftActive,
+}: PlanningV2ActionBarProps) {
+  const router = useRouter();
+  const isoWeek = getWeekKeyISO(weekStart);
+
+  const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
+  const [modeSwitchTarget, setModeSwitchTarget] = useState<"manual" | "auto" | null>(null);
+  const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  /** תכנון שמור בשרת (לא רק טיוטת מסך) */
+  const isSavedMode = useMemo(() => assignmentsNonEmpty(weekPlan?.assignments ?? null), [weekPlan?.assignments]);
+
+  const linkedSiteEntries = useMemo(() => {
+    return linkedSites.map((ls) => {
+      const assigned = Number(ls.assigned_count ?? 0);
+      const required = Number(ls.required_count ?? 0);
+      return {
+        id: ls.id,
+        name: ls.name,
+        assignedCount: assigned,
+        requiredCount: required,
+        holesCount: Math.max(0, required - assigned),
+      };
+    });
+  }, [linkedSites]);
+
+  const linkedSitesTotalHoles = useMemo(
+    () => linkedSiteEntries.reduce((sum, s) => sum + s.holesCount, 0),
+    [linkedSiteEntries],
+  );
+
+  /** Comme planning : יצירת תכנון bloquée si génération, plan serveur sans édition, ou mode ידני */
+  const generationBlocked = generationRunning || (isSavedMode && !editingSaved) || isManual;
+  const showAutoManual = !isSavedMode || editingSaved;
+
+  const canSavePlan =
+    assignmentsNonEmpty(effectiveAssignments) && (editingSaved || draftActive);
+
+  const navigateToLinkedSite = useCallback(
+    (targetId: number) => {
+      try {
+        sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
+      } catch {
+        /* ignore */
+      }
+      setShowLinkedSitesDialog(false);
+      router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
+    },
+    [router, isoWeek],
+  );
+
+  const handleDelete = useCallback(async () => {
+    const id = Number(siteId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    setDeleting(true);
+    try {
+      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
+      await Promise.allSettled([
+        apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          method: "DELETE",
+          headers,
+        }),
+        apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+          method: "DELETE",
+          headers,
+        }),
+        apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
+          method: "DELETE",
+          headers,
+        }),
+      ]);
+      toast.success("התכנון נמחק בהצלחה");
+      setShowDeleteConfirm(false);
+      onEditingSavedChange(false);
+      onDraftClear?.();
+      await reloadWeekPlan();
+    } catch (e: unknown) {
+      toast.error("מחיקה נכשלה", { description: String((e as Error)?.message || "נסה שוב מאוחר יותר.") });
+    } finally {
+      setDeleting(false);
+    }
+  }, [siteId, isoWeek, reloadWeekPlan, onEditingSavedChange, onDraftClear]);
+
+  return (
+    <>
+      {showModeSwitchDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-3 text-sm">
+              {modeSwitchTarget === "manual"
+                ? "לעבור למצב ידני. לשמור את השיבוצים הנוכחיים במקומם?"
+                : "לעבור למצב אוטומטי. לשמור את השיבוצים הנוכחיים במקומם?"}
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  if (modeSwitchTarget === "auto") onIsManualChange(false);
+                  else if (modeSwitchTarget === "manual") onIsManualChange(true);
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                }}
+              >
+                שמור מיקומים
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  if (modeSwitchTarget === "auto") {
+                    onIsManualChange(false);
+                  } else if (modeSwitchTarget === "manual") {
+                    onIsManualChange(true);
+                  }
+                  setShowModeSwitchDialog(false);
+                  setModeSwitchTarget(null);
+                  void reloadWeekPlan();
+                }}
+              >
+                אפס גריד
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLinkedSitesDialog ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowLinkedSitesDialog(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 text-center text-base font-semibold">מולטי אתרים</div>
+            <div className="mb-3 text-center text-sm font-medium text-orange-600 dark:text-orange-400">
+              {'סה"כ חוסרים: '}
+              {linkedSitesTotalHoles}
+            </div>
+            <div className="space-y-2">
+              {linkedSiteEntries.map((linkedSite) => (
+                <button
+                  key={linkedSite.id}
+                  type="button"
+                  onClick={() => navigateToLinkedSite(linkedSite.id)}
+                  className={
+                    "flex w-full items-center justify-between rounded-xl border px-3 py-3 text-right transition-colors " +
+                    (String(linkedSite.id) === String(siteId)
+                      ? "border-[#00A8E0] bg-sky-50 dark:border-sky-600 dark:bg-sky-950/30"
+                      : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                  }
+                >
+                  <span className="font-medium text-zinc-900 dark:text-zinc-100">{linkedSite.name}</span>
+                  <span className="flex flex-col items-end text-sm">
+                    <span className="text-zinc-500 dark:text-zinc-400">
+                      {linkedSite.assignedCount}/{linkedSite.requiredCount}
+                    </span>
+                    <span className="text-orange-600 dark:text-orange-400">חוסרים: {linkedSite.holesCount}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => setShowLinkedSitesDialog(false)}
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              >
+                סגור
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showDeleteConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-3 text-sm">למחוק את התכנון השמור לשבוע זה?</div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-red-600 px-3 py-1 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                onClick={() => void handleDelete()}
+                disabled={deleting}
+              >
+                {deleting ? "מוחק…" : "מחק"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-zinc-800 dark:bg-zinc-900/90">
+        <div className="mx-auto grid w-full max-w-none grid-cols-1 place-items-center gap-3 px-3 py-3 text-sm md:gap-4 md:py-4 sm:px-6">
+          <div className="order-2 flex flex-wrap items-center justify-center gap-2 md:order-1 md:justify-center [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+            <div className="flex w-full flex-wrap items-center justify-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+              {generationRunning && (
+                <button
+                  type="button"
+                  onClick={() => onStopGeneration()}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-500/90 bg-white px-3 py-2 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50 dark:border-red-500/70 dark:bg-zinc-900 dark:text-red-400 dark:hover:bg-red-950/50 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M6 6h12v12H6z" />
+                  </svg>
+                </button>
+              )}
+              <div
+                className={
+                  "inline-flex overflow-hidden rounded-md border disabled:opacity-60 " +
+                  (generationBlocked ? "border-zinc-300 dark:border-zinc-600" : "border-[#00A8E0]")
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => onRequestGenerate()}
+                  disabled={generationBlocked}
+                  className={
+                    "inline-flex items-center gap-2 rounded-none border-0 px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                    (generationBlocked
+                      ? "cursor-not-allowed bg-zinc-300 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-400"
+                      : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
+                  }
+                >
+                  {generationRunning ? (
+                    <>
+                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
+                      </svg>
+                      יוצר...
+                    </>
+                  ) : (
+                    <>
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                        <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z" />
+                      </svg>
+                      יצירת תכנון
+                    </>
+                  )}
+                </button>
+                <div
+                  onClick={(e) => {
+                    if (generationBlocked) return;
+                    const trigger = (e.currentTarget as HTMLDivElement).querySelector(
+                      '[data-pulls-picker-trigger="1"]',
+                    ) as HTMLButtonElement | null;
+                    trigger?.click();
+                  }}
+                  className={
+                    "flex min-w-[2rem] cursor-pointer flex-col items-center justify-center border-l px-0.5 py-0 [@media(orientation:landscape)_and_(max-width:1024px)]:min-w-[1.85rem] " +
+                    (generationBlocked
+                      ? "cursor-not-allowed border-zinc-400/60 bg-zinc-300 dark:border-zinc-600 dark:bg-zinc-700"
+                      : autoPullsEnabled
+                        ? "border-orange-500 bg-orange-500 dark:border-orange-500 dark:bg-orange-500"
+                        : "border-[#00A8E0]/80 bg-white dark:border-[#0092c6]/80 dark:bg-zinc-900")
+                  }
+                >
+                  <span
+                    className={
+                      "text-[9px] font-medium leading-none [@media(orientation:landscape)_and_(max-width:1024px)]:text-[8px] " +
+                      (generationBlocked
+                        ? "text-zinc-600 dark:text-zinc-400"
+                        : autoPullsEnabled
+                          ? "text-white"
+                          : "text-orange-600 dark:text-orange-400")
+                    }
+                  >
+                    משיכות
+                  </span>
+                  <PullsLimitPicker
+                    value={autoPullsLimit}
+                    onChange={onAutoPullsLimitChange}
+                    disabled={generationBlocked}
+                    className={
+                      "!shadow-none w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +
+                      (generationBlocked
+                        ? "text-zinc-600 placeholder:text-zinc-500 dark:text-zinc-400 dark:placeholder:text-zinc-500 disabled:opacity-100"
+                        : autoPullsEnabled
+                          ? "text-white placeholder:text-white/70 disabled:opacity-50"
+                          : "text-orange-600 placeholder:text-orange-600/70 dark:text-orange-400 dark:placeholder:text-orange-400/70 disabled:opacity-50")
+                    }
+                    title="מגבלת משיכות"
+                  />
+                </div>
+              </div>
+
+              {linkedSites.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setShowLinkedSitesDialog(true)}
+                  className="relative inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1"
+                  aria-label="מולטי אתרים"
+                  title="מולטי אתרים"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z" />
+                  </svg>
+                  <span className="absolute -right-1 -top-1 min-w-4 rounded-full border border-orange-200 bg-orange-100 px-1 py-0 text-[10px] font-medium leading-4 text-orange-700 dark:border-orange-800 dark:bg-orange-950/70 dark:text-orange-300">
+                    {linkedSitesTotalHoles}
+                  </span>
+                </button>
+              )}
+
+              {showAutoManual && (
+                <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isManual) return;
+                      if (!assignmentsNonEmpty(effectiveAssignments)) {
+                        onIsManualChange(false);
+                        return;
+                      }
+                      setModeSwitchTarget("auto");
+                      setShowModeSwitchDialog(true);
+                    }}
+                    className={
+                      "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                      (isManual ? "dark:border-zinc-700" : "border-[#00A8E0] bg-[#00A8E0] text-white")
+                    }
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94L14.4 2.81c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.3-.06.61-.06.94 0 .32.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
+                    </svg>
+                    אוטומטי
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isManual) return;
+                      const hasContent = assignmentsNonEmpty(effectiveAssignments);
+                      if (!hasContent) {
+                        onIsManualChange(true);
+                        return;
+                      }
+                      setModeSwitchTarget("manual");
+                      setShowModeSwitchDialog(true);
+                    }}
+                    className={
+                      "inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                      (isManual ? "border-[#00A8E0] bg-[#00A8E0] text-white" : "dark:border-zinc-700")
+                    }
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                      <path d="M9 11.24V7.5a2.5 2.5 0 0 1 5 0v3.74c1.21-.81 2-2.18 2-3.74C16 5.01 13.99 3 11.5 3S7 5.01 7 7.5c0 1.56.79 2.93 2 3.74zm9.84 4.63l-4.54-2.26c-.17-.07-.35-.11-.54-.11H13v-6c0-.83-.67-1.5-1.5-1.5S10 6.67 10 7.5v10.74l-3.43-.72c-.08-.01-.15-.03-.24-.03-.31 0-.59.13-.79.33l-.79.8 4.94 4.94c.27.27.65.44 1.06.44h6.79c.75 0 1.33-.55 1.44-1.28l.75-5.27c.01-.07.02-.14.02-.2 0-.62-.38-1.16-.91-1.38z" />
+                    </svg>
+                    ידני
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex w-full flex-wrap items-center justify-center gap-2 md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(true)}
+                disabled={!isSavedMode}
+                className={
+                  "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                  (isSavedMode
+                    ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
+                    : "cursor-not-allowed bg-zinc-300 text-zinc-600 opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
+                }
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                </svg>
+                מחק
+              </button>
+
+              {!editingSaved && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isSavedMode) return;
+                    onEditingSavedChange(true);
+                  }}
+                  disabled={!isSavedMode}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                    (isSavedMode
+                      ? "border-[#00A8E0] bg-[#00A8E0] text-white hover:bg-[#0092c6]"
+                      : "cursor-not-allowed border-zinc-300 bg-zinc-300 text-zinc-600 opacity-60 dark:border-zinc-700 dark:bg-zinc-700 dark:text-zinc-400")
+                  }
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                  </svg>
+                  ערוך
+                </button>
+              )}
+
+              {editingSaved && (
+                <button
+                  type="button"
+                  onClick={() => onEditingSavedChange(false)}
+                  className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                  </svg>
+                  ביטול
+                </button>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+                <button
+                  type="button"
+                  onClick={() => void onSavePlan(false)}
+                  disabled={!canSavePlan}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                    (canSavePlan
+                      ? "border-green-600 bg-white text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
+                      : "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400 opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500")
+                  }
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
+                  </svg>
+                  שמור
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onSavePlan(true)}
+                  disabled={!canSavePlan}
+                  className={
+                    "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
+                    (canSavePlan
+                      ? "bg-green-600 text-white hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600"
+                      : "cursor-not-allowed bg-zinc-300 text-zinc-600 opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
+                  }
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                    <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                  </svg>
+                  שמור ואשלח
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}

@@ -5,6 +5,21 @@ au code pousse sur `main`.
 
 ## Serveur cible
 
+- **IP (Oracle Cloud)** : `129.159.131.86`
+- Connexion SSH depuis **ton Mac** (clé privée Oracle) — copie-colle toute la ligne :
+
+```bash
+ssh -i /Users/yoelibarthel/Downloads/ssh-key-2026-04-08.key ubuntu@129.159.131.86
+```
+
+*(Si SSH refuse la clé : `chmod 400 /Users/yoelibarthel/Downloads/ssh-key-2026-04-08.key`.)*
+
+Une fois connecté **sur le serveur**, pour lancer le déploiement (après avoir créé le script une première fois, sections 1–2) :
+
+```bash
+/home/ubuntu/deploy-backend.sh
+```
+
 - Projet : `/home/ubuntu/Sidour-Avoda-website`
 - Backend : `/home/ubuntu/Sidour-Avoda-website/backend`
 - Venv : `/home/ubuntu/Sidour-Avoda-website/backend/.venv`
@@ -85,3 +100,12 @@ curl http://127.0.0.1:8000/docs
 
 Si `sidour-backend` est `active (running)` et que `/docs` repond, le backend de production
 correspond bien au code pousse.
+
+---
+
+## A la fin (sur le serveur)
+
+```bash
+sudo systemctl status sidour-backend --no-pager
+curl http://127.0.0.1:8000/docs
+```

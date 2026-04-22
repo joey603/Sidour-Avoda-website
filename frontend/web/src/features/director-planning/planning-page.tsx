@@ -1,6 +1,5 @@
 "use client";
 
-import { flushSync } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -21,175 +20,6 @@ import Link from "@tiptap/extension-link";
 import Highlight from "@tiptap/extension-highlight";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
-
-const EMPTY_WORKER_AVAILABILITY = {
-  sun: [],
-  mon: [],
-  tue: [],
-  wed: [],
-  thu: [],
-  fri: [],
-  sat: [],
-};
-
-const AVAILABILITY_DAY_KEYS = Object.keys(EMPTY_WORKER_AVAILABILITY) as Array<keyof typeof EMPTY_WORKER_AVAILABILITY>;
-
-/** Copie profonde des créneaux par jour (évite les références partagées). */
-function cloneWorkerAvailability(
-  av: Record<string, string[]> | null | undefined,
-): Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]> {
-  const base = av || EMPTY_WORKER_AVAILABILITY;
-  const out = {} as Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]>;
-  for (const k of AVAILABILITY_DAY_KEYS) {
-    out[k] = [...(base[k] || [])];
-  }
-  return out;
-}
-
-/** Vrai seulement si la grille jour / משמרת a changé (pas nom, rôles, max_shifts). */
-function isAvailabilityDayShiftChanged(
-  before: Record<string, string[]> | null | undefined,
-  after: Record<string, string[]> | null | undefined,
-) {
-  try {
-    const norm = (x: Record<string, string[]> | null | undefined) => {
-      const b = x || EMPTY_WORKER_AVAILABILITY;
-      const o: Record<string, string[]> = {};
-      for (const k of AVAILABILITY_DAY_KEYS) {
-        o[k] = [...(b[k] || [])].map(String).sort();
-      }
-      return JSON.stringify(o);
-    };
-    return norm(before) !== norm(after);
-  } catch {
-    return true;
-  }
-}
-
-function normPlanningCellName(s: unknown): string {
-  return String(s ?? "")
-    .normalize("NFKC")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-/**
- * Noms contenus dans une cellule du snapshot (liste plate).
- * Tolère un niveau de tableau imbriqué si les données sont mal formées.
- */
-function draftFixedCellNamesInRow(row: unknown): string[] {
-  if (!Array.isArray(row)) return [];
-  const out: string[] = [];
-  for (const cell of row) {
-    if (Array.isArray(cell)) {
-      for (const inner of cell) {
-        const n = normPlanningCellName(inner);
-        if (n) out.push(n);
-      }
-    } else {
-      const n = normPlanningCellName(cell);
-      if (n) out.push(n);
-    }
-  }
-  return out;
-}
-
-/** Indique si ce nom figurait dans le snapshot שיבוצים קבועים pour cette case (aligné sur le backend fixed_cells). */
-function isWorkerInDraftFixedSnapshot(
-  snap: Record<string, Record<string, string[][]>> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-): boolean {
-  if (!snap) return false;
-  const row = snap[dayKey]?.[shiftName]?.[stationIdx];
-  const names = draftFixedCellNamesInRow(row);
-  const n = normPlanningCellName(workerName);
-  if (!n) return false;
-  return names.includes(n);
-}
-
-/** Affiche le pictogramme שיבוץ קבוע (cadenas) pour ce travailleur dans cette cellule. */
-function shouldShowDraftFixedPinForWorker(
-  snap: Record<string, Record<string, string[][]>> | null | undefined,
-  isSavedMode: boolean,
-  editingSaved: boolean,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-  cellAssignedNames: string[],
-): boolean {
-  if (!snap || (isSavedMode && !editingSaved)) return false;
-  const snapNames = draftFixedCellNamesInRow(snap[dayKey]?.[shiftName]?.[stationIdx]);
-  if (!snapNames.length) return false;
-  const dispSet = new Set(cellAssignedNames.map((x) => normPlanningCellName(x)).filter(Boolean));
-  if (!snapNames.every((x) => dispSet.has(x))) return false;
-  return isWorkerInDraftFixedSnapshot(snap, dayKey, shiftName, stationIdx, workerName);
-}
-
-type PlanningAssignmentsMap = Record<string, Record<string, string[][]>>;
-
-function planningCellNames(cell: unknown): string[] {
-  if (!Array.isArray(cell)) return [];
-  return cell
-    .map((name) => String(name ?? "").trim())
-    .filter(Boolean);
-}
-
-function samePlanningCellNames(a: unknown, b: unknown): boolean {
-  const aa = planningCellNames(a).map(normPlanningCellName).sort();
-  const bb = planningCellNames(b).map(normPlanningCellName).sort();
-  if (aa.length !== bb.length) return false;
-  return aa.every((value, idx) => value === bb[idx]);
-}
-
-function buildNonEmptyPlanningAssignmentsSnapshot(
-  source: PlanningAssignmentsMap | null | undefined,
-): PlanningAssignmentsMap | null {
-  if (!source || typeof source !== "object") return null;
-  const out: PlanningAssignmentsMap = {};
-  Object.keys(source).forEach((dayKey) => {
-    const shiftsMap = source[dayKey];
-    if (!shiftsMap || typeof shiftsMap !== "object") return;
-    Object.keys(shiftsMap).forEach((shiftName) => {
-      const perStation = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
-      const nextStations = perStation.map((cell) => planningCellNames(cell));
-      if (!nextStations.some((cell) => cell.length > 0)) return;
-      out[dayKey] = out[dayKey] || {};
-      out[dayKey][shiftName] = nextStations;
-    });
-  });
-  return Object.keys(out).length > 0 ? out : null;
-}
-
-function buildChangedNonEmptyPlanningAssignmentsSnapshot(
-  current: PlanningAssignmentsMap | null | undefined,
-  baseline: PlanningAssignmentsMap | null | undefined,
-): PlanningAssignmentsMap | null {
-  if (!current || typeof current !== "object") return null;
-  const out: PlanningAssignmentsMap = {};
-  Object.keys(current).forEach((dayKey) => {
-    const shiftsMap = current[dayKey];
-    if (!shiftsMap || typeof shiftsMap !== "object") return;
-    Object.keys(shiftsMap).forEach((shiftName) => {
-      const currentStations = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
-      const baselineStations = Array.isArray(baseline?.[dayKey]?.[shiftName]) ? (baseline?.[dayKey]?.[shiftName] as string[][]) : [];
-      const maxStations = Math.max(currentStations.length, baselineStations.length);
-      const nextStations: string[][] = Array.from({ length: maxStations }, (_, stationIdx) => {
-        const names = planningCellNames(currentStations[stationIdx]);
-        if (names.length === 0) return [];
-        if (samePlanningCellNames(currentStations[stationIdx], baselineStations[stationIdx])) return [];
-        return names;
-      });
-      if (!nextStations.some((cell) => cell.length > 0)) return;
-      out[dayKey] = out[dayKey] || {};
-      out[dayKey][shiftName] = nextStations;
-    });
-  });
-  return Object.keys(out).length > 0 ? out : null;
-}
 
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
@@ -556,7 +386,6 @@ export default function PlanningPage() {
   const aiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const aiIdleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const streamPullPriorityPromotedRef = useRef(false);
-  const generationFixedPullsRef = useRef<Record<string, PullEntry>>({});
   const multiSitePullsDialogBypassRef = useRef(false);
   const multiSitePullsRequestRef = useRef<Record<string, string> | null>(null);
   /** Dernières cellules « fixes » envoyées à la génération (brouillon auto) — pastilles שיבוץ קבוע */
@@ -879,19 +708,12 @@ export default function PlanningPage() {
   const isAnyGenerationRunning = aiLoading || sharedGenerationRunning;
   const aiAssignmentsVariants = useMemo(() => {
     if (!aiPlan) return [] as Record<string, Record<string, string[][]>>[];
-    // Base canonique = aiPlan.assignments uniquement (ne pas la remplacer par une חלופה lors de la navigation).
-    const base = aiPlan.assignments ?? baseAssignmentsRef.current;
+    // Toujours préférer la grille courante de aiPlan (ex. après ידני→אוטומטי « שמור מיקומים ») :
+    // baseAssignmentsRef peut rester celui d’une יצירת תכנון antérieure et écraser l’affichage / le fixed.
+    const base = aiPlan.assignments || baseAssignmentsRef.current;
     if (!base) return [] as Record<string, Record<string, string[][]>>[];
     return [base, ...((aiPlan.alternatives || []).filter(Boolean) as Record<string, Record<string, string[][]>>[])];
   }, [aiPlan]);
-  /** Grille / résumés : alternative active selon altIndex sans muter aiPlan.assignments */
-  const displayedAiAssignments = useMemo((): Record<string, Record<string, string[][]>> | null => {
-    if (!aiPlan?.assignments || isManual) return null;
-    const idx = Math.max(0, Number(altIndex) || 0);
-    if (idx <= 0) return aiPlan.assignments;
-    const alt = (aiPlan.alternatives || [])[idx - 1];
-    return alt || aiPlan.assignments;
-  }, [aiPlan, altIndex, isManual]);
   const assignmentCountFilters = useMemo(
     () => sharedAssignmentCountFilters[String(params.id)] || {},
     [sharedAssignmentCountFilters, params.id],
@@ -1048,10 +870,6 @@ export default function PlanningPage() {
   const [genExcludeDays, setGenExcludeDays] = useState<string[] | null>(null);
   const [showPastDaysDialog, setShowPastDaysDialog] = useState(false);
   const [pendingExcludeDays, setPendingExcludeDays] = useState<string[] | null>(null);
-  /** Après «שמור כשיבוצים קבועים» : מגבלת משיכות גבוהה מהמספר בפועל בתכנון */
-  const [pullsLimitMismatchDialog, setPullsLimitMismatchDialog] = useState<
-    null | { actual: number; configuredMax: number }
-  >(null);
   const pendingLinkedAvailabilitySaveRef = useRef<null | ((propagate: boolean) => Promise<void>)>(null);
   const [linkedAvailabilityConfirmSites, setLinkedAvailabilityConfirmSites] = useState<string[] | null>(null);
   // Surcouche d'affichage de זמינות ajoutée par drop manuel (mise en rouge)
@@ -1982,26 +1800,20 @@ export default function PlanningPage() {
       const nm = (w.name || "").trim();
       if (nm) namesSet.add(nm);
     }
-    // depuis le plan IA (toutes les חלופות pour des couleurs stables)
-    if (aiPlan?.assignments) {
-      const maps = [
-        aiPlan.assignments,
-        ...((Array.isArray(aiPlan.alternatives) ? aiPlan.alternatives : []) as Record<string, Record<string, string[][]>>[]),
-      ].filter(Boolean);
-      for (const amap of maps) {
-        for (const day of Object.keys(amap)) {
-          const shiftsMap = (amap as any)[day] || {};
+    // depuis le plan IA courant
+    if (aiPlan && aiPlan.assignments) {
+      for (const day of Object.keys(aiPlan.assignments)) {
+        const shiftsMap = (aiPlan.assignments as any)[day] || {};
         for (const sh of Object.keys(shiftsMap)) {
           const perStation: string[][] = shiftsMap[sh] || [];
           for (const arr of perStation) {
             for (const nm of arr || []) {
               const v = (nm || "").trim();
-                if (v) namesSet.add(v);
+              if (v) namesSet.add(v);
             }
           }
         }
       }
-    }
     }
     const names = Array.from(namesSet).sort((a, b) => a.localeCompare(b));
     const identities = Array.from(new Set(names.map((name) => workerColorIdentityByName.get(name) || `name:${name}`))).sort((a, b) => a.localeCompare(b));
@@ -2185,6 +1997,22 @@ export default function PlanningPage() {
     }
 
     return counts;
+  }
+
+  function subtractPullExtrasFromWorkerCounts(
+    rawCounts: Map<string, number>,
+    pulls: Record<string, PullEntry> | null | undefined,
+  ): Map<string, number> {
+    const out = new Map(rawCounts);
+    if (!pulls || typeof pulls !== "object") return out;
+    for (const entry of Object.values(pulls)) {
+      if (!entry || typeof entry !== "object") continue;
+      const before = String((entry as PullEntry).before?.name || "").trim();
+      const after = String((entry as PullEntry).after?.name || "").trim();
+      if (before) out.set(before, Math.max(0, (out.get(before) || 0) - 1));
+      if (after) out.set(after, Math.max(0, (out.get(after) || 0) - 1));
+    }
+    return out;
   }
 
   function requiredForStationSummary(st: any, shiftName: string, dayKey: string): number {
@@ -2454,10 +2282,10 @@ export default function PlanningPage() {
     const currentAssignments =
       savedWeekPlan?.assignments && !editingSaved
         ? savedWeekPlan.assignments
-        : (isManual ? manualAssignments : displayedAiAssignments || aiPlan?.assignments);
+        : (isManual ? manualAssignments : aiPlan?.assignments);
     accumulateAssignments(currentAssignments);
     return totals;
-  }, [weekStart, workersByName, savedWeekPlan, editingSaved, isManual, manualAssignments, aiPlan, displayedAiAssignments]);
+  }, [weekStart, workersByName, savedWeekPlan, editingSaved, isManual, manualAssignments, aiPlan]);
 
   function totalAssignmentsForSummaryWorker(workerName: string, localCount: number): number {
     if (!showMultiSiteTotalColumn) return localCount;
@@ -2483,23 +2311,6 @@ export default function PlanningPage() {
     }
     const pullsCount = pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0;
     return Math.max(0, total - pullsCount);
-  }
-
-  /** Dans סיכום שיבוצים : les noms « before » / « after » d'une משיכה ne comptent pas comme משמרות supplémentaires */
-  function subtractPullExtrasFromWorkerCounts(
-    rawCounts: Map<string, number>,
-    pulls: Record<string, PullEntry> | null | undefined,
-  ): Map<string, number> {
-    const out = new Map(rawCounts);
-    if (!pulls || typeof pulls !== "object") return out;
-    for (const entry of Object.values(pulls)) {
-      if (!entry || typeof entry !== "object") continue;
-      const before = String((entry as PullEntry).before?.name || "").trim();
-      const after = String((entry as PullEntry).after?.name || "").trim();
-      if (before) out.set(before, Math.max(0, (out.get(before) || 0) - 1));
-      if (after) out.set(after, Math.max(0, (out.get(after) || 0) - 1));
-    }
-    return out;
   }
 
   function countRequiredForCurrentSite(): number {
@@ -2592,10 +2403,13 @@ export default function PlanningPage() {
   }
 
   function selectAiPlanIndex(index: number) {
+    const assignments = index === 0
+      ? (aiPlan?.assignments || baseAssignmentsRef.current || null)
+      : ((aiPlan?.alternatives || [])[index - 1] || null);
     const pulls = index === 0
       ? (aiPlan?.pulls || {})
       : ((aiPlan?.alternativePulls || [])[index - 1] || {});
-    if (index === altIndex) {
+    if (index === altIndex && sameAssignmentsMap(aiPlan?.assignments, assignments || undefined)) {
       const linkedMemory = readLinkedPlansFromMemory(weekStart);
       if (linkedMemory?.plansBySite) {
         saveLinkedPlansToMemory(weekStart, linkedMemory.plansBySite, index, "select-index-noop");
@@ -2603,8 +2417,14 @@ export default function PlanningPage() {
       return;
     }
     setAltIndex(index);
-    setPullsByHoleKey(mergePullMaps(generationFixedPullsRef.current, pulls || {}));
+    setPullsByHoleKey(pulls || {});
     setPullsEditor(null);
+    if (assignments) {
+      setAiPlan((prev) => {
+        if (!prev || sameAssignmentsMap(prev.assignments, assignments)) return prev;
+        return { ...prev, assignments };
+      });
+    }
     const linkedMemory = readLinkedPlansFromMemory(weekStart);
     if (linkedMemory?.plansBySite) {
       saveLinkedPlansToMemory(weekStart, linkedMemory.plansBySite, index, "select-index");
@@ -3090,51 +2910,12 @@ export default function PlanningPage() {
     }
   }
 
-  function mergePullMaps(
-    fixedPulls: Record<string, PullEntry> | null | undefined,
-    generatedPulls: Record<string, PullEntry> | null | undefined,
-  ): Record<string, PullEntry> {
-    return {
-      ...(generatedPulls || {}),
-      ...(fixedPulls || {}),
-    };
-  }
-
-  function stripPullExtrasFromAssignmentsSnapshot(
-    snapshot: PlanningAssignmentsMap | null | undefined,
-    pulls: Record<string, PullEntry> | null | undefined,
-  ): PlanningAssignmentsMap | null {
-    if (!snapshot || typeof snapshot !== "object") return null;
-    const next = JSON.parse(JSON.stringify(snapshot)) as PlanningAssignmentsMap;
-    Object.entries(pulls || {}).forEach(([pullKey, entry]) => {
-      const parts = String(pullKey || "").split("|");
-      if (parts.length < 3) return;
-      const [dayKey, shiftName, stationIdxRaw] = parts;
-      const stationIdx = Number(stationIdxRaw);
-      if (!dayKey || !shiftName || !Number.isFinite(stationIdx)) return;
-      const beforeName = String(entry?.before?.name || "").trim();
-      const afterName = String(entry?.after?.name || "").trim();
-      const blocked = new Set(
-        [beforeName, afterName]
-          .map(normPlanningCellName)
-          .filter(Boolean),
-      );
-      if (blocked.size === 0) return;
-      const cell = next?.[dayKey]?.[shiftName]?.[stationIdx];
-      if (!Array.isArray(cell) || cell.length === 0) return;
-      next[dayKey][shiftName][stationIdx] = cell.filter(
-        (name) => !blocked.has(normPlanningCellName(name)),
-      );
-    });
-    return next;
-  }
-
   function applyLinkedSitePlan(plan: LinkedSitePlan, index: number) {
     const assignments = resolveAssignmentsForAlternative(plan, index);
     const pulls = resolvePullsForAlternative(plan, index);
     setSavedWeekPlan(null);
     setEditingSaved(false);
-    setPullsByHoleKey(mergePullMaps(generationFixedPullsRef.current, pulls || {}));
+    setPullsByHoleKey(pulls || {});
     setPullsEditor(null);
     setAiPlan((prev) => {
       const nextAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
@@ -4281,8 +4062,6 @@ export default function PlanningPage() {
       if (linkedCurrentPlan && linkedCurrentPlan.assignments) {
         const autoPlan = await fetchAutoGeneratedPlanForSite(Number(params.id));
         if (isStaleRequest()) return;
-        // Ne pas écraser un flux יצירת תכנון en cours (ex. pulls DB vs assignments SSE).
-        if (isSharedGenerationRunning(start)) return;
         const autoCandidateCount = getLinkedPlanCandidateCount(autoPlan);
         const shouldPreferAutoPlan =
           !!(autoPlan && autoPlan.assignments) &&
@@ -4362,9 +4141,6 @@ export default function PlanningPage() {
         fetchWeekPlanScope(Number(params.id), isoWeek, "auto"),
       ]);
       if (isStaleRequest()) return;
-      // Même semaine / même requête : si יצירת תכנון a démarré pendant le fetch, ne pas réappliquer
-      // des משיחות sauvegardées sur une grille déjà mise à jour par le stream.
-      if (isSharedGenerationRunning(start)) return;
 
         if (fromDirector && typeof fromDirector === "object") {
           setActiveSavedPlanKey("db:director");
@@ -4415,7 +4191,6 @@ export default function PlanningPage() {
 
       // 2) localStorage fallback (legacy)
       if (isStaleRequest()) return;
-      if (isSharedGenerationRunning(start)) return;
       const raw = typeof window !== "undefined" ? (localStorage.getItem(keyDirector) || localStorage.getItem(keyShared)) : null;
       if (typeof window !== "undefined") {
         try { setActiveSavedPlanKey(localStorage.getItem(keyDirector) ? keyDirector : (localStorage.getItem(keyShared) ? keyShared : null)); } catch {}
@@ -4535,40 +4310,6 @@ export default function PlanningPage() {
     } catch (e) {
       void e;
     }
-  }
-
-  /** מקסימום משיחות שהמגבלה הנוכחית מאפשרת (0 = ללא משיכות). */
-  function getPullsLimitConfiguredMax(): number {
-    if (autoPullsLimit === "unlimited") return Number.POSITIVE_INFINITY;
-    if (!autoPullsEnabled || autoPullsLimit === "") return 0;
-    const n = Number(autoPullsLimit);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }
-
-  /** בתכנון יש יותר משיחות מהמגבלה (למשל חזרה מאוטו אחרי ידני עם 2 משיחות והכפתור על ללא / 1). */
-  function shouldPromptPullsLimitMismatchBeforeFixedSave(): boolean {
-    if (autoPullsLimit === "unlimited") return false;
-    const actual = Object.keys(pullsByHoleKey || {}).length;
-    if (actual <= 0) return false;
-    const max = getPullsLimitConfiguredMax();
-    if (max === Number.POSITIVE_INFINITY) return false;
-    return actual > max;
-  }
-
-  function proceedGenerateWithFixedCells() {
-    setDraftFixedAssignmentsSnapshot(null);
-    pendingManualFixedAssignmentsRef.current = null;
-    genDialogBypassRef.current = "fixed";
-    genUseFixedRef.current = true;
-    setGenUseFixed(true);
-    if (isManual) capturePendingManualFixedAssignments();
-    setShowGenDialog(false);
-    setIsManual(false);
-    setTimeout(() => {
-      try {
-        triggerGenerateButton();
-      } catch {}
-    }, 0);
   }
 
   function readMultiSiteSavedEditSiteIds(start: Date): number[] {
@@ -5648,10 +5389,10 @@ export default function PlanningPage() {
                         <table className="w-full table-fixed border-collapse text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="sticky top-0 z-20 bg-white px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 text-[10px] md:text-sm shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">שם</th>
-                              <th className="sticky top-0 z-20 bg-white px-0.5 md:px-3 py-1 md:py-2 text-center w-12 md:w-auto text-[10px] md:text-sm shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מקס'</th>
-                              <th className="sticky top-0 z-20 bg-white px-0.5 md:px-3 py-1 md:py-2 text-center w-16 md:w-auto text-[10px] md:text-sm shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">תפקידים</th>
-                              <th className="sticky top-0 z-20 bg-white px-0.5 md:px-3 py-1 md:py-2 text-center w-20 md:w-auto text-[10px] md:text-sm shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">זמינות</th>
+                              <th className="px-1 md:px-3 py-1 md:py-2 text-center w-20 md:w-40 text-[10px] md:text-sm">שם</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-12 md:w-auto text-[10px] md:text-sm">מקס'</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-16 md:w-auto text-[10px] md:text-sm">תפקידים</th>
+                              <th className="px-0.5 md:px-3 py-1 md:py-2 text-center w-20 md:w-auto text-[10px] md:text-sm">זמינות</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -8126,11 +7867,11 @@ export default function PlanningPage() {
                           <table className="w-full border-collapse table-fixed text-[8px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="sticky top-0 z-20 bg-white px-0 md:px-2 py-0.5 md:py-2 text-right align-bottom w-10 md:w-28 text-[8px] md:text-sm shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">משמרת</th>
+                                <th className="px-0 md:px-2 py-0.5 md:py-2 text-right align-bottom w-10 md:w-28 text-[8px] md:text-sm">משמרת</th>
                                 {dayCols.map((d, i) => {
                                   const date = addDays(weekStart, i);
                                   return (
-                                    <th key={d.key} className="sticky top-0 z-20 bg-white px-0.5 md:px-2 py-0.5 md:py-2 text-center align-bottom shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
+                                    <th key={d.key} className="px-0.5 md:px-2 py-0.5 md:py-2 text-center align-bottom">
                                       <div className="flex flex-col items-center leading-tight min-w-0">
                                         <span className="text-[5px] md:text-xs text-zinc-500 whitespace-nowrap max-w-full truncate">
                                           {formatHebDate(date)}
@@ -8185,8 +7926,8 @@ export default function PlanningPage() {
                                             const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
                                             return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                           }
-                                          if (displayedAiAssignments) {
-                                            const cell = (displayedAiAssignments as any)[dayKey]?.[shiftName]?.[idx];
+                                          if (aiPlan?.assignments) {
+                                            const cell = (aiPlan.assignments as any)[dayKey]?.[shiftName]?.[idx];
                                             return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                           }
                                           // Fallback: utiliser savedWeekPlan si les assignations en cours d'édition ne sont pas encore chargées
@@ -8203,8 +7944,8 @@ export default function PlanningPage() {
                                           const cell = (manualAssignments as any)[dayKey]?.[shiftName]?.[idx];
                                           return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                         }
-                                        if (displayedAiAssignments) {
-                                          const cell = (displayedAiAssignments as any)[dayKey]?.[shiftName]?.[idx];
+                                        if (aiPlan?.assignments) {
+                                          const cell = (aiPlan.assignments as any)[dayKey]?.[shiftName]?.[idx];
                                           return Array.isArray(cell) ? (cell as any[]).filter((x) => x && String(x).trim()) : [];
                                         }
                                         if (savedWeekPlan?.assignments) {
@@ -9404,18 +9145,18 @@ export default function PlanningPage() {
                                                                   ) : null}
                                                                   <span
                                                                     className={"block min-w-0 flex-1 max-w-full leading-tight md:text-center " + (isRtlName(nm) ? "text-right" : "text-left")}
-                                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                                >
-                                                                  {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
-                                                                  <span className="md:hidden">
-                                                                    {expandedSlotKey === expKey ? (
-                                                                      <span className="whitespace-nowrap">{nm}</span>
-                                                                    ) : (
-                                                                      <span>{truncateMobile6(nm)}</span>
-                                                                    )}
-                                                                  </span>
-                                                                  {/* Desktop: ellipsis classique */}
-                                                                  <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
+                                                                    dir={isRtlName(nm) ? "rtl" : "ltr"}
+                                                                  >
+                                                                    {/* Mobile: tronqué par défaut, complet uniquement sur le slot ciblé */}
+                                                                    <span className="md:hidden">
+                                                                      {expandedSlotKey === expKey ? (
+                                                                        <span className="whitespace-nowrap">{nm}</span>
+                                                                      ) : (
+                                                                        <span>{truncateMobile6(nm)}</span>
+                                                                      )}
+                                                                    </span>
+                                                                    {/* Desktop: ellipsis classique */}
+                                                                    <span className="hidden md:block w-full truncate text-[8px] md:text-sm">{nm}</span>
                                                                   </span>
                                                                 </span>
                                                                 {(() => {
@@ -9676,19 +9417,19 @@ export default function PlanningPage() {
                                                 </div>
                                               ) : null}
                                               <div className="mt-0.5 flex w-full min-w-0 flex-col items-center gap-0.5 leading-tight max-md:max-w-[5.5rem] md:max-w-none md:mt-1 md:gap-1">
-                                              <span
-                                                className={
+                                                <span
+                                                  className={
                                                     "flex w-full items-center justify-center gap-0.5 whitespace-nowrap text-[7px] md:text-[10px] " +
                                                     (assignedCount < required
-                                                    ? "text-red-600 dark:text-red-400"
+                                                      ? "text-red-600 dark:text-red-400"
                                                       : required > 0 && assignedCount >= required
                                                         ? "text-green-600 dark:text-green-400"
                                                         : "")
-                                                }
-                                              >
+                                                  }
+                                                >
                                                   <span>שיבוצים:</span>
                                                   <span className="font-medium tabular-nums">{assignedCount}</span>
-                                              </span>
+                                                </span>
                                                 <span className="flex w-full items-center justify-center gap-0.5 whitespace-nowrap text-[7px] text-zinc-500 md:text-[10px]">
                                                   <span>נדרש:</span>
                                                   <span className="font-medium tabular-nums text-zinc-600 dark:text-zinc-400">{required}</span>
@@ -9740,12 +9481,10 @@ export default function PlanningPage() {
               {aiPlan && !isManual && (!savedWeekPlan?.assignments || editingSaved) && (
                 <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
                   {(() => {
-                    const gridForSummary = displayedAiAssignments || aiPlan.assignments;
-                    const pullsForSummary = pullsByHoleKey || {};
                     const counts = new Map<string, number>();
-                    const days = Object.keys(gridForSummary || {});
+                    const days = Object.keys(aiPlan.assignments || {});
                     for (const dKey of days) {
-                      const shiftsMap = (gridForSummary as any)[dKey] || {};
+                      const shiftsMap = (aiPlan.assignments as any)[dKey] || {};
                       for (const sn of Object.keys(shiftsMap)) {
                         const perStation: string[][] = shiftsMap[sn] || [];
                         for (const namesHere of perStation) {
@@ -9756,7 +9495,6 @@ export default function PlanningPage() {
                         }
                       }
                     }
-                    const countsAdjusted = subtractPullExtrasFromWorkerCounts(counts, pullsForSummary);
                   // Totaux globaux: נדרש (required) et שיבוצים (assignés)
                   const stationsCfgAll: any[] = (site?.config?.stations || []) as any[];
                   function requiredForSummary(st: any, shiftName: string, dayKey: string): number {
@@ -9777,22 +9515,22 @@ export default function PlanningPage() {
                   }
                   let totalRequired = 0;
                   for (const dKey of days) {
-                    const shiftsMap = (gridForSummary as any)[dKey] || {};
+                    const shiftsMap = (aiPlan.assignments as any)[dKey] || {};
                     for (const sn of Object.keys(shiftsMap)) {
                       for (let tIdx = 0; tIdx < stationsCfgAll.length; tIdx++) {
                         totalRequired += requiredForSummary(stationsCfgAll[tIdx], sn, dKey);
                       }
                     }
                   }
-                  const totalAssigned = Array.from(countsAdjusted.values()).reduce((a, b) => a + b, 0);
+                  const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     // Compléter avec tous les travailleurs (compte 0 si non assigné)
                     workers.forEach((w) => {
-                      if (!countsAdjusted.has(w.name)) countsAdjusted.set(w.name, 0);
+                      if (!counts.has(w.name)) counts.set(w.name, 0);
                     });
                     // Ordre stable: suivre l'ordre d'apparition dans la liste 'workers'
                     const order = new Map<string, number>();
                     workers.forEach((w, i) => order.set(w.name, i));
-                    const items = Array.from(countsAdjusted.entries())
+                    const items = Array.from(counts.entries())
                       .sort((a, b) => {
                         const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
                         const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
@@ -9841,10 +9579,10 @@ export default function PlanningPage() {
                         <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                           <thead>
                             <tr className="border-b dark:border-zinc-800">
-                              <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">עובד</th>
-                              <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס' משמרות</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                              <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                               {showMultiSiteTotalColumn && (
-                                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">סה״כ שיבוצים</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה״כ שיבוצים</th>
                               )}
                             </tr>
                           </thead>
@@ -9912,11 +9650,10 @@ export default function PlanningPage() {
                         </div>
                         {(() => {
                           // Récap par תפקיד
-                          const gridForRoles = displayedAiAssignments || aiPlan.assignments;
                           const roleTotals = new Map<string, number>();
                           const stationsCfg: any[] = (site?.config?.stations || []) as any[];
                           const getStationCfg = (tIdx: number) => stationsCfg[tIdx] || null;
-                          const dayKeys = Object.keys(gridForRoles || {});
+                          const dayKeys = Object.keys(aiPlan.assignments || {});
                           function roleRequirementsLocal(st: any, shiftName: string, dayKey: string): Record<string, number> {
                             const out: Record<string, number> = {};
                             const push = (name?: string, count?: number, enabled?: boolean) => {
@@ -9967,7 +9704,7 @@ export default function PlanningPage() {
                           }
                           // parcours des cellules
                           dayKeys.forEach((dKey) => {
-                            const shiftsMap = (gridForRoles as any)[dKey] || {};
+                            const shiftsMap = (aiPlan.assignments as any)[dKey] || {};
                             for (const sn of Object.keys(shiftsMap)) {
                               const perStation: string[][] = shiftsMap[sn] || [];
                               perStation.forEach((namesHere, tIdx) => {
@@ -9981,21 +9718,6 @@ export default function PlanningPage() {
                                 });
                               });
                             }
-                          });
-                          Object.entries(pullsByHoleKey || {}).forEach(([pullKey, pe]) => {
-                            const parts = String(pullKey || "").split("|");
-                            if (parts.length < 3) return;
-                            const [dKey, sn, tIdxStr] = parts;
-                            const tIdx = Number(tIdxStr);
-                            if (!Number.isFinite(tIdx)) return;
-                            const namesHere = (gridForRoles as any)?.[dKey]?.[sn]?.[tIdx] || [];
-                            const filteredNames = namesHere.filter(Boolean);
-                            const stCfg = getStationCfg(tIdx);
-                            const m = assignRolesLocal(filteredNames, stCfg, sn, dKey);
-                            const afterNm = String((pe as PullEntry)?.after?.name || "").trim();
-                            if (!afterNm) return;
-                            const rAfter = m.get(afterNm);
-                            if (rAfter) roleTotals.set(rAfter, Math.max(0, (roleTotals.get(rAfter) || 0) - 1));
                           });
                           // Compléter avec tous les rôles connus (même si 0 assignation)
                           for (const rName of Array.from(enabledRoleNameSet)) {
@@ -10011,8 +9733,8 @@ export default function PlanningPage() {
                               <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                 <thead>
                                   <tr className="border-b dark:border-zinc-800">
-                                    <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">תפקיד</th>
-                                    <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">סה"כ שיבוצים</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
+                                    <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -10042,7 +9764,6 @@ export default function PlanningPage() {
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     // Build counts from manualAssignments
-                    const pullsManual = displayedPullsByHoleKey || {};
                     const counts = new Map<string, number>();
                     const days = Object.keys(manualAssignments || {});
                     for (const dKey of days) {
@@ -10057,14 +9778,13 @@ export default function PlanningPage() {
                         }
                       }
                     }
-                    const countsAdjusted = subtractPullExtrasFromWorkerCounts(counts, pullsManual);
                     // Include all workers with 0
-                    workers.forEach((w) => { if (!countsAdjusted.has(w.name)) countsAdjusted.set(w.name, 0); });
+                    workers.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
                     const order = new Map<string, number>();
                     workers.forEach((w, i) => order.set(w.name, i));
                     const isPendingApprovalName = (name: string) =>
                       !!(workers.find((w) => String(w.name || "").trim() === String(name || "").trim())?.pendingApproval);
-                    const items = Array.from(countsAdjusted.entries())
+                    const items = Array.from(counts.entries())
                       .filter(([nm]) => !isPendingApprovalName(nm))
                       .sort((a, b) => {
                       const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
@@ -10099,7 +9819,7 @@ export default function PlanningPage() {
                         }
                       }
                     }
-                    const totalAssigned = Array.from(countsAdjusted.values()).reduce((a, b) => a + b, 0);
+                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     return (
                       <>
                         <div className="mb-2 flex items-center justify-end gap-6 text-xs md:text-sm">
@@ -10110,10 +9830,10 @@ export default function PlanningPage() {
                           <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">עובד</th>
-                                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">total שיבוצים</th>
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -10146,9 +9866,6 @@ export default function PlanningPage() {
                   <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>
                   {(() => {
                     const assignments = savedWeekPlan!.assignments as any;
-                    const pullsSaved = (savedWeekPlan?.pulls && typeof savedWeekPlan.pulls === "object"
-                      ? (savedWeekPlan.pulls as Record<string, PullEntry>)
-                      : {}) as Record<string, PullEntry>;
                     const counts = new Map<string, number>();
                     const dayKeys = Object.keys(assignments || {});
                     for (const dKey of dayKeys) {
@@ -10163,7 +9880,6 @@ export default function PlanningPage() {
                         }
                       }
                     }
-                    const countsAdjusted = subtractPullExtrasFromWorkerCounts(counts, pullsSaved);
                     // Worker ordering based on saved snapshot workers if available
                     const workerList: Worker[] = (Array.isArray(savedWeekPlan!.workers) && savedWeekPlan!.workers!.length)
                       ? (savedWeekPlan!.workers as any[]).map((w: any, idx: number) => ({
@@ -10175,10 +9891,10 @@ export default function PlanningPage() {
                           answers: w.answers || {},
                         }))
                       : workers;
-                    workerList.forEach((w) => { if (!countsAdjusted.has(w.name)) countsAdjusted.set(w.name, 0); });
+                    workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
                     const order = new Map<string, number>();
                     workerList.forEach((w, i) => order.set(w.name, i));
-                    const items = Array.from(countsAdjusted.entries()).sort((a, b) => {
+                    const items = Array.from(counts.entries()).sort((a, b) => {
                       const ia = order.has(a[0]) ? (order.get(a[0]) as number) : Number.MAX_SAFE_INTEGER;
                       const ib = order.has(b[0]) ? (order.get(b[0]) as number) : Number.MAX_SAFE_INTEGER;
                       if (ia !== ib) return ia - ib;
@@ -10211,7 +9927,7 @@ export default function PlanningPage() {
                         }
                       }
                     }
-                    const totalAssigned = Array.from(countsAdjusted.values()).reduce((a, b) => a + b, 0);
+                    const totalAssigned = Array.from(counts.values()).reduce((a, b) => a + b, 0);
                     if (workerList.length === 0) {
                       return <div className="text-sm text-zinc-500">אין שיבוצים</div>;
                     }
@@ -10225,10 +9941,10 @@ export default function PlanningPage() {
                           <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                             <thead>
                               <tr className="border-b dark:border-zinc-800">
-                                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">עובד</th>
-                                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס' משמרות</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">עובד</th>
+                                <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">מס' משמרות</th>
                                 {showMultiSiteTotalColumn && (
-                                  <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">total שיבוצים</th>
+                                  <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">total שיבוצים</th>
                                 )}
                               </tr>
                             </thead>
@@ -10319,20 +10035,6 @@ export default function PlanningPage() {
                                 });
                               }
                             });
-                            Object.entries(pullsSaved || {}).forEach(([pullKey, pe]) => {
-                              const parts = String(pullKey || "").split("|");
-                              if (parts.length < 3) return;
-                              const [dKey, sn, tIdxStr] = parts;
-                              const tIdx = Number(tIdxStr);
-                              if (!Number.isFinite(tIdx)) return;
-                              const namesHere = assignments[dKey]?.[sn]?.[tIdx] || [];
-                              const stCfg = getStationCfg(tIdx);
-                              const m = assignRolesLocal(namesHere.filter(Boolean), stCfg, sn, dKey);
-                              const afterNm = String((pe as PullEntry)?.after?.name || "").trim();
-                              if (!afterNm) return;
-                              const rAfter = m.get(afterNm);
-                              if (rAfter) roleTotals.set(rAfter, Math.max(0, (roleTotals.get(rAfter) || 0) - 1));
-                            });
                             // Compléter avec tous les rôles connus (même si 0 assignation)
                             for (const rName of Array.from(enabledRoleNameSet)) {
                               if (!roleTotals.has(rName)) roleTotals.set(rName, 0);
@@ -10347,8 +10049,8 @@ export default function PlanningPage() {
                                 <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
                                   <thead>
                                     <tr className="border-b dark:border-zinc-800">
-                                      <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">תפקיד</th>
-                                      <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">סה"כ שיבוצים</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64">תפקיד</th>
+                                      <th className="px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap">סה"כ שיבוצים</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -10804,29 +10506,23 @@ export default function PlanningPage() {
                     /** Avant tout await : après setGenUseFixed(false) le useEffect peut remettre la ref à false,
                      * ce qui annulait fixed_assignments. On fige l’intention ici. */
                     const snapshotGenUseFixed = genUseFixedRef.current;
-                    const preservedFixedPulls = snapshotGenUseFixed
-                      ? (JSON.parse(JSON.stringify(displayedPullsByHoleKey || {})) as Record<string, PullEntry>)
-                      : {};
-                    generationFixedPullsRef.current = preservedFixedPulls;
-                    
+
                     let stopped = false;
                     try {
-                      /* Réactivité UI : tout de suite «יוצר…» + stop, puis nettoyage cache réseau (DELETE) */
-                      flushSync(() => {
-                        clearLinkedPlansMemory();
+                      await clearAutoWeeklyPlanningCacheForCurrentContext();
+                      clearLinkedPlansMemory();
                       setAiLoading(true);
                       setAiPlan(null);
-                        setPullsByHoleKey({});
-                        setPullsEditor(null);
-                      setAltIndex(0);
-                        setSharedGenerationRunningState(weekStart, true);
-                        setSharedGenerationRunning(true);
-                      });
+                      setPullsByHoleKey({});
+                      setPullsEditor(null);
                       baseAssignmentsRef.current = null;
                       streamPullPriorityPromotedRef.current = false;
+                      setAltIndex(0);
                       const controller = new AbortController();
                       aiControllerRef.current = controller;
                       registerSharedGenerationController(weekStart, controller);
+                      setSharedGenerationRunningState(weekStart, true);
+                      setSharedGenerationRunning(true);
                       const timeoutId = setTimeout(() => {
                         try { controller.abort(); } catch {}
                         setAiLoading(false);
@@ -10835,9 +10531,6 @@ export default function PlanningPage() {
                         setSharedGenerationRunning(false);
                       }, 120000);
                       aiTimeoutRef.current = timeoutId;
-
-                      await clearAutoWeeklyPlanningCacheForCurrentContext();
-
                       // Inactivité: si aucune frame reçue pendant X ms, terminer proprement
                       const armIdle = () => {
                         if (aiIdleTimeoutRef.current) clearTimeout(aiIdleTimeoutRef.current);
@@ -10861,7 +10554,7 @@ export default function PlanningPage() {
                       // Construire les cellules fixées (préaffectations)
                       // Priorité: manuel > planning sauvegardé (non en édition) > plan AI de l’alternative affichée
                       // Utiliser snapshotGenUseFixed (voir plus haut), pas genUseFixedRef après await.
-                      const fixedRaw = (() => {
+                      const fixed = (() => {
                         if (!snapshotGenUseFixed) return null;
                         const nonEmpty = (obj: any) => obj && Object.keys(obj || {}).length > 0;
                         const pickSource = () => {
@@ -10895,10 +10588,9 @@ export default function PlanningPage() {
                         }
                         return buildNonEmptyPlanningAssignmentsSnapshot(chosen.data as PlanningAssignmentsMap);
                       })();
-                      const fixed = stripPullExtrasFromAssignmentsSnapshot(fixedRaw, preservedFixedPulls);
 
                       setDraftFixedAssignmentsSnapshot(
-                        fixedRaw && typeof fixedRaw === "object" ? (JSON.parse(JSON.stringify(fixedRaw)) as Record<string, Record<string, string[][]>>) : null,
+                        fixed && typeof fixed === "object" ? (JSON.parse(JSON.stringify(fixed)) as Record<string, Record<string, string[][]>>) : null,
                       );
 
                       const effectiveExcludeDays = (genExcludeDays && genExcludeDays.length ? genExcludeDays : undefined);
@@ -11034,22 +10726,6 @@ export default function PlanningPage() {
                                     const current = nextPlans[currentSiteIdRef.current];
                                     if (current?.assignments) applyLinkedSitePlan(current, nextActiveIndex);
                                   } else if (quality === 0) {
-                                    const incomingBySite = evt.site_plans as Record<string, LinkedSitePlan>;
-                                    const siteKeys = Object.keys(incomingBySite);
-                                    const skipDuplicateAlt =
-                                      siteKeys.length > 0 &&
-                                      siteKeys.every((siteKey) => {
-                                        const prevPlan = mergedPlans[siteKey];
-                                        const incomingPlan = incomingBySite[siteKey];
-                                        if (!prevPlan?.assignments || !incomingPlan?.assignments) return false;
-                                        return (
-                                          sameAssignmentsMap(prevPlan.assignments, incomingPlan.assignments) &&
-                                          samePullsMap(prevPlan.pulls || {}, incomingPlan.pulls || {})
-                                        );
-                                      });
-                                    if (skipDuplicateAlt) {
-                                      continue;
-                                    }
                                     // Garder un index d'alternative global aligné entre tous les sites liés,
                                     // même si une alternative donnée produit localement le même planning.
                                     Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).forEach(([siteKey, incomingPlan]) => {
@@ -11082,24 +10758,6 @@ export default function PlanningPage() {
                                       currentIncomingPlan.assignments,
                                       currentIncomingPlan.pulls,
                                     );
-                                  const incomingEvtPlans = evt.site_plans as Record<string, LinkedSitePlan>;
-                                  if (!promoteIncomingAsBase) {
-                                    const ks = Object.keys(incomingEvtPlans);
-                                    const skipDupLinkedAppend =
-                                      ks.length > 0 &&
-                                      ks.every((siteKey) => {
-                                        const prevPlan = mergedPlans[siteKey];
-                                        const incomingPlan = incomingEvtPlans[siteKey];
-                                        if (!prevPlan?.assignments || !incomingPlan?.assignments) return false;
-                                        return (
-                                          sameAssignmentsMap(prevPlan.assignments, incomingPlan.assignments) &&
-                                          samePullsMap(prevPlan.pulls || {}, incomingPlan.pulls || {})
-                                        );
-                                      });
-                                    if (skipDupLinkedAppend) {
-                                      continue;
-                                    }
-                                  }
                                   Object.entries(evt.site_plans as Record<string, LinkedSitePlan>).forEach(([siteKey, incomingPlan]) => {
                                     const prevPlan = mergedPlans[siteKey];
                                     mergedPlans[siteKey] = {
@@ -11226,7 +10884,7 @@ export default function PlanningPage() {
                               if (exceedsPullsLimit(evt?.pulls)) {
                                 continue;
                               }
-                              setPullsByHoleKey(mergePullMaps(generationFixedPullsRef.current, evt.pulls || {}));
+                              setPullsByHoleKey(evt.pulls || {});
                               setPullsEditor(null);
                               setAiPlan({
                                 days: evt.days,
@@ -11247,34 +10905,30 @@ export default function PlanningPage() {
                               if (exceedsPullsLimit(evt?.pulls)) {
                                 continue;
                               }
-                              let streamPullsAfterAlternative: Record<string, PullEntry> | undefined;
                               setAiPlan((prev) => {
                                 if (!prev) return prev;
+                                const activeIndex = Math.max(0, Number(altIndex || 0));
+                                const currentDisplayedPulls = activeIndex === 0
+                                  ? (prev.pulls || {})
+                                  : (((prev.alternativePulls || [])[activeIndex - 1] || {}) as Record<string, PullEntry>);
                                 const previousBaseAssignments = baseAssignmentsRef.current || prev.assignments;
                                 if (autoPullsEnabled) {
                                   const quality = comparePlanQuality(previousBaseAssignments, prev.pulls, evt.assignments, evt.pulls);
                                   if (quality > 0) return prev;
                                   if (quality < 0) {
                                     baseAssignmentsRef.current = evt.assignments;
-                                    streamPullsAfterAlternative = mergePullMaps(
-                                      generationFixedPullsRef.current,
-                                      evt.pulls || {},
-                                    );
-                                    const demoteBase =
-                                      previousBaseAssignments &&
-                                      !sameAssignmentsMap(previousBaseAssignments, evt.assignments);
+                                    setAltIndex((current) => Math.max(0, Number(current || 0)) + 1);
+                                    setPullsByHoleKey(currentDisplayedPulls || {});
                                     return {
                                       ...prev,
-                                      assignments: evt.assignments,
+                                      assignments: prev.assignments,
                                       pulls: evt.pulls || {},
                                       alternatives: [
-                                        ...(demoteBase
-                                          ? ([previousBaseAssignments] as Record<string, Record<string, string[][]>>[])
-                                          : []),
+                                        ...((previousBaseAssignments ? [previousBaseAssignments] : []) as Record<string, Record<string, string[][]>>[]),
                                         ...((prev.alternatives || []) as Record<string, Record<string, string[][]>>[]),
                                       ],
                                       alternativePulls: [
-                                        ...(demoteBase ? ([prev.pulls || {}] as Record<string, PullEntry>[]) : []),
+                                        ...((prev.pulls ? [prev.pulls] : []) as Record<string, PullEntry>[]),
                                         ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
                                       ],
                                     } as any;
@@ -11299,58 +10953,38 @@ export default function PlanningPage() {
                                   !!baseAssignmentsRef.current &&
                                   shouldPromotePullFriendlyPlan(
                                     baseAssignmentsRef.current,
-                                    prev.pulls,
+                                    aiPlan?.pulls,
                                     evt.assignments,
                                     evt.pulls,
                                   );
                                 const alts = Array.isArray(prev.alternatives) ? prev.alternatives : [];
-                                const altPullsList = (prev.alternativePulls || []) as Record<string, PullEntry>[];
-                                const dupOfPrimary =
-                                  sameAssignmentsMap(evt.assignments, prev.assignments) &&
-                                  samePullsMap(evt.pulls || {}, prev.pulls || {});
-                                const dupOfExistingAlt = alts.some((alt, idx) =>
-                                  sameAssignmentsMap(alt, evt.assignments) &&
-                                  samePullsMap((altPullsList[idx] || {}) as Record<string, PullEntry>, evt.pulls || {}),
-                                );
-                                if (!promoteIncomingAsBase && (dupOfPrimary || dupOfExistingAlt)) return prev;
-                                const oldBase = baseAssignmentsRef.current;
-                                const oldPulls = prev.pulls || {};
-                                const demoteOld =
-                                  !!oldBase &&
-                                  promoteIncomingAsBase &&
-                                  !sameAssignmentsMap(oldBase, evt.assignments);
                                 const next = promoteIncomingAsBase
                                   ? {
                                       ...prev,
-                                      assignments: evt.assignments,
+                                      assignments: prev.assignments,
                                       pulls: evt.pulls || {},
                                       alternatives: [
-                                        ...(demoteOld ? ([oldBase] as Record<string, Record<string, string[][]>>[]) : []),
+                                        ...(baseAssignmentsRef.current ? [baseAssignmentsRef.current] : []),
                                         ...alts,
                                       ],
                                       alternativePulls: [
-                                        ...(demoteOld ? ([oldPulls] as Record<string, PullEntry>[]) : []),
-                                        ...altPullsList,
+                                        ...(prev.pulls ? [prev.pulls] : []),
+                                        ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
                                       ],
                                     }
                                   : {
                                       ...prev,
                                       alternatives: [...alts, evt.assignments],
-                                      alternativePulls: [...altPullsList, (evt.pulls || {})],
+                                      alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})],
                                     };
                                 if (promoteIncomingAsBase) {
                                   baseAssignmentsRef.current = evt.assignments;
                                   streamPullPriorityPromotedRef.current = true;
-                                  streamPullsAfterAlternative = mergePullMaps(
-                                    generationFixedPullsRef.current,
-                                    evt.pulls || {},
-                                  );
+                                  setAltIndex((current) => Math.max(0, Number(current || 0)) + 1);
+                                  setPullsByHoleKey(currentDisplayedPulls || {});
                                 }
                                 return next as any;
                               });
-                              if (streamPullsAfterAlternative !== undefined) {
-                                setPullsByHoleKey(streamPullsAfterAlternative);
-                              }
                             } else if (evt?.type === "status") {
                               if (evt?.status === "ERROR" && evt?.detail) {
                                 toast.error("יצירת תכנון נכשלה", { description: String(evt.detail) });
@@ -11603,52 +11237,6 @@ export default function PlanningPage() {
                     </div>
                   </div>
                 )}
-                {pullsLimitMismatchDialog && (
-                  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-                    <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-right shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-                      <div className="mb-3 text-sm leading-relaxed">
-                        בתכנון הנוכחי יש{" "}
-                        <span className="font-semibold">{pullsLimitMismatchDialog.actual}</span> משיכות, בעוד
-                        שבמגבלה בשורה התחתונה (כפתור <span className="font-semibold">משיכות</span>) מותרות לכל היותר{" "}
-                        {pullsLimitMismatchDialog.configuredMax <= 0 ? (
-                          <span className="font-semibold">ללא</span>
-                        ) : (
-                          <span className="font-semibold">{pullsLimitMismatchDialog.configuredMax}</span>
-                        )}
-                        .
-                        <br />
-                        <span className="mt-2 inline-block">
-                          לעדכן את המגבלה ל־
-                          <span className="font-semibold"> {pullsLimitMismatchDialog.actual} </span>
-                          ולהמשיך בשמירה כשיבוצים קבועים?
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          type="button"
-                          className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                          onClick={() => setPullsLimitMismatchDialog(null)}
-                        >
-                          ביטול
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
-                          onClick={() => {
-                            const a = pullsLimitMismatchDialog.actual;
-                            const nextLimit =
-                              a <= 0 ? "" : a <= 10 ? String(a) : "unlimited";
-                            setAutoPullsLimit(nextLimit);
-                            setPullsLimitMismatchDialog(null);
-                            proceedGenerateWithFixedCells();
-                          }}
-                        >
-                          המשך
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
                 {showGenDialog && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
                     <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
@@ -11668,15 +11256,17 @@ export default function PlanningPage() {
                           type="button"
                           className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                           onClick={() => {
-                            if (shouldPromptPullsLimitMismatchBeforeFixedSave()) {
-                              const actual = Object.keys(pullsByHoleKey || {}).length;
-                              setPullsLimitMismatchDialog({
-                                actual,
-                                configuredMax: getPullsLimitConfiguredMax(),
-                              });
-                              return;
-                            }
-                            proceedGenerateWithFixedCells();
+                            // Ne pas réutiliser un ancien brouillon / ref de génération précédente
+                            setDraftFixedAssignmentsSnapshot(null);
+                            pendingManualFixedAssignmentsRef.current = null;
+                            genDialogBypassRef.current = "fixed";
+                            genUseFixedRef.current = true;
+                            setGenUseFixed(true);
+                            if (isManual) capturePendingManualFixedAssignments();
+                            setShowGenDialog(false);
+                            // Ensure the generate button exists (auto mode)
+                            setIsManual(false);
+                            setTimeout(() => { try { triggerGenerateButton(); } catch {} }, 0);
                           }}
                         >
                           שמור כשיבוצים קבועים
