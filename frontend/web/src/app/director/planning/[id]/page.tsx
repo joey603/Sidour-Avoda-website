@@ -550,6 +550,8 @@ export default function PlanningPage() {
   const [multiSitePullsLimits, setMultiSitePullsLimits] = useState<Record<string, string>>({});
   const [altIndex, setAltIndex] = useState<number>(0);
   const [sharedAssignmentCountFilters, setSharedAssignmentCountFilters] = useState<SharedAssignmentCountFilters>({});
+  const [debouncedSharedAssignmentCountFilters, setDebouncedSharedAssignmentCountFilters] =
+    useState<SharedAssignmentCountFilters>({});
   const baseAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const prevAltCountRef = useRef<number>(0);
   const aiControllerRef = useRef<AbortController | null>(null);
@@ -793,16 +795,20 @@ export default function PlanningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAddMessageOpen, messageEditorInitialHtml, messageEditor]);
 
+  const fetchMessagesForWeek = useCallback(async (siteId: number, wk: string) => {
+    const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+    });
+    return Array.isArray(res) ? sortMessagesChronologically(res) : [];
+  }, []);
+
   async function refreshMessages() {
     const siteId = Number(params.id);
     if (!siteId) return;
     const wk = isoYMD(weekStart);
     try {
       setMessagesLoading(true);
-      const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-      });
-      setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
+      setMessages(await fetchMessagesForWeek(siteId, wk));
     } catch {
       setMessages([]);
     } finally {
@@ -826,11 +832,9 @@ export default function PlanningPage() {
     (async () => {
       try {
         setMessagesLoading(true);
-        const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
+        const res = await fetchMessagesForWeek(siteId, wk);
         if (!alive) return;
-        setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
+        setMessages(res);
       } catch {
         if (!alive) return;
         setMessages([]);
@@ -840,7 +844,7 @@ export default function PlanningPage() {
       }
     })();
     return () => { alive = false; };
-  }, [params.id, weekStart]);
+  }, [params.id, weekStart, fetchMessagesForWeek]);
 
   const visibleMessages = useMemo(() => messages, [messages]);
   const planningDayKeys = useMemo(() => ["sun","mon","tue","wed","thu","fri","sat"] as const, []);
@@ -896,9 +900,15 @@ export default function PlanningPage() {
     () => sharedAssignmentCountFilters[String(params.id)] || {},
     [sharedAssignmentCountFilters, params.id],
   );
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSharedAssignmentCountFilters(sharedAssignmentCountFilters);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [sharedAssignmentCountFilters]);
   const activeAssignmentCountFilters = useMemo(
     () =>
-      Object.entries(sharedAssignmentCountFilters).flatMap(([siteId, siteFilters]) => {
+      Object.entries(debouncedSharedAssignmentCountFilters).flatMap(([siteId, siteFilters]) => {
         if (!siteFilters || typeof siteFilters !== "object") return [];
         return Object.entries(siteFilters).flatMap(([workerName, rawValue]) => {
           const trimmed = String(rawValue || "").trim();
@@ -908,7 +918,7 @@ export default function PlanningPage() {
           return [[siteId, workerName, Math.floor(num)] as [string, string, number]];
         });
       }),
-    [sharedAssignmentCountFilters],
+    [debouncedSharedAssignmentCountFilters],
   );
   const aiVariantCounts = useMemo(() => {
     if (!aiPlan) return [] as Map<string, number>[];
@@ -1127,19 +1137,7 @@ export default function PlanningPage() {
   // Build the availability to send to backend: weekly overrides merged with red overlays
   function buildWeeklyAvailabilityForRequest(): Record<string, WorkerAvailability> {
     const out: Record<string, WorkerAvailability> = {};
-    // Nettoyer weeklyAvailability pour s'assurer qu'il n'y a pas de structure imbriquée incorrecte
-    Object.keys(weeklyAvailability || {}).forEach((workerName) => {
-      const wa = weeklyAvailability[workerName];
-      // Si wa a une propriété "availability", c'est une structure incorrecte - extraire directement
-      if (wa && typeof wa === 'object' && 'availability' in wa && !('sun' in wa)) {
-        // Structure incorrecte: {availability: {...}}, extraire directement
-        out[workerName] = (wa as any).availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-      } else {
-        // Structure correcte: {sun: [...], mon: [...], ...}
-        out[workerName] = wa || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-      }
-    });
-    
+    const emptyAvailability: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
     const ensureDays = (wa: WorkerAvailability): WorkerAvailability => ({
       sun: Array.isArray(wa.sun) ? wa.sun : [],
       mon: Array.isArray(wa.mon) ? wa.mon : [],
@@ -1149,16 +1147,59 @@ export default function PlanningPage() {
       fri: Array.isArray(wa.fri) ? wa.fri : [],
       sat: Array.isArray(wa.sat) ? wa.sat : [],
     });
-    
-    // Nettoyer chaque entrée pour s'assurer qu'elle a la bonne structure
-    Object.keys(out).forEach((name) => {
-      out[name] = ensureDays(out[name]);
+    const normalizeShiftList = (list: string[]): string[] => {
+      const seen = new Set<string>();
+      return (list || []).reduce<string[]>((acc, raw) => {
+        const shiftName = String(raw || "").trim();
+        if (!shiftName || seen.has(shiftName)) return acc;
+        seen.add(shiftName);
+        acc.push(shiftName);
+        return acc;
+      }, []);
+    };
+    const normalizeAvailabilityShape = (wa: any): WorkerAvailability => {
+      if (!wa || typeof wa !== "object") return { ...emptyAvailability };
+      if ("availability" in wa && wa.availability && typeof wa.availability === "object" && !("sun" in wa)) {
+        return ensureDays(wa.availability as WorkerAvailability);
+      }
+      return ensureDays(wa as WorkerAvailability);
+    };
+    const rows = Array.isArray(workerRowsForTable) ? workerRowsForTable : [];
+    const names = new Set<string>();
+    rows.forEach((row: any) => {
+      const name = String(row?.name || "").trim();
+      if (name) names.add(name);
     });
-    
+    Object.keys(weeklyAvailability || {}).forEach((name) => {
+      const clean = String(name || "").trim();
+      if (clean) names.add(clean);
+    });
+    Object.keys(availabilityOverlays || {}).forEach((name) => {
+      const clean = String(name || "").trim();
+      if (clean) names.add(clean);
+    });
+    const allowedShifts = new Set((allShiftNames || []).map((sn) => String(sn || "").trim()).filter(Boolean));
+    names.forEach((name) => {
+      const row = rows.find((entry: any) => String(entry?.name || "").trim() === name);
+      const workerBase = row?.availability || findWorkerByName(name)?.availability || emptyAvailability;
+      const workerWeekly = (weeklyAvailability as Record<string, any>)[name];
+      const base = row?.availability
+        ? normalizeAvailabilityShape(workerBase)
+        : normalizeAvailabilityShape(workerWeekly || workerBase);
+      out[name] = {
+        sun: normalizeShiftList(base.sun),
+        mon: normalizeShiftList(base.mon),
+        tue: normalizeShiftList(base.tue),
+        wed: normalizeShiftList(base.wed),
+        thu: normalizeShiftList(base.thu),
+        fri: normalizeShiftList(base.fri),
+        sat: normalizeShiftList(base.sat),
+      };
+    });
     // Ajouter les overlays (disponibilités rouges)
     Object.keys(availabilityOverlays || {}).forEach((name) => {
       const perDay = (availabilityOverlays[name] || {}) as Record<string, string[]>;
-      const base = ensureDays(out[name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+      const base = ensureDays(out[name] || { ...emptyAvailability });
       Object.keys(perDay).forEach((dayKey) => {
         if (Array.isArray(perDay[dayKey])) {
           const list = new Set<string>(base[dayKey as keyof WorkerAvailability] || []);
@@ -1169,6 +1210,23 @@ export default function PlanningPage() {
         }
       });
       out[name] = base;
+    });
+    Object.keys(out).forEach((name) => {
+      const perDay = ensureDays(out[name]);
+      if (allowedShifts.size > 0) {
+        (["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).forEach((dayKey) => {
+          perDay[dayKey] = perDay[dayKey].filter((shiftName) => allowedShifts.has(String(shiftName || "").trim()));
+        });
+      }
+      out[name] = {
+        sun: normalizeShiftList(perDay.sun),
+        mon: normalizeShiftList(perDay.mon),
+        tue: normalizeShiftList(perDay.tue),
+        wed: normalizeShiftList(perDay.wed),
+        thu: normalizeShiftList(perDay.thu),
+        fri: normalizeShiftList(perDay.fri),
+        sat: normalizeShiftList(perDay.sat),
+      };
     });
     return out;
   }
@@ -4879,7 +4937,9 @@ export default function PlanningPage() {
 
   async function saveCurrentSitePlan(publishToWorkers: boolean) {
     try {
-      const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+      const currentAssignments = isManual
+        ? manualAssignments
+        : (displayedAiAssignments || aiPlan?.assignments || null);
       // Si on n'est pas en train d'éditer, on autorise la sauvegarde d'un plan déjà chargé (savedWeekPlan)
       const fallbackAssignments = savedWeekPlan?.assignments;
       const effective = currentAssignments || fallbackAssignments;
@@ -4962,7 +5022,9 @@ export default function PlanningPage() {
           pulls = resolvePullsForAlternative(sitePlan, activeIndex);
           workersSnapshot = await fetchWorkersSnapshotForSite(siteId);
         } else if (siteId === Number(params.id)) {
-          const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+          const currentAssignments = isManual
+            ? manualAssignments
+            : (displayedAiAssignments || aiPlan?.assignments || null);
           const fallbackAssignments = savedWeekPlan?.assignments;
           const effective = currentAssignments || fallbackAssignments;
           if (!effective) {

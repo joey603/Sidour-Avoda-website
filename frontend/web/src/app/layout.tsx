@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import AuthSessionVersionGuard from "@/components/auth-session-version-guard";
 import TopNav from "@/components/top-nav";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -36,6 +37,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        <AuthSessionVersionGuard />
         <TopNav />
         {children}
         <Toaster richColors closeButton position="top-center" />

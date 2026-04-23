@@ -945,19 +945,7 @@ export default function PlanningPage() {
   // Build the availability to send to backend: weekly overrides merged with red overlays
   function buildWeeklyAvailabilityForRequest(): Record<string, WorkerAvailability> {
     const out: Record<string, WorkerAvailability> = {};
-    // Nettoyer weeklyAvailability pour s'assurer qu'il n'y a pas de structure imbriquée incorrecte
-    Object.keys(weeklyAvailability || {}).forEach((workerName) => {
-      const wa = weeklyAvailability[workerName];
-      // Si wa a une propriété "availability", c'est une structure incorrecte - extraire directement
-      if (wa && typeof wa === 'object' && 'availability' in wa && !('sun' in wa)) {
-        // Structure incorrecte: {availability: {...}}, extraire directement
-        out[workerName] = (wa as any).availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-      } else {
-        // Structure correcte: {sun: [...], mon: [...], ...}
-        out[workerName] = wa || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
-      }
-    });
-    
+    const emptyAvailability: WorkerAvailability = { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] };
     const ensureDays = (wa: WorkerAvailability): WorkerAvailability => ({
       sun: Array.isArray(wa.sun) ? wa.sun : [],
       mon: Array.isArray(wa.mon) ? wa.mon : [],
@@ -967,16 +955,59 @@ export default function PlanningPage() {
       fri: Array.isArray(wa.fri) ? wa.fri : [],
       sat: Array.isArray(wa.sat) ? wa.sat : [],
     });
-    
-    // Nettoyer chaque entrée pour s'assurer qu'elle a la bonne structure
-    Object.keys(out).forEach((name) => {
-      out[name] = ensureDays(out[name]);
+    const normalizeShiftList = (list: string[]): string[] => {
+      const seen = new Set<string>();
+      return (list || []).reduce<string[]>((acc, raw) => {
+        const shiftName = String(raw || "").trim();
+        if (!shiftName || seen.has(shiftName)) return acc;
+        seen.add(shiftName);
+        acc.push(shiftName);
+        return acc;
+      }, []);
+    };
+    const normalizeAvailabilityShape = (wa: any): WorkerAvailability => {
+      if (!wa || typeof wa !== "object") return { ...emptyAvailability };
+      if ("availability" in wa && wa.availability && typeof wa.availability === "object" && !("sun" in wa)) {
+        return ensureDays(wa.availability as WorkerAvailability);
+      }
+      return ensureDays(wa as WorkerAvailability);
+    };
+    const rows = Array.isArray(workerRowsForTable) ? workerRowsForTable : [];
+    const names = new Set<string>();
+    rows.forEach((row: any) => {
+      const name = String(row?.name || "").trim();
+      if (name) names.add(name);
     });
-    
+    Object.keys(weeklyAvailability || {}).forEach((name) => {
+      const clean = String(name || "").trim();
+      if (clean) names.add(clean);
+    });
+    Object.keys(availabilityOverlays || {}).forEach((name) => {
+      const clean = String(name || "").trim();
+      if (clean) names.add(clean);
+    });
+    const allowedShifts = new Set((allShiftNames || []).map((sn) => String(sn || "").trim()).filter(Boolean));
+    names.forEach((name) => {
+      const row = rows.find((entry: any) => String(entry?.name || "").trim() === name);
+      const workerBase = row?.availability || findWorkerByName(name)?.availability || emptyAvailability;
+      const workerWeekly = (weeklyAvailability as Record<string, any>)[name];
+      const base = row?.availability
+        ? normalizeAvailabilityShape(workerBase)
+        : normalizeAvailabilityShape(workerWeekly || workerBase);
+      out[name] = {
+        sun: normalizeShiftList(base.sun),
+        mon: normalizeShiftList(base.mon),
+        tue: normalizeShiftList(base.tue),
+        wed: normalizeShiftList(base.wed),
+        thu: normalizeShiftList(base.thu),
+        fri: normalizeShiftList(base.fri),
+        sat: normalizeShiftList(base.sat),
+      };
+    });
     // Ajouter les overlays (disponibilités rouges)
     Object.keys(availabilityOverlays || {}).forEach((name) => {
       const perDay = (availabilityOverlays[name] || {}) as Record<string, string[]>;
-      const base = ensureDays(out[name] || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] });
+      const base = ensureDays(out[name] || { ...emptyAvailability });
       Object.keys(perDay).forEach((dayKey) => {
         if (Array.isArray(perDay[dayKey])) {
           const list = new Set<string>(base[dayKey as keyof WorkerAvailability] || []);
@@ -987,6 +1018,23 @@ export default function PlanningPage() {
         }
       });
       out[name] = base;
+    });
+    Object.keys(out).forEach((name) => {
+      const perDay = ensureDays(out[name]);
+      if (allowedShifts.size > 0) {
+        (["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const).forEach((dayKey) => {
+          perDay[dayKey] = perDay[dayKey].filter((shiftName) => allowedShifts.has(String(shiftName || "").trim()));
+        });
+      }
+      out[name] = {
+        sun: normalizeShiftList(perDay.sun),
+        mon: normalizeShiftList(perDay.mon),
+        tue: normalizeShiftList(perDay.tue),
+        wed: normalizeShiftList(perDay.wed),
+        thu: normalizeShiftList(perDay.thu),
+        fri: normalizeShiftList(perDay.fri),
+        sat: normalizeShiftList(perDay.sat),
+      };
     });
     return out;
   }
@@ -4620,7 +4668,9 @@ export default function PlanningPage() {
 
   async function saveCurrentSitePlan(publishToWorkers: boolean) {
     try {
-      const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+      const currentAssignments = isManual
+        ? manualAssignments
+        : (displayedAiAssignments || aiPlan?.assignments || null);
       // Si on n'est pas en train d'éditer, on autorise la sauvegarde d'un plan déjà chargé (savedWeekPlan)
       const fallbackAssignments = savedWeekPlan?.assignments;
       const effective = currentAssignments || fallbackAssignments;
@@ -4703,7 +4753,9 @@ export default function PlanningPage() {
           pulls = resolvePullsForAlternative(sitePlan, activeIndex);
           workersSnapshot = await fetchWorkersSnapshotForSite(siteId);
         } else if (siteId === Number(params.id)) {
-          const currentAssignments = isManual ? manualAssignments : aiPlan?.assignments;
+          const currentAssignments = isManual
+            ? manualAssignments
+            : (displayedAiAssignments || aiPlan?.assignments || null);
           const fallbackAssignments = savedWeekPlan?.assignments;
           const effective = currentAssignments || fallbackAssignments;
           if (!effective) {
