@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { PlanningWorker, WorkerAvailability } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker, WorkerAvailability } from "../types";
 import type { V2WeekPlanData } from "./use-planning-v2-week-plan";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import {
@@ -72,7 +72,7 @@ export function usePlanningV2PlanController({
   const [draftAssignments, setDraftAssignments] = useState<Record<string, Record<string, string[][]>> | null>(
     null,
   );
-  const [draftPulls, setDraftPulls] = useState<Record<string, unknown> | null>(null);
+  const [draftPulls, setDraftPulls] = useState<PlanningV2PullsMap | null>(null);
   const [generationRunning, setGenerationRunning] = useState(false);
   const [autoPullsLimit, setAutoPullsLimit] = useState("2");
   const [isManual, setIsManual] = useState(false);
@@ -97,9 +97,11 @@ export function usePlanningV2PlanController({
     return weekPlan?.assignments ?? null;
   }, [draftAssignments, weekPlan?.assignments]);
 
-  const displayPulls = useMemo(() => {
+  const displayPulls = useMemo((): PlanningV2PullsMap | null | undefined => {
     if (draftPulls !== null) return draftPulls;
-    return (weekPlan?.pulls as Record<string, unknown> | undefined) ?? undefined;
+    const p = weekPlan?.pulls;
+    if (!p || typeof p !== "object") return undefined;
+    return p as PlanningV2PullsMap;
   }, [draftPulls, weekPlan?.pulls]);
 
   const stopGeneration = useCallback(() => {
@@ -179,14 +181,14 @@ export function usePlanningV2PlanController({
             if (cur?.assignments && typeof cur.assignments === "object") {
               setDraftAssignments(cur.assignments as Record<string, Record<string, string[][]>>);
               setDraftPulls(
-                cur.pulls && typeof cur.pulls === "object" ? (cur.pulls as Record<string, unknown>) : {},
+                cur.pulls && typeof cur.pulls === "object" ? (cur.pulls as PlanningV2PullsMap) : {},
               );
               setIsManual(false);
               toast.success("תכנון בסיסי מוכן");
             }
           } else if (!linked && evt.assignments && typeof evt.assignments === "object") {
             setDraftAssignments(evt.assignments as Record<string, Record<string, string[][]>>);
-            setDraftPulls(evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as Record<string, unknown>) : {});
+            setDraftPulls(evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {});
             setIsManual(false);
             toast.success("תכנון בסיסי מוכן");
           }
@@ -224,11 +226,11 @@ export function usePlanningV2PlanController({
         toast.error("אין מה לשמור", { description: "לא נמצא תכנון קיים לשמירה" });
         return;
       }
-      let pulls: Record<string, unknown> = {};
+      let pulls: PlanningV2PullsMap = {};
       try {
-        pulls = JSON.parse(JSON.stringify(displayPulls || {})) as Record<string, unknown>;
+        pulls = JSON.parse(JSON.stringify(displayPulls || {})) as PlanningV2PullsMap;
       } catch {
-        pulls = (displayPulls || {}) as Record<string, unknown>;
+        pulls = (displayPulls || {}) as PlanningV2PullsMap;
       }
       let assignmentsSnapshot: typeof assignments;
       try {

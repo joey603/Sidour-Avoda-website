@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactElement, useEffect, useMemo, useState } from "react";
-import type { PlanningWorker, SiteSummary } from "./types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "./types";
 import { workerNameChipColor } from "./lib/worker-name-chip-color";
 import {
   buildTotalAssignmentsByIdentity,
@@ -51,7 +51,7 @@ type PlanningV2AssignmentsSummaryProps = {
   weekStart: Date;
   workers: PlanningWorker[];
   assignments: Record<string, Record<string, string[][]>> | null | undefined;
-  pulls?: Record<string, { before?: { name?: string }; after?: { name?: string } }> | null;
+  pulls?: PlanningV2PullsMap | null;
   loading?: boolean;
 };
 

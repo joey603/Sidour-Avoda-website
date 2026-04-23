@@ -21,6 +21,175 @@ import Highlight from "@tiptap/extension-highlight";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 
+const EMPTY_WORKER_AVAILABILITY = {
+  sun: [],
+  mon: [],
+  tue: [],
+  wed: [],
+  thu: [],
+  fri: [],
+  sat: [],
+};
+
+const AVAILABILITY_DAY_KEYS = Object.keys(EMPTY_WORKER_AVAILABILITY) as Array<keyof typeof EMPTY_WORKER_AVAILABILITY>;
+
+/** Copie profonde des créneaux par jour (évite les références partagées). */
+function cloneWorkerAvailability(
+  av: Record<string, string[]> | null | undefined,
+): Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]> {
+  const base = av || EMPTY_WORKER_AVAILABILITY;
+  const out = {} as Record<keyof typeof EMPTY_WORKER_AVAILABILITY, string[]>;
+  for (const k of AVAILABILITY_DAY_KEYS) {
+    out[k] = [...(base[k] || [])];
+  }
+  return out;
+}
+
+/** Vrai seulement si la grille jour / משמרת a changé (pas nom, rôles, max_shifts). */
+function isAvailabilityDayShiftChanged(
+  before: Record<string, string[]> | null | undefined,
+  after: Record<string, string[]> | null | undefined,
+) {
+  try {
+    const norm = (x: Record<string, string[]> | null | undefined) => {
+      const b = x || EMPTY_WORKER_AVAILABILITY;
+      const o: Record<string, string[]> = {};
+      for (const k of AVAILABILITY_DAY_KEYS) {
+        o[k] = [...(b[k] || [])].map(String).sort();
+      }
+      return JSON.stringify(o);
+    };
+    return norm(before) !== norm(after);
+  } catch {
+    return true;
+  }
+}
+
+function normPlanningCellName(s: unknown): string {
+  return String(s ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Noms contenus dans une cellule du snapshot (liste plate).
+ * Tolère un niveau de tableau imbriqué si les données sont mal formées.
+ */
+function draftFixedCellNamesInRow(row: unknown): string[] {
+  if (!Array.isArray(row)) return [];
+  const out: string[] = [];
+  for (const cell of row) {
+    if (Array.isArray(cell)) {
+      for (const inner of cell) {
+        const n = normPlanningCellName(inner);
+        if (n) out.push(n);
+      }
+    } else {
+      const n = normPlanningCellName(cell);
+      if (n) out.push(n);
+    }
+  }
+  return out;
+}
+
+/** Indique si ce nom figurait dans le snapshot שיבוצים קבועים pour cette case (aligné sur le backend fixed_cells). */
+function isWorkerInDraftFixedSnapshot(
+  snap: Record<string, Record<string, string[][]>> | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  workerName: string,
+): boolean {
+  if (!snap) return false;
+  const row = snap[dayKey]?.[shiftName]?.[stationIdx];
+  const names = draftFixedCellNamesInRow(row);
+  const n = normPlanningCellName(workerName);
+  if (!n) return false;
+  return names.includes(n);
+}
+
+/** Affiche le pictogramme שיבוץ קבוע (cadenas) pour ce travailleur dans cette cellule. */
+function shouldShowDraftFixedPinForWorker(
+  snap: Record<string, Record<string, string[][]>> | null | undefined,
+  isSavedMode: boolean,
+  editingSaved: boolean,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  workerName: string,
+  cellAssignedNames: string[],
+): boolean {
+  if (!snap || (isSavedMode && !editingSaved)) return false;
+  const snapNames = draftFixedCellNamesInRow(snap[dayKey]?.[shiftName]?.[stationIdx]);
+  if (!snapNames.length) return false;
+  const dispSet = new Set(cellAssignedNames.map((x) => normPlanningCellName(x)).filter(Boolean));
+  if (!snapNames.every((x) => dispSet.has(x))) return false;
+  return isWorkerInDraftFixedSnapshot(snap, dayKey, shiftName, stationIdx, workerName);
+}
+
+type PlanningAssignmentsMap = Record<string, Record<string, string[][]>>;
+
+function planningCellNames(cell: unknown): string[] {
+  if (!Array.isArray(cell)) return [];
+  return cell
+    .map((name) => String(name ?? "").trim())
+    .filter(Boolean);
+}
+
+function samePlanningCellNames(a: unknown, b: unknown): boolean {
+  const aa = planningCellNames(a).map(normPlanningCellName).sort();
+  const bb = planningCellNames(b).map(normPlanningCellName).sort();
+  if (aa.length !== bb.length) return false;
+  return aa.every((value, idx) => value === bb[idx]);
+}
+
+function buildNonEmptyPlanningAssignmentsSnapshot(
+  source: PlanningAssignmentsMap | null | undefined,
+): PlanningAssignmentsMap | null {
+  if (!source || typeof source !== "object") return null;
+  const out: PlanningAssignmentsMap = {};
+  Object.keys(source).forEach((dayKey) => {
+    const shiftsMap = source[dayKey];
+    if (!shiftsMap || typeof shiftsMap !== "object") return;
+    Object.keys(shiftsMap).forEach((shiftName) => {
+      const perStation = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
+      const nextStations = perStation.map((cell) => planningCellNames(cell));
+      if (!nextStations.some((cell) => cell.length > 0)) return;
+      out[dayKey] = out[dayKey] || {};
+      out[dayKey][shiftName] = nextStations;
+    });
+  });
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function buildChangedNonEmptyPlanningAssignmentsSnapshot(
+  current: PlanningAssignmentsMap | null | undefined,
+  baseline: PlanningAssignmentsMap | null | undefined,
+): PlanningAssignmentsMap | null {
+  if (!current || typeof current !== "object") return null;
+  const out: PlanningAssignmentsMap = {};
+  Object.keys(current).forEach((dayKey) => {
+    const shiftsMap = current[dayKey];
+    if (!shiftsMap || typeof shiftsMap !== "object") return;
+    Object.keys(shiftsMap).forEach((shiftName) => {
+      const currentStations = Array.isArray(shiftsMap[shiftName]) ? shiftsMap[shiftName] : [];
+      const baselineStations = Array.isArray(baseline?.[dayKey]?.[shiftName]) ? (baseline?.[dayKey]?.[shiftName] as string[][]) : [];
+      const maxStations = Math.max(currentStations.length, baselineStations.length);
+      const nextStations: string[][] = Array.from({ length: maxStations }, (_, stationIdx) => {
+        const names = planningCellNames(currentStations[stationIdx]);
+        if (names.length === 0) return [];
+        if (samePlanningCellNames(currentStations[stationIdx], baselineStations[stationIdx])) return [];
+        return names;
+      });
+      if (!nextStations.some((cell) => cell.length > 0)) return;
+      out[dayKey] = out[dayKey] || {};
+      out[dayKey][shiftName] = nextStations;
+    });
+  });
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 export default function PlanningPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -714,6 +883,14 @@ export default function PlanningPage() {
     if (!base) return [] as Record<string, Record<string, string[][]>>[];
     return [base, ...((aiPlan.alternatives || []).filter(Boolean) as Record<string, Record<string, string[][]>>[])];
   }, [aiPlan]);
+  /** Grille / résumés : alternative active selon altIndex sans muter aiPlan.assignments */
+  const displayedAiAssignments = useMemo((): Record<string, Record<string, string[][]>> | null => {
+    if (!aiPlan?.assignments || isManual) return null;
+    const idx = Math.max(0, Number(altIndex) || 0);
+    if (idx <= 0) return aiPlan.assignments;
+    const alt = (aiPlan.alternatives || [])[idx - 1];
+    return alt || aiPlan.assignments;
+  }, [aiPlan, altIndex, isManual]);
   const assignmentCountFilters = useMemo(
     () => sharedAssignmentCountFilters[String(params.id)] || {},
     [sharedAssignmentCountFilters, params.id],

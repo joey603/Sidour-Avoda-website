@@ -19,3 +19,11 @@ export type SiteSummary = {
   name: string;
   config?: Record<string, unknown>;
 };
+
+/** משיכה — structure minimale alignée sur le planning principal / backend. */
+export type PlanningV2PullEntry = {
+  before?: { name?: string };
+  after?: { name?: string };
+};
+
+export type PlanningV2PullsMap = Record<string, PlanningV2PullEntry>;
