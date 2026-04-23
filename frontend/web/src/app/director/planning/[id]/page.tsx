@@ -8279,7 +8279,7 @@ export default function PlanningPage() {
                                       // Garantir l'affichage des 2 personnes d'une משיכה même si l'assignation n'a qu'1 nom
                                       // (ex: après switch auto->manual, ou si l'utilisateur a modifié la cellule)
                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                      const pullEntriesHere: any[] = Object.entries(pullsByHoleKey || {})
+                                      const pullEntriesHere: any[] = Object.entries(displayedPullsByHoleKey || {})
                                         .filter(([k]) => String(k).startsWith(cellPrefix))
                                         .map(([, e]) => e as any);
                                       const normPullNameLocal = (s: any) =>
@@ -8380,7 +8380,7 @@ export default function PlanningPage() {
                                       const pulledNamesFor = (dayKey: string, shiftName: string): Set<string> => {
                                         const out = new Set<string>();
                                         const prefix = `${dayKey}|${shiftName}|`;
-                                        Object.entries(pullsByHoleKey || {}).forEach(([k, e]) => {
+                                        Object.entries(displayedPullsByHoleKey || {}).forEach(([k, e]) => {
                                           if (!String(k).startsWith(prefix)) return;
                                           const pe: any = e;
                                           if (pe?.before?.name) out.add(String(pe.before.name).trim());
@@ -8402,7 +8402,7 @@ export default function PlanningPage() {
                                         bShiftIdx: number,
                                       ) => !!a && a.dayIdx === bDayIdx && a.shiftIdx === bShiftIdx;
                                       const pullHighlightKindByName = new Map<string, "cell" | "before" | "after">();
-                                      Object.entries(pullsByHoleKey || {}).forEach(([pullKey, entryAny]) => {
+                                      Object.entries(displayedPullsByHoleKey || {}).forEach(([pullKey, entryAny]) => {
                                         const parts = String(pullKey || "").split("|");
                                         if (parts.length < 3) return;
                                         const [pullDayKey, pullShiftName, pullStationIdxRaw] = parts;
@@ -8580,7 +8580,7 @@ export default function PlanningPage() {
                                                           have.add(n);
                                                         };
                                                         try {
-                                                          Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                                                          Object.entries(displayedPullsByHoleKey || {}).forEach(([k, entry]) => {
                                                             if (!String(k).startsWith(cellPrefix)) return;
                                                             const b = String((entry as any)?.before?.name || "").trim();
                                                             const a = String((entry as any)?.after?.name || "").trim();
@@ -8664,7 +8664,7 @@ export default function PlanningPage() {
                                                                   .trim()
                                                                   .replace(/\s+/g, " ");
                                                               const nmN = norm(nm);
-                                                              const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                              const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                                 if (!String(k).startsWith(cellPrefix)) return false;
                                                                 const e: any = entry;
                                                                 return norm(e?.before?.name) === nmN || norm(e?.after?.name) === nmN;
@@ -8746,7 +8746,7 @@ export default function PlanningPage() {
                                                                     if (pullsModeStationIdx !== idx) return;
                                                                     if (isSavedMode && !editingSaved) return;
                                                                     const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                    const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                    const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                                       if (!String(k).startsWith(cellPrefix)) return false;
                                                                       const pe: any = entry;
                                                                       return pe?.before?.name === nm || pe?.after?.name === nm;
@@ -8827,7 +8827,7 @@ export default function PlanningPage() {
                                                                     </span>
                                                                     {(() => {
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                      const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                      const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                                         if (!k.startsWith(cellPrefix)) return false;
                                                                         const e: any = entry;
                                                                         return e?.before?.name === nm || e?.after?.name === nm;
@@ -8854,7 +8854,7 @@ export default function PlanningPage() {
                                                                             // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                             const used = new Set(getCellNames(d.key, sn));
                                                                             const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                            Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                            Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                               if (!String(kk).startsWith(cellPrefix)) return;
                                                                               if (String(kk) === String(k)) return; // ne pas compter l'entrée en cours d'édition
                                                                               const e: any = ee;
@@ -8926,7 +8926,7 @@ export default function PlanningPage() {
                                                                       // Si on clique sur une personne qui fait partie d'une משיכה,
                                                                       // supprimer la משיכה ET les deux personnes (before+after) de la cellule.
                                                                       try {
-                                                                        Object.entries(pullsByHoleKey || {}).forEach(([k, entry]) => {
+                                                                        Object.entries(displayedPullsByHoleKey || {}).forEach(([k, entry]) => {
                                                                           if (!String(k).startsWith(cellPrefix)) return;
                                                                           const b = norm((entry as any)?.before?.name);
                                                                           const a = norm((entry as any)?.after?.name);
@@ -9072,7 +9072,7 @@ export default function PlanningPage() {
                                                                     // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                     const used = new Set(getCellNames(d.key, sn));
                                                                     const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                    Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                    Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                       if (!String(kk).startsWith(cellPrefix)) return;
                                                                       const e: any = ee;
                                                                       if (e?.before?.name) used.add(String(e.before.name).trim());
@@ -9176,7 +9176,7 @@ export default function PlanningPage() {
                                                                     // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                     const used = new Set(getCellNames(d.key, sn));
                                                                     const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                    Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                    Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                       if (!String(kk).startsWith(cellPrefix)) return;
                                                                       const e: any = ee;
                                                                       if (e?.before?.name) used.add(String(e.before.name).trim());
@@ -9318,7 +9318,7 @@ export default function PlanningPage() {
                                                           // Si ce nom fait partie d'une משיכה avec roleName, afficher aussi le rôle sur la bulle "ajoutée"
                                                           const pullRoleName = (() => {
                                                             const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                            const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                            const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                               if (!String(k).startsWith(cellPrefix)) return false;
                                                               const e: any = entry;
                                                               return e?.before?.name === nm || e?.after?.name === nm;
@@ -9392,7 +9392,7 @@ export default function PlanningPage() {
                                                                 if (pullsModeStationIdx !== idx) return;
                                                                 if (isSavedMode && !editingSaved) return;
                                                                 const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                                   if (!String(k).startsWith(cellPrefix)) return false;
                                                                   const pe: any = entry;
                                                                   return pe?.before?.name === nm || pe?.after?.name === nm;
@@ -9482,7 +9482,7 @@ export default function PlanningPage() {
                                                                 </span>
                                                                 {(() => {
                                                                   const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                  const match = Object.entries(pullsByHoleKey || {}).find(([k, entry]) => {
+                                                                  const match = Object.entries(displayedPullsByHoleKey || {}).find(([k, entry]) => {
                                                                     if (!k.startsWith(cellPrefix)) return false;
                                                                     const e: any = entry;
                                                                     return e?.before?.name === nm || e?.after?.name === nm;
@@ -9509,7 +9509,7 @@ export default function PlanningPage() {
                                                                         // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                         const used = new Set(getCellNames(d.key, sn));
                                                                         const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                        Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                        Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                           if (!String(kk).startsWith(cellPrefix)) return;
                                                                           const e: any = ee;
                                                                           if (e?.before?.name) used.add(String(e.before.name).trim());
@@ -9600,7 +9600,7 @@ export default function PlanningPage() {
                                                                       // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                       const used = new Set(getCellNames(d.key, sn));
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                      Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                      Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                         if (!String(kk).startsWith(cellPrefix)) return;
                                                                         const e: any = ee;
                                                                         if (e?.before?.name) used.add(String(e.before.name).trim());
@@ -9677,7 +9677,7 @@ export default function PlanningPage() {
                                                                       // Exclure les travailleurs déjà utilisés par d'autres משיכות de cette même case
                                                                       const used = new Set(getCellNames(d.key, sn));
                                                                       const cellPrefix = `${d.key}|${sn}|${idx}|`;
-                                                                      Object.entries(pullsByHoleKey || {}).forEach(([kk, ee]) => {
+                                                                      Object.entries(displayedPullsByHoleKey || {}).forEach(([kk, ee]) => {
                                                                         if (!String(kk).startsWith(cellPrefix)) return;
                                                                         const e: any = ee;
                                                                         if (e?.before?.name) used.add(String(e.before.name).trim());
