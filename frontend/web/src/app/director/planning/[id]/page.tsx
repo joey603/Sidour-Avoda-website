@@ -5328,7 +5328,7 @@ export default function PlanningPage() {
   }
 
   return (
-    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40 [&_button]:shadow-sm [&_button]:touch-manipulation [&_button]:select-none [&_button]:transition-[transform,filter,opacity] [&_button]:duration-75 [&_button]:active:scale-[0.98] [&_button]:active:brightness-95">
+    <div className="min-h-screen px-3 sm:px-4 lg:px-4 py-6 pb-56 md:pb-40 [&_button]:shadow-sm [&_button]:touch-manipulation [&_button]:select-none [&_button]:transition-[transform,filter,opacity] [&_button]:duration-75 max-md:[&_button]:active:scale-100 md:[&_button]:active:scale-[0.98] [&_button]:active:brightness-95">
       <div
         className={
           "mx-auto w-full max-w-none md:max-w-5xl lg:max-w-6xl space-y-6 rounded-xl " +
@@ -6092,7 +6092,7 @@ export default function PlanningPage() {
                         type="text"
                         value={newWorkerName}
                         onChange={(e) => setNewWorkerName(e.target.value)}
-                        className="w-full rounded-md border border-zinc-300 bg-white px-2 md:px-3 py-1.5 md:py-2 text-sm md:text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                       />
                     </div>
                     <div>
@@ -6102,7 +6102,7 @@ export default function PlanningPage() {
                         onChange={(value) => setNewWorkerMax(Math.max(0, Math.min(6, value)))}
                         min={0}
                         max={6}
-                        className="w-full rounded-md border border-zinc-300 bg-white px-2 md:px-3 py-1.5 md:py-2 text-sm md:text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                        className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
                       />
                     </div>
                     <div className="md:col-span-2">

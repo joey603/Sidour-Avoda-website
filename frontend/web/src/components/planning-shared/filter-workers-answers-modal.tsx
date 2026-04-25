@@ -157,7 +157,7 @@ export function FilterWorkersAnswersModal({
                                           [qid]: e.target.value || undefined,
                                         }));
                                       }}
-                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                      className="w-full rounded-md border px-3 py-2 text-base md:text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
                                       <option value="">כל התשובות</option>
                                       {q.options.map((opt: string) => (
@@ -173,7 +173,7 @@ export function FilterWorkersAnswersModal({
                                           [qid]: e.target.value || undefined,
                                         }));
                                       }}
-                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                      className="w-full rounded-md border px-3 py-2 text-base md:text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
                                       <option value="">כל התשובות</option>
                                       <option value="true">כן</option>
@@ -188,7 +188,7 @@ export function FilterWorkersAnswersModal({
                                           [qid]: e.target.value || undefined,
                                         }));
                                       }}
-                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                      className="w-full rounded-md border px-3 py-2 text-base md:text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
                                       <option value="">כל התשובות</option>
                                       {uniqueValues.map((val) => (
@@ -206,7 +206,7 @@ export function FilterWorkersAnswersModal({
                                         }));
                                       }}
                                       placeholder="הזן ערך לחיפוש..."
-                                      className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
+                                      className="w-full rounded-md border px-3 py-2 text-base md:text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     />
                                   )}
                                 </div>

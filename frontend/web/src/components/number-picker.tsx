@@ -86,7 +86,7 @@ export default function NumberPicker({
             handleOpen();
           }
         }}
-        className={`${className} cursor-pointer touch-manipulation`}
+        className={`!text-base ${className} min-h-10 cursor-pointer touch-manipulation`}
         inputMode="none"
         placeholder={placeholder}
       />

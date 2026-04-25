@@ -97,7 +97,7 @@ export function WorkerEditModal({
                 type="text"
                 value={newWorkerName}
                 onChange={(e) => onNewWorkerNameChange(e.target.value)}
-                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-base dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
             </div>
             <div>
@@ -107,7 +107,7 @@ export function WorkerEditModal({
                 onChange={(value) => onNewWorkerMaxChange(Math.max(0, Math.min(6, value)))}
                 min={0}
                 max={6}
-                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-base dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
             </div>
             <div className="md:col-span-2">
