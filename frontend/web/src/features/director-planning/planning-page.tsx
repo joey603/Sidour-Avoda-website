@@ -5499,7 +5499,7 @@ export default function PlanningPage() {
           </div>
         ) : null}
         {loading || !workersResolvedForPage ? (
-          <div className="fixed inset-0 z-50 flex h-screen-mobile min-h-screen-mobile w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
+          <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
             <LoadingAnimation size={96} />
           </div>
         ) : error ? (
@@ -5508,7 +5508,7 @@ export default function PlanningPage() {
           <>
           {/* Lazy loading: keep UI visible, show a centered overlay while week data refreshes */}
           {isRefreshingWeekData ? (
-            <div className="fixed inset-0 z-50 flex h-screen-mobile min-h-screen-mobile w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md dark:bg-zinc-950/70 dark:backdrop-blur-md">
+            <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
               <LoadingAnimation size={96} />
             </div>
           ) : null}
