@@ -42,6 +42,46 @@ type LocalWorkerContextCache = {
   siteName?: string;
 };
 
+/** True si au moins un créneau est choisi (pas seulement un objet semaine vide). */
+function hasAvailabilityShifts(av: Record<string, string[]> | undefined | null): boolean {
+  if (!av || typeof av !== "object") return false;
+  return Object.values(av).some((shifts) => Array.isArray(shifts) && shifts.length > 0);
+}
+
+/** True si au moins une réponse est renseignée (hors null / undefined / chaîne vide). */
+function hasAnswersContent(
+  answers: WorkerContextAnswers | Record<string, AnswerValue> | undefined | null
+): boolean {
+  if (!answers || typeof answers !== "object") return false;
+  const isPresent = (v: unknown): boolean =>
+    v !== null && v !== undefined && v !== "";
+
+  if ("general" in answers || "perDay" in answers) {
+    const a = answers as WorkerContextAnswers;
+    const g = a.general;
+    if (g && typeof g === "object") {
+      for (const v of Object.values(g)) {
+        if (isPresent(v)) return true;
+      }
+    }
+    const pd = a.perDay;
+    if (pd && typeof pd === "object") {
+      for (const day of Object.values(pd)) {
+        if (day && typeof day === "object") {
+          for (const v of Object.values(day)) {
+            if (isPresent(v)) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  for (const v of Object.values(answers as Record<string, AnswerValue>)) {
+    if (isPresent(v)) return true;
+  }
+  return false;
+}
+
 export default function WorkerAvailabilityPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -182,9 +222,9 @@ export default function WorkerAvailabilityPage() {
           }
         }
 
-        // Si des données existent, marquer comme édité et sauvegardé
-        const hasData = Object.keys(workerData.availability || {}).length > 0 || 
-                       Object.keys(workerData.answers || {}).length > 0;
+        // Si des données réelles existent (créneaux ou réponses), marquer comme déjà enregistré côté serveur
+        const hasData =
+          hasAvailabilityShifts(workerData.availability) || hasAnswersContent(workerData.answers);
         if (hasData) {
           setIsEditing(true);
           setSuccess(true);

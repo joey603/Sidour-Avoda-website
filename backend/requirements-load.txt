@@ -1,0 +1,3 @@
+# Outils optionnels : tests de charge / stabilité multi-utilisateurs
+# pip install -r requirements-load.txt
+locust>=2.32.0

@@ -19,6 +19,9 @@ type PlanningWorkersSectionProps = {
   rows: Array<PlanningWorker & { availability: PlanningWorker["availability"] }>;
   workersLoading: boolean;
   onWorkersChanged: () => void;
+  /** גרירת שם לגריד במצב ידני */
+  workersNameDraggable?: boolean;
+  onWorkerNameDragPreview?: (workerName: string | null) => void;
 };
 
 export function PlanningWorkersSection({
@@ -29,6 +32,8 @@ export function PlanningWorkersSection({
   rows,
   workersLoading,
   onWorkersChanged,
+  workersNameDraggable = false,
+  onWorkerNameDragPreview,
 }: PlanningWorkersSectionProps) {
   const modals = usePlanningV2WorkerModals(siteId, site, weekStart, workers, () => {
     onWorkersChanged();
@@ -81,7 +86,13 @@ export function PlanningWorkersSection({
           {workersLoading ? (
             <div className="py-8 text-center text-sm text-zinc-500">טוען עובדים…</div>
           ) : (
-            <PlanningWorkersTable rows={rows} enabledRoleNames={enabledRoleNames} onRowClick={modals.onTableRowClick} />
+            <PlanningWorkersTable
+              rows={rows}
+              enabledRoleNames={enabledRoleNames}
+              onRowClick={modals.onTableRowClick}
+              workerNameDraggable={workersNameDraggable}
+              onWorkerNameDragPreview={onWorkerNameDragPreview}
+            />
           )}
           <p className="text-center text-[11px] text-zinc-500 dark:text-zinc-400">
             לחיצה על שורה פותחת עריכת זמינות ותפקידים. השיבוצים בגריד מוצגים למטה באותו מסך.

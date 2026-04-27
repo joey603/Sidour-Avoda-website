@@ -1,5 +1,43 @@
-/** Palette stable par nom — même logique que `colorForName` dans `planning/[id]/page.tsx` (fallback hash). */
-export function workerNameChipColor(name: string): { bg: string; border: string; text: string } {
+const GOLDEN = 137.508;
+
+function shiftForbiddenHue(hue: number): number {
+  let h = hue;
+  // Eviter rouge et vert pour ne pas confondre avec états OK/KO
+  if (h < 20 || h >= 350) h = (h + 30) % 360;
+  if (h >= 100 && h <= 150) h = (h + 40) % 360;
+  return h;
+}
+
+/** Mapping stable nom -> couleur, aligné sur la logique planning historique. */
+export function buildWorkerNameColorMap(namesInput: string[]): Map<string, { bg: string; border: string; text: string }> {
+  const names = Array.from(
+    new Set(
+      (namesInput || [])
+        .map((n) => String(n || "").trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+
+  const map = new Map<string, { bg: string; border: string; text: string }>();
+  names.forEach((name, i) => {
+    const hue = shiftForbiddenHue((i * GOLDEN) % 360);
+    const L = [88, 84, 80][i % 3];
+    const Sbg = [85, 80, 75][(i >> 1) % 3];
+    const bg = `hsl(${hue} ${Sbg}% ${L}%)`;
+    const border = `hsl(${hue} 60% ${Math.max(65, L - 10)}%)`;
+    const text = "#1f2937";
+    map.set(name, { bg, border, text });
+  });
+  return map;
+}
+
+/** Palette stable par nom — fallback hash identique au planning. */
+export function workerNameChipColor(
+  name: string,
+  presetMap?: Map<string, { bg: string; border: string; text: string }>,
+): { bg: string; border: string; text: string } {
+  const preset = presetMap?.get(String(name || "").trim());
+  if (preset) return preset;
   const s = name || "";
   let hash = 0;
   for (let i = 0; i < s.length; i++) {

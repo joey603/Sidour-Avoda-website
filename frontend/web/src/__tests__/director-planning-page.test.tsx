@@ -2,7 +2,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import PlanningPage from "@/app/director/planning/[id]/page";
+import PlanningPage from "@/app/director/planning/[id]/planning-legacy-page";
 
 jest.setTimeout(20000);
 

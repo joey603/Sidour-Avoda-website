@@ -33,6 +33,16 @@ jest.mock("react-markdown", () => {
 jest.mock("remark-gfm", () => ({ __esModule: true, default: () => null }));
 jest.mock("dompurify", () => ({ __esModule: true, default: { sanitize: (html: any) => html } }));
 
+// lottie-react + canvas (évite erreurs JSDOM sur LoadingAnimation et pages qui l’importent)
+jest.mock("lottie-react", () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const React = require("react");
+  return {
+    __esModule: true,
+    default: () => React.createElement("div", { "data-testid": "lottie-mock" }),
+  };
+});
+
 // ResizeObserver mock (used by some UI libs)
 class ResizeObserverMock {
   observe() {}

@@ -59,3 +59,17 @@ export async function persistWeekPlanToApi(
     body: JSON.stringify({ week_iso, scope, data }),
   });
 }
+
+/** Brouillon תכנון אוטומטי (scope `auto`) — mis à jour après chaque génération IA réussie. */
+export async function persistAutoWeekPlanDraftToApi(
+  siteId: string,
+  weekStart: Date,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const week_iso = getWeekKeyISO(weekStart);
+  await apiFetch(`/director/sites/${siteId}/week-plan`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+    body: JSON.stringify({ week_iso, scope: "auto", data }),
+  });
+}

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .database import SessionLocal, settings
 from .models import User, UserRole, SiteWorker, Site
+from . import pwned_passwords
 from .schemas import LoginRequest, Token, UserCreate, UserOut, WorkerLoginRequest
 
 
@@ -168,6 +169,18 @@ def ensure_worker_site_membership(
 
 @router.post("/register", response_model=UserOut, status_code=201)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
+    if settings.enable_pwned_password_check:
+        try:
+            if pwned_passwords.is_password_pwned(user_in.password):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Ce mot de passe figure dans des fuites de données connues (Have I Been Pwned). Choisissez un autre mot de passe.",
+                )
+        except pwned_passwords.PwnedPasswordsServiceError:
+            raise HTTPException(
+                status_code=503,
+                detail="Vérification du mot de passe impossible pour le moment. Réessayez plus tard.",
+            )
     normalized_phone = _normalize_phone(user_in.phone)
     # Vérifier si email ou phone existe déjà
     if user_in.email:

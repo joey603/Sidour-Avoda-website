@@ -1253,7 +1253,7 @@ def solve_schedule(
                             # forbid same-day multi-placement
                             if name_present_same_day(cand, dkey, nm):
                                 continue
-                            if not is_allowed(nm, dkey, s_to):
+                            if s_to not in _avail_list_stream_of(nm, dkey):
                                 continue
                             if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                                 continue
@@ -1879,6 +1879,8 @@ def solve_schedule_stream(
     def _avail_list_of(name: str, dkey: str) -> List[str]:
         day_val = (name_to_avail_all.get(name) or {}).get(dkey)
         return day_val if isinstance(day_val, list) else []
+    def is_allowed(nm: str, dkey: str, sname: str) -> bool:
+        return sname in _avail_list_of(nm, dkey)
     def _respects_availability_all(a: Dict[str, Dict[str, List[List[str]]]]) -> bool:
         for dk in days:
             for sn in shifts:
@@ -2263,7 +2265,7 @@ def solve_schedule_stream(
                                 continue
                             cand = {dk: {sn: [list(lst) for lst in perst] for sn, perst in smap.items()} for dk, smap in assignments.items()}
                             _write_cell(cand, dkey, sname, t_idx, [n for n in names_here if n != nm])
-                            if name_present_same_day(cand, dkey, nm):
+                            if _name_present_same_day(cand, dkey, nm):
                                 continue
                             if not is_allowed(nm, dkey, s_to):
                                 continue

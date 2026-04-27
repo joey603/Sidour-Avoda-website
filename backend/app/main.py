@@ -244,6 +244,11 @@ def create_app() -> FastAPI:
         # Safe to ignore in dev if another process handles migration
         pass
 
+    @app.get("/health")
+    def health():
+        """Sonde légère (chargeurs, k8s, tests de charge) — sans auth ni DB."""
+        return {"status": "ok"}
+
     # Routes
     app.include_router(auth_router)
     app.include_router(sites_router)

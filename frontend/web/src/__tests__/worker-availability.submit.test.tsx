@@ -56,7 +56,7 @@ describe("/worker/availability submit", () => {
     localStorage.clear();
   });
 
-  it("submits weekly availability and question answers with week_key", async () => {
+  it("POST worker-context with availability and answers", async () => {
     const { fetchMe } = require("@/lib/auth");
     const { apiFetch } = require("@/lib/api");
 
@@ -68,22 +68,23 @@ describe("/worker/availability submit", () => {
       { id: "p1", label: "יכול בוקר?", type: "yesno", perDay: true },
     ];
 
-    apiFetch.mockImplementation((path: string, options?: any) => {
-      if (path === "/public/sites/worker-sites") return Promise.resolve([{ id: 7, name: "Site A" }]);
-      if (path === "/public/sites/7/info") {
-        return Promise.resolve({ id: 7, name: "Site A", shifts: ["06-14"], questions: siteQuestions });
-      }
-      if (path === `/public/sites/7/worker-availability?week_key=${encodeURIComponent(nextWeekIso)}`) {
+    const ctxPath = `/public/sites/worker-context?week_key=${encodeURIComponent(nextWeekIso)}`;
+
+    apiFetch.mockImplementation((path: string, options?: { method?: string }) => {
+      if (path === ctxPath && (!options?.method || options.method === "GET")) {
+        // Objet semaine / réponses vides : ne doit pas activer le mode « déjà enregistré » (hasData réel).
         return Promise.resolve({
-          id: 19,
-          name: "Yoeli",
+          worker_name: "Yoeli",
+          sites: [{ id: 7, name: "Site A" }],
+          shifts: ["06-14"],
+          questions: siteQuestions,
           max_shifts: 5,
           roles: [],
           availability: { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
           answers: { general: {}, perDay: {} },
         });
       }
-      if (path === `/public/sites/7/register?week_key=${encodeURIComponent(nextWeekIso)}`) {
+      if (path === ctxPath && options?.method === "POST") {
         return Promise.resolve({});
       }
       throw new Error(`Unexpected apiFetch path: ${path} ${JSON.stringify(options || {})}`);
@@ -95,20 +96,16 @@ describe("/worker/availability submit", () => {
 
     const user = userEvent.setup();
 
-    const editButton = await screen.findByRole("button", { name: "ערוך" });
-    await user.click(editButton);
-
-    // select one shift for Sunday
-    const shiftButton = (await screen.findAllByRole("button", { name: "06-14" })).find((el) => !(el as HTMLButtonElement).disabled);
+    const shiftButton = (await screen.findAllByRole("button", { name: "06-14" })).find(
+      (el) => !(el as HTMLButtonElement).disabled,
+    );
     expect(shiftButton).toBeTruthy();
     await user.click(shiftButton as HTMLElement);
 
-    // fill general text question
     const generalInput = (await screen.findAllByRole("textbox")).find((el) => !(el as HTMLInputElement).disabled);
     expect(generalInput).toBeTruthy();
     await user.type(generalInput as HTMLElement, "בדיקה");
 
-    // answer per-day yes/no question for Sunday
     const yesRadios = screen.getAllByRole("radio", { name: "כן" });
     for (const radio of yesRadios) {
       await user.click(radio);
@@ -118,16 +115,15 @@ describe("/worker/availability submit", () => {
 
     await waitFor(() => {
       const submitCall = (apiFetch as jest.Mock).mock.calls.find(
-        (call: any[]) => call[0] === `/public/sites/7/register?week_key=${encodeURIComponent(nextWeekIso)}`,
+        (call: unknown[]) => call[0] === ctxPath && (call[1] as { method?: string })?.method === "POST",
       );
       expect(submitCall).toBeTruthy();
 
-      const body = JSON.parse(String(submitCall[1].body));
-      expect(body.answers.week_key).toBe(nextWeekIso);
+      const body = JSON.parse(String((submitCall![1] as { body: string }).body));
+      expect(body.max_shifts).toBe(5);
       expect(body.answers.general.g1).toBe("בדיקה");
       expect(body.answers.perDay.p1.sun).toBe(true);
       expect(body.availability.sun).toContain("06-14");
     });
   });
 });
-

@@ -1,6 +1,6 @@
 "use client";
 
 /**
- * Même UI et logique que `/director/planning/[id]` — réexport du module unique (aucune suppression dans la page initiale).
+ * Même entrée que `/director/planning/[id]` (Planning v2).
  */
-export { default } from "../../planning/[id]/page";
+export { default } from "@/app/director/planning/[id]/page";

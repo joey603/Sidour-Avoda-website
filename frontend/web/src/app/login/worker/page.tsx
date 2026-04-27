@@ -123,7 +123,7 @@ function WorkerLoginInner() {
       } catch {
         // Ignorer pour ne pas bloquer l'accès worker si le claim a déjà été fait.
       } finally {
-        router.replace(existingTarget);
+    router.replace(existingTarget);
       }
     })();
   }, [existingTarget, inviteToken, router, validatedRole]);

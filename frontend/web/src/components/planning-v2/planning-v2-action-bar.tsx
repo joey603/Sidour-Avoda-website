@@ -1,16 +1,13 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import PullsLimitPicker from "@/components/pulls-limit-picker";
 import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import type { V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
 import type { LinkedSiteRow } from "./hooks/use-planning-v2-linked-sites";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
-import { getWeekKeyISO } from "./lib/week";
-
-const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
+import { addDays, getWeekKeyISO } from "./lib/week";
 
 type PlanningV2ActionBarProps = {
   siteId: string;
@@ -21,20 +18,34 @@ type PlanningV2ActionBarProps = {
   linkedSites: LinkedSiteRow[];
   editingSaved: boolean;
   onEditingSavedChange: (v: boolean) => void;
+  /** ביטול מצב עריכה — ניקוי טיוטה והצגת התכנון השמור (לפני סגירת ה־UI). */
+  onCancelSavedEdit?: () => void | Promise<void>;
   reloadWeekPlan: () => void | Promise<void>;
   generationRunning: boolean;
-  onRequestGenerate: () => void;
+  onRequestGenerate: (options?: {
+    excludeDays?: string[];
+    fixedAssignments?: Record<string, Record<string, string[][]>>;
+  }) => void;
   onStopGeneration: () => void;
   autoPullsLimit: string;
   onAutoPullsLimitChange: (v: string) => void;
   autoPullsEnabled: boolean;
   isManual: boolean;
   onIsManualChange: (v: boolean) => void;
+  /** מעבר לידני + איפוס גריד מקומי (ללא טעינה מחדש מהשרת). */
+  onEnterManualWithGridReset?: () => void;
   onSavePlan: (publishToWorkers: boolean) => void | Promise<void>;
   onDraftClear?: () => void;
   /** טיוטת IA ללא שמירה — מאפשר שמור בלי מצב ערוך */
   draftActive: boolean;
+  alternativeCount: number;
+  selectedAlternativeIndex: number;
+  onSelectedAlternativeChange: (index: number) => void;
+  alternativesFiltered?: boolean;
+  alternativesTotalCount?: number;
 };
+
+type MultiSitePlanAction = "delete" | "save_director" | "save_shared";
 
 export function PlanningV2ActionBar({
   siteId,
@@ -44,6 +55,7 @@ export function PlanningV2ActionBar({
   linkedSites,
   editingSaved,
   onEditingSavedChange,
+  onCancelSavedEdit,
   reloadWeekPlan,
   generationRunning,
   onRequestGenerate,
@@ -53,60 +65,102 @@ export function PlanningV2ActionBar({
   autoPullsEnabled,
   isManual,
   onIsManualChange,
+  onEnterManualWithGridReset,
   onSavePlan,
   onDraftClear,
   draftActive,
+  alternativeCount,
+  selectedAlternativeIndex,
+  onSelectedAlternativeChange,
+  alternativesFiltered = false,
+  alternativesTotalCount,
 }: PlanningV2ActionBarProps) {
-  const router = useRouter();
   const isoWeek = getWeekKeyISO(weekStart);
 
   const [showModeSwitchDialog, setShowModeSwitchDialog] = useState(false);
   const [modeSwitchTarget, setModeSwitchTarget] = useState<"manual" | "auto" | null>(null);
-  const [showLinkedSitesDialog, setShowLinkedSitesDialog] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showPastDaysDialog, setShowPastDaysDialog] = useState(false);
+  const [pendingExcludeDays, setPendingExcludeDays] = useState<string[]>([]);
+  const [showExistingAssignmentsDialog, setShowExistingAssignmentsDialog] = useState(false);
+  const [pendingGenerateOptions, setPendingGenerateOptions] = useState<{
+    fixedAssignments?: Record<string, Record<string, string[][]>>;
+    skipExistingCheck?: boolean;
+  } | null>(null);
+  const [multiSitePlanActionDialog, setMultiSitePlanActionDialog] = useState<{
+    action: MultiSitePlanAction;
+  } | null>(null);
 
-  /** תכנון שמור בשרת (לא רק טיוטת מסך) */
-  const isSavedMode = useMemo(() => assignmentsNonEmpty(weekPlan?.assignments ?? null), [weekPlan?.assignments]);
-
-  const linkedSiteEntries = useMemo(() => {
-    return linkedSites.map((ls) => {
-      const assigned = Number(ls.assigned_count ?? 0);
-      const required = Number(ls.required_count ?? 0);
-      return {
-        id: ls.id,
-        name: ls.name,
-        assignedCount: assigned,
-        requiredCount: required,
-        holesCount: Math.max(0, required - assigned),
-      };
-    });
-  }, [linkedSites]);
-
-  const linkedSitesTotalHoles = useMemo(
-    () => linkedSiteEntries.reduce((sum, s) => sum + s.holesCount, 0),
-    [linkedSiteEntries],
+  /** תכנון verrouillé : director/shared seulement — une טיוטת `auto` reste éditable / regénérable sans « ערוך ». */
+  const isSavedMode = useMemo(
+    () =>
+      assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
+      (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared"),
+    [weekPlan?.assignments, weekPlan?.sourceScope],
   );
+
+  const hasPersistedWeekPlan = useMemo(
+    () => assignmentsNonEmpty(weekPlan?.assignments ?? null),
+    [weekPlan?.assignments],
+  );
+
+  const multiSiteActionLabelByType: Record<MultiSitePlanAction, string> = {
+    delete: "מחק",
+    save_director: "שמור",
+    save_shared: "שמור ואשלח",
+  };
+  const currentSiteLabel = useMemo(() => {
+    const current = linkedSites.find((s) => String(s.id) === String(siteId));
+    return current?.name || "האתר הנוכחי";
+  }, [linkedSites, siteId]);
+  const otherSitesLabel = useMemo(() => {
+    const names = linkedSites
+      .filter((s) => String(s.id) !== String(siteId))
+      .map((s) => s.name)
+      .filter(Boolean);
+    return names.join(", ");
+  }, [linkedSites, siteId]);
 
   /** Comme planning : יצירת תכנון bloquée si génération, plan serveur sans édition, ou mode ידני */
   const generationBlocked = generationRunning || (isSavedMode && !editingSaved) || isManual;
   const showAutoManual = !isSavedMode || editingSaved;
 
   const canSavePlan =
-    assignmentsNonEmpty(effectiveAssignments) && (editingSaved || draftActive);
+    assignmentsNonEmpty(effectiveAssignments) &&
+    (editingSaved || draftActive || weekPlan?.sourceScope === "auto");
 
-  const navigateToLinkedSite = useCallback(
-    (targetId: number) => {
-      try {
-        sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
-      } catch {
-        /* ignore */
-      }
-      setShowLinkedSitesDialog(false);
-      router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
+  const buildNonEmptyAssignmentsSnapshot = useCallback(
+    (src: Record<string, Record<string, string[][]>> | null | undefined) => {
+      if (!src || typeof src !== "object") return undefined;
+      const out: Record<string, Record<string, string[][]>> = {};
+      Object.entries(src).forEach(([dayKey, shiftsMap]) => {
+        if (!shiftsMap || typeof shiftsMap !== "object") return;
+        let dayUsed = false;
+        const nextShifts: Record<string, string[][]> = {};
+        Object.entries(shiftsMap).forEach(([shiftName, perStation]) => {
+          if (!Array.isArray(perStation)) return;
+          const nextStations = perStation.map((cell) => {
+            if (!Array.isArray(cell)) return [];
+            return cell.map((n) => String(n || "").trim()).filter(Boolean);
+          });
+          const hasAny = nextStations.some((cell) => cell.length > 0);
+          if (hasAny) {
+            nextShifts[shiftName] = nextStations;
+            dayUsed = true;
+          }
+        });
+        if (dayUsed) out[dayKey] = nextShifts;
+      });
+      return Object.keys(out).length > 0 ? out : undefined;
     },
-    [router, isoWeek],
+    [],
   );
+
+  const hasAlternatives = alternativeCount > 1;
+  const altCurrent = Math.max(0, Math.min(Math.max(0, selectedAlternativeIndex), Math.max(0, alternativeCount - 1)));
+  const canAltPrev = hasAlternatives && altCurrent > 0;
+  const canAltNext = hasAlternatives && altCurrent < alternativeCount - 1;
 
   const handleDelete = useCallback(async () => {
     const id = Number(siteId);
@@ -140,12 +194,122 @@ export function PlanningV2ActionBar({
     }
   }, [siteId, isoWeek, reloadWeekPlan, onEditingSavedChange, onDraftClear]);
 
+  const deletePlanForSite = useCallback(
+    async (targetSiteId: number) => {
+      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
+      await Promise.allSettled([
+        apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
+          method: "DELETE",
+          headers,
+        }),
+        apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
+          method: "DELETE",
+          headers,
+        }),
+        apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
+          method: "DELETE",
+          headers,
+        }),
+      ]);
+    },
+    [isoWeek],
+  );
+
+  const executeMultiSitePlanAction = useCallback(
+    async (action: MultiSitePlanAction, allLinked: boolean) => {
+      if (action === "save_director") {
+        await onSavePlan(false);
+        return;
+      }
+      if (action === "save_shared") {
+        await onSavePlan(true);
+        return;
+      }
+      if (action === "delete") {
+        if (!allLinked) {
+          await handleDelete();
+          return;
+        }
+        setDeleting(true);
+        try {
+          const ids = linkedSites.map((s) => Number(s.id)).filter(Number.isFinite);
+          await Promise.all(ids.map((id) => deletePlanForSite(id)));
+          toast.success("התכנון נמחק בכל האתרים המקושרים");
+          setShowDeleteConfirm(false);
+          onEditingSavedChange(false);
+          onDraftClear?.();
+          await reloadWeekPlan();
+        } catch (e: unknown) {
+          toast.error("מחיקה נכשלה", { description: String((e as Error)?.message || "נסה שוב מאוחר יותר.") });
+        } finally {
+          setDeleting(false);
+        }
+      }
+    },
+    [onSavePlan, handleDelete, linkedSites, deletePlanForSite, onEditingSavedChange, onDraftClear, reloadWeekPlan],
+  );
+
+  const requestMultiSitePlanAction = useCallback(
+    (action: MultiSitePlanAction) => {
+      if (linkedSites.length > 1) {
+        setMultiSitePlanActionDialog({ action });
+        return;
+      }
+      if (action === "delete") {
+        setShowDeleteConfirm(true);
+        return;
+      }
+      void executeMultiSitePlanAction(action, false);
+    },
+    [linkedSites.length, executeMultiSitePlanAction],
+  );
+
+  const runGenerateWithChecks = useCallback(
+    (options?: {
+      fixedAssignments?: Record<string, Record<string, string[][]>>;
+      skipExistingCheck?: boolean;
+    }) => {
+      if (generationBlocked) return;
+      const baseOptions = options || {};
+      const hasNonEmptyGrid = assignmentsNonEmpty(effectiveAssignments);
+      if (hasNonEmptyGrid && !baseOptions.fixedAssignments && !baseOptions.skipExistingCheck) {
+        setPendingGenerateOptions(baseOptions);
+        setShowExistingAssignmentsDialog(true);
+        return;
+      }
+      const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const toExclude: string[] = [];
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(weekStart, i);
+        d.setHours(0, 0, 0, 0);
+        if (d < today) toExclude.push(dayKeys[i]);
+      }
+      if (toExclude.length > 0) {
+        setPendingGenerateOptions(baseOptions);
+        setPendingExcludeDays(toExclude);
+        setShowPastDaysDialog(true);
+        return;
+      }
+      onRequestGenerate({
+        fixedAssignments: baseOptions.fixedAssignments,
+      });
+    },
+    [generationBlocked, effectiveAssignments, onRequestGenerate, weekStart],
+  );
+
+  const handleGenerateClick = useCallback(() => {
+    if (generationBlocked) return;
+    runGenerateWithChecks();
+  }, [generationBlocked, runGenerateWithChecks]);
+
   return (
     <>
       {showModeSwitchDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="mb-3 text-sm">
+            <div className="mb-3 text-center text-sm">
               {modeSwitchTarget === "manual"
                 ? "לעבור למצב ידני. לשמור את השיבוצים הנוכחיים במקומם?"
                 : "לעבור למצב אוטומטי. לשמור את השיבוצים הנוכחיים במקומם?"}
@@ -179,12 +343,14 @@ export function PlanningV2ActionBar({
                 onClick={() => {
                   if (modeSwitchTarget === "auto") {
                     onIsManualChange(false);
+                    setShowModeSwitchDialog(false);
+                    setModeSwitchTarget(null);
+                    void reloadWeekPlan();
                   } else if (modeSwitchTarget === "manual") {
-                    onIsManualChange(true);
+                    onEnterManualWithGridReset?.();
+                    setShowModeSwitchDialog(false);
+                    setModeSwitchTarget(null);
                   }
-                  setShowModeSwitchDialog(false);
-                  setModeSwitchTarget(null);
-                  void reloadWeekPlan();
                 }}
               >
                 אפס גריד
@@ -193,56 +359,6 @@ export function PlanningV2ActionBar({
           </div>
         </div>
       )}
-
-      {showLinkedSitesDialog ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowLinkedSitesDialog(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mb-3 text-center text-base font-semibold">מולטי אתרים</div>
-            <div className="mb-3 text-center text-sm font-medium text-orange-600 dark:text-orange-400">
-              {'סה"כ חוסרים: '}
-              {linkedSitesTotalHoles}
-            </div>
-            <div className="space-y-2">
-              {linkedSiteEntries.map((linkedSite) => (
-                <button
-                  key={linkedSite.id}
-                  type="button"
-                  onClick={() => navigateToLinkedSite(linkedSite.id)}
-                  className={
-                    "flex w-full items-center justify-between rounded-xl border px-3 py-3 text-right transition-colors " +
-                    (String(linkedSite.id) === String(siteId)
-                      ? "border-[#00A8E0] bg-sky-50 dark:border-sky-600 dark:bg-sky-950/30"
-                      : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
-                  }
-                >
-                  <span className="font-medium text-zinc-900 dark:text-zinc-100">{linkedSite.name}</span>
-                  <span className="flex flex-col items-end text-sm">
-                    <span className="text-zinc-500 dark:text-zinc-400">
-                      {linkedSite.assignedCount}/{linkedSite.requiredCount}
-                    </span>
-                    <span className="text-orange-600 dark:text-orange-400">חוסרים: {linkedSite.holesCount}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 flex justify-center">
-              <button
-                type="button"
-                onClick={() => setShowLinkedSitesDialog(false)}
-                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              >
-                סגור
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {showDeleteConfirm ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -264,6 +380,156 @@ export function PlanningV2ActionBar({
                 disabled={deleting}
               >
                 {deleting ? "מוחק…" : "מחק"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showPastDaysDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-3 text-center text-sm">
+              {`כבר עברו ${pendingExcludeDays.length} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`}
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setShowPastDaysDialog(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  setShowPastDaysDialog(false);
+                  onRequestGenerate({
+                    fixedAssignments: pendingGenerateOptions?.fixedAssignments,
+                    excludeDays: [],
+                  });
+                  setPendingGenerateOptions(null);
+                }}
+              >
+                לא
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  setShowPastDaysDialog(false);
+                  onRequestGenerate({
+                    fixedAssignments: pendingGenerateOptions?.fixedAssignments,
+                    excludeDays: pendingExcludeDays,
+                  });
+                  setPendingGenerateOptions(null);
+                }}
+              >
+                כן
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showExistingAssignmentsDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="mb-3 text-sm">
+              התכנית מכילה שיבוצים קיימים.
+              <br />
+              האם לשמור אותם כקבועים וליצור תכנון סביבם, או להתחיל מאפס?
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  setShowExistingAssignmentsDialog(false);
+                  setPendingGenerateOptions(null);
+                }}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  const fixedAssignments = buildNonEmptyAssignmentsSnapshot(effectiveAssignments);
+                  setShowExistingAssignmentsDialog(false);
+                  if (!fixedAssignments) {
+                    const base = { ...(pendingGenerateOptions || {}), skipExistingCheck: true };
+                    setPendingGenerateOptions(null);
+                    runGenerateWithChecks(base);
+                    return;
+                  }
+                  const base = { ...(pendingGenerateOptions || {}), fixedAssignments, skipExistingCheck: true };
+                  setPendingGenerateOptions(null);
+                  runGenerateWithChecks(base);
+                }}
+              >
+                שמור כשיבוצים קבועים
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  setShowExistingAssignmentsDialog(false);
+                  const base = { ...(pendingGenerateOptions || {}), skipExistingCheck: true };
+                  setPendingGenerateOptions(null);
+                  runGenerateWithChecks(base);
+                }}
+              >
+                תכנון מאפס
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {multiSitePlanActionDialog ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="space-y-2 text-right">
+              <div className="text-base font-semibold">
+                {multiSiteActionLabelByType[multiSitePlanActionDialog.action]} באתרים מקושרים
+              </div>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                האם לבצע את הפעולה רק עבור {currentSiteLabel} או עבור כל האתרים המקושרים?
+              </div>
+              {otherSitesLabel ? (
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">האתרים המקושרים: {otherSitesLabel}</div>
+              ) : null}
+            </div>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setMultiSitePlanActionDialog(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  const action = multiSitePlanActionDialog.action;
+                  setMultiSitePlanActionDialog(null);
+                  void executeMultiSitePlanAction(action, false);
+                }}
+              >
+                רק באתר הנוכחי
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  const action = multiSitePlanActionDialog.action;
+                  setMultiSitePlanActionDialog(null);
+                  void executeMultiSitePlanAction(action, true);
+                }}
+              >
+                בכל האתרים המקושרים
               </button>
             </div>
           </div>
@@ -293,7 +559,7 @@ export function PlanningV2ActionBar({
               >
                 <button
                   type="button"
-                  onClick={() => onRequestGenerate()}
+                  onClick={() => handleGenerateClick()}
                   disabled={generationBlocked}
                   className={
                     "inline-flex items-center gap-2 rounded-none border-0 px-4 py-2 disabled:opacity-60 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
@@ -364,23 +630,6 @@ export function PlanningV2ActionBar({
                 </div>
               </div>
 
-              {linkedSites.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => setShowLinkedSitesDialog(true)}
-                  className="relative inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white px-3 py-2 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1"
-                  aria-label="מולטי אתרים"
-                  title="מולטי אתרים"
-                >
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                    <path d="M4 6h16v2H4V6Zm0 5h16v2H4v-2Zm0 5h16v2H4v-2Z" />
-                  </svg>
-                  <span className="absolute -right-1 -top-1 min-w-4 rounded-full border border-orange-200 bg-orange-100 px-1 py-0 text-[10px] font-medium leading-4 text-orange-700 dark:border-orange-800 dark:bg-orange-950/70 dark:text-orange-300">
-                    {linkedSitesTotalHoles}
-                  </span>
-                </button>
-              )}
-
               {showAutoManual && (
                 <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                   <button
@@ -426,6 +675,60 @@ export function PlanningV2ActionBar({
                     </svg>
                     ידני
                   </button>
+                  {hasAlternatives ? (
+                    <div className="inline-flex flex-col gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
+                      <div className="text-center text-[10px] font-medium text-zinc-600 dark:text-zinc-300">חלופות</div>
+                      <div className="inline-flex items-center gap-1">
+                        {alternativesFiltered ? (
+                          <span
+                            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                            title={
+                              typeof alternativesTotalCount === "number"
+                                ? `מסונן: ${alternativeCount}/${alternativesTotalCount}`
+                                : "מסונן לפי פילטרים"
+                            }
+                          >
+                            מסונן
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => canAltPrev && onSelectedAlternativeChange(altCurrent - 1)}
+                          disabled={!canAltPrev}
+                          className={
+                            "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
+                            (canAltPrev
+                              ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                              : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
+                          }
+                          aria-label="אלטרנטיבה קודמת"
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+                            <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
+                          </svg>
+                        </button>
+                        <span className="min-w-14 text-center text-xs font-medium text-zinc-700 dark:text-zinc-200" dir="ltr">
+                          {altCurrent + 1}/{alternativeCount}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => canAltNext && onSelectedAlternativeChange(altCurrent + 1)}
+                          disabled={!canAltNext}
+                          className={
+                            "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
+                            (canAltNext
+                              ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                              : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
+                          }
+                          aria-label="אלטרנטיבה הבאה"
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+                            <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -433,11 +736,11 @@ export function PlanningV2ActionBar({
             <div className="flex w-full flex-wrap items-center justify-center gap-2 md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
               <button
                 type="button"
-                onClick={() => setShowDeleteConfirm(true)}
-                disabled={!isSavedMode}
+                onClick={() => requestMultiSitePlanAction("delete")}
+                disabled={!hasPersistedWeekPlan}
                 className={
                   "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                  (isSavedMode
+                  (hasPersistedWeekPlan
                     ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
                     : "cursor-not-allowed bg-zinc-300 text-zinc-600 opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
                 }
@@ -452,13 +755,13 @@ export function PlanningV2ActionBar({
                 <button
                   type="button"
                   onClick={() => {
-                    if (!isSavedMode) return;
+                    if (!hasPersistedWeekPlan) return;
                     onEditingSavedChange(true);
                   }}
-                  disabled={!isSavedMode}
+                  disabled={!hasPersistedWeekPlan}
                   className={
                     "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                    (isSavedMode
+                    (hasPersistedWeekPlan
                       ? "border-[#00A8E0] bg-[#00A8E0] text-white hover:bg-[#0092c6]"
                       : "cursor-not-allowed border-zinc-300 bg-zinc-300 text-zinc-600 opacity-60 dark:border-zinc-700 dark:bg-zinc-700 dark:text-zinc-400")
                   }
@@ -473,7 +776,15 @@ export function PlanningV2ActionBar({
               {editingSaved && (
                 <button
                   type="button"
-                  onClick={() => onEditingSavedChange(false)}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await onCancelSavedEdit?.();
+                      } finally {
+                        onEditingSavedChange(false);
+                      }
+                    })();
+                  }}
                   className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
@@ -486,7 +797,7 @@ export function PlanningV2ActionBar({
               <div className="flex flex-wrap items-center gap-2 md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                 <button
                   type="button"
-                  onClick={() => void onSavePlan(false)}
+                  onClick={() => requestMultiSitePlanAction("save_director")}
                   disabled={!canSavePlan}
                   className={
                     "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
@@ -502,7 +813,7 @@ export function PlanningV2ActionBar({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onSavePlan(true)}
+                  onClick={() => requestMultiSitePlanAction("save_shared")}
                   disabled={!canSavePlan}
                   className={
                     "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +

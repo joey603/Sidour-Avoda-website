@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 import { toast } from "sonner";
 import type { SiteSummary } from "./types";
 
@@ -102,7 +103,10 @@ export function PlanningV2SitePaperHeader({ siteId, site, siteLoading }: Plannin
           <button
             type="button"
             onClick={() => {
-              if (site?.id != null) router.push(`/director/sites/${site.id}/edit`);
+              if (site?.id != null) {
+                clearAllPlanningSessionCaches();
+                router.push(`/director/sites/${site.id}/edit`);
+              }
             }}
             disabled={!site?.id}
             className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"

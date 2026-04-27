@@ -1,4 +1,7 @@
+"use client";
+
 import Link from "next/link";
+import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 
 type PlanningV2HeaderProps = {
   siteId: string;
@@ -18,6 +21,9 @@ export function PlanningV2Header({ siteId }: PlanningV2HeaderProps) {
         <nav className="flex flex-wrap items-center gap-2">
           <Link
             href="/director/sites"
+            onClick={() => {
+              clearAllPlanningSessionCaches();
+            }}
             aria-label="רשימת אתרים"
             title="רשימת אתרים"
             className="inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white p-2 text-zinc-800 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"

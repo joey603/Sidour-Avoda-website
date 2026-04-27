@@ -36,7 +36,7 @@ jest.mock("@/lib/api", () => ({
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  let reject!: (e: any) => void;
+  let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
@@ -47,7 +47,6 @@ function deferred<T>() {
 describe("/worker/availability loading", () => {
   beforeEach(() => {
     replaceMock.mockReset();
-    // localStorage access_token used by apiFetch headers in code
     localStorage.setItem("access_token", "test-token");
   });
 
@@ -56,57 +55,45 @@ describe("/worker/availability loading", () => {
     jest.clearAllMocks();
   });
 
-  it("keeps the loading screen until site info + DB data are loaded", async () => {
+  it("keeps the loading screen until worker-context is loaded", async () => {
     const { fetchMe } = require("@/lib/auth");
     const { apiFetch } = require("@/lib/api");
 
-    fetchMe.mockResolvedValue({ role: "worker", full_name: "Yoeli" });
+    fetchMe.mockResolvedValue({ role: "worker", full_name: "Yoeli", id: 19 });
 
-    const infoDef = deferred<{ id: number; name: string; shifts: string[]; questions?: any[] }>();
-    const availDef = deferred<any>();
+    const ctxDef = deferred<{
+      worker_name: string;
+      sites: Array<{ id: number; name: string }>;
+      shifts: string[];
+      questions: unknown[];
+      max_shifts: number;
+      roles: string[];
+      availability: Record<string, string[]>;
+      answers: { general: Record<string, unknown>; perDay: Record<string, unknown> };
+    }>();
 
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/public/sites/worker-sites") {
-        return Promise.resolve([{ id: 7, name: "Site A" }]);
-      }
-      if (path === "/public/sites/7/info") return infoDef.promise;
-      if (String(path).startsWith("/public/sites/7/worker-availability?week_key=")) return availDef.promise;
+      if (String(path).startsWith("/public/sites/worker-context?week_key=")) return ctxDef.promise;
       throw new Error(`Unexpected apiFetch path: ${path}`);
     });
 
     render(<WorkerAvailabilityPage />);
 
-    // initial loading
     expect(screen.getByTestId("loading")).toBeInTheDocument();
 
-    // Wait until the component requested site info (means: worker-sites loaded and auto-select happened)
     await waitFor(() => {
-      const calls = (apiFetch as jest.Mock).mock.calls.map((c: any[]) => String(c[0]));
-      expect(calls.includes("/public/sites/7/info")).toBe(true);
+      const calls = (apiFetch as jest.Mock).mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(calls.some((p) => p.startsWith("/public/sites/worker-context?week_key="))).toBe(true);
     });
 
-    // still loading while info unresolved
     expect(screen.getByTestId("loading")).toBeInTheDocument();
 
-    // Resolve info first
     await act(async () => {
-      infoDef.resolve({ id: 7, name: "Site A", shifts: ["06-14"], questions: [] });
-    });
-
-    // Wait until the component requested worker availability from DB
-    await waitFor(() => {
-      const calls = (apiFetch as jest.Mock).mock.calls.map((c: any[]) => String(c[0]));
-      expect(calls.some((p) => p.startsWith("/public/sites/7/worker-availability?week_key="))).toBe(true);
-    });
-
-    // Still loading until availability resolves
-    expect(screen.getByTestId("loading")).toBeInTheDocument();
-
-    // Resolve availability
-    await act(async () => {
-      availDef.resolve({
-        id: 19,
-        name: "Yoeli",
+      ctxDef.resolve({
+        worker_name: "Yoeli",
+        sites: [{ id: 7, name: "Site A" }],
+        shifts: ["06-14"],
+        questions: [],
         max_shifts: 5,
         roles: [],
         availability: { sun: ["06-14"], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
@@ -114,9 +101,7 @@ describe("/worker/availability loading", () => {
       });
     });
 
-    // loading should be gone and the page should render
     expect(await screen.findByText("רישום זמינות", {}, { timeout: 10000 })).toBeInTheDocument();
     expect(screen.queryByTestId("loading")).not.toBeInTheDocument();
   });
 });
-

@@ -9,7 +9,12 @@
     "lint": "eslint",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:ci": "jest --ci"
+    "test:ci": "jest --ci",
+    "test:security:web": "jest --ci --testPathPattern=api\\.fetch\\.security",
+    "test:security:api": "cd ../../backend && python3 -m pytest tests/test_api_security.py tests/test_pwned_passwords.py -q",
+    "test:security": "npm run test:security:web && npm run test:security:api",
+    "load:local": "cd ../../backend && bash load/run-local.sh",
+    "load:smoke": "cd ../../backend && bash load/run-local.sh smoke"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

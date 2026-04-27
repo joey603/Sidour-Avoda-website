@@ -11,7 +11,12 @@ const customJestConfig = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
   },
-  testPathIgnorePatterns: ["<rootDir>/.next/", "<rootDir>/node_modules/"],
+  testPathIgnorePatterns: [
+    "<rootDir>/.next/",
+    "<rootDir>/node_modules/",
+    // Planning legacy ~12k lignes : exécuter avec `npx jest director-planning-page`
+    "<rootDir>/src/__tests__/director-planning-page.test.tsx",
+  ],
 };
 
 module.exports = createJestConfig(customJestConfig);

@@ -5,6 +5,8 @@ export type LinkedSitePlan = {
   alternatives?: Record<string, Record<string, string[][]>>[];
   pulls?: Record<string, unknown>;
   alternative_pulls?: Record<string, unknown>[];
+  /** Présent quand le plan a été enrichi côté client (comme la page planning). */
+  required_count?: number;
 };
 
 export type LinkedPlansMemory = {
@@ -57,5 +59,53 @@ export function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null
     };
   } catch {
     return null;
+  }
+}
+
+/** Efface le cache session des plannings multi-sites pour cette semaine (avant une nouvelle יצירת תכנון). */
+export function clearLinkedPlansFromMemory(start: Date): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = multiSiteMemoryKey(start);
+    sessionStorage.removeItem(key);
+    queueMicrotask(() => {
+      try {
+        window.dispatchEvent(new CustomEvent("linked-plans-memory-updated", { detail: { storageKey: key } }));
+      } catch {
+        /* ignore */
+      }
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+export function saveLinkedPlansToMemory(
+  start: Date,
+  plansBySite: Record<string, LinkedSitePlan>,
+  activeAltIndex = 0,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = multiSiteMemoryKey(start);
+    const payload: LinkedPlansMemory = {
+      activeAltIndex: Math.max(0, Number(activeAltIndex || 0)),
+      plansBySite: plansBySite || {},
+    };
+    const nextRaw = JSON.stringify(payload);
+    const prevRaw = sessionStorage.getItem(key);
+    if (prevRaw === nextRaw) return;
+    sessionStorage.setItem(key, nextRaw);
+    // Différer : un listener synchrone (ex. refreshFromMemory) pendant readSseStream peut enchaîner des setState
+    // et provoquer « Maximum update depth » si d’autres effets réagissent dans la même pile.
+    queueMicrotask(() => {
+      try {
+        window.dispatchEvent(new CustomEvent("linked-plans-memory-updated", { detail: { storageKey: key } }));
+      } catch {
+        /* ignore */
+      }
+    });
+  } catch {
+    /* ignore */
   }
 }

@@ -5,6 +5,7 @@ import asyncio
 from fastapi import Body, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 import re
 from datetime import datetime, timedelta
 from copy import deepcopy
@@ -271,6 +272,7 @@ def _save_site_week_plan(db: Session, site_id: int, week_iso: str, scope: str, d
     if row:
         row.data = data
         row.updated_at = now
+        flag_modified(row, "data")
     else:
         row = SiteWeekPlan(
             site_id=site_id,
@@ -453,6 +455,7 @@ def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
     cfg = dict(site.config or {})
     cfg["autoPlanningLastRun"] = summary
     site.config = cfg
+    flag_modified(site, "config")
 
 
 def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict, pulls_limit: int | None = None) -> dict:
@@ -1458,11 +1461,14 @@ def _run_auto_planning_for_director(
                 source,
                 pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
             )
+            # ידני : toujours טיוטת `auto` (visible dans le planning) — pas de promotion director/shared sans choix explicite.
+            save_mode = str(auto_save_mode or "manual").strip()
             target_scope = "auto"
-            if bool(summary.get("complete")) and auto_save_mode in ("director", "shared"):
-                target_scope = auto_save_mode
+            if bool(summary.get("complete")) and save_mode in ("director", "shared"):
+                target_scope = save_mode
             _save_site_week_plan(db, site.id, target_week_iso, target_scope, payload)
             _store_site_auto_planning_status(site, summary)
+            db.commit()
             logger.info(
                 "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
                 director_id,
@@ -1772,6 +1778,7 @@ def put_week_plan(
     if row:
         row.data = data or {}
         row.updated_at = now
+        flag_modified(row, "data")
     else:
         row = SiteWeekPlan(site_id=site_id, week_iso=wk, scope=sc, data=data or {}, updated_at=now)
         db.add(row)

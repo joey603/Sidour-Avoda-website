@@ -9,6 +9,9 @@ type PlanningWorkersTableProps = {
   /** Overlays rouges (écart grille vs זמינות) — vide sur planning v2 tant que pas de grille. */
   availabilityOverlays?: Record<string, Record<string, string[]>>;
   onRowClick?: (row: Row) => void;
+  workerNameDraggable?: boolean;
+  /** מצב ידני: עדכון שם העובד הנגרר להדגשת יעדים בגריד */
+  onWorkerNameDragPreview?: (workerName: string | null) => void;
 };
 
 export function PlanningWorkersTable({
@@ -16,6 +19,8 @@ export function PlanningWorkersTable({
   enabledRoleNames,
   availabilityOverlays = {},
   onRowClick,
+  workerNameDraggable = false,
+  onWorkerNameDragPreview,
 }: PlanningWorkersTableProps) {
   return (
     <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
@@ -50,9 +55,28 @@ export function PlanningWorkersTable({
               >
                 <td className="w-20 overflow-hidden px-1 py-1 text-center md:w-40 md:px-3 md:py-2">
                   <span
-                    className="block w-full truncate text-center text-[10px] md:text-sm"
+                    className={
+                      "block w-full truncate text-center text-[10px] md:text-sm " +
+                      (workerNameDraggable ? "cursor-grab touch-none active:cursor-grabbing" : "")
+                    }
                     dir={isRtlName(w.name) ? "rtl" : "ltr"}
                     title={w.name}
+                    draggable={workerNameDraggable}
+                    onDragStart={(e) => {
+                      if (!workerNameDraggable) return;
+                      e.stopPropagation();
+                      try {
+                        e.dataTransfer.setData("text/plain", w.name);
+                        e.dataTransfer.effectAllowed = "copy";
+                      } catch {
+                        /* ignore */
+                      }
+                      onWorkerNameDragPreview?.(String(w.name || "").trim() || null);
+                    }}
+                    onDragEnd={() => {
+                      if (!workerNameDraggable) return;
+                      onWorkerNameDragPreview?.(null);
+                    }}
                   >
                     {w.name}
                   </span>

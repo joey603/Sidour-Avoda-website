@@ -22,8 +22,8 @@ export type SiteSummary = {
 
 /** משיכה — structure minimale alignée sur le planning principal / backend. */
 export type PlanningV2PullEntry = {
-  before?: { name?: string };
-  after?: { name?: string };
+  before?: { name?: string; start?: string; end?: string };
+  after?: { name?: string; start?: string; end?: string };
 };
 
 export type PlanningV2PullsMap = Record<string, PlanningV2PullEntry>;

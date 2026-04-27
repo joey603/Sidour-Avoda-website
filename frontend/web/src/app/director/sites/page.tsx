@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import { AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY } from "@/lib/clear-sites-list-planning-for-week";
 import LoadingAnimation from "@/components/loading-animation";
 import TimePicker from "@/components/time-picker";
 import NumberPicker from "@/components/number-picker";
@@ -90,7 +91,8 @@ const AUTO_PLANNING_SAVE_MODE_OPTIONS = [
   {
     value: "manual",
     label: "ידני",
-    description: "ברירת מחדל. כל התכנונים נשמרים כטיוטה ומחכים ל-שמור או שמור ואשלח ידני.",
+    description:
+      "ברירת מחדל. התכנון נשמר כטיוטת auto בשרת (ניתן לפתוח ולראות במסך התכנון) — בלי שמירה אוטומטית למנהל או שליחה לעובדים.",
   },
   {
     value: "director",
@@ -112,7 +114,7 @@ function getErrorMessage(error: unknown): string {
 function getAutoPlanningResultLabel(mode: AutoPlanningConfig["auto_save_mode"] | undefined): string {
   if (mode === "director") return "תוכניות שנשמרו אוטומטית";
   if (mode === "shared") return "תוכניות שנשמרו ונשלחו אוטומטית";
-  return "טיוטות";
+  return "טיוטות auto נשמרו בשרת";
 }
 
 function getSiteAutoPlanningStatus(site: Site) {
@@ -155,6 +157,23 @@ function getWeekPlanStatusDisplay(site: Site, preserved: PreservedWeekPlanStats 
       required,
       pulls: preserved.pulls,
       complete,
+      showAssignmentsLine: true,
+    };
+  }
+  const last = site.config?.autoPlanningLastRun;
+  const weekKey = st?.week_iso || getNextWeekIsoSundayBased();
+  if (
+    last &&
+    last.week_iso &&
+    weekKey &&
+    String(last.week_iso) === String(weekKey) &&
+    last.error == null
+  ) {
+    return {
+      assigned: last.assigned_count ?? 0,
+      required: last.required_count ?? 0,
+      pulls: 0,
+      complete: !!last.complete,
       showAssignmentsLine: true,
     };
   }
@@ -304,7 +323,6 @@ function AutoPlanningFormSwitch(props: {
 
 export default function SitesList() {
   const router = useRouter();
-  const AUTO_WEEKLY_WORKER_CHANGES_KEY = "auto_weekly_worker_changes_v1";
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -386,7 +404,7 @@ export default function SitesList() {
   function syncAutoWeeklyWorkerChangesFromStorage() {
     if (typeof window === "undefined") return;
     try {
-      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_KEY);
+      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
       setAutoWeeklyWorkerChangesByWeek((parsed && typeof parsed === "object") ? parsed : {});
     } catch {
@@ -419,11 +437,11 @@ export default function SitesList() {
     const wk = String(weekIso || "").trim();
     if (!wk || typeof window === "undefined") return;
     try {
-      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_KEY);
+      const raw = localStorage.getItem(AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
       if (!parsed || typeof parsed !== "object" || !parsed[wk]) return;
       delete parsed[wk];
-      localStorage.setItem(AUTO_WEEKLY_WORKER_CHANGES_KEY, JSON.stringify(parsed));
+      localStorage.setItem(AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY, JSON.stringify(parsed));
       setAutoWeeklyWorkerChangesByWeek(parsed);
       window.dispatchEvent(new CustomEvent("auto-planning-worker-changes-updated"));
     } catch {}
@@ -1312,7 +1330,7 @@ export default function SitesList() {
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
-                                    router.push(`/director/planning/${s.id}`);
+                                    router.push(`/director/planning-v2/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
@@ -1386,7 +1404,7 @@ export default function SitesList() {
                           </div>
                         ) : (
                         <button
-                          onClick={() => router.push(`/director/planning/${s.id}`)}
+                          onClick={() => router.push(`/director/planning-v2/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
@@ -1551,7 +1569,7 @@ export default function SitesList() {
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
-                                    router.push(`/director/planning/${s.id}`);
+                                    router.push(`/director/planning-v2/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                                 >
@@ -1625,7 +1643,7 @@ export default function SitesList() {
                           </div>
                         ) : (
                         <button
-                          onClick={() => router.push(`/director/planning/${s.id}`)}
+                          onClick={() => router.push(`/director/planning-v2/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
@@ -1918,7 +1936,7 @@ export default function SitesList() {
                   />
                 </label>
                 <div className="text-xs text-zinc-500">
-                  שומר אוטומטית רק אם האתר מלא. אם נשארו חוסרים, התכנון נשאר ידני ברשימת האתרים.
+                  «ידני»: נשמר כטיוטת auto (פתיחה במסך התכנון) — בלי שמירה אוטומטית למנהל/עובדים. «שמור אוטומטית…» / «שמור ואשלח…»: אם האתר מלא, שמירה ישירה למנהל או לשיתוף.
                 </div>
               </div>
               <label className="flex w-full flex-col gap-1">
