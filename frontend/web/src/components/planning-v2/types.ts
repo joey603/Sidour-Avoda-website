@@ -12,6 +12,8 @@ export type PlanningWorker = {
   linkedSiteIds?: number[];
   linkedSiteNames?: string[];
   pendingApproval?: boolean;
+  createdAt?: number;
+  removedFromWeekIso?: string | null;
 };
 
 export type SiteSummary = {

@@ -5,6 +5,7 @@ import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import type { WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
+import { getWeekKeyISO } from "../lib/week";
 
 type ExistingWorkerEntry = {
   id: number;
@@ -15,6 +16,8 @@ type ExistingWorkerEntry = {
   maxShifts: number;
   roles: string[];
   availability: WorkerAvailability;
+  removedFromWeekIso?: string | null;
+  removedByPlanning?: boolean;
 };
 
 type GroupedExistingWorker = {
@@ -41,11 +44,12 @@ type ExistingWorkersPickerModalProps = {
   open: boolean;
   onClose: () => void;
   siteId: string;
+  weekStart: Date;
   onAdded: () => void;
 };
 
 /** Modale « הוספת עובד קיים » — même contenu que le planning director. */
-export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: ExistingWorkersPickerModalProps) {
+export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, onAdded }: ExistingWorkersPickerModalProps) {
   const [existingWorkersLoading, setExistingWorkersLoading] = useState(false);
   const [existingWorkerQuery, setExistingWorkerQuery] = useState("");
   const [existingWorkerAddingKey, setExistingWorkerAddingKey] = useState<string | null>(null);
@@ -84,6 +88,8 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: E
         maxShifts: Number(workerItem.max_shifts ?? workerItem.maxShifts ?? 5),
         roles: Array.isArray(workerItem.roles) ? (workerItem.roles as string[]) : [],
         availability: (workerItem.availability as WorkerAvailability) || { ...EMPTY_WORKER_AVAILABILITY },
+        removedFromWeekIso: (workerItem.removed_from_week_iso as string | null | undefined) ?? null,
+        removedByPlanning: Boolean(workerItem.removed_by_planning),
       }));
       setExistingWorkersCatalog(nextCatalog);
     } catch (e: unknown) {
@@ -142,7 +148,14 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: E
 
   const addExistingWorkerToSite = async (worker: GroupedExistingWorker) => {
     if (!worker.entries.length) return;
-    const alreadyOnSite = worker.entries.some((entry) => Number(entry.siteId) === Number(siteId));
+    const selectedWeekIso = getWeekKeyISO(weekStart);
+    const alreadyOnSite = worker.entries.some((entry) => {
+      if (Number(entry.siteId) !== Number(siteId)) return false;
+      const removedIso = String(entry.removedFromWeekIso || "").trim();
+      // Autoriser la réactivation si le worker est supprimé à partir de la semaine sélectionnée.
+      if (removedIso && selectedWeekIso >= removedIso) return false;
+      return true;
+    });
     if (alreadyOnSite) {
       toast.error("העובד כבר קיים באתר");
       return;
@@ -159,6 +172,7 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: E
           max_shifts: sourceEntry.maxShifts || 5,
           roles: Array.isArray(sourceEntry.roles) ? sourceEntry.roles : [],
           availability: sourceEntry.availability || {},
+          week_iso: getWeekKeyISO(weekStart),
         }),
       });
       onClose();
@@ -208,7 +222,11 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: E
           ) : (
             <div className="space-y-3">
               {filteredExistingWorkers.map((worker) => {
-                const alreadyOnSite = worker.entries.some((entry) => Number(entry.siteId) === Number(siteId));
+                const selectedWeekIso = getWeekKeyISO(weekStart);
+                const existingOnSiteEntry = worker.entries.find((entry) => Number(entry.siteId) === Number(siteId));
+                const removedIso = String(existingOnSiteEntry?.removedFromWeekIso || "").trim();
+                const canReactivateFromSelectedWeek = !!existingOnSiteEntry && !!removedIso && selectedWeekIso >= removedIso;
+                const alreadyOnSite = !!existingOnSiteEntry && !canReactivateFromSelectedWeek;
                 const isAdding = existingWorkerAddingKey === worker.key;
                 return (
                   <div
@@ -245,7 +263,13 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, onAdded }: E
                               : "bg-[#00A8E0] text-white hover:bg-[#0092c6]"
                           }`}
                         >
-                          {alreadyOnSite ? "כבר באתר" : isAdding ? "מוסיף..." : "הוסף"}
+                          {alreadyOnSite
+                            ? "כבר באתר"
+                            : isAdding
+                              ? "מוסיף..."
+                              : canReactivateFromSelectedWeek
+                                ? "החזר"
+                                : "הוסף"}
                         </button>
                       </div>
                     </div>

@@ -103,7 +103,7 @@ export function PlanningWorkersTable({
                     </span>
                   )}
                   {(w.linkedSiteIds?.length ?? 0) > 1 ? (
-                    <span className="mt-1 inline-block rounded-full border border-violet-300 bg-violet-50 px-2 py-0.5 text-[9px] text-violet-800 md:text-[10px] dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
+                    <span className="mt-1 inline-block rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[9px] text-sky-800 md:text-[10px] dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300">
                       מולטי אתרים
                     </span>
                   ) : null}

@@ -64,7 +64,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   } = usePlanningV2SiteWorkers(siteId);
 
   const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(siteId, weekStart);
-  const { linkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
+  const { linkedSites, reloadLinkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const weekPurgeSiteIds = useMemo(() => {
     const s = new Set<number>();
     const cur = Number(siteId);
@@ -144,6 +144,19 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const bump = () => setLinkedPlansMemoryTick((n) => n + 1);
     window.addEventListener("linked-plans-memory-updated", bump as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", bump as EventListener);
+  }, [linkedSites.length]);
+
+  const prevLinkedSitesLengthRef = useRef<number>(linkedSites.length);
+  useEffect(() => {
+    const prev = prevLinkedSitesLengthRef.current;
+    if (prev <= 1 && linkedSites.length > 1) {
+      setShowLinkedSitesRail(true);
+      queueMicrotask(() => setLinkedPlansMemoryTick((n) => n + 1));
+    }
+    if (prev > 1 && linkedSites.length <= 1) {
+      setShowLinkedSitesRail(false);
+    }
+    prevLinkedSitesLengthRef.current = linkedSites.length;
   }, [linkedSites.length]);
 
   // Fin de « session » onglet : fermeture / navigation pleine page — pas au démontage SPA
@@ -858,12 +871,232 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     void reloadWorkers();
     void reloadWeeklyAvailability();
     void reloadWeekPlan();
+    void reloadLinkedSites();
+    try {
+      window.dispatchEvent(new CustomEvent("auto-planning-worker-changes-updated"));
+    } catch {
+      /* ignore */
+    }
   };
 
   const handleSavePlan = async (publishToWorkers: boolean) => {
     await plan.savePlan(publishToWorkers);
     setEditingSaved(false);
   };
+  const hasMultiWorkersThisWeek = useMemo(
+    () => workers.some((w) => Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1),
+    [workers],
+  );
+  const hasLinkedSitesRail = linkedSites.length > 1 && hasMultiWorkersThisWeek;
+
+  const renderLinkedSitesRailContent = () => (
+    <>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            חלופה מסוננת{" "}
+            {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
+            /{Math.max(1, visibleAlternativeIndices.length)}
+          </span>
+        </div>
+      </div>
+      <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+        מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
+      </div>
+      <div className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
+        {linkedSitesRailData.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            אין אתרים מקושרים נוספים להצגה.
+          </div>
+        ) : (
+          linkedSitesRailData.map((siteBlock) => (
+            <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+              <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                    <span className="min-w-0 break-words">{siteBlock.siteName}</span>
+                    {siteBlock.siteDeleted ? (
+                      <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
+                        ארכיון
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-0.5 text-[10px] font-bold text-red-600 dark:text-red-400">
+                    חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigateToLinkedSiteFromRail(siteBlock.siteId)}
+                  className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  פתח אתר
+                </button>
+              </div>
+              <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+                <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
+                  עובדים רב-אתריים משובצים באתר זה
+                </div>
+                {siteBlock.workerCounts.length === 0 ? (
+                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                    אין שיבוצים רב-אתריים בחלופה זו.
+                  </div>
+                ) : (
+                  <div className="max-h-24 overflow-y-auto">
+                    <table className="w-full border-collapse text-[10px]">
+                      <thead>
+                        <tr className="border-b dark:border-zinc-800">
+                          <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">עובד</th>
+                          <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">שיבוצים</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {siteBlock.workerCounts.map((entry) => (
+                          <tr key={`${siteBlock.siteId}-${entry.workerName}`} className="border-b last:border-0 dark:border-zinc-800">
+                            <td className="px-1 py-1 text-zinc-700 dark:text-zinc-200">{entry.workerName}</td>
+                            <td className="px-1 py-1 text-center font-semibold text-zinc-700 dark:text-zinc-200">
+                              {entry.count}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+              {(() => {
+                const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];
+                const dayLabel: Record<string, string> = {
+                  sun: "א׳",
+                  sunday: "א׳",
+                  mon: "ב׳",
+                  monday: "ב׳",
+                  tue: "ג׳",
+                  tuesday: "ג׳",
+                  wed: "ד׳",
+                  wednesday: "ד׳",
+                  thu: "ה׳",
+                  thursday: "ה׳",
+                  fri: "ו׳",
+                  friday: "ו׳",
+                  sat: "ש׳",
+                  saturday: "ש׳",
+                };
+                const shiftOrder = ["morning", "noon", "night", "בוקר", "צהריים", "לילה"];
+
+                if (siteBlock.rows.length === 0) {
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse text-[11px]">
+                        <thead>
+                          <tr className="border-b dark:border-zinc-800">
+                            <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
+                            <th className="min-w-[10rem] px-1 py-1 text-center text-zinc-500 dark:text-zinc-400"> </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b dark:border-zinc-800">
+                            <td className="whitespace-nowrap px-1 py-2 align-middle text-zinc-400 dark:text-zinc-500">—</td>
+                            <td className="border border-dashed border-zinc-200 px-2 py-3 text-center text-[10px] leading-snug text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                              אין עובדים רב-אתריים משובצים בחלופה זו.
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                }
+
+                const days = [...new Set(siteBlock.rows.map((r) => String(r.dayKey || "")))]
+                  .sort((a, b) => {
+                    const ia = dayOrder.indexOf(a.toLowerCase());
+                    const ib = dayOrder.indexOf(b.toLowerCase());
+                    if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                    return a.localeCompare(b);
+                  });
+                const shifts = [...new Set(siteBlock.rows.map((r) => String(r.shiftName || "")))]
+                  .sort((a, b) => {
+                    const ia = shiftOrder.findIndex((x) => a.toLowerCase().includes(x.toLowerCase()));
+                    const ib = shiftOrder.findIndex((x) => b.toLowerCase().includes(x.toLowerCase()));
+                    if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                    return a.localeCompare(b);
+                  });
+                const cellMap = new Map<string, Array<{ stationLabel: string; workers: string[] }>>();
+                siteBlock.rows.forEach((r) => {
+                  const k = `${r.dayKey}||${r.shiftName}`;
+                  const current = cellMap.get(k) || [];
+                  cellMap.set(k, [...current, { stationLabel: r.stationLabel, workers: r.workers }]);
+                });
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-[11px]">
+                      <thead>
+                        <tr className="border-b dark:border-zinc-800">
+                          <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
+                          {days.map((d) => (
+                            <th key={`${siteBlock.siteId}-${d}`} className="px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
+                              {dayLabel[d.toLowerCase()] || d}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shifts.map((s) => (
+                          <tr key={`${siteBlock.siteId}-${s}`} className="border-b last:border-0 dark:border-zinc-800">
+                            <td className="whitespace-nowrap px-1 py-1 font-medium text-zinc-700 dark:text-zinc-200">{s}</td>
+                            {days.map((d) => {
+                              const k = `${d}||${s}`;
+                              const lines = cellMap.get(k) || [];
+                              return (
+                                <td key={`${siteBlock.siteId}-${d}-${s}`} className="align-top px-1 py-1">
+                                  {lines.length === 0 ? (
+                                    <span className="text-zinc-400 dark:text-zinc-500">—</span>
+                                  ) : (
+                                    <div className="space-y-0.5">
+                                      {lines.slice(0, 3).map((line, idx) => (
+                                        <div key={`${k}-${idx}`} className="rounded bg-zinc-50 px-1 py-0.5 dark:bg-zinc-900/50">
+                                          <div className="mb-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+                                            {line.stationLabel}
+                                          </div>
+                                          <div className="flex flex-wrap gap-1">
+                                            {line.workers.map((nm) => {
+                                              const col = workerNameChipColor(nm, workerColorMap);
+                                              return (
+                                                <span
+                                                  key={`${k}-${idx}-${nm}`}
+                                                  className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px]"
+                                                  style={{
+                                                    backgroundColor: col.bg,
+                                                    borderColor: col.border,
+                                                    color: col.text,
+                                                  }}
+                                                >
+                                                  {nm}
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+          ))
+        )}
+      </div>
+    </>
+  );
 
   return (
     <div
@@ -886,8 +1119,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             </Link>
           </div>
         ) : null}
+        <div className="relative">
         <PlanningV2MainPaper editingSaved={editingSaved} savedHighlight={savedHighlight}>
-          {linkedSites.length > 1 ? (
+          {hasLinkedSitesRail ? (
             <button
               type="button"
               onClick={() => {
@@ -899,7 +1133,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                   return next;
                 });
               }}
-              className="absolute -left-3 top-24 z-30 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800"
+              className="absolute -left-3 top-24 z-30 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 lg:hidden"
               aria-label={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
               title={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
             >
@@ -912,220 +1146,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               </svg>
             </button>
           ) : null}
-          {linkedSites.length > 1 ? (
+          {hasLinkedSitesRail ? (
             <aside
               className={
-                "absolute left-0 top-0 z-20 h-full w-[20rem] max-w-[85vw] rounded-l-2xl border-r border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur-sm transition-transform duration-300 dark:border-zinc-800 dark:bg-zinc-950/95 " +
-                (showLinkedSitesRail ? "translate-x-0" : "-translate-x-[102%]")
+                "absolute inset-y-0 left-0 z-20 h-full w-full rounded-l-2xl border-r border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur-sm transition-transform duration-300 dark:border-zinc-800 dark:bg-zinc-950/95 lg:w-[20rem] lg:max-w-[85vw] " +
+                (showLinkedSitesRail ? "translate-x-0" : "-translate-x-[102%]") +
+                " lg:hidden"
               }
             >
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">אתרים מקושרים</div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                    חלופה מסוננת{" "}
-                    {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
-                    /{Math.max(1, visibleAlternativeIndices.length)}
-                  </span>
-                  <span className="rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
-                    ללא סינון (AI): חלופה {Math.max(1, effectiveAlternativeIndex + 1)}/{Math.max(1, plan.alternativeCount)}
-                  </span>
-                </div>
-              </div>
-              <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-                מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
-              </div>
-              <div className="max-h-[calc(100%-3.5rem)] space-y-2 overflow-y-auto pr-1">
-                {linkedSitesRailData.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                    אין אתרים מקושרים נוספים להצגה.
-                  </div>
-                ) : (
-                  linkedSitesRailData.map((siteBlock) => (
-                    <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
-                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
-                            <span className="min-w-0 break-words">{siteBlock.siteName}</span>
-                            {siteBlock.siteDeleted ? (
-                              <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
-                                ארכיון
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-0.5 text-[10px] text-orange-600 dark:text-orange-400">
-                            חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => navigateToLinkedSiteFromRail(siteBlock.siteId)}
-                          className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                        >
-                          פתח אתר
-                        </button>
-                      </div>
-                      <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
-                        <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
-                          עובדים רב-אתריים משובצים באתר זה
-                        </div>
-                        {siteBlock.workerCounts.length === 0 ? (
-                          <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                            אין שיבוצים רב-אתריים בחלופה זו.
-                          </div>
-                        ) : (
-                          <div className="max-h-24 overflow-y-auto">
-                            <table className="w-full border-collapse text-[10px]">
-                              <thead>
-                                <tr className="border-b dark:border-zinc-800">
-                                  <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">עובד</th>
-                                  <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">שיבוצים</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {siteBlock.workerCounts.map((entry) => (
-                                  <tr key={`${siteBlock.siteId}-${entry.workerName}`} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="px-1 py-1 text-zinc-700 dark:text-zinc-200">{entry.workerName}</td>
-                                    <td className="px-1 py-1 text-center font-semibold text-zinc-700 dark:text-zinc-200">
-                                      {entry.count}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                      {(() => {
-                        const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];
-                        const dayLabel: Record<string, string> = {
-                          sun: "א׳",
-                          sunday: "א׳",
-                          mon: "ב׳",
-                          monday: "ב׳",
-                          tue: "ג׳",
-                          tuesday: "ג׳",
-                          wed: "ד׳",
-                          wednesday: "ד׳",
-                          thu: "ה׳",
-                          thursday: "ה׳",
-                          fri: "ו׳",
-                          friday: "ו׳",
-                          sat: "ש׳",
-                          saturday: "ש׳",
-                        };
-                        const shiftOrder = ["morning", "noon", "night", "בוקר", "צהריים", "לילה"];
-
-                        if (siteBlock.rows.length === 0) {
-                          return (
-                            <div className="overflow-x-auto">
-                              <table className="w-full border-collapse text-[11px]">
-                                <thead>
-                                  <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                                    <th className="min-w-[10rem] px-1 py-1 text-center text-zinc-500 dark:text-zinc-400"> </th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  <tr className="border-b dark:border-zinc-800">
-                                    <td className="whitespace-nowrap px-1 py-2 align-middle text-zinc-400 dark:text-zinc-500">—</td>
-                                    <td className="border border-dashed border-zinc-200 px-2 py-3 text-center text-[10px] leading-snug text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                                      אין עובדים רב-אתריים משובצים בחלופה זו.
-                                    </td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
-                          );
-                        }
-
-                        const days = [...new Set(siteBlock.rows.map((r) => String(r.dayKey || "")))]
-                          .sort((a, b) => {
-                            const ia = dayOrder.indexOf(a.toLowerCase());
-                            const ib = dayOrder.indexOf(b.toLowerCase());
-                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                            return a.localeCompare(b);
-                          });
-                        const shifts = [...new Set(siteBlock.rows.map((r) => String(r.shiftName || "")))]
-                          .sort((a, b) => {
-                            const ia = shiftOrder.findIndex((x) => a.toLowerCase().includes(x.toLowerCase()));
-                            const ib = shiftOrder.findIndex((x) => b.toLowerCase().includes(x.toLowerCase()));
-                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                            return a.localeCompare(b);
-                          });
-                        const cellMap = new Map<string, Array<{ stationLabel: string; workers: string[] }>>();
-                        siteBlock.rows.forEach((r) => {
-                          const k = `${r.dayKey}||${r.shiftName}`;
-                          const current = cellMap.get(k) || [];
-                          cellMap.set(k, [...current, { stationLabel: r.stationLabel, workers: r.workers }]);
-                        });
-                        return (
-                          <div className="overflow-x-auto">
-                            <table className="w-full border-collapse text-[11px]">
-                              <thead>
-                                <tr className="border-b dark:border-zinc-800">
-                                  <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                                  {days.map((d) => (
-                                    <th key={`${siteBlock.siteId}-${d}`} className="px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
-                                      {dayLabel[d.toLowerCase()] || d}
-                                    </th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {shifts.map((s) => (
-                                  <tr key={`${siteBlock.siteId}-${s}`} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="whitespace-nowrap px-1 py-1 font-medium text-zinc-700 dark:text-zinc-200">{s}</td>
-                                    {days.map((d) => {
-                                      const k = `${d}||${s}`;
-                                      const lines = cellMap.get(k) || [];
-                                      return (
-                                        <td key={`${siteBlock.siteId}-${d}-${s}`} className="align-top px-1 py-1">
-                                          {lines.length === 0 ? (
-                                            <span className="text-zinc-400 dark:text-zinc-500">—</span>
-                                          ) : (
-                                            <div className="space-y-0.5">
-                                              {lines.slice(0, 3).map((line, idx) => (
-                                                <div key={`${k}-${idx}`} className="rounded bg-zinc-50 px-1 py-0.5 dark:bg-zinc-900/50">
-                                                  <div className="mb-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                                                    {line.stationLabel}
-                                                  </div>
-                                                  <div className="flex flex-wrap gap-1">
-                                                    {line.workers.map((nm) => {
-                                                      const col = workerNameChipColor(nm, workerColorMap);
-                                                      return (
-                                                        <span
-                                                          key={`${k}-${idx}-${nm}`}
-                                                          className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px]"
-                                                          style={{
-                                                            backgroundColor: col.bg,
-                                                            borderColor: col.border,
-                                                            color: col.text,
-                                                          }}
-                                                        >
-                                                          {nm}
-                                                        </span>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </td>
-                                      );
-                                    })}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  ))
-                )}
-              </div>
+              {renderLinkedSitesRailContent()}
             </aside>
           ) : null}
           <PlanningV2SitePaperHeader
@@ -1205,6 +1234,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           />
           <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
         </PlanningV2MainPaper>
+        {hasLinkedSitesRail ? (
+          <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:block lg:max-h-[calc(100vh-2rem)] lg:w-[20rem] lg:overflow-y-auto lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
+            {renderLinkedSitesRailContent()}
+          </aside>
+        ) : null}
+        </div>
         <PlanningV2ActionBar
           siteId={siteId}
           weekStart={weekStart}

@@ -845,7 +845,11 @@ def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: in
     return sorted(visited)
 
 
-def _linked_site_cluster_map_for_director(db: Session, director_id: int) -> dict[int, list[int]]:
+def _linked_site_cluster_map_for_director(
+    db: Session,
+    director_id: int,
+    graph_week_iso: str | None = None,
+) -> dict[int, list[int]]:
     """Pour chaque site, liste triée des ids du même groupe multi-sites (≥2) ; [] si isolé."""
     site_ids_set = _active_director_site_ids(db, director_id)
     site_ids = sorted(site_ids_set)
@@ -855,7 +859,7 @@ def _linked_site_cluster_map_for_director(db: Session, director_id: int) -> dict
     rows = [
         row
         for row in rows
-        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, None)
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, graph_week_iso)
     ]
     key_to_sites: dict[str, set[int]] = {}
     for row in rows:
@@ -2452,7 +2456,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         existing = preferred_plan_by_site.get(row.site_id)
         if existing is None or _week_plan_rank(row) > _week_plan_rank(existing):
             preferred_plan_by_site[row.site_id] = row
-    linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
+    linked_by_site = _linked_site_cluster_map_for_director(db, user.id, next_week_iso)
     return [
         SiteOut(
             id=s.id,
@@ -2585,6 +2589,7 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
         worker_out = WorkerOut(
             id=r.id,
             site_id=r.site_id,
+            created_at=getattr(r, "created_at", None),
             name=r.name,
             max_shifts=r.max_shifts,
             roles=r.roles or [],
@@ -2774,6 +2779,7 @@ def list_workers(
         result.append(WorkerOut(
             id=r.id,
             site_id=r.site_id,
+            created_at=getattr(r, "created_at", None),
             name=r.name,
             max_shifts=r.max_shifts,
             roles=r.roles or [],
@@ -2827,6 +2833,92 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             logger.error(f"[create-worker] Site {site_id} not found or not owned by director {user.id}")
             raise HTTPException(status_code=404, detail="Site introuvable")
         logger.info(f"[create-worker] Creating worker '{payload.name}' for site {site_id} (director_id={user.id})")
+        effective_created_at_ms = _now_ms()
+        target_week_iso = _validate_week_iso(payload.week_iso) if payload.week_iso else None
+        if payload.week_iso:
+            wk = _validate_week_iso(payload.week_iso)
+            effective_created_at_ms = int(_week_start_date(datetime.fromisoformat(wk)).timestamp() * 1000)
+
+        def _copy_weekly_availability_from_linked_sites(target_row: SiteWorker) -> None:
+            if not target_week_iso:
+                return
+            try:
+                director_site_ids = sorted(_active_director_site_ids(db, user.id))
+                if len(director_site_ids) <= 1:
+                    return
+                all_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all()
+                target_key = _worker_identity_key(target_row)
+                if not target_key:
+                    return
+                linked_rows = [
+                    r
+                    for r in all_rows
+                    if _worker_identity_key(r) == target_key
+                    and not bool(getattr(r, "pending_approval", False))
+                    and _site_worker_visible_for_week(r, target_week_iso)
+                ]
+                if len(linked_rows) <= 1:
+                    return
+
+                source_site_ids = sorted({int(r.site_id) for r in linked_rows if int(r.site_id) != int(target_row.site_id)})
+                if not source_site_ids:
+                    return
+                weekly_rows = (
+                    db.query(SiteWeeklyAvailability)
+                    .filter(SiteWeeklyAvailability.site_id.in_(source_site_ids))
+                    .filter(SiteWeeklyAvailability.week_iso == target_week_iso)
+                    .all()
+                )
+                weekly_by_site = {int(r.site_id): r for r in weekly_rows}
+
+                source_weekly_availability: dict[str, list[str]] | None = None
+                for linked_row in linked_rows:
+                    linked_site_id = int(linked_row.site_id)
+                    if linked_site_id == int(target_row.site_id):
+                        continue
+                    weekly_row = weekly_by_site.get(linked_site_id)
+                    if not weekly_row:
+                        continue
+                    weekly_map = weekly_row.availability if isinstance(weekly_row.availability, dict) else {}
+                    candidate = weekly_map.get(str(linked_row.name))
+                    if isinstance(candidate, dict):
+                        source_weekly_availability = {
+                            str(day_key): [str(shift_name) for shift_name in shifts if str(shift_name or "").strip()]
+                            for day_key, shifts in candidate.items()
+                            if isinstance(shifts, list)
+                        }
+                        if source_weekly_availability:
+                            break
+                if not source_weekly_availability:
+                    return
+
+                target_weekly_row = (
+                    db.query(SiteWeeklyAvailability)
+                    .filter(SiteWeeklyAvailability.site_id == int(target_row.site_id))
+                    .filter(SiteWeeklyAvailability.week_iso == target_week_iso)
+                    .first()
+                )
+                now = _now_ms()
+                if target_weekly_row:
+                    data = dict(target_weekly_row.availability or {})
+                    data[str(target_row.name)] = source_weekly_availability
+                    target_weekly_row.availability = data
+                    target_weekly_row.updated_at = now
+                else:
+                    target_weekly_row = SiteWeeklyAvailability(
+                        site_id=int(target_row.site_id),
+                        week_iso=target_week_iso,
+                        availability={str(target_row.name): source_weekly_availability},
+                        updated_at=now,
+                    )
+                    db.add(target_weekly_row)
+            except Exception:
+                logger.warning(
+                    "[create-worker] weekly availability copy skipped for worker='%s' site=%s week=%s",
+                    getattr(target_row, "name", ""),
+                    getattr(target_row, "site_id", ""),
+                    target_week_iso,
+                )
         
         # Chercher le User correspondant par nom ET téléphone (si disponible)
         user_worker = None
@@ -2863,6 +2955,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             # Si le worker existe déjà, mettre à jour ses données et le lier au User si nécessaire
             logger.info(f"[create-worker] Worker '{payload.name}' already exists (id={existing.id}), updating")
             existing.removed_from_week_iso = None
+            existing.created_at = effective_created_at_ms
             existing.max_shifts = payload.max_shifts
             existing.roles = payload.roles or []
             # IMPORTANT: ne pas écraser les זמינות soumises par le travailleur.
@@ -2882,6 +2975,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                 linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == existing.user_id).all()
                 for linked_row in linked_rows:
                     linked_row.max_shifts = payload.max_shifts
+            _copy_weekly_availability_from_linked_sites(existing)
             db.commit()
             db.refresh(existing)
             # Récupérer le téléphone du User lié
@@ -2891,7 +2985,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                 phone = linked_user.phone if linked_user else None
             linked_site_ids = _linked_site_ids_for_worker(db, user.id, existing)
             linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
-            return WorkerOut(id=existing.id, site_id=existing.site_id, name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(existing, "pending_approval", False)))
+            return WorkerOut(id=existing.id, site_id=existing.site_id, created_at=getattr(existing, "created_at", None), name=existing.name, max_shifts=existing.max_shifts, roles=existing.roles or [], availability=existing.availability or {}, answers=existing.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(existing, "pending_approval", False)))
         
         # Créer un nouveau worker avec le lien au User si trouvé
         w = SiteWorker(
@@ -2904,6 +2998,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             answers=payload.answers or {},
             user_id=user_worker.id if user_worker else None,
             pending_approval=False,
+            created_at=effective_created_at_ms,
         )
         db.add(w)
         db.flush()
@@ -2911,13 +3006,14 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
             for linked_row in linked_rows:
                 linked_row.max_shifts = payload.max_shifts
+        _copy_weekly_availability_from_linked_sites(w)
         db.commit()
         db.refresh(w)
         logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
         phone = user_worker.phone if user_worker else None
         linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
         linked_site_name_by_id = {int(s.id): s.name for s in db.query(Site).filter(Site.director_id == user.id).all()}
-        return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
+        return WorkerOut(id=w.id, site_id=w.site_id, created_at=getattr(w, "created_at", None), name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
     except HTTPException:
         raise
     except Exception as e:
@@ -3084,7 +3180,7 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         int(s.id): s.name
         for s in db.query(Site).filter(Site.director_id == user.id).all()
     }
-    return WorkerOut(id=w.id, site_id=w.site_id, name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
+    return WorkerOut(id=w.id, site_id=w.site_id, created_at=getattr(w, "created_at", None), name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
 
 
 @router.post("/{site_id}/workers/{worker_id}/approve-invite", response_model=WorkerOut)
@@ -3109,6 +3205,7 @@ def approve_pending_worker(site_id: int, worker_id: int, user: User = Depends(re
     return WorkerOut(
         id=w.id,
         site_id=w.site_id,
+        created_at=getattr(w, "created_at", None),
         name=w.name,
         max_shifts=w.max_shifts,
         roles=w.roles or [],

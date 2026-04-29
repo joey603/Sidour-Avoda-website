@@ -27,7 +27,26 @@ function mapApiWorker(w: Record<string, unknown>): PlanningWorker {
     linkedSiteIds: Array.isArray(w.linked_site_ids) ? (w.linked_site_ids as number[]) : [],
     linkedSiteNames: Array.isArray(w.linked_site_names) ? (w.linked_site_names as string[]) : [],
     pendingApproval: !!(w.pending_approval ?? w.pendingApproval),
+    createdAt: Number(w.created_at ?? w.createdAt ?? 0) || 0,
+    removedFromWeekIso: (w.removed_from_week_iso as string | null | undefined) ?? null,
   };
+}
+
+function isWorkerVisibleForSelectedWeek(worker: PlanningWorker, weekStart: Date): boolean {
+  const weekIso = getWeekKeyISO(weekStart);
+  const createdAt = Number(worker.createdAt || 0);
+  if (Number.isFinite(createdAt) && createdAt > 0) {
+    const createdDate = new Date(createdAt);
+    if (!Number.isNaN(createdDate.getTime())) {
+      const createdWeek = new Date(createdDate);
+      createdWeek.setDate(createdWeek.getDate() - createdWeek.getDay());
+      createdWeek.setHours(0, 0, 0, 0);
+      if (getWeekKeyISO(createdWeek) > weekIso) return false;
+    }
+  }
+  const removedIso = String(worker.removedFromWeekIso || "").trim();
+  if (removedIso && weekIso >= removedIso) return false;
+  return true;
 }
 
 export function usePlanningV2SiteWorkers(siteId: string) {
@@ -94,7 +113,8 @@ export function usePlanningV2SiteWorkers(siteId: string) {
         },
       );
       if (req !== loadReq.current) return;
-      setWorkers((list || []).map((row) => mapApiWorker(row)));
+      const mapped = (list || []).map((row) => mapApiWorker(row));
+      setWorkers(mapped.filter((w) => isWorkerVisibleForSelectedWeek(w, weekStart)));
     } catch (e: unknown) {
       if (req !== loadReq.current) return;
       const msg = e instanceof Error ? e.message : "נסה שוב מאוחר יותר.";

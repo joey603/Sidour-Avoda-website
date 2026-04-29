@@ -165,7 +165,7 @@ export function PlanningV2ActionBar({
     [],
   );
 
-  const hasAlternatives = alternativeCount > 1;
+  const hasAlternatives = alternativeCount >= 1;
   const altCurrent = Math.max(0, Math.min(Math.max(0, selectedAlternativeIndex), Math.max(0, alternativeCount - 1)));
   const canAltPrev = hasAlternatives && altCurrent > 0;
   const canAltNext = hasAlternatives && altCurrent < alternativeCount - 1;

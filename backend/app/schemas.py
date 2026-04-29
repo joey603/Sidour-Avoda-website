@@ -125,7 +125,7 @@ class WorkerBase(BaseModel):
 
 
 class WorkerCreate(WorkerBase):
-    pass
+    week_iso: str | None = None
 
 
 class WorkerUpdate(BaseModel):
@@ -143,6 +143,7 @@ class WorkerUpdate(BaseModel):
 class WorkerOut(WorkerBase):
     id: int
     site_id: int
+    created_at: int | None = None
     linked_site_ids: list[int] = []
     linked_site_names: list[str] = []
     pending_approval: bool = False

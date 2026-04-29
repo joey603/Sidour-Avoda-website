@@ -229,6 +229,7 @@ export function usePlanningV2WorkerModals(
             max_shifts: 5,
             roles: [] as string[],
             availability: {},
+            week_iso: getWeekKeyISO(weekStart),
           }),
         });
 
@@ -364,6 +365,7 @@ export function usePlanningV2WorkerModals(
           max_shifts: newWorkerMax,
           roles: newWorkerRoles,
           availability: newWorkerAvailability,
+          week_iso: getWeekKeyISO(weekStart),
         }),
       });
       void result;
@@ -433,6 +435,7 @@ export function usePlanningV2WorkerModals(
       open: existingPickerOpen,
       onClose: () => setExistingPickerOpen(false),
       siteId,
+      weekStart,
       onAdded: () => void reloadWorkers(),
     },
     workerEditModalProps: {
