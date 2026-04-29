@@ -142,13 +142,41 @@ export default function WorkerDetailsPage() {
       const start = new Date(weekStart);
       const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 
+      type WeekPlanPullEntry = {
+        before: { name: string; start: string; end: string };
+        after: { name: string; start: string; end: string };
+      };
+
+      function normalizeWeekPlanPulls(rawPulls: unknown): Record<string, WeekPlanPullEntry> | undefined {
+        if (!rawPulls || typeof rawPulls !== "object") return undefined;
+        const out: Record<string, WeekPlanPullEntry> = {};
+        for (const [key, value] of Object.entries(rawPulls as Record<string, unknown>)) {
+          if (!value || typeof value !== "object") continue;
+          const entry = value as Record<string, unknown>;
+          const before = entry.before as Record<string, unknown> | undefined;
+          const after = entry.after as Record<string, unknown> | undefined;
+          const beforeName = String(before?.name || "").trim();
+          const beforeStart = String(before?.start || "").trim();
+          const beforeEnd = String(before?.end || "").trim();
+          const afterName = String(after?.name || "").trim();
+          const afterStart = String(after?.start || "").trim();
+          const afterEnd = String(after?.end || "").trim();
+          if (!beforeName || !beforeStart || !beforeEnd || !afterName || !afterStart || !afterEnd) continue;
+          out[key] = {
+            before: { name: beforeName, start: beforeStart, end: beforeEnd },
+            after: { name: afterName, start: afterStart, end: afterEnd },
+          };
+        }
+        return out;
+      }
+
       function weekPlanFromApiPayload(raw: Record<string, unknown> | null | undefined) {
         if (!raw || typeof raw !== "object" || raw.assignments == null) return null;
         return {
           assignments: raw.assignments as Record<string, Record<string, string[][]>>,
           isManual: !!raw.isManual,
           workers: Array.isArray(raw.workers) ? raw.workers : undefined,
-          pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : undefined,
+          pulls: normalizeWeekPlanPulls(raw.pulls),
         };
       }
 
@@ -213,7 +241,7 @@ export default function WorkerDetailsPage() {
                 assignments: parsed.assignments,
                 isManual: !!parsed.isManual,
                 workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-                pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+                pulls: normalizeWeekPlanPulls(parsed.pulls),
               });
               return;
             }

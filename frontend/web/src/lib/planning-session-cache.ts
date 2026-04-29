@@ -18,6 +18,18 @@ const SESSION_PREFIXES = [
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
 
 export const PLANNING_WEEKLY_PURGE_LAST_BOUNDARY_MS_KEY = "planning_weekly_purge_last_sat_end_ms";
+const AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY = "auto_weekly_worker_changes_v1";
+
+const PLANNING_LOCALSTORAGE_PREFIXES_TO_CLEAR_ON_LOGOUT = [
+  "avail_",
+  "planning_v2_auto_pulls_limit_week_",
+] as const;
+
+const PLANNING_LOCALSTORAGE_PREFIXES_TO_KEEP_ON_LOGOUT = [
+  "plan_",
+  "plan_director_",
+  "plan_shared_",
+] as const;
 
 /** Dans le navigateur, `setInterval` renvoie un `number` ; éviter `NodeJS.Timeout` du typage Node. */
 let weeklyPurgeIntervalId: number | null = null;
@@ -44,6 +56,9 @@ function clearMultiSitePlanningSessionStorageCore(): void {
         /* ignore */
       }
     });
+    if (keysToRemove.length > 0) {
+      console.debug("[planning-v2][cache][logout/session] removed sessionStorage keys:", keysToRemove);
+    }
     queueMicrotask(() => {
       try {
         window.dispatchEvent(new CustomEvent("linked-plans-memory-updated", { detail: { reason: "session-cache-cleared" } }));
@@ -68,6 +83,41 @@ export function clearAllPlanningSessionCaches(): void {
  */
 export function clearPlanningCreatPlanSessionStorageOnLogout(): void {
   clearMultiSitePlanningSessionStorageCore();
+}
+
+/**
+ * Déconnexion: purge ciblée des clés localStorage liées au planning.
+ * Conserve explicitement les données auto/weekly (`auto_weekly_worker_changes_v1` + plans hebdo `plan_*`),
+ * qui doivent être invalidées au prochain יצירת תכנון.
+ */
+export function clearPlanningLocalStorageOnLogout(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (key === AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY) continue;
+      if (PLANNING_LOCALSTORAGE_PREFIXES_TO_KEEP_ON_LOGOUT.some((prefix) => key.startsWith(prefix))) {
+        continue;
+      }
+      if (PLANNING_LOCALSTORAGE_PREFIXES_TO_CLEAR_ON_LOGOUT.some((prefix) => key.startsWith(prefix))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* ignore */
+      }
+    });
+    if (keysToRemove.length > 0) {
+      console.debug("[planning-v2][cache][logout/local] removed localStorage keys:", keysToRemove);
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 /**

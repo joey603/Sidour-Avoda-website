@@ -40,7 +40,7 @@ const SITE_BADGE_COLORS = [
   "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
   "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300",
   "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
-  "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-950/40 dark:text-rose-300",
+  "border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300",
   "border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-300",
 ];
 
@@ -429,7 +429,7 @@ export default function WorkersList() {
                                   entry.site_deleted
                                     ? "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                                     : entry.removed_by_planning
-                                      ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                                      ? "border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
                                     : getSiteBadgeClassName(entry.site_id)
                                 }`}
                               >
@@ -439,7 +439,7 @@ export default function WorkersList() {
                                     ארכיון
                                   </span>
                                 ) : entry.removed_by_planning ? (
-                                  <span className="rounded bg-orange-200 px-1 py-px text-[10px] font-semibold text-orange-900 dark:bg-orange-900/60 dark:text-orange-200">
+                                  <span className="rounded bg-red-200 px-1 py-px text-[10px] font-semibold text-red-900 dark:bg-red-900/60 dark:text-red-200">
                                     הוסר מהאתר
                                   </span>
                                 ) : null}
@@ -489,7 +489,7 @@ export default function WorkersList() {
                                 entry.site_deleted
                                   ? "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                                   : entry.removed_by_planning
-                                    ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                                    ? "border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300"
                                   : getSiteBadgeClassName(entry.site_id)
                               }`}
                             >
@@ -499,7 +499,7 @@ export default function WorkersList() {
                                   ארכיון
                                 </span>
                               ) : entry.removed_by_planning ? (
-                                <span className="rounded bg-orange-200 px-1 py-px text-[10px] font-semibold text-orange-900 dark:bg-orange-900/60 dark:text-orange-200">
+                                <span className="rounded bg-red-200 px-1 py-px text-[10px] font-semibold text-red-900 dark:bg-red-900/60 dark:text-red-200">
                                   הוסר מהאתר
                                 </span>
                               ) : null}

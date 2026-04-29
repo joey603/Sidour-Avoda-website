@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { fetchMe, clearToken, getToken, isTokenExpired } from "@/lib/auth";
-import { clearPlanningCreatPlanSessionStorageOnLogout, ensurePlanningWeeklyCachePurgeScheduled } from "@/lib/planning-session-cache";
+import {
+  clearPlanningCreatPlanSessionStorageOnLogout,
+  clearPlanningLocalStorageOnLogout,
+  ensurePlanningWeeklyCachePurgeScheduled,
+} from "@/lib/planning-session-cache";
 // Remplace Image optimisé pour éviter erreurs avec PNG locaux non valides
 import Link from "next/link";
 
@@ -352,6 +356,7 @@ export default function TopNav() {
               type="button"
               onClick={() => {
                 clearPlanningCreatPlanSessionStorageOnLogout();
+                clearPlanningLocalStorageOnLogout();
                 clearToken();
                 setUserRole(null);
                 router.replace(userRole === "director" ? "/login/director" : "/login/worker");
@@ -415,6 +420,7 @@ export default function TopNav() {
                 type="button"
                 onClick={() => {
                   clearPlanningCreatPlanSessionStorageOnLogout();
+                  clearPlanningLocalStorageOnLogout();
                   clearToken();
                   setUserRole(null);
                   setMobileMenuOpen(false);

@@ -458,6 +458,35 @@ def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
     flag_modified(site, "config")
 
 
+def _clear_auto_planning_cache_for_director(
+    db: Session,
+    director_id: int,
+    target_week_iso: str,
+) -> None:
+    """Désactivation du תכנון אוטומטי: purge cache auto hebdo (semaine cible suivante)."""
+    sites = db.query(Site).filter(Site.director_id == director_id).all()
+    if not sites:
+        return
+    site_ids = [int(s.id) for s in sites if getattr(s, "id", None)]
+    if site_ids:
+        auto_rows = (
+            db.query(SiteWeekPlan)
+            .filter(SiteWeekPlan.site_id.in_(site_ids))
+            .filter(SiteWeekPlan.week_iso == target_week_iso)
+            .filter(SiteWeekPlan.scope == "auto")
+            .all()
+        )
+        for row in auto_rows:
+            db.delete(row)
+    for site in sites:
+        cfg = dict(site.config or {})
+        if "autoPlanningLastRun" not in cfg:
+            continue
+        cfg.pop("autoPlanningLastRun", None)
+        site.config = cfg
+        flag_modified(site, "config")
+
+
 def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict, pulls_limit: int | None = None) -> dict:
     from .ai_solver import build_capacities_from_config
 
@@ -1728,6 +1757,7 @@ def put_auto_planning_config(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
+    previous_enabled: bool | None = None
     row = (
         db.query(DirectorAutoPlanningConfig)
         .filter(DirectorAutoPlanningConfig.director_id == user.id)
@@ -1749,6 +1779,7 @@ def put_auto_planning_config(
         )
         db.add(row)
     else:
+        previous_enabled = bool(getattr(row, "enabled", False))
         row.enabled = payload.enabled
         row.day_of_week = payload.day_of_week
         row.hour = payload.hour
@@ -1761,6 +1792,9 @@ def put_auto_planning_config(
     # Toute modification de créneau redéfinit le prochain déclenchement planifié.
     row.last_run_week_iso = None
     row.last_run_at = None
+    if (previous_enabled is True) and (payload.enabled is False):
+        target_week_iso = _next_week_iso(datetime.now())
+        _clear_auto_planning_cache_for_director(db, int(user.id), target_week_iso)
     db.commit()
     db.refresh(row)
     return _serialize_auto_planning_config(row)
