@@ -790,10 +790,14 @@ def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
 def _worker_identity_key(row: SiteWorker) -> str:
     if getattr(row, "user_id", None):
         return f"user:{int(row.user_id)}"
-    phone = str(getattr(row, "phone", "") or "").strip()
+    # Keep identity stable across sites even when phone/name formatting differs.
+    phone_raw = str(getattr(row, "phone", "") or "")
+    phone = "".join(ch for ch in phone_raw if ch.isdigit() or ch == "+").strip()
     if phone:
         return f"phone:{phone}"
-    return f"name:{_norm_name_local(getattr(row, 'name', ''))}"
+    name_raw = _norm_name_local(getattr(row, "name", ""))
+    name = re.sub(r"\s+", " ", str(name_raw or "").strip()).lower()
+    return f"name:{name}"
 
 
 def _active_director_site_ids(db: Session, director_id: int) -> set[int]:
@@ -1235,7 +1239,7 @@ def _generate_multi_site_memory_plans(
     result = solve_schedule(
         context["combined_config"],
         context["combined_workers"],
-        time_limit_seconds=25,
+        time_limit_seconds=45,
         max_nights_per_worker=3,
         num_alternatives=num_alternatives,
         fixed_assignments=context["combined_fixed"],
@@ -1589,6 +1593,9 @@ def _run_auto_planning_for_director(
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     errors: list[str] = []
     success_count = 0
+    sites_by_id: dict[int, Site] = {int(site.id): site for site in sites}
+    cluster_map = _linked_site_cluster_map_for_director(db, director_id)
+    processed_site_ids: set[int] = set()
     logger.info(
         "[AUTO-PLANNING] run start director_id=%s source=%s target_week=%s sites=%s",
         director_id,
@@ -1596,7 +1603,97 @@ def _run_auto_planning_for_director(
         target_week_iso,
         len(sites),
     )
+
+    def _persist_generated_payload(site: Site, payload: dict) -> None:
+        nonlocal success_count
+        summary = _summarize_auto_planning_result(
+            site,
+            payload.get("assignments"),
+            target_week_iso,
+            source,
+            pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
+        )
+        # ידני : toujours טיוטת `auto` (visible dans le planning) — pas de promotion director/shared sans choix explicite.
+        save_mode = str(auto_save_mode or "manual").strip()
+        target_scope = "auto"
+        if bool(summary.get("complete")) and save_mode in ("director", "shared"):
+            target_scope = save_mode
+        _save_site_week_plan(db, int(site.id), target_week_iso, target_scope, payload)
+        _store_site_auto_planning_status(site, summary)
+        success_count += 1
+
     for site in sites:
+        site_id_int = int(site.id)
+        if site_id_int in processed_site_ids:
+            continue
+        linked_ids = [int(x) for x in (cluster_map.get(site_id_int) or []) if int(x) in sites_by_id]
+        # Multi-sites: une seule ריצה solver par groupe lié, puis split des plans par site.
+        if len(linked_ids) > 1:
+            root_site_id = min(linked_ids)
+            try:
+                logger.info(
+                    "[AUTO-PLANNING] multi-site group start director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                    director_id,
+                    root_site_id,
+                    len(linked_ids),
+                    target_week_iso,
+                    source,
+                )
+                generated = _generate_multi_site_memory_plans(
+                    db,
+                    director_id,
+                    root_site_id,
+                    target_week_iso,
+                    num_alternatives=20 if auto_pulls_enabled else 1,
+                )
+                site_plans = generated.get("site_plans") if isinstance(generated, dict) else {}
+                if not isinstance(site_plans, dict):
+                    site_plans = {}
+                if auto_pulls_enabled:
+                    site_plans = _apply_auto_pulls_to_site_plans(
+                        db,
+                        {sid: s for sid, s in sites_by_id.items() if sid in linked_ids},
+                        site_plans,
+                        pulls_limit=pulls_limit,
+                        pulls_limits_by_site=pulls_limits_by_site,
+                    )
+                for linked_sid in linked_ids:
+                    linked_site = sites_by_id.get(linked_sid)
+                    if not linked_site:
+                        continue
+                    site_payload = site_plans.get(str(linked_sid)) or site_plans.get(linked_sid)
+                    if not isinstance(site_payload, dict):
+                        raise RuntimeError(f"missing generated plan for linked site {linked_sid}")
+                    _persist_generated_payload(linked_site, site_payload)
+                    processed_site_ids.add(linked_sid)
+                db.commit()
+                logger.info(
+                    "[AUTO-PLANNING] multi-site group success director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                    director_id,
+                    root_site_id,
+                    len(linked_ids),
+                    target_week_iso,
+                    source,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[AUTO-PLANNING] multi-site group failed director_id=%s root_site_id=%s",
+                    director_id,
+                    root_site_id,
+                )
+                for linked_sid in linked_ids:
+                    linked_site = sites_by_id.get(linked_sid)
+                    if not linked_site:
+                        continue
+                    _store_site_auto_planning_status(
+                        linked_site,
+                        _summarize_auto_planning_result(linked_site, None, target_week_iso, source, str(exc)),
+                    )
+                    processed_site_ids.add(linked_sid)
+                db.commit()
+                errors.append(f"multi-site group {root_site_id}: {exc}")
+            continue
+
         try:
             logger.info(
                 "[AUTO-PLANNING] site start director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
@@ -1614,20 +1711,7 @@ def _run_auto_planning_for_director(
                 auto_pulls_enabled=auto_pulls_enabled,
                 pulls_limit=site_pulls_limit,
             )
-            summary = _summarize_auto_planning_result(
-                site,
-                payload.get("assignments"),
-                target_week_iso,
-                source,
-                pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
-            )
-            # ידני : toujours טיוטת `auto` (visible dans le planning) — pas de promotion director/shared sans choix explicite.
-            save_mode = str(auto_save_mode or "manual").strip()
-            target_scope = "auto"
-            if bool(summary.get("complete")) and save_mode in ("director", "shared"):
-                target_scope = save_mode
-            _save_site_week_plan(db, site.id, target_week_iso, target_scope, payload)
-            _store_site_auto_planning_status(site, summary)
+            _persist_generated_payload(site, payload)
             db.commit()
             logger.info(
                 "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
@@ -1637,13 +1721,15 @@ def _run_auto_planning_for_director(
                 target_week_iso,
                 source,
             )
-            success_count += 1
+            processed_site_ids.add(site_id_int)
         except Exception as exc:
             logger.exception("[AUTO-PLANNING] Failed for director=%s site=%s", director_id, site.id)
             _store_site_auto_planning_status(
                 site,
                 _summarize_auto_planning_result(site, None, target_week_iso, source, str(exc)),
             )
+            processed_site_ids.add(site_id_int)
+            db.commit()
             errors.append(f"{site.name}: {exc}")
     logger.info(
         "[AUTO-PLANNING] run end director_id=%s source=%s target_week=%s success_sites=%s errors=%s",
@@ -2016,7 +2102,7 @@ def delete_week_plan(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
-    _director_site_or_404(db, site_id, user.id)
+    site = _director_site_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     sc = (scope or "director").strip()
     if sc not in ("auto", "director", "shared"):
@@ -2028,6 +2114,13 @@ def delete_week_plan(
         .filter(SiteWeekPlan.scope == sc)
         .first()
     )
+    if sc == "auto":
+        cfg = dict(site.config or {})
+        last_run = cfg.get("autoPlanningLastRun")
+        if isinstance(last_run, dict) and str(last_run.get("week_iso") or "").strip() == wk:
+            cfg.pop("autoPlanningLastRun", None)
+            site.config = cfg
+            flag_modified(site, "config")
     if row:
         db.delete(row)
         db.commit()
@@ -3279,9 +3372,9 @@ async def ai_generate_linked_planning_stream(
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
 
-    eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
+    eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 45))
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
-    eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
+    eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 1200))
     if payload and payload.auto_pulls_enabled:
         eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None

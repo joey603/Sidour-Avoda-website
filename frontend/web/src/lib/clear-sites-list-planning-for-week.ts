@@ -11,6 +11,37 @@ function normalizeSiteIds(siteIds: number[]): number[] {
   return [...new Set(siteIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))];
 }
 
+export function clearPlanningV2MultiSiteFilterKeysForWeek(weekIso: string): void {
+  const wk = String(weekIso || "").trim();
+  if (!wk || typeof window === "undefined") return;
+  try {
+    const keys = Object.keys(localStorage || {});
+    const prefixes = [
+      `planning_v2_multisite_assignment_filters_${wk}`,
+      `planning_v2_multisite_assignment_filters_by_site_${wk}`,
+      `planning_v2_multisite_alternative_filters_${wk}`,
+    ];
+    const removed: string[] = [];
+    keys.forEach((k) => {
+      if (!prefixes.some((p) => k.startsWith(p))) return;
+      try {
+        localStorage.removeItem(k);
+        removed.push(k);
+      } catch {
+        /* ignore */
+      }
+    });
+    if (removed.length > 0) {
+      console.debug("[planning-v2][cache][generate] removed multisite filter keys:", {
+        weekIso: wk,
+        keys: removed,
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export function clearAutoWeeklyWorkerChangesLocalStorageForWeek(weekIso: string): void {
   const wk = String(weekIso || "").trim();
   if (!wk || typeof window === "undefined") return;
@@ -101,6 +132,7 @@ export async function clearSitesListPlanningBeforePlanningCreat(
     siteIds: normalizeSiteIds(siteIds),
   });
   clearAutoWeeklyWorkerChangesLocalStorageForWeek(weekIso);
+  clearPlanningV2MultiSiteFilterKeysForWeek(weekIso);
   clearWeeklyPlanLocalStorageKeysForWeekAndSites(weekIso, siteIds);
   await deleteAutoScopeWeekPlansForSites(weekIso, siteIds);
 }

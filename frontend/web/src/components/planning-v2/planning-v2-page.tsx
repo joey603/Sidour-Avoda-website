@@ -747,6 +747,17 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     return visibleAlternativeIndices.indexOf(plan.selectedAlternativeIndex);
   }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
 
+  /** Alternative réellement affichée après filtres (fallback robuste si l’index courant sort du sous-ensemble). */
+  const effectiveAlternativeIndex = useMemo(() => {
+    if (visibleAlternativeIndices.length <= 0) {
+      return Math.max(0, plan.selectedAlternativeIndex);
+    }
+    if (visibleAlternativeIndices.includes(plan.selectedAlternativeIndex)) {
+      return plan.selectedAlternativeIndex;
+    }
+    return visibleAlternativeIndices[0] ?? 0;
+  }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
+
   const linkedSitesRailData = useMemo(() => {
     if (linkedSites.length <= 1) return [];
     const currentSiteIdNum = Number(siteId);
@@ -773,12 +784,18 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const plansBySite =
       mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
 
-    const rowsForSite = (sid: number): Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }> => {
-      if (multiNames.size === 0) return [];
+    const rowsForSite = (
+      sid: number,
+    ): {
+      rows: Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }>;
+      workerCounts: Array<{ workerName: string; count: number }>;
+    } => {
+      if (multiNames.size === 0) return { rows: [], workerCounts: [] };
       const sitePlan = plansBySite[String(sid)] as LinkedSitePlan | undefined;
-      if (!sitePlan) return [];
-      const asg = resolveAssignmentsForAlternative(sitePlan, plan.selectedAlternativeIndex) || {};
+      if (!sitePlan) return { rows: [], workerCounts: [] };
+      const asg = resolveAssignmentsForAlternative(sitePlan, effectiveAlternativeIndex) || {};
       const rows: Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }> = [];
+      const workerCountsMap = new Map<string, number>();
       for (const [dayKey, shiftsMap] of Object.entries(asg)) {
         if (!shiftsMap || typeof shiftsMap !== "object") continue;
         for (const [shiftName, perStation] of Object.entries(shiftsMap)) {
@@ -789,6 +806,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               .map((n) => String(n || "").trim())
               .filter((n) => n && multiNames.has(n));
             if (matched.length === 0) return;
+            matched.forEach((nm) => workerCountsMap.set(nm, (workerCountsMap.get(nm) || 0) + 1));
             rows.push({
               dayKey,
               shiftName,
@@ -798,18 +816,28 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           });
         }
       }
-      return rows;
+      const workerCounts = Array.from(workerCountsMap.entries())
+        .map(([workerName, count]) => ({ workerName, count }))
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          return a.workerName.localeCompare(b.workerName, "he");
+        });
+      return { rows, workerCounts };
     };
 
     const archivedById = new Map<number, boolean>();
     linkedSites.forEach((ls) => archivedById.set(Number(ls.id), !!ls.site_deleted));
 
-    const out = otherSiteIds.map((sid) => ({
-      siteId: sid,
-      siteName: linkedById.get(sid) || `אתר ${sid}`,
-      siteDeleted: archivedById.get(sid) === true,
-      rows: rowsForSite(sid),
-    }));
+    const out = otherSiteIds.map((sid) => {
+      const siteRows = rowsForSite(sid);
+      return {
+        siteId: sid,
+        siteName: linkedById.get(sid) || `אתר ${sid}`,
+        siteDeleted: archivedById.get(sid) === true,
+        rows: siteRows.rows,
+        workerCounts: siteRows.workerCounts,
+      };
+    });
     return out.sort((a, b) => {
       const aa = a.siteDeleted ? 1 : 0;
       const bb = b.siteDeleted ? 1 : 0;
@@ -821,7 +849,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekStart,
     workers,
     siteId,
-    plan.selectedAlternativeIndex,
+    effectiveAlternativeIndex,
     plan.alternativeCount,
     linkedPlansMemoryTick,
   ]);
@@ -893,9 +921,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             >
               <div className="mb-2 flex items-center justify-between">
                 <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">אתרים מקושרים</div>
-                <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                  חלופה {plan.selectedAlternativeIndex + 1}
-                </span>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                    חלופה מסוננת{" "}
+                    {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
+                    /{Math.max(1, visibleAlternativeIndices.length)}
+                  </span>
+                  <span className="rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300">
+                    ללא סינון (AI): חלופה {Math.max(1, effectiveAlternativeIndex + 1)}/{Math.max(1, plan.alternativeCount)}
+                  </span>
+                </div>
               </div>
               <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
                 מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
@@ -929,6 +964,37 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                         >
                           פתח אתר
                         </button>
+                      </div>
+                      <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
+                        <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
+                          עובדים רב-אתריים משובצים באתר זה
+                        </div>
+                        {siteBlock.workerCounts.length === 0 ? (
+                          <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
+                            אין שיבוצים רב-אתריים בחלופה זו.
+                          </div>
+                        ) : (
+                          <div className="max-h-24 overflow-y-auto">
+                            <table className="w-full border-collapse text-[10px]">
+                              <thead>
+                                <tr className="border-b dark:border-zinc-800">
+                                  <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">עובד</th>
+                                  <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">שיבוצים</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {siteBlock.workerCounts.map((entry) => (
+                                  <tr key={`${siteBlock.siteId}-${entry.workerName}`} className="border-b last:border-0 dark:border-zinc-800">
+                                    <td className="px-1 py-1 text-zinc-700 dark:text-zinc-200">{entry.workerName}</td>
+                                    <td className="px-1 py-1 text-center font-semibold text-zinc-700 dark:text-zinc-200">
+                                      {entry.count}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                       {(() => {
                         const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];

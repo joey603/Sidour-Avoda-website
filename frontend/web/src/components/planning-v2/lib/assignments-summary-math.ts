@@ -46,13 +46,21 @@ export function subtractPullExtrasFromWorkerCounts(
 }
 
 export function colorIdentityForWorker(worker: PlanningWorker): string {
-  const phone = String(worker.phone || "").trim();
+  const phone = String(worker.phone || "")
+    .split("")
+    .filter((ch) => /\d|\+/.test(ch))
+    .join("")
+    .trim();
   if (phone) return `phone:${phone}`;
   const linkedIds = Array.isArray(worker.linkedSiteIds)
     ? worker.linkedSiteIds.map((id) => Number(id)).filter(Number.isFinite).sort((a, b) => a - b)
     : [];
-  if (linkedIds.length > 1) return `linked:${linkedIds.join(",")}:${String(worker.name || "").trim()}`;
-  return `name:${String(worker.name || "").trim()}`;
+  const normName = String(worker.name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  if (linkedIds.length > 1) return `linked:${linkedIds.join(",")}:${normName}`;
+  return `name:${normName}`;
 }
 
 export function sumTotalRequiredFromAssignments(
@@ -80,6 +88,7 @@ export function buildTotalAssignmentsByIdentity(
   weekStart: Date,
   currentAssignments: Record<string, Record<string, string[][]>> | null | undefined,
   currentPulls?: Record<string, { before?: { name?: string }; after?: { name?: string } }> | null,
+  selectedAlternativeIndex?: number,
 ): Map<string, number> {
   const workersByName = new Map<string, PlanningWorker>();
   for (const w of workers) {
@@ -102,7 +111,10 @@ export function buildTotalAssignmentsByIdentity(
   };
   const mem = readLinkedPlansFromMemory(weekStart);
   if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-    const idx = mem.activeAltIndex || 0;
+    const idx =
+      typeof selectedAlternativeIndex === "number" && Number.isFinite(selectedAlternativeIndex)
+        ? Math.max(0, Math.trunc(selectedAlternativeIndex))
+        : (mem.activeAltIndex || 0);
     for (const plan of Object.values(mem.plansBySite)) {
       accumulate(
         resolveAssignmentsForAlternative(plan, idx),

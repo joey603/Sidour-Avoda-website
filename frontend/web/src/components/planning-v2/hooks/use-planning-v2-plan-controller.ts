@@ -23,6 +23,10 @@ function apiBaseUrl(): string {
 }
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
+const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 1200;
+const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 45;
+const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 500;
+const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 20;
 
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
@@ -329,6 +333,15 @@ export function usePlanningV2PlanController({
     if (purgeIds.length > 0) {
       try {
         await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
+        try {
+          window.dispatchEvent(
+            new CustomEvent("planning-v2-assignment-filters-reset", {
+              detail: { weekIso },
+            }),
+          );
+        } catch {
+          /* ignore */
+        }
         await reloadWeekPlan();
       } catch {
         /* ignore */
@@ -351,7 +364,8 @@ export function usePlanningV2PlanController({
     const body = linked
       ? {
           week_iso: weekIso,
-          num_alternatives: 500,
+          num_alternatives: MULTI_SITE_GENERATION_NUM_ALTERNATIVES,
+          time_limit_seconds: MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
           fixed_assignments: fixedAssignments,
@@ -360,7 +374,8 @@ export function usePlanningV2PlanController({
         }
       : {
           week_iso: weekIso,
-          num_alternatives: 500,
+          num_alternatives: SINGLE_SITE_GENERATION_NUM_ALTERNATIVES,
+          time_limit_seconds: SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
           fixed_assignments: fixedAssignments,

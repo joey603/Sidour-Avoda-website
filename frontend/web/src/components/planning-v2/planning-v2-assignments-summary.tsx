@@ -12,6 +12,12 @@ import {
   totalAssignmentsForSummaryWorker,
 } from "./lib/assignments-summary-math";
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
+import { getWeekKeyISO } from "./lib/week";
+import {
+  readLinkedPlansFromMemory,
+  resolveAssignmentsForAlternative,
+  resolvePullsForAlternative,
+} from "./lib/multi-site-linked-memory";
 
 function isRtlName(s: string): boolean {
   return /[\u0590-\u05FF]/.test(String(s || ""));
@@ -121,6 +127,23 @@ export function PlanningV2AssignmentsSummary({
 }: PlanningV2AssignmentsSummaryProps) {
   const { linkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const showMultiSiteTotalColumn = linkedSites.length > 1;
+  const weekIso = useMemo(() => getWeekKeyISO(weekStart), [weekStart]);
+  const linkedSiteIdsKey = useMemo(() => {
+    const ids = new Set<number>();
+    const cur = Number(siteId);
+    if (Number.isFinite(cur) && cur > 0) ids.add(cur);
+    for (const ls of linkedSites) {
+      const n = Number(ls.id);
+      if (Number.isFinite(n) && n > 0) ids.add(n);
+    }
+    return Array.from(ids)
+      .sort((a, b) => a - b)
+      .join("-");
+  }, [linkedSites, siteId]);
+  const multiSiteFiltersStorageKey = useMemo(
+    () => `planning_v2_multisite_assignment_filters_by_site_${weekIso}_${linkedSiteIdsKey}`,
+    [weekIso, linkedSiteIdsKey],
+  );
 
   const [memoryTick, setMemoryTick] = useState(0);
   useEffect(() => {
@@ -142,8 +165,14 @@ export function PlanningV2AssignmentsSummary({
 
   const byIdentity = useMemo(() => {
     void memoryTick;
-    return buildTotalAssignmentsByIdentity(workers, weekStart, assignments ?? {}, pulls ?? null);
-  }, [workers, weekStart, assignments, pulls, memoryTick]);
+    return buildTotalAssignmentsByIdentity(
+      workers,
+      weekStart,
+      assignments ?? {},
+      pulls ?? null,
+      selectedAlternativeIndex,
+    );
+  }, [workers, weekStart, assignments, pulls, selectedAlternativeIndex, memoryTick]);
 
   const nameColorMap = useMemo(() => {
     const bundles = [assignments, ...(assignmentVariants || [])].filter(
@@ -154,7 +183,80 @@ export function PlanningV2AssignmentsSummary({
   }, [workers, assignments, assignmentVariants]);
 
   const [assignmentCountFilters, setAssignmentCountFilters] = useState<Record<string, string>>({});
-  const hasActiveAssignmentCountFilters = useMemo(
+  const [persistedMultiSiteFilters, setPersistedMultiSiteFilters] = useState<Record<string, Record<string, number>>>({});
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(multiSiteFiltersStorageKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const normalized: Record<string, Record<string, number>> = {};
+      if (parsed && typeof parsed === "object") {
+        for (const [sid, siteFilters] of Object.entries(parsed as Record<string, unknown>)) {
+          if (!siteFilters || typeof siteFilters !== "object") continue;
+          const nextSite: Record<string, number> = {};
+          for (const [workerName, rawVal] of Object.entries(siteFilters as Record<string, unknown>)) {
+            const n = Number(rawVal);
+            if (!Number.isFinite(n) || n < 0) continue;
+            nextSite[String(workerName)] = Math.trunc(n);
+          }
+          if (Object.keys(nextSite).length > 0) normalized[String(sid)] = nextSite;
+        }
+      }
+      setPersistedMultiSiteFilters(normalized);
+      const nextLocalFilters: Record<string, string> = {};
+      for (const [workerName, value] of Object.entries(normalized[String(siteId)] || {})) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) continue;
+        nextLocalFilters[String(workerName)] = String(Math.max(0, Math.trunc(n)));
+      }
+      setAssignmentCountFilters(nextLocalFilters);
+    } catch {
+      setPersistedMultiSiteFilters({});
+      setAssignmentCountFilters({});
+    }
+  }, [multiSiteFiltersStorageKey, siteId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onReset = (evt: Event) => {
+      const custom = evt as CustomEvent<{ weekIso?: string }>;
+      const evtWeek = String(custom.detail?.weekIso || "").trim();
+      if (evtWeek && evtWeek !== weekIso) return;
+      setAssignmentCountFilters({});
+      setPersistedMultiSiteFilters({});
+    };
+    window.addEventListener("planning-v2-assignment-filters-reset", onReset as EventListener);
+    return () =>
+      window.removeEventListener("planning-v2-assignment-filters-reset", onReset as EventListener);
+  }, [weekIso]);
+
+  const persistLocalFilterForWorker = useMemo(
+    () => (workerName: string, valueOrNull: number | null) => {
+      if (!showMultiSiteTotalColumn) return;
+      const cleanWorker = String(workerName || "").trim();
+      if (!cleanWorker) return;
+      setPersistedMultiSiteFilters((prev) => {
+        const next: Record<string, Record<string, number>> = { ...prev };
+        const bySite = { ...(next[String(siteId)] || {}) };
+        if (valueOrNull == null) {
+          delete bySite[cleanWorker];
+        } else {
+          bySite[cleanWorker] = Math.max(0, Math.trunc(valueOrNull));
+        }
+        if (Object.keys(bySite).length === 0) delete next[String(siteId)];
+        else next[String(siteId)] = bySite;
+        try {
+          localStorage.setItem(multiSiteFiltersStorageKey, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    },
+    [showMultiSiteTotalColumn, siteId, multiSiteFiltersStorageKey],
+  );
+  const hasLocalAssignmentCountFilters = useMemo(
     () => Object.values(assignmentCountFilters).some((v) => String(v || "").trim() !== ""),
     [assignmentCountFilters],
   );
@@ -169,46 +271,164 @@ export function PlanningV2AssignmentsSummary({
     );
   }, [assignmentVariants, pullVariants]);
 
-  const generatedAssignmentCountOptionsByWorker = useMemo(() => {
-    const out = new Map<string, number[]>();
-    for (const counts of assignmentCountsByVariant) {
-      for (const [nm, val] of counts.entries()) {
-        const cur = out.get(nm) || [];
-        if (!cur.includes(val)) cur.push(val);
-        out.set(nm, cur);
+  const activeAssignmentCountFilters = useMemo(
+    () =>
+      Object.entries(persistedMultiSiteFilters).flatMap(([sid, siteFilters]) => {
+        if (!siteFilters || typeof siteFilters !== "object") return [] as Array<[string, string, number]>;
+        return Object.entries(siteFilters).flatMap(([workerName, raw]) => {
+          const n = Number(raw);
+          if (!Number.isFinite(n) || n < 0) return [] as Array<[string, string, number]>;
+          return [[String(sid), String(workerName), Math.trunc(n)] as [string, string, number]];
+        });
+      }),
+    [persistedMultiSiteFilters],
+  );
+  const hasActiveAssignmentCountFilters = activeAssignmentCountFilters.length > 0;
+
+  /** Legacy parity: cacher toute alternative qui dépasse max_shifts global multi-site. */
+  const maxShiftsCompatibleIndices = useMemo(() => {
+    if (!assignmentCountsByVariant.length) return [] as number[];
+    const currentSiteId = String(siteId);
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const countsCache = new Map<string, Map<string, number>>();
+    const getCountsForSite = (targetSiteId: string, idx: number) => {
+      const cacheKey = `${targetSiteId}:${idx}`;
+      if (countsCache.has(cacheKey)) return countsCache.get(cacheKey) || null;
+      let counts: Map<string, number> | null = null;
+      if (targetSiteId === currentSiteId) {
+        counts = assignmentCountsByVariant[idx] || new Map<string, number>();
+      } else {
+        const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
+        if (sitePlan) {
+          counts = subtractPullExtrasFromWorkerCounts(
+            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
+            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+          );
+        }
       }
-    }
-    for (const nm of out.keys()) {
-      out.set(
-        nm,
-        [...(out.get(nm) || [])].sort((a, b) => a - b),
-      );
-    }
-    return out;
-  }, [assignmentCountsByVariant]);
+      if (counts) countsCache.set(cacheKey, counts);
+      return counts;
+    };
+
+    const compatible: number[] = [];
+    assignmentCountsByVariant.forEach((currentSiteCounts, idx) => {
+      let ok = true;
+      for (const w of workers) {
+        if ((w.linkedSiteIds || []).length <= 1) continue;
+        const workerName = String(w.name || "").trim();
+        if (!workerName) continue;
+        const maxShifts = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
+        if (!Number.isFinite(maxShifts) || maxShifts <= 0) continue;
+        let total = Number(currentSiteCounts.get(workerName) || 0);
+        for (const linkedId of w.linkedSiteIds || []) {
+          const sid = String(linkedId);
+          if (sid === currentSiteId) continue;
+          const linkedCounts = getCountsForSite(sid, idx);
+          total += Number(linkedCounts?.get(workerName) || 0);
+        }
+        if (total > Math.trunc(maxShifts)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) compatible.push(idx);
+    });
+    return compatible;
+  }, [assignmentCountsByVariant, workers, weekStart, siteId]);
 
   const filteredAlternativeIndices = useMemo(() => {
     if (!assignmentCountsByVariant.length) return [];
-    const active = Object.entries(assignmentCountFilters).filter(([, v]) => String(v || "").trim() !== "");
-    if (active.length === 0) {
-      return assignmentCountsByVariant.map((_, idx) => idx);
+    const maxCompatibleSet = new Set<number>(maxShiftsCompatibleIndices);
+    if (activeAssignmentCountFilters.length === 0) {
+      return assignmentCountsByVariant.map((_, idx) => idx).filter((idx) => maxCompatibleSet.has(idx));
     }
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const countsCache = new Map<string, Map<string, number>>();
+    const getCountsForSite = (targetSiteId: string, idx: number) => {
+      const cacheKey = `${targetSiteId}:${idx}`;
+      if (countsCache.has(cacheKey)) return countsCache.get(cacheKey) || null;
+      let counts: Map<string, number> | null = null;
+      if (targetSiteId === String(siteId)) {
+        counts = assignmentCountsByVariant[idx] || new Map<string, number>();
+      } else {
+        const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
+        if (sitePlan) {
+          counts = subtractPullExtrasFromWorkerCounts(
+            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
+            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+          );
+        }
+      }
+      if (counts) countsCache.set(cacheKey, counts);
+      return counts;
+    };
     return assignmentCountsByVariant
       .map((counts, idx) => ({ counts, idx }))
-      .filter(({ counts }) =>
-        active.every(([nm, raw]) => {
-          const target = Number(raw);
-          if (!Number.isFinite(target)) return true;
-          return Number(counts.get(nm) || 0) === target;
+      .filter(({ idx }) => maxCompatibleSet.has(idx))
+      .filter(({ counts, idx }) =>
+        activeAssignmentCountFilters.every(([filterSiteId, workerName, target]) => {
+          const targetCounts =
+            filterSiteId === String(siteId) ? counts : getCountsForSite(filterSiteId, idx);
+          return !!targetCounts && Number(targetCounts.get(workerName) || 0) === target;
         }),
       )
       .map((x) => x.idx);
-  }, [assignmentCountsByVariant, assignmentCountFilters]);
+  }, [assignmentCountsByVariant, activeAssignmentCountFilters, weekStart, siteId, maxShiftsCompatibleIndices]);
+
+  const generatedAssignmentCountOptionsByWorker = useMemo(() => {
+    const out = new Map<string, number[]>();
+    const maxCompatibleSet = new Set<number>(maxShiftsCompatibleIndices);
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const countsCache = new Map<string, Map<string, number>>();
+    const getCountsForSite = (targetSiteId: string, idx: number) => {
+      const cacheKey = `${targetSiteId}:${idx}`;
+      if (countsCache.has(cacheKey)) return countsCache.get(cacheKey) || null;
+      let counts: Map<string, number> | null = null;
+      if (targetSiteId === String(siteId)) {
+        counts = assignmentCountsByVariant[idx] || new Map<string, number>();
+      } else {
+        const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
+        if (sitePlan) {
+          counts = subtractPullExtrasFromWorkerCounts(
+            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
+            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+          );
+        }
+      }
+      if (counts) countsCache.set(cacheKey, counts);
+      return counts;
+    };
+
+    for (const w of workers) {
+      const workerName = String(w.name || "").trim();
+      if (!workerName) continue;
+      const values = new Set<number>();
+      assignmentCountsByVariant.forEach((counts, idx) => {
+        if (!maxCompatibleSet.has(idx)) return;
+        const matchesOtherFilters = activeAssignmentCountFilters.every(([filterSiteId, filterWorkerName, target]) => {
+          if (filterSiteId === String(siteId) && filterWorkerName === workerName) return true;
+          const targetCounts =
+            filterSiteId === String(siteId) ? counts : getCountsForSite(filterSiteId, idx);
+          return !!targetCounts && Number(targetCounts.get(filterWorkerName) || 0) === target;
+        });
+        if (!matchesOtherFilters) return;
+        values.add(Number(counts.get(workerName) || 0));
+      });
+      out.set(workerName, Array.from(values).sort((a, b) => a - b));
+    }
+    return out;
+  }, [workers, assignmentCountsByVariant, activeAssignmentCountFilters, weekStart, siteId, maxShiftsCompatibleIndices]);
+
+  const combinedFilteredAlternativeIndices = filteredAlternativeIndices;
+  const hasCrossSiteAlternativeFilters = useMemo(
+    () => activeAssignmentCountFilters.some(([sid]) => String(sid) !== String(siteId)),
+    [activeAssignmentCountFilters, siteId],
+  );
 
   /** Clé stable : évite useEffect qui se redéclenchent à chaque render à cause d’une nouvelle ref de tableau. */
   const filteredAlternativeIndicesKey = useMemo(
-    () => filteredAlternativeIndices.join(","),
-    [filteredAlternativeIndices],
+    () => combinedFilteredAlternativeIndices.join(","),
+    [combinedFilteredAlternativeIndices],
   );
 
   function handleAssignmentCountFilterChange(workerName: string, rawValue: string, maxAllowed?: number) {
@@ -217,10 +437,26 @@ export function PlanningV2AssignmentsSummary({
       const next = { ...prev };
       if (!cleaned) {
         delete next[workerName];
+        persistLocalFilterForWorker(workerName, null);
       } else {
         const numeric = Number(cleaned);
         const bounded = Number.isFinite(maxAllowed) ? Math.min(numeric, Number(maxAllowed)) : numeric;
         next[workerName] = String(bounded);
+        persistLocalFilterForWorker(workerName, Number(next[workerName]));
+      }
+      return next;
+    });
+  }
+
+  function handleResetCurrentSiteFilters() {
+    setAssignmentCountFilters({});
+    setPersistedMultiSiteFilters((prev) => {
+      const next: Record<string, Record<string, number>> = { ...prev };
+      delete next[String(siteId)];
+      try {
+        localStorage.setItem(multiSiteFiltersStorageKey, JSON.stringify(next));
+      } catch {
+        /* ignore */
       }
       return next;
     });
@@ -250,14 +486,14 @@ export function PlanningV2AssignmentsSummary({
 
   /** Combinaison de filtres impossible → réinitialiser avant peinture pour éviter état bloquant. */
   useLayoutEffect(() => {
-    if (!hasActiveAssignmentCountFilters) return;
+    if (!hasLocalAssignmentCountFilters) return;
     if (assignmentCountsByVariant.length <= 1) return;
-    if (filteredAlternativeIndices.length !== 0) return;
+    if (combinedFilteredAlternativeIndices.length !== 0) return;
     setAssignmentCountFilters({});
   }, [
-    hasActiveAssignmentCountFilters,
+    hasLocalAssignmentCountFilters,
     assignmentCountsByVariant.length,
-    filteredAlternativeIndices.length,
+    combinedFilteredAlternativeIndices.length,
   ]);
 
   const lastFilterNotifyKey = useRef<string>("");
@@ -267,14 +503,15 @@ export function PlanningV2AssignmentsSummary({
     if (notifyKey === lastFilterNotifyKey.current) return;
     lastFilterNotifyKey.current = notifyKey;
     onFilteredAlternativesChange({
-      indices: filteredAlternativeIndices,
-      hasActiveFilters: hasActiveAssignmentCountFilters,
+      indices: combinedFilteredAlternativeIndices,
+      hasActiveFilters: hasActiveAssignmentCountFilters || hasCrossSiteAlternativeFilters,
     });
   }, [
     onFilteredAlternativesChange,
-    filteredAlternativeIndices,
+    combinedFilteredAlternativeIndices,
     filteredAlternativeIndicesKey,
     hasActiveAssignmentCountFilters,
+    hasCrossSiteAlternativeFilters,
   ]);
 
   const { items, totalRequired, totalAssigned } = useMemo(() => {
@@ -324,14 +561,14 @@ export function PlanningV2AssignmentsSummary({
     <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
       <div className="mb-2 flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
         <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
-        {assignmentCountsByVariant.length > 1 && hasActiveAssignmentCountFilters ? (
+        {assignmentCountsByVariant.length > 1 && hasLocalAssignmentCountFilters ? (
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {filteredAlternativeIndices.length}/{assignmentCountsByVariant.length}
+              {combinedFilteredAlternativeIndices.length}/{assignmentCountsByVariant.length}
             </span>
             <button
               type="button"
-              onClick={() => setAssignmentCountFilters({})}
+              onClick={handleResetCurrentSiteFilters}
               className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
             >
               איפוס סינון
@@ -347,7 +584,7 @@ export function PlanningV2AssignmentsSummary({
           סה&quot;כ שיבוצים: <span className="font-medium">{totalAssigned}</span>
         </div>
       </div>
-      {assignmentCountsByVariant.length > 1 && filteredAlternativeIndices.length === 0 ? (
+      {assignmentCountsByVariant.length > 1 && combinedFilteredAlternativeIndices.length === 0 ? (
         <div className="mb-2 text-sm text-amber-600 dark:text-amber-400">
           אין חלופות שתואמות את מספרי המשמרות שנבחרו.
         </div>
@@ -371,17 +608,32 @@ export function PlanningV2AssignmentsSummary({
             {items.map(([nm, c]) => {
               const allowedCounts = generatedAssignmentCountOptionsByWorker.get(nm) || [c];
               const minAllowed = allowedCounts[0] ?? 0;
-              const maxAllowed = allowedCounts[allowedCounts.length - 1] ?? c;
+              let maxAllowed = allowedCounts[allowedCounts.length - 1] ?? c;
+              const workerForRow = workersByName.get(String(nm || "").trim());
+              if (showMultiSiteTotalColumn && workerForRow && (workerForRow.linkedSiteIds || []).length > 1) {
+                const selectedOnOtherSites = activeAssignmentCountFilters.reduce((acc, [sid, workerName, target]) => {
+                  if (String(sid) === String(siteId)) return acc;
+                  if (String(workerName) !== String(nm)) return acc;
+                  return acc + (Number.isFinite(target) ? Number(target) : 0);
+                }, 0);
+                const globalCap = Number(
+                  (workerForRow as unknown as { max_shifts?: number }).max_shifts ?? workerForRow.maxShifts ?? 0,
+                );
+                if (Number.isFinite(globalCap) && globalCap > 0) {
+                  maxAllowed = Math.max(minAllowed, Math.min(maxAllowed, globalCap - selectedOnOtherSites));
+                }
+              }
+              const boundedAllowedCounts = allowedCounts.filter((v) => v >= minAllowed && v <= maxAllowed);
               const isManuallyModified = Object.prototype.hasOwnProperty.call(assignmentCountFilters, nm);
               const rawFilter =
                 assignmentCountFilters[nm] !== undefined && String(assignmentCountFilters[nm]).trim() !== ""
                   ? Number(assignmentCountFilters[nm])
                   : c;
-              const pickerValue = allowedCounts.includes(rawFilter)
+              const pickerValue = boundedAllowedCounts.includes(rawFilter)
                 ? rawFilter
-                : allowedCounts.reduce(
+                : boundedAllowedCounts.reduce(
                     (best, x) => (Math.abs(x - rawFilter) < Math.abs(best - rawFilter) ? x : best),
-                    allowedCounts[0] ?? c,
+                    boundedAllowedCounts[0] ?? Math.min(Math.max(rawFilter, minAllowed), maxAllowed),
                   );
               const filterSelectClass =
                 "w-full max-w-[4.5rem] rounded-md border px-1.5 py-1 text-center text-[10px] outline-none md:max-w-[5.5rem] md:px-2 md:py-1 md:text-sm " +
@@ -434,11 +686,11 @@ export function PlanningV2AssignmentsSummary({
                       onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
                       min={minAllowed}
                       max={maxAllowed}
-                      allowedOptions={allowedCounts}
+                      allowedOptions={boundedAllowedCounts}
                       placeholder={String(c)}
                       className={filterSelectClass}
                       inputAriaLabel={`מספר משמרות עבור ${nm}`}
-                      title={`אפשרויות: ${allowedCounts.join(", ")}`}
+                      title={`אפשרויות: ${boundedAllowedCounts.join(", ")}`}
                     />
                   ) : (
                     c

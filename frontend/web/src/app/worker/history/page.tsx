@@ -28,6 +28,34 @@ const dayLabels: Record<string, string> = {
 
 const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
 
+type WeekPlanPullEntry = {
+  before: { name: string; start: string; end: string };
+  after: { name: string; start: string; end: string };
+};
+
+function normalizeWeekPlanPulls(raw: unknown): Record<string, WeekPlanPullEntry> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, WeekPlanPullEntry> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const entry = value as Record<string, unknown>;
+    const beforeRaw = entry.before as Record<string, unknown> | undefined;
+    const afterRaw = entry.after as Record<string, unknown> | undefined;
+    const beforeName = String(beforeRaw?.name || "").trim();
+    const beforeStart = String(beforeRaw?.start || "").trim();
+    const beforeEnd = String(beforeRaw?.end || "").trim();
+    const afterName = String(afterRaw?.name || "").trim();
+    const afterStart = String(afterRaw?.start || "").trim();
+    const afterEnd = String(afterRaw?.end || "").trim();
+    if (!beforeName || !beforeStart || !beforeEnd || !afterName || !afterStart || !afterEnd) continue;
+    out[String(key)] = {
+      before: { name: beforeName, start: beforeStart, end: beforeEnd },
+      after: { name: afterName, start: afterStart, end: afterEnd },
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export default function WorkerHistoryPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -306,7 +334,7 @@ export default function WorkerHistoryPage() {
             assignments: fa.assignments as Record<string, Record<string, string[][]>>,
             isManual: !!fa.isManual,
             workers: Array.isArray(fa.workers) ? fa.workers : undefined,
-            pulls: fa.pulls && typeof fa.pulls === "object" ? (fa.pulls as Record<string, unknown>) : undefined,
+            pulls: normalizeWeekPlanPulls(fa.pulls),
           });
           return;
         }
@@ -321,7 +349,7 @@ export default function WorkerHistoryPage() {
               assignments: parsed.assignments,
               isManual: !!parsed.isManual,
               workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-              pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+              pulls: normalizeWeekPlanPulls(parsed?.pulls),
             });
             return;
           }
