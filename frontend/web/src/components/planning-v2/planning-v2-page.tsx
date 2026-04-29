@@ -1133,7 +1133,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                   return next;
                 });
               }}
-              className="fixed left-2 top-24 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 lg:hidden"
+              className="fixed left-2 top-1/2 z-40 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#00A8E0] bg-white text-[#00A8E0] shadow-sm hover:bg-[#EAF8FF] dark:border-[#00A8E0] dark:bg-zinc-900 dark:text-[#00A8E0] dark:hover:bg-zinc-800 lg:hidden"
               aria-label={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
               title={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
             >
