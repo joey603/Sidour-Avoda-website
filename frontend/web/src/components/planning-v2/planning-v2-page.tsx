@@ -1100,7 +1100,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   return (
     <div
-      className="min-h-screen px-3 py-6 pb-56 sm:px-4 lg:px-4 md:pb-40 [&_button]:touch-manipulation [&_button]:select-none"
+      className="min-h-screen overflow-x-hidden px-3 py-6 pb-56 sm:px-4 lg:px-4 md:pb-40 [&_button]:touch-manipulation [&_button]:select-none"
       dir="rtl"
     >
       <PlanningV2LayoutShell>
@@ -1133,7 +1133,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                   return next;
                 });
               }}
-              className="absolute -left-3 top-24 z-30 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 lg:hidden"
+              className="fixed left-2 top-24 z-40 inline-flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white shadow-sm hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:hover:bg-zinc-800 lg:hidden"
               aria-label={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
               title={showLinkedSitesRail ? "הסתר תצוגת אתרים מקושרים" : "הצג תצוגת אתרים מקושרים"}
             >
