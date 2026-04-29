@@ -16,6 +16,8 @@ type PlanningV2ActionBarProps = {
   /** Assignations affichées (brouillon IA + serveur) — pour בדיקות מצב */
   effectiveAssignments: Record<string, Record<string, string[][]>> | null;
   linkedSites: LinkedSiteRow[];
+  /** Site archivé (soft-delete) : pas d’enregistrement / génération. */
+  readOnly?: boolean;
   editingSaved: boolean;
   onEditingSavedChange: (v: boolean) => void;
   /** ביטול מצב עריכה — ניקוי טיוטה והצגת התכנון השמור (לפני סגירת ה־UI). */
@@ -53,6 +55,7 @@ export function PlanningV2ActionBar({
   weekPlan,
   effectiveAssignments,
   linkedSites,
+  readOnly = false,
   editingSaved,
   onEditingSavedChange,
   onCancelSavedEdit,
@@ -100,9 +103,13 @@ export function PlanningV2ActionBar({
     [weekPlan?.assignments, weekPlan?.sourceScope],
   );
 
+  // "מחק/ערוך" רק עבור תכנון שמור אמיתי (מנהל/משותף),
+  // לא עבור טיוטת auto שנוצרה אחרי יצירת תכנון.
   const hasPersistedWeekPlan = useMemo(
-    () => assignmentsNonEmpty(weekPlan?.assignments ?? null),
-    [weekPlan?.assignments],
+    () =>
+      assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
+      (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared"),
+    [weekPlan?.assignments, weekPlan?.sourceScope],
   );
 
   const multiSiteActionLabelByType: Record<MultiSitePlanAction, string> = {
@@ -123,10 +130,11 @@ export function PlanningV2ActionBar({
   }, [linkedSites, siteId]);
 
   /** Comme planning : יצירת תכנון bloquée si génération, plan serveur sans édition, ou mode ידני */
-  const generationBlocked = generationRunning || (isSavedMode && !editingSaved) || isManual;
+  const generationBlocked = readOnly || generationRunning || (isSavedMode && !editingSaved) || isManual;
   const showAutoManual = !isSavedMode || editingSaved;
 
   const canSavePlan =
+    !readOnly &&
     assignmentsNonEmpty(effectiveAssignments) &&
     (editingSaved || draftActive || weekPlan?.sourceScope === "auto");
 
@@ -163,6 +171,7 @@ export function PlanningV2ActionBar({
   const canAltNext = hasAlternatives && altCurrent < alternativeCount - 1;
 
   const handleDelete = useCallback(async () => {
+    if (readOnly) return;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) return;
     setDeleting(true);
@@ -192,7 +201,7 @@ export function PlanningV2ActionBar({
     } finally {
       setDeleting(false);
     }
-  }, [siteId, isoWeek, reloadWeekPlan, onEditingSavedChange, onDraftClear]);
+  }, [readOnly, siteId, isoWeek, reloadWeekPlan, onEditingSavedChange, onDraftClear]);
 
   const deletePlanForSite = useCallback(
     async (targetSiteId: number) => {
@@ -217,6 +226,7 @@ export function PlanningV2ActionBar({
 
   const executeMultiSitePlanAction = useCallback(
     async (action: MultiSitePlanAction, allLinked: boolean) => {
+      if (readOnly) return;
       if (action === "save_director") {
         await onSavePlan(false);
         return;
@@ -246,11 +256,12 @@ export function PlanningV2ActionBar({
         }
       }
     },
-    [onSavePlan, handleDelete, linkedSites, deletePlanForSite, onEditingSavedChange, onDraftClear, reloadWeekPlan],
+    [readOnly, onSavePlan, handleDelete, linkedSites, deletePlanForSite, onEditingSavedChange, onDraftClear, reloadWeekPlan],
   );
 
   const requestMultiSitePlanAction = useCallback(
     (action: MultiSitePlanAction) => {
+      if (readOnly) return;
       if (linkedSites.length > 1) {
         setMultiSitePlanActionDialog({ action });
         return;
@@ -261,7 +272,7 @@ export function PlanningV2ActionBar({
       }
       void executeMultiSitePlanAction(action, false);
     },
-    [linkedSites.length, executeMultiSitePlanAction],
+    [readOnly, linkedSites.length, executeMultiSitePlanAction],
   );
 
   const runGenerateWithChecks = useCallback(
@@ -737,10 +748,10 @@ export function PlanningV2ActionBar({
               <button
                 type="button"
                 onClick={() => requestMultiSitePlanAction("delete")}
-                disabled={!hasPersistedWeekPlan}
+                disabled={readOnly || !hasPersistedWeekPlan}
                 className={
                   "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                  (hasPersistedWeekPlan
+                  (hasPersistedWeekPlan && !readOnly
                     ? "bg-red-600 text-white hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600"
                     : "cursor-not-allowed bg-zinc-300 text-zinc-600 opacity-60 dark:bg-zinc-700 dark:text-zinc-400")
                 }
@@ -755,13 +766,13 @@ export function PlanningV2ActionBar({
                 <button
                   type="button"
                   onClick={() => {
-                    if (!hasPersistedWeekPlan) return;
+                    if (!hasPersistedWeekPlan || readOnly) return;
                     onEditingSavedChange(true);
                   }}
-                  disabled={!hasPersistedWeekPlan}
+                  disabled={readOnly || !hasPersistedWeekPlan}
                   className={
                     "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
-                    (hasPersistedWeekPlan
+                    (hasPersistedWeekPlan && !readOnly
                       ? "border-[#00A8E0] bg-[#00A8E0] text-white hover:bg-[#0092c6]"
                       : "cursor-not-allowed border-zinc-300 bg-zinc-300 text-zinc-600 opacity-60 dark:border-zinc-700 dark:bg-zinc-700 dark:text-zinc-400")
                   }

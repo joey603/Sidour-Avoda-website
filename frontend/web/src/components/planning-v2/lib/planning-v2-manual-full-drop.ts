@@ -211,6 +211,21 @@ function hasWorkerInShiftColumn(
   return perStation.some((arr) => (arr || []).some((nm) => normName(nm) === t));
 }
 
+function isWorkerAlreadyAssignedInShift(
+  assignments: Record<string, Record<string, string[][]>>,
+  dayKey: string,
+  shiftName: string,
+  workerName: string,
+): boolean {
+  const t = normName(workerName);
+  if (!t) return false;
+  const perStation: string[][] = (assignments?.[dayKey]?.[shiftName] || []) as string[][];
+  for (const arr of perStation) {
+    if ((arr || []).some((nm) => normName(nm) === t)) return true;
+  }
+  return false;
+}
+
 export function collectManualRuleViolations(
   assignments: Record<string, Record<string, string[][]>>,
   workerName: string,
@@ -363,6 +378,7 @@ export function canHighlightManualDropTarget(ctx: {
   shiftName: string;
   stationIndex: number;
   roleHint?: string | null;
+  dragSource?: ManualDragSource | null;
 }): boolean {
   const trimmed = String(ctx.workerName || "").trim();
   if (!trimmed) return false;
@@ -371,6 +387,15 @@ export function canHighlightManualDropTarget(ctx: {
   }
   if (ctx.roleHint && !workerHasRole(ctx.workers, trimmed, ctx.roleHint)) return false;
   if (getLinkedSiteConflictReason(ctx.siteId, ctx.weekStart, ctx.workers, trimmed, ctx.dayKey, ctx.shiftName)) {
+    return false;
+  }
+  // Pendant un déplacement slot->slot, l’état actuel contient encore la cellule source.
+  // Pour l’aperçu vert, on évite les faux négatifs (ex: ancienne cellule) et on garde
+  // les validations strictes au moment du drop via analyzeManualSlotDrop.
+  if (ctx.dragSource && String(ctx.dragSource.workerName || "").trim() === trimmed) {
+    return true;
+  }
+  if (isWorkerAlreadyAssignedInShift(ctx.assignments, ctx.dayKey, ctx.shiftName, trimmed)) {
     return false;
   }
   try {
@@ -496,6 +521,17 @@ export function analyzeManualSlotDrop(ctx: {
   const linked = getLinkedSiteConflictReason(ctx.siteId, ctx.weekStart, ctx.workers, trimmed, ctx.dayKey, ctx.shiftName);
   if (linked) return { action: "block", message: linked };
 
+  const isMoveFromSameWorker = !!(
+    ctx.dragSource &&
+    normName(ctx.dragSource.workerName) === normName(trimmed)
+  );
+  if (
+    !isMoveFromSameWorker &&
+    isWorkerAlreadyAssignedInShift(ctx.base, ctx.dayKey, ctx.shiftName, trimmed)
+  ) {
+    return { action: "block", message: "העובד כבר משובץ במשמרת זו ולא ניתן לשבץ אותו שוב." };
+  }
+
   const w = ctx.workers.find((x) => (x.name || "").trim() === trimmed);
   const effAvail =
     (ctx.availabilityByWorkerName[trimmed] as Record<string, string[]> | undefined) ||
@@ -513,13 +549,36 @@ export function analyzeManualSlotDrop(ctx: {
 
   const stCfg = (ctx.site?.config?.stations as any[])?.[ctx.stationIndex] || null;
   const beforeArr: string[] = Array.from(ctx.base[ctx.dayKey]?.[ctx.shiftName]?.[ctx.stationIndex] || []);
+  const roleReqForCell = roleRequirementsForStation(stCfg, ctx.shiftName, ctx.dayKey);
+  const requiredRoleNames = Object.keys(roleReqForCell).filter((rn) => Number(roleReqForCell[rn] || 0) > 0);
   const roleHints = computeRoleHintsForCell(ctx.workers, stCfg, ctx.shiftName, ctx.dayKey, beforeArr);
-  const slotExpectedRole = (roleHints[ctx.slotIndex] || "").trim() || null;
-  if (slotExpectedRole && !ctx.flags.forceRole) {
+  const slotWorkerName = String(beforeArr[ctx.slotIndex] || "").trim();
+  const slotWorkerAssignedRole = slotWorkerName
+    ? findAssignedRole(ctx.workers, roleReqForCell, slotWorkerName)
+    : null;
+  // Priorité:
+  // 1) besoin explicite sur le slot (trou à combler),
+  // 2) rôle du worker déjà présent dans ce slot (cas déplacement/remplacement),
+  // 3) sinon null.
+  const slotExpectedRole =
+    (roleHints[ctx.slotIndex] || "").trim() ||
+    String(slotWorkerAssignedRole || "").trim() ||
+    null;
+  if (!ctx.flags.forceRole) {
     const workerRoles: string[] = Array.isArray(w?.roles) ? w.roles : [];
-    const match = workerRoles.some((r) => normLocal(String(r)) === normLocal(slotExpectedRole));
-    if (!match) {
-      return { action: "confirm_role", workerName: trimmed, roleName: slotExpectedRole };
+    if (slotExpectedRole) {
+      const match = workerRoles.some((r) => normLocal(String(r)) === normLocal(slotExpectedRole));
+      if (!match) {
+        return { action: "confirm_role", workerName: trimmed, roleName: slotExpectedRole };
+      }
+    } else if (requiredRoleNames.length > 0) {
+      // Même sans hint de slot précis, si la case exige des rôles et que l'עובד n'en a aucun, demander confirmation.
+      const hasAnyRequiredRole = requiredRoleNames.some((reqRole) =>
+        workerRoles.some((r) => normLocal(String(r)) === normLocal(reqRole)),
+      );
+      if (!hasAnyRequiredRole) {
+        return { action: "confirm_role", workerName: trimmed, roleName: requiredRoleNames.join(" / ") };
+      }
     }
   }
 

@@ -107,6 +107,8 @@ class SiteOut(BaseModel):
         default_factory=list,
         description="Même groupe multi-sites (≥2 sites) : ids triés ; vide si site seul.",
     )
+    # epoch ms si site soft-deleted ; None = site actif
+    deleted_at: int | None = None
 
 class SiteUpdate(BaseModel):
     name: str | None = None
@@ -144,6 +146,10 @@ class WorkerOut(WorkerBase):
     linked_site_ids: list[int] = []
     linked_site_names: list[str] = []
     pending_approval: bool = False
+    site_name: str | None = None
+    site_deleted: bool = False
+    removed_from_week_iso: str | None = None
+    removed_by_planning: bool = False
 
 
 class WorkerContextQuestion(BaseModel):

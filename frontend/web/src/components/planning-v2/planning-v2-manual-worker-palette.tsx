@@ -5,6 +5,8 @@ import { buildWorkerNameColorMap, workerNameChipColor } from "./lib/worker-name-
 
 type PlanningV2ManualWorkerPaletteProps = {
   workers: PlanningWorker[];
+  /** Si fournie (ex. grille), même couleurs que les cellules — sinon hash par nom. */
+  nameColorMap?: Map<string, { bg: string; border: string; text: string }> | null;
   /** כמו ב-planning: לא להציג ממתינים לאישור */
   hidePendingApproval?: boolean;
   /** נקרא בעת גרירה מהפלטה — להדגשת יעדי שיבוץ בגריד */
@@ -14,6 +16,7 @@ type PlanningV2ManualWorkerPaletteProps = {
 
 export function PlanningV2ManualWorkerPalette({
   workers,
+  nameColorMap: nameColorMapProp,
   hidePendingApproval = true,
   onDragPreviewStart,
   onDragPreviewEnd,
@@ -22,7 +25,9 @@ export function PlanningV2ManualWorkerPalette({
     if (hidePendingApproval && w.pendingApproval) return false;
     return String(w.name || "").trim().length > 0;
   });
-  const nameColorMap = buildWorkerNameColorMap(list.map((w) => String(w.name || "").trim()).filter(Boolean));
+  const nameColorMap =
+    nameColorMapProp ??
+    buildWorkerNameColorMap(list.map((w) => String(w.name || "").trim()).filter(Boolean));
 
   return (
     <div className="mt-3 rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 dark:border-zinc-700 dark:bg-zinc-900/40">

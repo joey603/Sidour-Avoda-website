@@ -31,6 +31,11 @@ jest.mock("@/lib/api", () => ({
   apiFetch: jest.fn(),
 }));
 
+/** Plan publié aux travailleurs uniquement (`scope=shared`) dans page fiche עובד */
+function mockDirectorSharedWeekPlan(path: string) {
+  return typeof path === "string" && path.includes("/director/sites/") && path.includes("/week-plan?") && path.includes("scope=shared");
+}
+
 describe("/director/workers/[id]", () => {
   beforeEach(() => {
     replaceMock.mockReset();
@@ -61,6 +66,9 @@ describe("/director/workers/[id]", () => {
       if (path === "/director/sites/1") {
         return Promise.resolve({ id: 1, name: "Alpha Site", config: { stations: [] } });
       }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
+      }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});
       }
@@ -73,7 +81,7 @@ describe("/director/workers/[id]", () => {
     expect(await screen.findByText("פרטי עובד")).toBeInTheDocument();
     expect(await screen.findByText("Alpha Site")).toBeInTheDocument();
     expect(await screen.findByText("0585060398")).toBeInTheDocument();
-    expect(await screen.findByText("אין נתוני תכנון שמורים לשבוע זה.")).toBeInTheDocument();
+    expect(await screen.findByText("אין תכנון שפורסם לעובדים לשבוע זה.")).toBeInTheDocument();
   });
 
   it("updates worker phone from the identity editor", async () => {
@@ -92,6 +100,9 @@ describe("/director/workers/[id]", () => {
       }
       if (path === "/director/sites/1" && !options?.method) {
         return Promise.resolve({ id: 1, name: "Alpha Site", config: { stations: [] } });
+      }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
       }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});
@@ -190,6 +201,9 @@ describe("/director/workers/[id]", () => {
       if (path === "/director/sites/1" && !options?.method) {
         return Promise.resolve({ id: 1, name: "Alpha Site", config: { stations: [] } });
       }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
+      }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});
       }
@@ -200,17 +214,16 @@ describe("/director/workers/[id]", () => {
 
     await screen.findByText("Alpha Site");
 
-    const before = (apiFetch as jest.Mock).mock.calls.filter((call: any[]) =>
-      String(call[0]).startsWith("/public/sites/1/week-plan?week="),
-    ).length;
+    const isWeekPlanRefetch = (call: any[]) =>
+      mockDirectorSharedWeekPlan(String(call[0])) || String(call[0]).startsWith("/public/sites/1/week-plan?week=");
+
+    const before = (apiFetch as jest.Mock).mock.calls.filter((call: any[]) => isWeekPlanRefetch(call)).length;
 
     const user = userEvent.setup();
     await user.click(screen.getAllByRole("button", { name: "שבוע הבא" })[0]);
 
     await waitFor(() => {
-      const after = (apiFetch as jest.Mock).mock.calls.filter((call: any[]) =>
-        String(call[0]).startsWith("/public/sites/1/week-plan?week="),
-      ).length;
+      const after = (apiFetch as jest.Mock).mock.calls.filter((call: any[]) => isWeekPlanRefetch(call)).length;
       expect(after).toBeGreaterThan(before);
     });
   });
@@ -231,6 +244,9 @@ describe("/director/workers/[id]", () => {
       }
       if (path === "/director/sites/1") {
         return Promise.resolve({ id: 1, name: "Alpha Site", config: { stations: [] } });
+      }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
       }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});
@@ -261,7 +277,7 @@ describe("/director/workers/[id]", () => {
     const iso = `${nextWeek.getFullYear()}-${String(nextWeek.getMonth() + 1).padStart(2, "0")}-${String(nextWeek.getDate()).padStart(2, "0")}`;
 
     localStorage.setItem(
-      `plan_1_${iso}`,
+      `plan_shared_1_${iso}`,
       JSON.stringify({
         assignments: { sun: { "06-14": [["Yoeli"]] } },
         isManual: false,
@@ -310,6 +326,9 @@ describe("/director/workers/[id]", () => {
           },
         });
       }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
+      }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});
       }
@@ -340,6 +359,9 @@ describe("/director/workers/[id]", () => {
       }
       if (path === "/director/sites/1" && !options?.method) {
         return Promise.resolve({ id: 1, name: "Alpha Site", config: { stations: [] } });
+      }
+      if (mockDirectorSharedWeekPlan(path)) {
+        return Promise.resolve({});
       }
       if (String(path).startsWith("/public/sites/1/week-plan?week=")) {
         return Promise.resolve({});

@@ -1,5 +1,11 @@
 "use client";
 
+/**
+ * Archive / référence uniquement — ancienne page planning monolithique.
+ * Ce fichier n’est monté sur aucune route du site (le live utilise `page.tsx` → Planning v2).
+ * Conservé pour consultation, diff, et tests Jest (`director-planning-page.test.tsx`).
+ */
+
 import { flushSync } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";

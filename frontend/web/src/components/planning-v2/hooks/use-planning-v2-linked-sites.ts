@@ -7,9 +7,20 @@ import { getWeekKeyISO } from "../lib/week";
 export type LinkedSiteRow = {
   id: number;
   name: string;
+  /** Site retiré de la liste active (soft-delete) — affiché après les sites actifs. */
+  site_deleted?: boolean;
   assigned_count?: number;
   required_count?: number;
 };
+
+function sortLinkedSitesForDisplay(rows: LinkedSiteRow[]): LinkedSiteRow[] {
+  return [...rows].sort((a, b) => {
+    const da = a.site_deleted ? 1 : 0;
+    const db = b.site_deleted ? 1 : 0;
+    if (da !== db) return da - db;
+    return String(a.name || "").localeCompare(String(b.name || ""), "he");
+  });
+}
 
 export function usePlanningV2LinkedSites(siteId: string, weekStart: Date) {
   const [linkedSites, setLinkedSites] = useState<LinkedSiteRow[]>([]);
@@ -32,7 +43,7 @@ export function usePlanningV2LinkedSites(siteId: string, weekStart: Date) {
           cache: "no-store",
         },
       );
-      setLinkedSites(Array.isArray(list) ? list : []);
+      setLinkedSites(sortLinkedSitesForDisplay(Array.isArray(list) ? (list as LinkedSiteRow[]) : []));
     } catch {
       setLinkedSites([]);
     } finally {

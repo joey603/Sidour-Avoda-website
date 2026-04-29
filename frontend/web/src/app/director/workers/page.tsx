@@ -15,6 +15,11 @@ interface Worker {
   max_shifts: number;
   roles: string[];
   availability: Record<string, string[]>;
+  /** Nom du site tel que renvoyé par l’API (y compris sites archivés). */
+  site_name?: string | null;
+  site_deleted?: boolean;
+  removed_from_week_iso?: string | null;
+  removed_by_planning?: boolean;
 }
 
 interface Site {
@@ -98,6 +103,11 @@ export default function WorkersList() {
     const site = sites.find((s) => s.id === siteId);
     return site?.name || `אתר #${siteId}`;
   };
+  const getSiteLabelForEntry = (entry: Worker): string => {
+    const fromApi = String(entry.site_name || "").trim();
+    if (fromApi) return fromApi;
+    return getSiteName(entry.site_id);
+  };
   const getSiteBadgeClassName = (siteId: number): string => {
     const normalizedId = Math.abs(Number(siteId) || 0);
     return SITE_BADGE_COLORS[normalizedId % SITE_BADGE_COLORS.length];
@@ -125,7 +135,17 @@ export default function WorkersList() {
     });
     return Array.from(grouped.values()).map((group) => ({
       ...group,
-      entries: [...group.entries].sort((a, b) => getSiteName(a.site_id).localeCompare(getSiteName(b.site_id))),
+      entries: [...group.entries].sort((a, b) => {
+        const rank = (entry: Worker) => {
+          if (entry.site_deleted) return 2; // אתר בארכיון
+          if (entry.removed_by_planning) return 1; // הוסר מהאתר דרך תכנון
+          return 0; // פעיל באתר
+        };
+        const da = rank(a);
+        const db = rank(b);
+        if (da !== db) return da - db;
+        return getSiteLabelForEntry(a).localeCompare(getSiteLabelForEntry(b), "he");
+      }),
     }));
   }, [workers, sites]);
 
@@ -135,7 +155,7 @@ export default function WorkersList() {
     return groupedWorkers.filter((worker) => {
       const name = String(worker?.name || "").toLowerCase();
       const phone = String(worker?.phone || "").toLowerCase();
-      const siteNames = worker.entries.map((entry) => String(getSiteName(Number(entry.site_id))).toLowerCase());
+      const siteNames = worker.entries.map((entry) => String(getSiteLabelForEntry(entry)).toLowerCase());
       return name.includes(q) || phone.includes(q) || siteNames.some((siteName) => siteName.includes(q));
     });
   }, [groupedWorkers, query, sites]);
@@ -405,9 +425,24 @@ export default function WorkersList() {
                             {worker.entries.map((entry) => (
                               <span
                                 key={entry.id}
-                                className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-0.5 text-xs ${getSiteBadgeClassName(entry.site_id)}`}
+                                className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${
+                                  entry.site_deleted
+                                    ? "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                                    : entry.removed_by_planning
+                                      ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                                    : getSiteBadgeClassName(entry.site_id)
+                                }`}
                               >
-                                {getSiteName(entry.site_id)}
+                                <span>{getSiteLabelForEntry(entry)}</span>
+                                {entry.site_deleted ? (
+                                  <span className="rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold dark:bg-zinc-700">
+                                    ארכיון
+                                  </span>
+                                ) : entry.removed_by_planning ? (
+                                  <span className="rounded bg-orange-200 px-1 py-px text-[10px] font-semibold text-orange-900 dark:bg-orange-900/60 dark:text-orange-200">
+                                    הוסר מהאתר
+                                  </span>
+                                ) : null}
                               </span>
                             ))}
                           </div>
@@ -450,9 +485,24 @@ export default function WorkersList() {
                           {worker.entries.map((entry) => (
                             <span
                               key={entry.id}
-                              className={`inline-flex w-fit items-center gap-2 rounded-full border px-2 py-1 text-xs ${getSiteBadgeClassName(entry.site_id)}`}
+                              className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-1 text-xs ${
+                                entry.site_deleted
+                                  ? "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                                  : entry.removed_by_planning
+                                    ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                                  : getSiteBadgeClassName(entry.site_id)
+                              }`}
                             >
-                              {getSiteName(entry.site_id)}
+                              <span>{getSiteLabelForEntry(entry)}</span>
+                              {entry.site_deleted ? (
+                                <span className="rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold dark:bg-zinc-700">
+                                  ארכיון
+                                </span>
+                              ) : entry.removed_by_planning ? (
+                                <span className="rounded bg-orange-200 px-1 py-px text-[10px] font-semibold text-orange-900 dark:bg-orange-900/60 dark:text-orange-200">
+                                  הוסר מהאתר
+                                </span>
+                              ) : null}
                             </span>
                           ))}
                         </div>

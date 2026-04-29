@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, Fragment } from "react";
+import { useEffect, useMemo, useRef, useState, Fragment, useCallback } from "react";
 import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import LoadingAnimation from "@/components/loading-animation";
 import { toast } from "sonner";
+import { getRequiredFor } from "@/components/planning-v2/lib/station-grid-helpers";
 
 interface Worker {
   id: number;
@@ -16,6 +17,10 @@ interface Worker {
   roles: string[];
   availability: Record<string, string[]>;
   phone?: string | null;
+  site_name?: string | null;
+  site_deleted?: boolean;
+  removed_from_week_iso?: string | null;
+  removed_by_planning?: boolean;
 }
 
 interface Site { id: number; name: string; config?: any }
@@ -136,39 +141,84 @@ export default function WorkerDetailsPage() {
 
       const start = new Date(weekStart);
       const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-      const key = `plan_${worker.site_id}_${iso(start)}`;
+
+      function weekPlanFromApiPayload(raw: Record<string, unknown> | null | undefined) {
+        if (!raw || typeof raw !== "object" || raw.assignments == null) return null;
+        return {
+          assignments: raw.assignments as Record<string, Record<string, string[][]>>,
+          isManual: !!raw.isManual,
+          workers: Array.isArray(raw.workers) ? raw.workers : undefined,
+          pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : undefined,
+        };
+      }
 
       try {
+        const wk = iso(start);
+        const siteId = worker.site_id;
+        const authOpts = {
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+          cache: "no-store" as const,
+        };
+        /** שיבוצים : רק תכנון שפורסם לעובדים (scope=shared), לא טיוטת מנהל / auto */
+        const sharedKey = `plan_shared_${worker.site_id}_${iso(start)}`;
+        let fromShared: Record<string, unknown> | null = null;
         try {
-          const wk = iso(start);
-          const fromApi = await apiFetch<any>(`/public/sites/${worker.site_id}/week-plan?week=${encodeURIComponent(wk)}`, {
+          fromShared = await apiFetch<Record<string, unknown>>(
+            `/director/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}&scope=shared`,
+            authOpts as any,
+          );
+        } catch {
+          fromShared = null;
+        }
+        if (gen !== weekPlanFetchGenRef.current) return;
+
+        const picked = weekPlanFromApiPayload(fromShared);
+
+        if (picked) {
+          try {
+            localStorage.setItem(sharedKey, JSON.stringify({ ...picked, pulls: picked.pulls ?? {} }));
+          } catch {
+            /* ignore */
+          }
+          setWeekPlan(picked);
+          return;
+        }
+
+        try {
+          const fromPublic = await apiFetch<any>(`/public/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}`, {
             headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           });
           if (gen !== weekPlanFetchGenRef.current) return;
-          if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
-            try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
-            setWeekPlan({
-              assignments: fromApi.assignments,
-              isManual: !!fromApi.isManual,
-              workers: Array.isArray(fromApi.workers) ? fromApi.workers : undefined,
-              pulls: (fromApi && fromApi.pulls && typeof fromApi.pulls === "object") ? fromApi.pulls : undefined,
-            });
+          const publicPlan = weekPlanFromApiPayload(fromPublic);
+          if (publicPlan) {
+            try {
+              localStorage.setItem(sharedKey, JSON.stringify({ ...publicPlan, pulls: publicPlan.pulls ?? {} }));
+            } catch {
+              /* ignore */
+            }
+            setWeekPlan(publicPlan);
             return;
           }
-        } catch {}
+        } catch {
+          /* pas de fallback brouillon */
+        }
         if (gen !== weekPlanFetchGenRef.current) return;
-        const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
+        const raw = typeof window !== "undefined" ? localStorage.getItem(sharedKey) : null;
         if (raw) {
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.assignments) {
-            setWeekPlan({
-              assignments: parsed.assignments,
-              isManual: !!parsed.isManual,
-              workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-              pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
-            });
-            return;
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.assignments) {
+              setWeekPlan({
+                assignments: parsed.assignments,
+                isManual: !!parsed.isManual,
+                workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
+                pulls: (parsed && parsed.pulls && typeof parsed.pulls === "object") ? parsed.pulls : undefined,
+              });
+              return;
+            }
+          } catch {
+            /* ignore */
           }
         }
         if (gen !== weekPlanFetchGenRef.current) return;
@@ -191,20 +241,40 @@ export default function WorkerDetailsPage() {
     }
   }, [weekStart, isCalendarOpen]);
 
+  /** Profil « מערכת » (DB / all-workers) — pour בקשות העובד, לא מטעות טיוטת שבוע בתכנון השמור. */
+  const workerSystemProfile = useMemo(() => {
+    if (!worker) return null;
+    return {
+      name: String(worker.name || ""),
+      max_shifts: worker.max_shifts,
+      roles: Array.isArray(worker.roles) ? worker.roles : [],
+      availability: worker.availability && typeof worker.availability === "object" ? worker.availability : {},
+    };
+  }, [worker]);
+
   const effectiveWorker = useMemo(() => {
     if (!worker) return null;
     // eslint-disable-next-line no-console
     console.log("[WorkerDetails] effectiveWorker - worker:", worker, "phone:", worker.phone);
     const snap = weekPlan?.workers?.find((w: any) => String(w.id) === String(worker.id));
     if (snap) {
+      const snapRoles = (snap as any).roles;
+      const snapAvail = (snap as any).availability;
+      const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+      const snapRolesUsable = Array.isArray(snapRoles) && snapRoles.length > 0;
+      const snapAvailUsable =
+        snapAvail &&
+        typeof snapAvail === "object" &&
+        DAY_KEYS.some((k) => Array.isArray((snapAvail as Record<string, unknown>)[k]) && ((snapAvail as Record<string, string[]>)[k] || []).length > 0);
+
       return {
         id: worker.id,
         site_id: worker.site_id,
         // IMPORTANT: toujours afficher l'identité depuis la DB (sinon un plan sauvegardé peut réafficher l'ancien nom)
         name: String(worker.name),
         max_shifts: typeof (snap as any).max_shifts === "number" ? (snap as any).max_shifts : worker.max_shifts,
-        roles: Array.isArray((snap as any).roles) ? (snap as any).roles : worker.roles,
-        availability: (snap as any).availability || worker.availability,
+        roles: snapRolesUsable ? snapRoles : worker.roles,
+        availability: snapAvailUsable ? snapAvail : worker.availability,
         phone: worker.phone, // Toujours utiliser le phone du worker actuel, pas celui sauvegardé
       } as Worker;
     }
@@ -217,11 +287,17 @@ export default function WorkerDetailsPage() {
     setEditPhone(worker.phone || "");
   }, [worker]);
 
+  const workerSiteLabel = useCallback((w: Worker) => {
+    const fromApi = String(w.site_name || "").trim();
+    if (fromApi) return fromApi;
+    const s = sites.find((x) => x.id === w.site_id);
+    return s?.name || `אתר #${w.site_id}`;
+  }, [sites]);
+
   const siteName = useMemo(() => {
     if (!worker) return "";
-    const s = sites.find((x) => x.id === worker.site_id);
-    return s?.name || `אתר #${worker.site_id}`;
-  }, [sites, worker]);
+    return workerSiteLabel(worker);
+  }, [worker, workerSiteLabel]);
 
   const workerSiteEntries = useMemo(() => {
     if (!worker) return [];
@@ -235,11 +311,17 @@ export default function WorkerDetailsPage() {
       if (!uniqueBySite.has(Number(entry.site_id))) uniqueBySite.set(Number(entry.site_id), entry);
     });
     return Array.from(uniqueBySite.values()).sort((a, b) => {
-      return (sites.find((site) => site.id === a.site_id)?.name || "").localeCompare(
-        sites.find((site) => site.id === b.site_id)?.name || "",
-      );
+      const rank = (entry: Worker) => {
+        if (entry.site_deleted) return 2;
+        if (entry.removed_by_planning) return 1;
+        return 0;
+      };
+      const da = rank(a);
+      const db = rank(b);
+      if (da !== db) return da - db;
+      return workerSiteLabel(a).localeCompare(workerSiteLabel(b), "he");
     });
-  }, [allWorkers, sites, worker]);
+  }, [allWorkers, worker, workerSiteLabel]);
 
   const weekRangeLabel = useMemo(() => {
     const end = addDays(weekStart, 6);
@@ -262,39 +344,43 @@ export default function WorkerDetailsPage() {
 
   const weekNavRow = (
     <>
-            <button
+      <button
         type="button"
-              onClick={() => setWeekStart((prev) => addDays(prev, +7))}
+        onClick={() => setWeekStart((prev) => addDays(prev, -7))}
         className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="שבוע הבא"
-              title="שבוע הבא"
-            >
-              →
-            </button>
+        aria-label="שבוע קודם"
+        title="שבוע קודם"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+          <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
+        </svg>
+      </button>
       <span className="min-w-0 shrink text-center text-xs font-medium text-zinc-700 whitespace-nowrap sm:text-sm dark:text-zinc-200">
         {weekRangeLabel}
-            </span>
-            <button
+      </span>
+      <button
         type="button"
-              onClick={() => setWeekStart((prev) => addDays(prev, -7))}
+        onClick={() => setWeekStart((prev) => addDays(prev, +7))}
         className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="שבוע קודם"
-              title="שבוע קודם"
-            >
-              ←
-            </button>
-            <button
+        aria-label="שבוע הבא"
+        title="שבוע הבא"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+          <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+        </svg>
+      </button>
+      <button
         type="button"
-              onClick={() => setIsCalendarOpen(true)}
+        onClick={() => setIsCalendarOpen(true)}
         className="inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="בחר שבוע מלוח שנה"
-              title="בחר שבוע מלוח שנה"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+        aria-label="בחר שבוע מלוח שנה"
+        title="בחר שבוע מלוח שנה"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
           <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
           <path d="M7 14h5v5H7z" />
-              </svg>
-            </button>
+        </svg>
+      </button>
     </>
   );
 
@@ -307,7 +393,7 @@ export default function WorkerDetailsPage() {
             <h1 className="min-w-0 truncate text-xl font-semibold">עריכת עובד</h1>
             {backButton}
           </div>
-          <div className="flex min-w-0 w-full items-center justify-center gap-2 px-1 sm:gap-2 sm:px-2">
+          <div className="flex min-w-0 w-full items-center justify-center gap-3 px-1 sm:px-2">
             {weekNavRow}
           </div>
         </div>
@@ -317,6 +403,14 @@ export default function WorkerDetailsPage() {
           <LoadingAnimation className="py-8" size={80} />
         ) : worker ? (
           <>
+            {worker.site_deleted ? (
+              <div
+                className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+                role="status"
+              >
+                האתר «{workerSiteLabel(worker)}» אינו ברשימה הפעילה (ארכיון). ההיסטוריה והתכנון השמור עדיין זמינים לצפייה.
+              </div>
+            ) : null}
             {workerSiteEntries.length > 1 ? (
               <div className="rounded-xl border p-4 dark:border-zinc-800">
                 <label className="mb-2 block text-sm font-medium">בחר אתר</label>
@@ -331,7 +425,8 @@ export default function WorkerDetailsPage() {
                 >
                   {workerSiteEntries.map((entry) => (
                     <option key={entry.id} value={entry.site_id}>
-                      {sites.find((site) => site.id === entry.site_id)?.name || `אתר #${entry.site_id}`}
+                      {workerSiteLabel(entry)}
+                      {entry.site_deleted ? " (ארכיון)" : entry.removed_by_planning ? " (הוסר מהאתר)" : ""}
                     </option>
                   ))}
                 </select>
@@ -672,11 +767,15 @@ export default function WorkerDetailsPage() {
             >
               <div className="border-b border-[#B3ECFF] bg-[#E6F7FF] px-4 py-3 dark:border-cyan-800/70 dark:bg-cyan-950/45">
                 <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">שיבוצים לשבוע הנוכחי</h2>
-                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">לפי התכנון השמור לאתר לשבוע שנבחר למעלה</p>
+                <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">
+                  לפי התכנון שפורסם לעובדים לאתר, לשבוע שנבחר למעלה (לא כולל טיוטת מנהל או AI)
+                </p>
               </div>
               {!siteConfig || !weekPlan ? (
                 <div className="bg-white px-4 py-8 text-center dark:bg-zinc-950/60">
-                  <p className="text-sm text-zinc-500 dark:text-zinc-400">אין נתוני תכנון שמורים לשבוע זה.</p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    אין תכנון שפורסם לעובדים לשבוע זה.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
@@ -714,13 +813,14 @@ export default function WorkerDetailsPage() {
                                 const names: string[] = (weekPlan.assignments?.[dk]?.[sh?.name]?.[stationIndex] || []) as any;
                                 const pulls = (weekPlan as any)?.pulls || {};
                                 const cleanNames = (names || []).map(String).map((x) => x.trim()).filter(Boolean);
-                                const required = (() => {
-                                  // similaire à history: fallback au nb de workers config si dispo
-                                  try { return Number(sh?.workers || 0) || 0; } catch { return 0; }
-                                })();
+                                /** Comme worker/history + planning : pas le seul `sh.workers` (ignore יום כבוי / per-day). */
+                                const required = getRequiredFor(st, String(sh?.name || ""), dk);
                                 const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
                                 const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
-                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                /** Pas de placeholder « — » si la case est vraiment inactive et sans שיבוץ ni משיכה. */
+                                const minSlots =
+                                  cleanNames.length === 0 && required === 0 && pullsCount === 0 ? 0 : 1;
+                                const slotCount = Math.max(required + pullsCount, cleanNames.length, minSlots);
                                 return (
                                   <div
                                     key={`cell-${stationIndex}-${sIdx}-${dk}`}
@@ -846,19 +946,19 @@ export default function WorkerDetailsPage() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
                     <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">שם</div>
-                    <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{effectiveWorker?.name}</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-100">{workerSystemProfile?.name}</div>
                   </div>
                   <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">
                     <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">מקס&apos; משמרות</div>
                     <div className="mt-1 text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-100">
-                      {effectiveWorker?.max_shifts ?? "—"}
+                      {workerSystemProfile?.max_shifts ?? "—"}
                     </div>
                   </div>
                   <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50 sm:col-span-1">
                     <div className="text-xs font-medium text-zinc-500 dark:text-zinc-400">תפקידים</div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {effectiveWorker?.roles?.length ? (
-                        effectiveWorker.roles.map((role) => (
+                      {workerSystemProfile?.roles?.length ? (
+                        workerSystemProfile.roles.map((role) => (
                           <span
                             key={role}
                             className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-medium text-zinc-800 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-200"
@@ -877,7 +977,7 @@ export default function WorkerDetailsPage() {
                   <div className="mb-2 text-xs font-semibold text-[#004B63] dark:text-cyan-100">זמינות לפי יום</div>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
                     {Object.keys(dayLabels).map((dk) => {
-                      const slots = (effectiveWorker?.availability?.[dk] || []) as string[];
+                      const slots = (workerSystemProfile?.availability?.[dk] || []) as string[];
                       const has = slots.length > 0;
                       return (
                         <div

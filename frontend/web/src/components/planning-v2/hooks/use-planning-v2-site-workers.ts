@@ -62,10 +62,11 @@ export function usePlanningV2SiteWorkers(siteId: string) {
     }
     setSiteLoading(true);
     try {
-      const data = await apiFetch<SiteSummary>(`/director/sites/${siteId}`, {
+      const raw = await apiFetch<SiteSummary & { deleted_at?: number | null }>(`/director/sites/${siteId}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
-      setSite(data);
+      const { deleted_at: deletedAtRaw, ...rest } = raw;
+      setSite({ ...rest, deletedAt: deletedAtRaw ?? null });
     } catch {
       setSite(null);
       toast.error("לא ניתן לטעון את פרטי האתר");

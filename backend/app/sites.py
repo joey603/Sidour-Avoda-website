@@ -631,6 +631,66 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
     return payload
 
 
+def _enforce_role_requirements_on_assignments(
+    site_config: dict | None,
+    assignments_value: dict | None,
+    workers_rows: list[SiteWorker],
+) -> dict:
+    """Retire les noms non compatibles avec les rôles requis d’un slot.
+
+    Règle: si un slot a au moins un rôle requis (>0), chaque nom assigné doit porter au moins
+    un de ces rôles. Sinon le nom est retiré du slot.
+    """
+    if not isinstance(assignments_value, dict):
+        return {}
+    from .ai_solver import build_capacities_from_config
+
+    days, shifts, stations = build_capacities_from_config(site_config or {})
+    if not stations:
+        return assignments_value
+
+    worker_roles_by_name: dict[str, set[str]] = {}
+    for row in workers_rows:
+        nm = _norm_name_local(getattr(row, "name", None))
+        if not nm:
+            continue
+        role_set = worker_roles_by_name.setdefault(nm, set())
+        for role_name in (getattr(row, "roles", None) or []):
+            norm_role = _norm_role_local(role_name)
+            if norm_role:
+                role_set.add(norm_role)
+
+    out = deepcopy(assignments_value)
+    for station_idx, st in enumerate(stations):
+        cap_roles = (st.get("capacity_roles") or {}) if isinstance(st, dict) else {}
+        for day_key in days:
+            for shift_name in shifts:
+                role_map_raw = ((cap_roles.get(day_key, {}) or {}).get(shift_name, {}) or {})
+                required_roles = {
+                    _norm_role_local(role_name)
+                    for role_name, cnt in (role_map_raw.items() if isinstance(role_map_raw, dict) else [])
+                    if int(cnt or 0) > 0 and _norm_role_local(role_name)
+                }
+                if not required_roles:
+                    continue
+                per_shift = (out.get(day_key) or {}).get(shift_name)
+                if not isinstance(per_shift, list) or station_idx >= len(per_shift):
+                    continue
+                cell = per_shift[station_idx]
+                if not isinstance(cell, list):
+                    continue
+                filtered_cell: list[str] = []
+                for raw_name in cell:
+                    norm_name = _norm_name_local(str(raw_name or ""))
+                    if not norm_name:
+                        continue
+                    worker_roles = worker_roles_by_name.get(norm_name, set())
+                    if worker_roles.intersection(required_roles):
+                        filtered_cell.append(str(raw_name))
+                per_shift[station_idx] = filtered_cell
+    return out
+
+
 def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, week_iso: str) -> NextWeekSavedPlanStatus:
     assignments = None
     pulls = None
@@ -707,10 +767,18 @@ def _worker_identity_key(row: SiteWorker) -> str:
     return f"name:{_norm_name_local(getattr(row, 'name', ''))}"
 
 
+def _active_director_site_ids(db: Session, director_id: int) -> set[int]:
+    """Sites non supprimés : les liaisons multi-site ne portent que sur ces ids (historique sur site archivé exclu du graphe)."""
+    return {
+        int(s.id)
+        for s in db.query(Site).filter(Site.director_id == director_id, Site.deleted_at.is_(None)).all()
+    }
+
+
 def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int, graph_week_iso: str | None = None) -> list[int]:
     """Composantes connexes par travailleur identique. Exclut pending et retraits (removed_from) pour la semaine du graphe (None = effectif « maintenant »)."""
-    sites = db.query(Site).filter(Site.director_id == director_id).all()
-    site_ids = [int(s.id) for s in sites]
+    site_ids_set = _active_director_site_ids(db, director_id)
+    site_ids = sorted(site_ids_set)
     rows = (
         [
             row
@@ -746,8 +814,8 @@ def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: in
 
 def _linked_site_cluster_map_for_director(db: Session, director_id: int) -> dict[int, list[int]]:
     """Pour chaque site, liste triée des ids du même groupe multi-sites (≥2) ; [] si isolé."""
-    sites = db.query(Site).filter(Site.director_id == director_id).all()
-    site_ids = [int(s.id) for s in sites]
+    site_ids_set = _active_director_site_ids(db, director_id)
+    site_ids = sorted(site_ids_set)
     if not site_ids:
         return {}
     rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
@@ -804,10 +872,7 @@ def _site_role_key(site_id: int, role_name: str | None) -> str:
 
 
 def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) -> list[int]:
-    director_site_ids = [
-        int(site_id)
-        for (site_id,) in db.query(Site.id).filter(Site.director_id == director_id).all()
-    ]
+    director_site_ids = sorted(_active_director_site_ids(db, director_id))
     if not director_site_ids:
         return [int(row.site_id)]
     key = _worker_identity_key(row)
@@ -824,7 +889,11 @@ def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) 
     return linked_site_ids or [int(row.site_id)]
 
 
-def _linked_site_ids_by_worker_key(rows: list[SiteWorker], graph_week_iso: str | None = None) -> dict[str, list[int]]:
+def _linked_site_ids_by_worker_key(
+    rows: list[SiteWorker],
+    graph_week_iso: str | None = None,
+    active_site_ids: set[int] | None = None,
+) -> dict[str, list[int]]:
     key_to_site_ids: dict[str, set[int]] = {}
     for row in rows:
         if bool(getattr(row, "pending_approval", False)) or not _site_worker_visible_for_week(row, graph_week_iso):
@@ -832,7 +901,10 @@ def _linked_site_ids_by_worker_key(rows: list[SiteWorker], graph_week_iso: str |
         key = _worker_identity_key(row)
         if not key:
             continue
-        key_to_site_ids.setdefault(key, set()).add(int(row.site_id))
+        site_id = int(row.site_id)
+        if active_site_ids is not None and site_id not in active_site_ids:
+            continue
+        key_to_site_ids.setdefault(key, set()).add(site_id)
     return {key: sorted(site_ids) for key, site_ids in key_to_site_ids.items()}
 
 
@@ -1147,6 +1219,11 @@ def _generate_multi_site_memory_plans(
         status=result.get("status"),
         objective=result.get("objective"),
     )
+    filled_base_site_plans = _enforce_role_requirements_on_site_plans(
+        db,
+        context["sites_by_id"],
+        filled_base_site_plans,
+    )
     for site_id, site_plan in filled_base_site_plans.items():
         site_plan["status"] = result.get("status")
         site_plan["objective"] = result.get("objective")
@@ -1156,6 +1233,11 @@ def _generate_multi_site_memory_plans(
             alt_assignments if isinstance(alt_assignments, dict) else {},
             status=result.get("status"),
             objective=result.get("objective"),
+        )
+        alt_site_plans = _enforce_role_requirements_on_site_plans(
+            db,
+            context["sites_by_id"],
+            alt_site_plans,
         )
         for site_id, alt_site_plan in alt_site_plans.items():
             filled_base_site_plans[site_id].setdefault("alternatives", []).append(alt_site_plan["assignments"])
@@ -1227,6 +1309,42 @@ def _apply_auto_pulls_to_site_plans(
         if next_alternatives:
             site_plan["alternatives"] = next_alternatives
             site_plan["alternative_pulls"] = alternative_pulls
+    return site_plans
+
+
+def _enforce_role_requirements_on_site_plans(
+    db: Session,
+    sites_by_id: dict[int, Site],
+    site_plans: dict[str, dict],
+) -> dict[str, dict]:
+    if not site_plans:
+        return site_plans
+    site_ids = [int(site_id) for site_id in site_plans.keys()]
+    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
+    rows_by_site: dict[int, list[SiteWorker]] = {}
+    for row in rows:
+        rows_by_site.setdefault(int(row.site_id), []).append(row)
+
+    for site_id_str, site_plan in site_plans.items():
+        site_id = int(site_id_str)
+        site = sites_by_id.get(site_id)
+        if not site:
+            continue
+        site_rows = rows_by_site.get(site_id, [])
+        site_plan["assignments"] = _enforce_role_requirements_on_assignments(
+            site.config or {},
+            site_plan.get("assignments") if isinstance(site_plan.get("assignments"), dict) else {},
+            site_rows,
+        )
+        if isinstance(site_plan.get("alternatives"), list):
+            site_plan["alternatives"] = [
+                _enforce_role_requirements_on_assignments(
+                    site.config or {},
+                    alt if isinstance(alt, dict) else {},
+                    site_rows,
+                )
+                for alt in (site_plan.get("alternatives") or [])
+            ]
     return site_plans
 
 
@@ -1365,12 +1483,25 @@ def _generate_director_week_plan_payload(
     )
 
     if not auto_pulls_enabled:
-        return make_payload(result["assignments"])
+        cleaned_base_assignments = _enforce_role_requirements_on_assignments(
+            site.config or {},
+            result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+            rows,
+        )
+        return make_payload(cleaned_base_assignments)
 
-    candidate_assignments: list[dict] = [result["assignments"]]
+    candidate_assignments: list[dict] = [
+        _enforce_role_requirements_on_assignments(
+            site.config or {},
+            result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+            rows,
+        )
+    ]
     for alt in (result.get("alternatives") or []):
         if isinstance(alt, dict):
-            candidate_assignments.append(alt)
+            candidate_assignments.append(
+                _enforce_role_requirements_on_assignments(site.config or {}, alt, rows),
+            )
 
     best_payload: dict | None = None
     best_key: tuple[int, int, int] | None = None
@@ -1561,12 +1692,20 @@ def process_auto_planning_tick(db: Session) -> None:
     logger.info("[AUTO-PLANNING] tick end now=%s", now.isoformat())
 
 
-def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
+def _director_site_ownership_or_404(db: Session, site_id: int, director_id: int) -> Site:
+    """Directeur propriétaire — inclut les sites soft-deleted (consultation / historique)."""
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
     if site.director_id != director_id:
         raise HTTPException(status_code=403, detail="Accès interdit")
+    return site
+
+
+def _director_site_or_404(db: Session, site_id: int, director_id: int) -> Site:
+    site = _director_site_ownership_or_404(db, site_id, director_id)
+    if getattr(site, "deleted_at", None):
+        raise HTTPException(status_code=404, detail="Site introuvable")
     return site
 
 
@@ -1692,7 +1831,7 @@ def get_weekly_availability(
     Persistance DB (Neon) des overrides hebdo de disponibilité utilisés par le directeur.
     Remplace le localStorage comme source de vérité entre appareils.
     """
-    _director_site_or_404(db, site_id, user.id)
+    _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     row = (
         db.query(SiteWeeklyAvailability)
@@ -1739,7 +1878,7 @@ def get_week_plan(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
-    _director_site_or_404(db, site_id, user.id)
+    _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     sc = (scope or "director").strip()
     if sc not in ("auto", "director", "shared"):
@@ -1868,7 +2007,7 @@ def list_site_messages(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
-    _director_site_or_404(db, site_id, user.id)
+    _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     rows = (
         db.query(SiteMessage)
@@ -2156,7 +2295,7 @@ def normalize_site_config(config: dict) -> dict:
 def list_sites(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     # En Postgres, le type JSON n'a pas d'opérateur d'égalité → impossible de GROUP BY sur sites.config.
     # On fait donc 2 requêtes simples et on assemble côté Python.
-    sites = db.query(Site).filter(Site.director_id == user.id).all()
+    sites = db.query(Site).filter(Site.director_id == user.id, Site.deleted_at.is_(None)).all()
     counts_rows = (
         db.query(SiteWorker.site_id, func.count(SiteWorker.id).label("workers_count"))
         .join(Site, Site.id == SiteWorker.site_id)
@@ -2231,19 +2370,17 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
 
 @router.get("/all-workers", response_model=list[WorkerOut])
 def list_all_workers(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
-    """Retourne tous les travailleurs de tous les sites du directeur"""
-    # Récupérer tous les sites du directeur
-    sites = db.query(Site.id).filter(Site.director_id == user.id).all()
-    site_ids = [s.id for s in sites]
+    """Retourne tous les travailleurs de tous les sites du directeur (sites actifs ou archivés)."""
+    # Sites du directeur y compris soft-deleted (pour afficher encore le nom du site dans la liste travailleurs)
+    all_dir_sites = db.query(Site).filter(Site.director_id == user.id).all()
+    site_by_id = {int(s.id): s for s in all_dir_sites}
+    site_ids = list(site_by_id.keys())
     logger.info(f"[all-workers] Director {user.id} has {len(site_ids)} sites: {site_ids}")
     if not site_ids:
         return []
-    # Récupérer tous les travailleurs de ces sites (hors retraits effectifs pour la semaine courante)
-    rows = [
-        r
-        for r in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
-        if _site_worker_visible_for_week(r, None)
-    ]
+    # Récupérer tous les travailleurs de ces sites, y compris retirés du planning (historique multi-sites).
+    rows = [r for r in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()]
+    current_week_iso = _week_start_date(datetime.now()).date().isoformat()
     logger.info(f"[all-workers] Found {len(rows)} SiteWorkers: {[(r.id, r.name, r.site_id) for r in rows]}")
     result = []
     # Récupérer tous les workers users une seule fois pour optimiser
@@ -2315,6 +2452,9 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
         if not phone:
             phone = r.phone
         logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): phone={phone}, user_worker found={user_worker is not None}")
+        sn = site_by_id.get(int(r.site_id))
+        removed_from_week_iso = str(getattr(r, "removed_from_week_iso", "") or "").strip() or None
+        removed_by_planning = bool(removed_from_week_iso and current_week_iso >= removed_from_week_iso)
         worker_out = WorkerOut(
             id=r.id,
             site_id=r.site_id,
@@ -2323,7 +2463,11 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
             roles=r.roles or [],
             availability=r.availability or {},
             answers=r.answers or {},
-            phone=phone
+            phone=phone,
+            site_name=(sn.name if sn else None),
+            site_deleted=bool(getattr(sn, "deleted_at", None)) if sn else False,
+            removed_from_week_iso=removed_from_week_iso,
+            removed_by_planning=removed_by_planning,
         )
         logger.info(f"[all-workers] WorkerOut created for '{r.name}': phone field = {worker_out.phone}")
         result.append(worker_out)
@@ -2346,6 +2490,7 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
         pending_workers_count=pending_workers_count,
         config=site.config,
         linked_site_ids=linked_by_site.get(int(site.id), []),
+        deleted_at=getattr(site, "deleted_at", None),
     )
 
 
@@ -2353,6 +2498,8 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
 def get_worker_invite_link(site_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    if getattr(site, "deleted_at", None):
         raise HTTPException(status_code=404, detail="Site introuvable")
     ensure_director_code(user, db)
     db.commit()
@@ -2366,8 +2513,10 @@ def delete_site(site_id: int, user: User = Depends(require_role("director")), db
     site: Site | None = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    # Supprime aussi les assignments via FK ondelete=CASCADE
-    db.delete(site)
+    if getattr(site, "deleted_at", None):
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    # Soft-delete : conserve site_workers, site_week_plans, etc. — plus d’accès actif via _director_site_or_404
+    site.deleted_at = _now_ms()
     db.commit()
     return None
 
@@ -2376,6 +2525,8 @@ def delete_site(site_id: int, user: User = Depends(require_role("director")), db
 def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    if getattr(site, "deleted_at", None):
         raise HTTPException(status_code=404, detail="Site introuvable")
     if payload.name is not None:
         site.name = payload.name
@@ -2402,6 +2553,7 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
         pending_workers_count=pending_workers_count,
         config=site.config,
         linked_site_ids=linked_by_site.get(int(site.id), []),
+        deleted_at=None,
     )
 
 
@@ -2412,20 +2564,19 @@ def list_workers(
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
-    site = db.get(Site, site_id)
-    if not site or site.director_id != user.id:
-        raise HTTPException(status_code=404, detail="Site introuvable")
+    _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week) if week else None
     rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if _site_worker_visible_for_week(row, wk)]
     director_sites = db.query(Site).filter(Site.director_id == user.id).all()
     director_site_name_by_id = {int(s.id): s.name for s in director_sites}
     director_site_ids = [int(s.id) for s in director_sites]
+    active_director_site_ids = _active_director_site_ids(db, user.id)
     director_rows = (
         [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all() if _site_worker_visible_for_week(row, wk)]
         if director_site_ids
         else []
     )
-    linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows, wk)
+    linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows, wk, active_director_site_ids)
 
     user_ids = sorted({int(r.user_id) for r in rows if getattr(r, "user_id", None)})
     users_by_id = {
@@ -2857,7 +3008,13 @@ def reject_pending_worker(site_id: int, worker_id: int, user: User = Depends(req
 
 
 @router.delete("/{site_id}/workers/{worker_id}", status_code=204)
-def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+def delete_worker(
+    site_id: int,
+    worker_id: int,
+    week: str | None = Query(None),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
     """
     Retire le travailleur du planning à partir du dimanche de la semaine en cours (clé semaine de l'app).
     Les semaines strictement antérieures restent consultables avec ce travailleur dans l'historique.
@@ -2869,7 +3026,8 @@ def delete_worker(site_id: int, worker_id: int, user: User = Depends(require_rol
     if not w or w.site_id != site_id:
         raise HTTPException(status_code=404, detail="Travailleur introuvable sur ce site")
 
-    w.removed_from_week_iso = _week_start_date(datetime.now()).date().isoformat()
+    target_week_iso = _validate_week_iso(week) if week else _week_start_date(datetime.now()).date().isoformat()
+    w.removed_from_week_iso = target_week_iso
     db.commit()
     logger.info(
         f"[delete-worker] Worker '{w.name}' (id={worker_id}) removed from site {site_id} from week {w.removed_from_week_iso}"
@@ -2920,7 +3078,11 @@ def get_linked_sites(
         linked_site = by_id.get(linked_site_int)
         if not linked_site:
             continue
-        entry = {"id": linked_site_int, "name": linked_site.name}
+        entry = {
+            "id": linked_site_int,
+            "name": linked_site.name,
+            "site_deleted": bool(getattr(linked_site, "deleted_at", None)),
+        }
         if week_iso:
             preferred_row = _preferred_week_plan(plan_rows_by_site.get(linked_site_int, []))
             data = preferred_row.data if preferred_row and isinstance(preferred_row.data, dict) else {}
@@ -2934,6 +3096,13 @@ def get_linked_sites(
             entry["assigned_count"] = int(summary.get("assigned_count") or 0)
             entry["required_count"] = int(summary.get("required_count") or 0)
         response.append(entry)
+    # Actifs d’abord, puis sites archivés (soft-delete) ; à l’intérieur de chaque groupe par nom.
+    response.sort(
+        key=lambda e: (
+            1 if e.get("site_deleted") else 0,
+            str(e.get("name") or ""),
+        )
+    )
     return response
 
 
@@ -3124,6 +3293,11 @@ async def ai_generate_linked_planning_stream(
                             status="STREAMING" if item.get("type") == "base" else None,
                             objective=0,
                         )
+                        split_site_plans = _enforce_role_requirements_on_site_plans(
+                            db,
+                            context["sites_by_id"],
+                            split_site_plans,
+                        )
                         if payload and payload.auto_pulls_enabled:
                             split_site_plans = _apply_auto_pulls_to_site_plans(
                                 db,
@@ -3269,13 +3443,26 @@ def ai_generate_planning(
     )
     base_pulls: dict = {}
     alt_pulls: list[dict] = []
-    assignments_out = result["assignments"]
-    alternatives_out = result.get("alternatives", [])
+    assignments_out = _enforce_role_requirements_on_assignments(
+        site.config or {},
+        result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+        rows,
+    )
+    alternatives_out = [
+        _enforce_role_requirements_on_assignments(site.config or {}, alt, rows)
+        for alt in (result.get("alternatives") or [])
+        if isinstance(alt, dict)
+    ]
     if payload.auto_pulls_enabled:
+        base_candidate_assignments = _enforce_role_requirements_on_assignments(
+            site.config or {},
+            result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+            rows,
+        )
         base_payload = _apply_auto_pulls_to_payload(
             site,
             rows,
-            {"assignments": deepcopy(result["assignments"]), "pulls": {}},
+            {"assignments": deepcopy(base_candidate_assignments), "pulls": {}},
             pulls_limit=payload.pulls_limit,
         )
         candidate_pairs: list[tuple[dict, dict]] = []
@@ -3284,10 +3471,13 @@ def ai_generate_planning(
         if _matches_pulls_limit(base_pulls, payload.pulls_limit):
             candidate_pairs.append((base_assignments, base_pulls))
         for alt in (result.get("alternatives") or []):
+            if not isinstance(alt, dict):
+                continue
+            alt_cleaned = _enforce_role_requirements_on_assignments(site.config or {}, alt, rows)
             alt_payload = _apply_auto_pulls_to_payload(
                 site,
                 rows,
-                {"assignments": deepcopy(alt), "pulls": {}},
+                {"assignments": deepcopy(alt_cleaned), "pulls": {}},
                 pulls_limit=payload.pulls_limit,
             )
             current_alt_assignments = alt_payload.get("assignments") or {}
@@ -3436,10 +3626,15 @@ async def ai_generate_stream(
                 )
                 for item in gen:
                     if item.get("type") in {"base", "alternative"} and payload.auto_pulls_enabled:
+                        cleaned_assignments = _enforce_role_requirements_on_assignments(
+                            site.config or {},
+                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                            rows,
+                        )
                         transformed = _apply_auto_pulls_to_payload(
                             site,
                             rows,
-                            {"assignments": deepcopy(item.get("assignments") or {}), "pulls": {}},
+                            {"assignments": deepcopy(cleaned_assignments), "pulls": {}},
                             pulls_limit=eff_pulls_limit,
                         )
                         if eff_pulls_limit is not None and not _matches_pulls_limit(transformed.get("pulls"), eff_pulls_limit):
@@ -3448,6 +3643,15 @@ async def ai_generate_stream(
                         enriched["assignments"] = transformed.get("assignments") or {}
                         enriched["pulls"] = transformed.get("pulls") or {}
                         matched_candidates += 1
+                        q.put(enriched)
+                        continue
+                    if item.get("type") in {"base", "alternative"}:
+                        enriched = dict(item)
+                        enriched["assignments"] = _enforce_role_requirements_on_assignments(
+                            site.config or {},
+                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                            rows,
+                        )
                         q.put(enriched)
                         continue
                     if item.get("type") == "done" and payload.auto_pulls_enabled and eff_pulls_limit is not None and matched_candidates == 0:

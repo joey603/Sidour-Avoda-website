@@ -341,6 +341,8 @@ export default function SitesList() {
     publish: null,
   });
   const [deleteWeekPlanSiteId, setDeleteWeekPlanSiteId] = useState<number | null>(null);
+  /** Confirmation visuelle avant suppression définitive d’un site (remplace window.confirm). */
+  const [siteDeleteConfirm, setSiteDeleteConfirm] = useState<{ id: number; name: string } | null>(null);
   const [sitesListMultiDialog, setSitesListMultiDialog] = useState<SitesListMultiDialogState | null>(null);
   /** Après promote depuis פעולות : badge dans la liste jusqu’à nouvelle טיוטה אוטומטית */
   const [sitePromoteBadge, setSitePromoteBadge] = useState<Record<number, "saved" | "published">>({});
@@ -582,11 +584,8 @@ export default function SitesList() {
     router.push("/director/sites/new");
   }
 
-  async function onDelete(id: number) {
-    if (typeof window !== "undefined") {
-      const ok = window.confirm("למחוק את האתר?");
-      if (!ok) return;
-    }
+  async function executeDeleteSite(id: number) {
+    setSiteDeleteConfirm(null);
     setDeletingId(id);
     // suppression optimiste immédiate
     setSites((prev) => prev.filter((s) => s.id !== id));
@@ -1312,7 +1311,7 @@ export default function SitesList() {
                             className="relative"
                             ref={openActionsSiteId === s.id ? actionsMenuRef : null}
                           >
-                            <button
+                        <button
                               type="button"
                               onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
                               className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
@@ -1333,12 +1332,12 @@ export default function SitesList() {
                                     router.push(`/director/planning-v2/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                                >
-                                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                                     <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-                                  </svg>
+                          </svg>
                                   צפה
-                                </button>
+                        </button>
                                 {showAutoPlanningSiteStatuses ? (
                                   <>
                                     <button
@@ -1414,7 +1413,8 @@ export default function SitesList() {
                         </button>
                         )}
                         <button
-                          onClick={() => onDelete(s.id)}
+                          type="button"
+                          onClick={() => setSiteDeleteConfirm({ id: s.id, name: s.name })}
                           disabled={deletingId === s.id}
                           className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
                         >
@@ -1551,7 +1551,7 @@ export default function SitesList() {
                             className="relative"
                             ref={openActionsSiteId === s.id ? actionsMenuRef : null}
                           >
-                            <button
+                        <button
                               type="button"
                               onClick={() => setOpenActionsSiteId((prev) => (prev === s.id ? null : s.id))}
                               className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
@@ -1572,12 +1572,12 @@ export default function SitesList() {
                                     router.push(`/director/planning-v2/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                                >
-                                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+                        >
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
                                     <path d="M12 5c-7.63 0-10.99 6.5-11 7 .01.5 3.37 7 11 7 7.64 0 10.99-6.5 11-7-.01-.5-3.37-7-11-7zm0 12c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-                                  </svg>
+                          </svg>
                                   צפה
-                                </button>
+                        </button>
                                 {showAutoPlanningSiteStatuses ? (
                                   <>
                                     <button
@@ -1653,7 +1653,8 @@ export default function SitesList() {
                         </button>
                         )}
                         <button
-                          onClick={() => onDelete(s.id)}
+                          type="button"
+                          onClick={() => setSiteDeleteConfirm({ id: s.id, name: s.name })}
                           disabled={deletingId === s.id}
                           className="inline-flex items-center gap-1 rounded-md border border-red-300 px-3 py-1 text-sm text-red-700 shadow-sm hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900"
                         >
@@ -1674,6 +1675,48 @@ export default function SitesList() {
           )}
         </div>
       </div>
+      {siteDeleteConfirm ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          dir="rtl"
+          role="presentation"
+          onClick={() => setSiteDeleteConfirm(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+            role="alertdialog"
+            aria-labelledby="site-delete-title"
+            aria-describedby="site-delete-desc"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div id="site-delete-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              מחיקת אתר
+            </div>
+            <p id="site-delete-desc" className="mt-3 text-right text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+              למחוק את האתר <span className="font-semibold text-zinc-900 dark:text-zinc-100">{siteDeleteConfirm.name}</span>
+              ? פעולה זו מוחקת את האתר ואת הנתונים הקשורים אליו ואינה ניתנת לשחזור.
+            </p>
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800"
+                onClick={() => setSiteDeleteConfirm(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                aria-label="אישור מחיקת אתר"
+                disabled={deletingId === siteDeleteConfirm.id}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                onClick={() => void executeDeleteSite(siteDeleteConfirm.id)}
+              >
+                {deletingId === siteDeleteConfirm.id ? "מוחק..." : "מחק אתר"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {sitesListMultiDialog ? (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"

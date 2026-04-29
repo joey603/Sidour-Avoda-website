@@ -14,6 +14,13 @@ type PlanningWorkersTableProps = {
   onWorkerNameDragPreview?: (workerName: string | null) => void;
 };
 
+function normWorkerName(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 export function PlanningWorkersTable({
   rows,
   enabledRoleNames,
@@ -22,6 +29,16 @@ export function PlanningWorkersTable({
   workerNameDraggable = false,
   onWorkerNameDragPreview,
 }: PlanningWorkersTableProps) {
+  const overlaysByNormName = Object.entries(availabilityOverlays || {}).reduce(
+    (acc, [name, byDay]) => {
+      const key = normWorkerName(name);
+      if (!key) return acc;
+      acc[key] = byDay || {};
+      return acc;
+    },
+    {} as Record<string, Record<string, string[]>>,
+  );
+
   return (
     <div className="max-h-[26rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
       <table className="w-full table-fixed border-collapse text-[10px] md:text-sm">
@@ -99,7 +116,9 @@ export function PlanningWorkersTable({
                   {DAY_DEFS.map((d, i) => {
                     const baseRaw = (w.availability[d.key] || []) as string[];
                     const base = [...baseRaw].sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
-                    const extra = ((availabilityOverlays[w.name]?.[d.key]) || [])
+                    const workerOverlay =
+                      availabilityOverlays[w.name] || overlaysByNormName[normWorkerName(w.name)] || {};
+                    const extra = ((workerOverlay[d.key]) || [])
                       .filter((sn) => !baseRaw.includes(sn))
                       .sort((a, b) => displayShiftOrderIndex(a) - displayShiftOrderIndex(b));
                     return (

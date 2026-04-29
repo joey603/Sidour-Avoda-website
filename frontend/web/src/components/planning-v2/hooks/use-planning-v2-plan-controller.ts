@@ -22,6 +22,8 @@ function apiBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 }
 
+const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
+
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
   if (autoPullsLimit === "unlimited") return null;
@@ -114,7 +116,8 @@ export function usePlanningV2PlanController({
   >(null);
   const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0);
   const [generationRunning, setGenerationRunning] = useState(false);
-  const [autoPullsLimit, setAutoPullsLimit] = useState("2");
+  // Par défaut: משיכות ללא (empty string).
+  const [autoPullsLimit, setAutoPullsLimit] = useState("");
   const [isManual, setIsManual] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const genBusyRef = useRef(false);
@@ -123,6 +126,8 @@ export function usePlanningV2PlanController({
   const draftAlternativesRef = useRef<Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap }>>(
     [],
   );
+  const lastAlternativeSnapshotRef = useRef<string>("");
+  const alternativesFlushRafRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
   const workersRef = useRef(workers);
 
@@ -143,6 +148,22 @@ export function usePlanningV2PlanController({
   }, [weekPlan?.assignments]);
 
   const weekIso = getWeekKeyISO(weekStart);
+  const autoPullsStorageKey = `${AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX}${weekIso}`;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(autoPullsStorageKey);
+      if (raw == null) {
+        setAutoPullsLimit("");
+        return;
+      }
+      const normalized = String(raw);
+      setAutoPullsLimit(normalized);
+    } catch {
+      setAutoPullsLimit("");
+    }
+  }, [autoPullsStorageKey]);
 
   const autoPullsEnabled = autoPullsLimit !== "";
 
@@ -231,10 +252,13 @@ export function usePlanningV2PlanController({
   }, [selectedAlternativeIndex, alternativeCount]);
 
   useEffect(() => {
+    // Pendant la génération SSE, `alternativeCount` bouge à chaque événement — ne pas resynchroniser
+    // l’index ici (sinon boucle avec les effets du résumé / filtres qui appellent aussi setSelected).
+    if (generationRunning) return;
     if (safeAlternativeIndex !== selectedAlternativeIndex) {
       setSelectedAlternativeIndex(safeAlternativeIndex);
     }
-  }, [safeAlternativeIndex, selectedAlternativeIndex]);
+  }, [generationRunning, safeAlternativeIndex, selectedAlternativeIndex]);
 
   const displayAssignments = useMemo(() => {
     if (assignmentVariants.length === 0) return null;
@@ -253,6 +277,14 @@ export function usePlanningV2PlanController({
       /* ignore */
     }
     abortRef.current = null;
+    if (alternativesFlushRafRef.current != null) {
+      try {
+        window.cancelAnimationFrame(alternativesFlushRafRef.current);
+      } catch {
+        /* ignore */
+      }
+      alternativesFlushRafRef.current = null;
+    }
     setGenerationRunning(false);
     genBusyRef.current = false;
   }, []);
@@ -274,7 +306,18 @@ export function usePlanningV2PlanController({
     draftAssignmentsRef.current = null;
     draftPullsRef.current = {};
     draftAlternativesRef.current = [];
+    lastAlternativeSnapshotRef.current = "";
+    setDraftAssignments(null);
+    setDraftPulls(null);
     setDraftAlternatives([]);
+    if (alternativesFlushRafRef.current != null) {
+      try {
+        window.cancelAnimationFrame(alternativesFlushRafRef.current);
+      } catch {
+        /* ignore */
+      }
+      alternativesFlushRafRef.current = null;
+    }
     // Session « mémoire » multi-sites (clés multi_site_*) : efface tout état client lié à une ריצה / navigation précédente.
     clearAllPlanningSessionCaches();
     const purgeIds =
@@ -330,6 +373,18 @@ export function usePlanningV2PlanController({
     let idleAutoClosed = false;
     let noResultAutoClosed = false;
     let sawPlanToPersist = false;
+    const scheduleAlternativesFlush = () => {
+      if (alternativesFlushRafRef.current != null) return;
+      alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
+        alternativesFlushRafRef.current = null;
+        setDraftAlternatives((prev) => {
+          const next = draftAlternativesRef.current || [];
+          // Évite les renders inutiles quand rien n'a changé.
+          if (prev.length === next.length) return prev;
+          return [...next];
+        });
+      });
+    };
 
     const persistGeneratedAutoDraftToServer = async () => {
       if (linkedSitesLength > 1) {
@@ -485,6 +540,7 @@ export function usePlanningV2PlanController({
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
             const existing = readLinkedPlansFromMemory(weekStart);
             const merged: Record<string, LinkedSitePlan> = { ...(existing?.plansBySite || {}) };
+            let mergedChanged = false;
             for (const [k, p] of Object.entries(plans)) {
               if (!p || typeof p !== "object") continue;
               const prev = (merged[k] || {}) as LinkedSitePlan;
@@ -504,15 +560,35 @@ export function usePlanningV2PlanController({
                   alternatives: [],
                   alternative_pulls: [],
                 };
+                mergedChanged = true;
               } else if (nextAssignments) {
+                const prevAlternatives = Array.isArray(prev.alternatives) ? prev.alternatives : [];
+                const prevAlternativePulls = Array.isArray(prev.alternative_pulls) ? prev.alternative_pulls : [];
+                let isDuplicateAlternative = false;
+                try {
+                  const lastAltAsg = prevAlternatives.length > 0 ? prevAlternatives[prevAlternatives.length - 1] : null;
+                  const lastAltPulls =
+                    prevAlternativePulls.length > 0 ? prevAlternativePulls[prevAlternativePulls.length - 1] : null;
+                  if (lastAltAsg && JSON.stringify(lastAltAsg) === JSON.stringify(nextAssignments)) {
+                    const lastPullsNorm = lastAltPulls || {};
+                    const nextPullsNorm = nextPulls || {};
+                    isDuplicateAlternative = JSON.stringify(lastPullsNorm) === JSON.stringify(nextPullsNorm);
+                  }
+                } catch {
+                  isDuplicateAlternative = false;
+                }
+                if (isDuplicateAlternative) continue;
                 merged[k] = {
                   ...prev,
-                  alternatives: [...(prev.alternatives || []), nextAssignments],
-                  alternative_pulls: [...(prev.alternative_pulls || []), nextPulls],
+                  alternatives: [...prevAlternatives, nextAssignments],
+                  alternative_pulls: [...prevAlternativePulls, nextPulls],
                 };
+                mergedChanged = true;
               }
             }
-            saveLinkedPlansToMemory(weekStart, merged, Number(existing?.activeAltIndex || 0));
+            if (mergedChanged) {
+              saveLinkedPlansToMemory(weekStart, merged, Number(existing?.activeAltIndex || 0));
+            }
             const curEvent = plans[String(siteId)];
             if (curEvent?.assignments && typeof curEvent.assignments === "object") {
               altAssignments = curEvent.assignments as Record<string, Record<string, string[][]>>;
@@ -526,14 +602,23 @@ export function usePlanningV2PlanController({
             altPulls = evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {};
           }
           if (altAssignments) {
-            setDraftAlternatives((prev) => {
-              const next = [
-                ...prev,
-                { assignments: altAssignments as Record<string, Record<string, string[][]>>, pulls: altPulls },
-              ];
-              draftAlternativesRef.current = next;
-              return next;
-            });
+            let nextSnapshot = "";
+            try {
+              nextSnapshot = JSON.stringify({ assignments: altAssignments, pulls: altPulls || {} });
+            } catch {
+              nextSnapshot = "";
+            }
+            if (nextSnapshot && nextSnapshot === lastAlternativeSnapshotRef.current) {
+              return false;
+            }
+            if (nextSnapshot) {
+              lastAlternativeSnapshotRef.current = nextSnapshot;
+            }
+            draftAlternativesRef.current = [
+              ...(draftAlternativesRef.current || []),
+              { assignments: altAssignments as Record<string, Record<string, string[][]>>, pulls: altPulls },
+            ];
+            scheduleAlternativesFlush();
           }
           return false;
         }
@@ -568,6 +653,14 @@ export function usePlanningV2PlanController({
       if (noResultWatch) {
         window.clearTimeout(noResultWatch);
       }
+      if (alternativesFlushRafRef.current != null) {
+        try {
+          window.cancelAnimationFrame(alternativesFlushRafRef.current);
+        } catch {
+          /* ignore */
+        }
+        alternativesFlushRafRef.current = null;
+      }
       setGenerationRunning(false);
       genBusyRef.current = false;
       abortRef.current = null;
@@ -576,7 +669,6 @@ export function usePlanningV2PlanController({
           try {
             await persistGeneratedAutoDraftToServer();
             await reloadWeekPlan();
-            clearAllPlanningSessionCaches();
           } catch (err) {
             console.warn("[planning-v2] persist auto draft after generation:", err);
           }
@@ -593,6 +685,7 @@ export function usePlanningV2PlanController({
     linkedSitesLength,
     reloadWeekPlan,
     weekPurgeSiteIds.join(","),
+    alternativesFlushRafRef,
   ]);
 
   const savePlan = useCallback(
@@ -713,6 +806,20 @@ export function usePlanningV2PlanController({
     setDraftPulls(next || {});
   }, []);
 
+  const setAutoPullsLimitPersisted = useCallback(
+    (v: string) => {
+      const next = String(v ?? "");
+      setAutoPullsLimit(next);
+      if (typeof window === "undefined") return;
+      try {
+        localStorage.setItem(autoPullsStorageKey, next);
+      } catch {
+        /* ignore */
+      }
+    },
+    [autoPullsStorageKey],
+  );
+
   const setSelectedAlternativeIndexSynced = useCallback(
     (index: number) => {
       const next = Math.max(0, Number(index || 0));
@@ -740,7 +847,7 @@ export function usePlanningV2PlanController({
     stopGeneration,
     savePlan,
     autoPullsLimit,
-    setAutoPullsLimit,
+    setAutoPullsLimit: setAutoPullsLimitPersisted,
     autoPullsEnabled,
     isManual,
     setIsManual,

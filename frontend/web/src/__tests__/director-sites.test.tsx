@@ -45,7 +45,6 @@ describe("/director/sites", () => {
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     localStorage.setItem("access_token", "test-token");
-    window.confirm = jest.fn(() => true);
     jest.clearAllMocks();
   });
 
@@ -106,6 +105,9 @@ describe("/director/sites", () => {
     const user = userEvent.setup();
     const deleteButtons = screen.getAllByRole("button", { name: "מחק" });
     await user.click(deleteButtons[0]);
+
+    const confirmDelete = await screen.findByRole("button", { name: "אישור מחיקת אתר" });
+    await user.click(confirmDelete);
 
     await waitFor(() => {
       expect(apiFetch).toHaveBeenCalledWith(

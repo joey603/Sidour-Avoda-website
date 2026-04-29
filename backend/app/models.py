@@ -31,6 +31,8 @@ class Site(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     director_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     config: Mapped[dict] = mapped_column(JSON, nullable=True)
+    # Soft-delete : pas de ligne supprimée → שיבוצים / site_workers / historiques conservés ; listes masquent deleted_at IS NOT NULL
+    deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
 
 
 class DirectorAutoPlanningConfig(Base):

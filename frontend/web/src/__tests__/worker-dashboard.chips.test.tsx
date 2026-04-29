@@ -61,7 +61,7 @@ describe("/worker dashboard planning table chips", () => {
               name: "06-14",
               enabled: true,
               workers: 1,
-              roles: [{ name: "חמוש", count: 1 }],
+              roles: [{ name: "חמוש", count: 1, enabled: true }],
             },
           ],
         },

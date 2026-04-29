@@ -33,6 +33,17 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
     }
   }
 
+  function getNextWeekStart(): Date {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const day = today.getDay(); // 0=Sunday
+    const daysUntilNextSunday = day === 0 ? 7 : 7 - day;
+    const nextSunday = new Date(today);
+    nextSunday.setDate(today.getDate() + daysUntilNextSunday);
+    nextSunday.setHours(0, 0, 0, 0);
+    return nextSunday;
+  }
+
   return (
     <>
       <div className="mb-4 flex items-center justify-center gap-3 text-sm text-zinc-600 dark:text-zinc-300">
@@ -135,6 +146,20 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                   <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
                 </svg>
+              </button>
+            </div>
+            <div className="mb-3 flex justify-start">
+              <button
+                type="button"
+                onClick={() => {
+                  const initialWeek = getNextWeekStart();
+                  updateWeekStart(initialWeek);
+                  setCalendarMonth(new Date(initialWeek.getFullYear(), initialWeek.getMonth(), 1));
+                  setIsCalendarOpen(false);
+                }}
+                className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                חזרה לשבוע הבא
               </button>
             </div>
             <div className="mb-4 flex items-center justify-between">

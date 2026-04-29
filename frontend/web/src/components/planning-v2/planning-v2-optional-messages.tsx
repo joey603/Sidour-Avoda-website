@@ -71,9 +71,14 @@ function toEditorHtml(raw: string): string {
 type PlanningV2OptionalMessagesProps = {
   siteId: string;
   weekStart: Date;
+  readOnly?: boolean;
 };
 
-export function PlanningV2OptionalMessages({ siteId, weekStart }: PlanningV2OptionalMessagesProps) {
+export function PlanningV2OptionalMessages({
+  siteId,
+  weekStart,
+  readOnly = false,
+}: PlanningV2OptionalMessagesProps) {
   const [messages, setMessages] = useState<OptionalMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [isAddMessageOpen, setIsAddMessageOpen] = useState(false);
@@ -160,8 +165,15 @@ export function PlanningV2OptionalMessages({ siteId, weekStart }: PlanningV2Opti
           <div className="text-sm text-zinc-600 dark:text-zinc-300">הודעה אופציונלית</div>
           <button
             type="button"
-            className="inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
+            disabled={readOnly}
+            title={readOnly ? "אתר בארכיון — צפייה בלבד" : undefined}
+            className={
+              readOnly
+                ? "inline-flex cursor-not-allowed items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                : "inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
+            }
             onClick={() => {
+              if (readOnly) return;
               setEditingMessageId(null);
               const initial = "<p><br/></p>";
               setMessageEditorInitialHtml(initial);
@@ -227,6 +239,7 @@ export function PlanningV2OptionalMessages({ siteId, weekStart }: PlanningV2Opti
                       );
                     })()}
                   </div>
+                  {!readOnly ? (
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -272,11 +285,13 @@ export function PlanningV2OptionalMessages({ siteId, weekStart }: PlanningV2Opti
                       מחק
                     </button>
                   </div>
+                  ) : null}
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <label className="inline-flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200">
                     <input
                       type="checkbox"
+                      disabled={readOnly}
                       checked={m.scope === "global"}
                       onChange={async (e) => {
                         const wk = isoYMD(weekStart);
@@ -461,8 +476,10 @@ export function PlanningV2OptionalMessages({ siteId, weekStart }: PlanningV2Opti
               </button>
               <button
                 type="button"
-                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                disabled={readOnly}
+                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={async () => {
+                  if (readOnly) return;
                   const txt = newMessageText.trim();
                   if (!txt) return;
                   const wk = isoYMD(weekStart);

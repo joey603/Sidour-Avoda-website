@@ -10,6 +10,9 @@ import LoadingAnimation from "@/components/loading-animation";
 interface Site {
   id: number;
   name: string;
+  site_deleted?: boolean;
+  removed_from_week_iso?: string | null;
+  removed_by_planning?: boolean;
   config?: any;
 }
 
@@ -55,6 +58,8 @@ export default function WorkerHistoryPage() {
     roles?: string[];
     availability?: Record<string, string[]>;
   } | null>(null);
+  const [selectedSiteArchived, setSelectedSiteArchived] = useState(false);
+  const [selectedSiteRemovedByPlanning, setSelectedSiteRemovedByPlanning] = useState(false);
 
   const workerDisplay = useMemo(() => {
     if (!workerData) return null;
@@ -153,15 +158,27 @@ export default function WorkerHistoryPage() {
       
       try {
         // Charger les sites où le travailleur est enregistré
-        const sitesList = await apiFetch<Array<{ id: number; name: string }>>("/public/sites/worker-sites", {
+        const sitesList = await apiFetch<Site[]>("/public/sites/worker-sites", {
           headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         });
-        setSites(sitesList || []);
-        
+        // Sites actifs d’abord (comme la logique « fiche » côté directeur), puis nom
+        const sorted = [...(sitesList || [])].sort((a, b) => {
+          const rank = (s: Site) => {
+            if (s.site_deleted) return 2;
+            if (s.removed_by_planning) return 1;
+            return 0;
+          };
+          const da = rank(a);
+          const db = rank(b);
+          if (da !== db) return da - db;
+          return String(a.name || "").localeCompare(String(b.name || ""), "he");
+        });
+        setSites(sorted);
+
         // Si un seul site, le sélectionner automatiquement
-        if (sitesList && sitesList.length === 1) {
-          setSelectedSiteId(sitesList[0].id);
-          await loadSiteInfo(sitesList[0].id);
+        if (sorted.length === 1) {
+          setSelectedSiteId(sorted[0].id);
+          await loadSiteInfo(sorted[0].id, undefined, sorted[0]);
         }
       } catch (e: any) {
         console.error("Error loading sites:", e);
@@ -171,8 +188,25 @@ export default function WorkerHistoryPage() {
     })();
   }, [router]);
 
-  async function loadSiteInfo(siteId: number, targetWeek?: Date) {
+  async function loadSiteInfo(siteId: number, targetWeek?: Date, siteMeta?: Site | null) {
     const weekToUse = targetWeek || weekStart;
+    const meta = siteMeta ?? sites.find((s) => Number(s.id) === Number(siteId));
+    if (meta?.removed_by_planning) {
+      setSiteConfig(null);
+      setWorkerData(null);
+      setSelectedSiteArchived(false);
+      setSelectedSiteRemovedByPlanning(true);
+      return;
+    }
+    if (meta?.site_deleted) {
+      setSiteConfig(null);
+      setWorkerData(null);
+      setSelectedSiteArchived(true);
+      setSelectedSiteRemovedByPlanning(false);
+      return;
+    }
+    setSelectedSiteArchived(false);
+    setSelectedSiteRemovedByPlanning(false);
     try {
       // Charger la config complète du site
       const site = await apiFetch<{ id: number; name: string; config: any }>(`/public/sites/${siteId}/config`, {
@@ -228,7 +262,7 @@ export default function WorkerHistoryPage() {
 
   useEffect(() => {
     if (selectedSiteId) {
-      loadSiteInfo(selectedSiteId);
+      void loadSiteInfo(selectedSiteId);
     }
   }, [selectedSiteId]);
 
@@ -237,12 +271,15 @@ export default function WorkerHistoryPage() {
     if (!selectedSiteId || !workerName) return;
     
     // Recharger depuis le serveur (source de vérité)
-      loadSiteInfo(selectedSiteId, weekStart);
+      void loadSiteInfo(selectedSiteId, weekStart);
   }, [weekStart, selectedSiteId, workerName]);
 
   useEffect(() => {
     if (!selectedSiteId) return;
-    
+
+    const siteMeta = sites.find((s) => Number(s.id) === Number(selectedSiteId));
+    const archived = !!siteMeta?.site_deleted || !!siteMeta?.removed_by_planning;
+
     // Charger le plan sauvegardé pour cette semaine
     const start = new Date(weekStart);
     const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -251,17 +288,25 @@ export default function WorkerHistoryPage() {
     (async () => {
       try {
         const wk = iso(start);
-        const fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          cache: "no-store" as any,
-        });
-        if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
+        let fromApi: unknown = null;
+        if (!archived) {
+          try {
+            fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
+              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+              cache: "no-store" as any,
+            });
+          } catch {
+            fromApi = null;
+          }
+        }
+        if (fromApi && typeof fromApi === "object" && (fromApi as any).assignments) {
           try { localStorage.setItem(key, JSON.stringify(fromApi)); } catch {}
+          const fa = fromApi as Record<string, unknown>;
           setWeekPlan({
-            assignments: fromApi.assignments,
-            isManual: !!fromApi.isManual,
-            workers: Array.isArray(fromApi.workers) ? fromApi.workers : undefined,
-            pulls: (fromApi && fromApi.pulls && typeof fromApi.pulls === "object") ? fromApi.pulls : undefined,
+            assignments: fa.assignments as Record<string, Record<string, string[][]>>,
+            isManual: !!fa.isManual,
+            workers: Array.isArray(fa.workers) ? fa.workers : undefined,
+            pulls: fa.pulls && typeof fa.pulls === "object" ? (fa.pulls as Record<string, unknown>) : undefined,
           });
           return;
         }
@@ -286,7 +331,7 @@ export default function WorkerHistoryPage() {
     })().finally(() => {
       setWeekPlanLoading(false);
     });
-  }, [selectedSiteId, weekStart]);
+  }, [selectedSiteId, weekStart, sites]);
 
   // Synchroniser le mois du calendrier avec la semaine sélectionnée
   useEffect(() => {
@@ -313,14 +358,18 @@ export default function WorkerHistoryPage() {
         ) : null}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">היסטוריה</h1>
-          <div className="flex-1 flex items-center justify-center gap-2">
+          <div className="flex flex-1 items-center justify-center gap-2 md:gap-3">
+            {/* Même ordre que PlanningV2WeekNavigation : קודם → טווח → הבא → לוח שנה */}
             <button
-              onClick={() => setWeekStart((prev) => addDays(prev, +7))}
+              type="button"
+              onClick={() => setWeekStart((prev) => addDays(prev, -7))}
               className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="שבוע הבא"
-              title="שבוע הבא"
+              aria-label="שבוע קודם"
+              title="שבוע קודם"
             >
-              →
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
+              </svg>
             </button>
             <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
               {(() => {
@@ -329,22 +378,26 @@ export default function WorkerHistoryPage() {
               })()}
             </span>
             <button
-              onClick={() => setWeekStart((prev) => addDays(prev, -7))}
+              type="button"
+              onClick={() => setWeekStart((prev) => addDays(prev, +7))}
               className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-              aria-label="שבוע קודם"
-              title="שבוע קודם"
+              aria-label="שבוע הבא"
+              title="שבוע הבא"
             >
-              ←
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
+                <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+              </svg>
             </button>
             <button
+              type="button"
               onClick={() => setIsCalendarOpen(true)}
               className="inline-flex items-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
               aria-label="בחר שבוע מלוח שנה"
               title="בחר שבוע מלוח שנה"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden>
-                <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z"/>
-                <path d="M7 14h5v5H7z"/>
+                <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
+                <path d="M7 14h5v5H7z" />
               </svg>
             </button>
           </div>
@@ -468,6 +521,7 @@ export default function WorkerHistoryPage() {
               {sites.map((site) => (
                 <option key={site.id} value={site.id}>
                   {site.name}
+                  {site.site_deleted ? " (ארכיון)" : site.removed_by_planning ? " (הוסר מהאתר)" : ""}
                 </option>
               ))}
             </select>
@@ -476,6 +530,21 @@ export default function WorkerHistoryPage() {
 
         {selectedSiteId ? (
           <>
+            {selectedSiteArchived ? (
+              <div
+                className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+                role="status"
+              >
+                האתר הוסר מהפעילות. ניתן לנסות לטעון תכנון ששמור במכשיר זה בלבד (מטמון דפדפן).
+              </div>
+            ) : selectedSiteRemovedByPlanning ? (
+              <div
+                className="rounded-lg border border-orange-300 bg-orange-50 px-4 py-3 text-sm text-orange-950 dark:border-orange-700 dark:bg-orange-950/40 dark:text-orange-100"
+                role="status"
+              >
+                הוסרת מהאתר הזה דרך התכנון השבועי. אפשר לצפות בהיסטוריה בלבד.
+              </div>
+            ) : null}
             <div className="w-full rounded-2xl border border-zinc-200/90 bg-white p-5 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.08)] dark:border-zinc-700 dark:bg-zinc-950/70 dark:shadow-[0_4px_24px_-4px_rgba(0,0,0,0.45)] sm:p-6 md:p-7">
               <div className="space-y-6">
             {/* Grille hebdomadaire avec surlignage du travailleur */}
@@ -530,7 +599,9 @@ export default function WorkerHistoryPage() {
                                 const required = getRequiredFor(st, sh?.name, dk);
                                 const cellPrefix = `${dk}|${sh?.name}|${stationIndex}|`;
                                 const pullsCount = Object.keys(pulls || {}).filter((k) => String(k).startsWith(cellPrefix)).length;
-                                const slotCount = Math.max(required + pullsCount, cleanNames.length, 1);
+                                const minSlots =
+                                  cleanNames.length === 0 && required === 0 && pullsCount === 0 ? 0 : 1;
+                                const slotCount = Math.max(required + pullsCount, cleanNames.length, minSlots);
                                 return (
                                   <div
                                     key={`cell-${stationIndex}-${sIdx}-${dk}`}
@@ -651,7 +722,16 @@ export default function WorkerHistoryPage() {
                 <h2 className="text-base font-semibold text-[#004B63] dark:text-cyan-100">בקשות העובד</h2>
                 <p className="mt-0.5 text-xs font-medium text-[#006C8A] dark:text-cyan-200/95">נתונים מהגדרת העובד במערכת (לא לפי שבוע)</p>
               </div>
-              {workerData && workerDisplay ? (
+              {selectedSiteArchived || selectedSiteRemovedByPlanning ? (
+                <div className="space-y-2 bg-white px-4 py-6 text-center text-sm text-zinc-600 dark:bg-zinc-950/60 dark:text-zinc-300">
+                  <p>
+                    {selectedSiteArchived
+                      ? "האתר הוסר מהפעילות — נתוני עובד (תפקידים, זמינות) אינם נטענים מהשרת."
+                      : "הוסרת מהאתר בתכנון — נתוני עובד (תפקידים, זמינות) אינם נטענים מהשרת."}
+                  </p>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-500">אפשר לצפות בתכנון שמור מקומי בלבד (אם היה נשמר בדפדפן), מעל.</p>
+                </div>
+              ) : workerData && workerDisplay ? (
                 <div className="space-y-4 bg-white p-4 dark:bg-zinc-950/60">
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="rounded-lg border border-zinc-200/90 bg-white px-3 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950/50">

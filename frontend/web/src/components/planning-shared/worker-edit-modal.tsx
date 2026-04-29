@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import NumberPicker from "@/components/number-picker";
 import type { WorkerModalQuestionView } from "./worker-modal-question-view";
 
@@ -20,6 +21,7 @@ export type WorkerEditModalProps = {
   dayDefs: readonly DayDef[];
   allShiftNames: string[];
   newWorkerAvailability: Record<string, string[]>;
+  workerAvailabilityOverlay?: Record<string, string[]>;
   onToggleAvailability: (dayKey: string, shiftName: string) => void;
   onToggleAvailabilityForAllDays: (shiftName: string | undefined, checked: boolean) => void;
   workerModalShiftBuckets: {
@@ -57,6 +59,7 @@ export function WorkerEditModal({
   dayDefs,
   allShiftNames,
   newWorkerAvailability,
+  workerAvailabilityOverlay = {},
   onToggleAvailability,
   onToggleAvailabilityForAllDays,
   workerModalShiftBuckets,
@@ -78,7 +81,7 @@ export function WorkerEditModal({
         <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">
             <h3 className="text-center text-base font-semibold md:text-lg">
-              {editingWorkerId ? "עריכת עובד" : "הוספת עובד"}
+              {editingWorkerId ? "זמינות עובד" : "הוספת עובד"}
             </h3>
             <button
               type="button"
@@ -97,8 +100,20 @@ export function WorkerEditModal({
                 type="text"
                 value={newWorkerName}
                 onChange={(e) => onNewWorkerNameChange(e.target.value)}
-                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                disabled={!!editingWorkerId}
+                title={editingWorkerId ? "לא ניתן לשנות שם עובד במסך זה" : undefined}
+                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500 md:px-3 md:py-2 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 dark:disabled:bg-zinc-900 dark:disabled:text-zinc-400"
               />
+              {editingWorkerId ? (
+                <div className="mt-1 text-center md:text-right">
+                  <Link
+                    href={`/director/workers/${editingWorkerId}`}
+                    className="relative z-10 inline-block cursor-pointer pointer-events-auto text-xs text-sky-700 underline underline-offset-2 hover:text-sky-800 dark:text-sky-300 dark:hover:text-sky-200"
+                  >
+                    מעבר ל-עריכת עובד
+                  </Link>
+                </div>
+              ) : null}
             </div>
             <div>
               <label className="block text-xs font-semibold md:text-sm">מקס&apos; משמרות בשבוע</label>
@@ -193,16 +208,21 @@ export function WorkerEditModal({
                   {allShiftNames.length === 0 ? (
                     <span className="text-zinc-500">אין משמרות פעילות</span>
                   ) : (
-                    allShiftNames.map((sn) => (
-                      <label key={sn} className="inline-flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={(newWorkerAvailability[d.key] || []).includes(sn)}
-                          onChange={() => onToggleAvailability(d.key, sn)}
-                        />
-                        {sn}
-                      </label>
-                    ))
+                    allShiftNames.map((sn) => {
+                      const isChecked = (newWorkerAvailability[d.key] || []).includes(sn);
+                      const isOverlay = ((workerAvailabilityOverlay[d.key] || []) as string[]).includes(sn);
+                      return (
+                        <label key={sn} className="inline-flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            className={isOverlay ? "accent-red-600" : undefined}
+                            checked={isChecked}
+                            onChange={() => onToggleAvailability(d.key, sn)}
+                          />
+                          {sn}
+                        </label>
+                      );
+                    })
                   )}
                 </div>
               ))}

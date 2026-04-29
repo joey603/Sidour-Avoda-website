@@ -18,6 +18,8 @@ export type SiteSummary = {
   id: number;
   name: string;
   config?: Record<string, unknown>;
+  /** epoch ms — site בגל לסוג soft-delete */
+  deletedAt?: number | null;
 };
 
 /** משיכה — structure minimale alignée sur le planning principal / backend. */

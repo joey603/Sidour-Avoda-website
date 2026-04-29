@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -21,7 +21,7 @@ import { PlanningWorkersSection } from "./workers/planning-workers-section";
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { usePlanningV2PlanController } from "./hooks/use-planning-v2-plan-controller";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
-import { buildWorkerNameColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
+import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
 import { analyzeManualSlotDrop, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
@@ -37,8 +37,19 @@ import {
   type LinkedSitePlan,
 } from "./lib/multi-site-linked-memory";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
+import {
+  buildFirstAlternativeDebugRows,
+  logPlanningV2FirstAltAfterGeneration,
+} from "./lib/planning-v2-first-alt-debug-log";
 
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
+
+function normWorkerName(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
 
 function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const {
@@ -74,10 +85,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   } | null>(null);
   const [manualDragWorkerName, setManualDragWorkerName] = useState<string | null>(null);
   const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
+  const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [summaryFilterState, setSummaryFilterState] = useState<{
     indices: number[];
     hasActiveFilters: boolean;
   }>({ indices: [], hasActiveFilters: false });
+  /** Clic sur une ligne du סיכום שיבוצים → surbrillance de l’עובד dans le גריד. */
+  const [summaryHighlightWorkerName, setSummaryHighlightWorkerName] = useState<string | null>(null);
   const [pullScopeDialog, setPullScopeDialog] = useState<{
     mode: "upsert" | "remove";
     resolve: (scope: "current_only" | "all_sites" | null) => void;
@@ -95,6 +109,33 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     linkedSitesLength: linkedSites.length,
     weekPurgeSiteIds,
   });
+
+  /** Debug console : alternative 0 uniquement — snapshot après fin de `יצירת תכנון` (positions sous-slots, nom brut vs affichage auto, rôles). */
+  const generationWasRunningRef = useRef(false);
+  useEffect(() => {
+    const prev = generationWasRunningRef.current;
+    generationWasRunningRef.current = plan.generationRunning;
+    if (!prev || plan.generationRunning) return;
+    const asg0 = plan.assignmentVariants?.[0];
+    const pulls0 = plan.pullVariants?.[0];
+    if (!asg0 || !assignmentsNonEmpty(asg0)) return;
+    const rows = buildFirstAlternativeDebugRows(site, workers, asg0, pulls0 ?? null);
+    logPlanningV2FirstAltAfterGeneration("apres-yetzirat-tehnun-alt0", {
+      siteId,
+      weekIso: getWeekKeyISO(weekStart),
+      alternativeIndex: 0,
+      rowCount: rows.length,
+      cells: rows,
+    });
+  }, [
+    plan.generationRunning,
+    plan.assignmentVariants,
+    plan.pullVariants,
+    site,
+    workers,
+    siteId,
+    weekStart,
+  ]);
 
   /** Recalculer la barre « אתרים מקושרים » quand sessionStorage (linked plans) change — le useMemo lit la mémoire sans que les autres deps bougent (ex. pendant SSE). */
   const [linkedPlansMemoryTick, setLinkedPlansMemoryTick] = useState(0);
@@ -120,13 +161,46 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const isSavedMode =
     assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
     (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
+
+  /** תגיות כמו ב-planning הישן (`weekPlanSaveBadgeKind` / `weekPlanSaveBadgeConfig`). */
+  const weekPlanSaveBadgeKind = useMemo<null | "director" | "shared">(() => {
+    if (editingSaved) return null;
+    if (!assignmentsNonEmpty(weekPlan?.assignments ?? null)) return null;
+    if (weekPlan?.sourceScope === "shared") return "shared";
+    if (weekPlan?.sourceScope === "director") return "director";
+    return null;
+  }, [editingSaved, weekPlan?.assignments, weekPlan?.sourceScope]);
+
+  const weekPlanSaveBadgeConfig = useMemo(() => {
+    if (weekPlanSaveBadgeKind === "director") {
+      return {
+        label: "נשמר (מנהל)",
+        className:
+          "inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
+      };
+    }
+    if (weekPlanSaveBadgeKind === "shared") {
+      return {
+        label: "נשמר ונשלח לעובדים",
+        className:
+          "inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300",
+      };
+    }
+    return null;
+  }, [weekPlanSaveBadgeKind]);
+
+  const showSavedPlanEditBadge =
+    editingSaved && assignmentsNonEmpty(weekPlan?.assignments ?? null);
+
+  const siteIsArchived = Boolean(site?.deletedAt);
+
   // Multi-site: en mode manuel on autorise l'édition directe du plan affiché (même issu d'une génération auto),
   // les confirmations de contraintes restent gérées par analyzeManualSlotDrop dans handleManualSlotDrop.
-  const manualEditable = plan.isManual && (!isSavedMode || editingSaved || linkedSites.length > 1);
+  const manualEditable =
+    !siteIsArchived && plan.isManual && (!isSavedMode || editingSaved || linkedSites.length > 1);
 
   const handleResetStation = (stationIdx: number) => {
     plan.resetManualStation(stationIdx);
-    setPullsModeStationIdx((p) => (p === stationIdx ? null : p));
   };
 
   const waitManualConfirm = useCallback((title: string, body: string) => {
@@ -139,16 +213,24 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const o: Record<string, Record<string, string[]>> = {};
     for (const r of workerRowsForTable) {
       const nm = String(r.name || "").trim();
-      if (nm) o[nm] = r.availability || {};
+      if (!nm) continue;
+      const base = (r.availability || {}) as Record<string, string[]>;
+      const overlay = (availabilityOverlays[nm] || {}) as Record<string, string[]>;
+      const merged: Record<string, string[]> = {};
+      for (const d of ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const) {
+        const next = new Set<string>([...(base[d] || []), ...(overlay[d] || [])]);
+        merged[d] = Array.from(next);
+      }
+      o[nm] = merged;
     }
     return o;
-  }, [workerRowsForTable]);
+  }, [workerRowsForTable, availabilityOverlays]);
 
   const assignmentHighlightBase = useMemo(() => plan.getLatestAssignmentBase(), [plan.displayAssignments, plan.getLatestAssignmentBase]);
   const workerColorMap = useMemo(() => {
-    const names = workers.map((w) => String(w.name || "").trim()).filter(Boolean);
-    return buildWorkerNameColorMap(names);
-  }, [workers]);
+    const bundles = [plan.displayAssignments, ...(plan.assignmentVariants || [])];
+    return buildDistinctWorkerColorMap(workers, bundles);
+  }, [workers, plan.displayAssignments, plan.assignmentVariants]);
 
   const linkedSiteHoleEntries = useMemo(
     () =>
@@ -177,6 +259,88 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     for (const e of linkedSiteHoleEntries) m.set(e.id, e.holesCount);
     return m;
   }, [linkedSiteHoleEntries]);
+
+  const displayedAvailabilityOverlays = useMemo(() => {
+    const base = plan.getLatestAssignmentBase();
+    const cellHasWorker = (dayKey: string, shiftName: string, workerName: string): boolean => {
+      const target = normWorkerName(workerName);
+      if (!target) return false;
+      const perStation = base?.[dayKey]?.[shiftName];
+      return Array.isArray(perStation)
+        ? perStation.some(
+            (cell) =>
+              Array.isArray(cell) &&
+              cell.some((nm) => normWorkerName(String(nm || "")) === target),
+          )
+        : false;
+    };
+    const out: Record<string, Record<string, string[]>> = {};
+    for (const [workerName, byDay] of Object.entries(availabilityOverlays || {})) {
+      const nextByDay: Record<string, string[]> = {};
+      for (const [dayKey, shifts] of Object.entries(byDay || {})) {
+        const kept: string[] = [];
+        for (const shiftName of shifts || []) {
+          const exists = cellHasWorker(dayKey, shiftName, workerName);
+          if (exists) kept.push(shiftName);
+        }
+        if (kept.length > 0) nextByDay[dayKey] = kept;
+      }
+      if (Object.keys(nextByDay).length > 0) out[workerName] = nextByDay;
+    }
+    return out;
+  }, [availabilityOverlays, plan.displayAssignments, plan.getLatestAssignmentBase]);
+
+  // Nettoyage auto des overlays rouges quand le worker n'est plus réellement sur le planning.
+  useEffect(() => {
+    const base = plan.getLatestAssignmentBase();
+    const hasWorkerInAnyShift = (workerName: string): boolean => {
+      const target = normWorkerName(workerName);
+      if (!target) return false;
+      for (const shiftsMap of Object.values(base || {})) {
+        if (!shiftsMap || typeof shiftsMap !== "object") continue;
+        for (const perStation of Object.values(shiftsMap)) {
+          if (!Array.isArray(perStation)) continue;
+          const found = perStation.some(
+            (cell) =>
+              Array.isArray(cell) &&
+              cell.some((nm) => normWorkerName(String(nm || "")) === target),
+          );
+          if (found) return true;
+        }
+      }
+      return false;
+    };
+    const hasWorkerInShift = (workerName: string, dayKey: string, shiftName: string): boolean => {
+      const target = normWorkerName(workerName);
+      if (!target) return false;
+      const perStation = base?.[dayKey]?.[shiftName];
+      return Array.isArray(perStation)
+        ? perStation.some(
+            (cell) =>
+              Array.isArray(cell) &&
+              cell.some((nm) => normWorkerName(String(nm || "")) === target),
+          )
+        : false;
+    };
+    setAvailabilityOverlays((prev) => {
+      let changed = false;
+      const next: Record<string, Record<string, string[]>> = {};
+      for (const [workerName, byDay] of Object.entries(prev || {})) {
+        if (!hasWorkerInAnyShift(workerName)) {
+          changed = true;
+          continue;
+        }
+        const cleanedByDay: Record<string, string[]> = {};
+        for (const [dayKey, shifts] of Object.entries(byDay || {})) {
+          const kept = (shifts || []).filter((shiftName) => hasWorkerInShift(workerName, dayKey, shiftName));
+          if (kept.length > 0) cleanedByDay[dayKey] = kept;
+          if (kept.length !== (shifts || []).length) changed = true;
+        }
+        if (Object.keys(cleanedByDay).length > 0) next[workerName] = cleanedByDay;
+      }
+      return changed ? next : prev;
+    });
+  }, [plan.displayAssignments, plan.getLatestAssignmentBase]);
 
   const isoWeek = useMemo(() => getWeekKeyISO(weekStart), [weekStart]);
 
@@ -224,7 +388,49 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           return;
         }
         if (r.action === "apply") {
-          plan.commitDraftAssignments(r.next);
+          if (flags.forceAvailability) {
+            const nm = String(p.workerName || "").trim();
+            if (nm) {
+              const canonicalName =
+                workerRowsForTable.find((r) => normWorkerName(r.name) === normWorkerName(nm))?.name || nm;
+              setAvailabilityOverlays((prev) => {
+                const next = { ...prev };
+                const byDay = { ...(next[canonicalName] || {}) } as Record<string, string[]>;
+                const cur = new Set<string>([...(byDay[p.dayKey] || [])]);
+                cur.add(p.shiftName);
+                byDay[p.dayKey] = Array.from(cur);
+                next[canonicalName] = byDay;
+                return next;
+              });
+            }
+          }
+          let nextAssignments = r.next;
+          // Garde-fou move: si drop depuis une cellule vers une autre, on vide explicitement la source.
+          if (p.dragSource) {
+            const src = p.dragSource;
+            const sameCell =
+              src.dayKey === p.dayKey &&
+              src.shiftName === p.shiftName &&
+              Number(src.stationIndex) === Number(p.stationIndex) &&
+              Number(src.slotIndex) === Number(p.slotIndex);
+            if (!sameCell) {
+              const srcRow = nextAssignments?.[src.dayKey]?.[src.shiftName]?.[src.stationIndex];
+              if (Array.isArray(srcRow)) {
+                const srcNext = JSON.parse(JSON.stringify(nextAssignments)) as Record<
+                  string,
+                  Record<string, string[][]>
+                >;
+                const arr = Array.from(srcNext[src.dayKey]?.[src.shiftName]?.[src.stationIndex] || []);
+                while (arr.length <= src.slotIndex) arr.push("");
+                arr[src.slotIndex] = "";
+                if (!srcNext[src.dayKey]) srcNext[src.dayKey] = {};
+                if (!srcNext[src.dayKey][src.shiftName]) srcNext[src.dayKey][src.shiftName] = [];
+                srcNext[src.dayKey][src.shiftName][src.stationIndex] = arr;
+                nextAssignments = srcNext;
+              }
+            }
+          }
+          plan.commitDraftAssignments(nextAssignments);
           return;
         }
         if (r.action === "confirm_availability") {
@@ -233,6 +439,22 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             `לעובד "${r.workerName}" אין זמינות למשמרת זו. להקצות בכל זאת?`,
           );
           if (!ok) return;
+          {
+            const nm = String(r.workerName || "").trim();
+            if (nm) {
+              const canonicalName =
+                workerRowsForTable.find((row) => normWorkerName(row.name) === normWorkerName(nm))?.name || nm;
+              setAvailabilityOverlays((prev) => {
+                const next = { ...prev };
+                const byDay = { ...(next[canonicalName] || {}) } as Record<string, string[]>;
+                const cur = new Set<string>([...(byDay[p.dayKey] || [])]);
+                cur.add(p.shiftName);
+                byDay[p.dayKey] = Array.from(cur);
+                next[canonicalName] = byDay;
+                return next;
+              });
+            }
+          }
           flags = { ...flags, forceAvailability: true };
           continue;
         }
@@ -257,7 +479,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       }
       toast.error("שגיאה", { description: "יותר מדי שלבי אישור — נסה שוב." });
     },
-    [site, siteId, weekStart, workers, availabilityByWorkerName, plan, waitManualConfirm],
+    [site, siteId, weekStart, workers, availabilityByWorkerName, plan, waitManualConfirm, workerRowsForTable],
   );
 
   const handleManualSlotDragOutside = useCallback(
@@ -579,12 +801,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       return rows;
     };
 
+    const archivedById = new Map<number, boolean>();
+    linkedSites.forEach((ls) => archivedById.set(Number(ls.id), !!ls.site_deleted));
+
     const out = otherSiteIds.map((sid) => ({
       siteId: sid,
       siteName: linkedById.get(sid) || `אתר ${sid}`,
+      siteDeleted: archivedById.get(sid) === true,
       rows: rowsForSite(sid),
     }));
-    return out.sort((a, b) => a.siteName.localeCompare(b.siteName));
+    return out.sort((a, b) => {
+      const aa = a.siteDeleted ? 1 : 0;
+      const bb = b.siteDeleted ? 1 : 0;
+      if (aa !== bb) return aa - bb;
+      return a.siteName.localeCompare(b.siteName, "he");
+    });
   }, [
     linkedSites,
     weekStart,
@@ -612,7 +843,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       dir="rtl"
     >
       <PlanningV2LayoutShell>
-        <PlanningV2Header siteId={siteId} />
+        <PlanningV2Header
+          weekPlanSaveBadgeConfig={weekPlanSaveBadgeConfig}
+          showEditBadge={showSavedPlanEditBadge}
+        />
+        {siteIsArchived ? (
+          <div
+            className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100"
+            role="status"
+          >
+            <span className="font-medium">האתר נמחק מהרשימה הפעילה.</span> ניתן לצפות בתכנון ובהיסטוריה בלבד.{" "}
+            <Link href="/director/sites" className="underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50">
+              חזרה לרשימת האתרים
+            </Link>
+          </div>
+        ) : null}
         <PlanningV2MainPaper editingSaved={editingSaved} savedHighlight={savedHighlight}>
           {linkedSites.length > 1 ? (
             <button
@@ -665,7 +910,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                     <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
                       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
-                          <div className="text-xs font-medium text-zinc-700 dark:text-zinc-200">{siteBlock.siteName}</div>
+                          <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                            <span className="min-w-0 break-words">{siteBlock.siteName}</span>
+                            {siteBlock.siteDeleted ? (
+                              <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
+                                ארכיון
+                              </span>
+                            ) : null}
+                          </div>
                           <div className="mt-0.5 text-[10px] text-orange-600 dark:text-orange-400">
                             חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
                           </div>
@@ -810,7 +1062,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               </div>
             </aside>
           ) : null}
-          <PlanningV2SitePaperHeader siteId={siteId} site={site} siteLoading={siteLoading} />
+          <PlanningV2SitePaperHeader
+            siteId={siteId}
+            site={site}
+            siteLoading={siteLoading}
+            readOnly={siteIsArchived}
+          />
           <Suspense
             fallback={
               <div className="mb-4 h-10 w-full animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800" aria-hidden />
@@ -824,10 +1081,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             weekStart={weekStart}
             workers={workers}
             rows={workerRowsForTable}
+            availabilityOverlays={availabilityOverlays}
             workersLoading={workersLoading}
             onWorkersChanged={refreshWorkersAndGrid}
             workersNameDraggable={manualEditable && pullsModeStationIdx === null}
             onWorkerNameDragPreview={setManualDragWorkerName}
+            readOnly={siteIsArchived}
           />
           <PlanningV2StationWeekGrid
             site={site}
@@ -835,6 +1094,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             weekStart={weekStart}
             workers={workers}
             assignments={plan.displayAssignments}
+            assignmentVariants={plan.assignmentVariants}
             assignmentHighlightBase={assignmentHighlightBase}
             pulls={plan.displayPulls}
             draftFixedAssignmentsSnapshot={plan.draftFixedAssignmentsSnapshot}
@@ -847,12 +1107,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             draggingWorkerName={manualDragWorkerName}
             onDraggingWorkerChange={setManualDragWorkerName}
             availabilityByWorkerName={availabilityByWorkerName}
+            availabilityOverlays={displayedAvailabilityOverlays}
             onTogglePullsModeStation={(idx) => setPullsModeStationIdx((prev) => (prev === idx ? null : idx))}
             onResetStation={handleResetStation}
             onManualSlotDragOutside={handleManualSlotDragOutside}
             onManualSlotDrop={handleManualSlotDrop}
             onUpsertPull={handleUpsertPull}
             onRemovePull={handleRemovePull}
+            summaryHighlightWorkerName={summaryHighlightWorkerName}
           />
           <PlanningV2AssignmentsSummary
             siteId={siteId}
@@ -867,8 +1129,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
             onFilteredAlternativesChange={setSummaryFilterState}
             loading={weekPlanLoading}
+            generationRunning={plan.generationRunning}
+            highlightedWorkerName={summaryHighlightWorkerName}
+            onHighlightWorkerToggle={(name) => {
+              setSummaryHighlightWorkerName((prev) =>
+                normWorkerName(prev || "") === normWorkerName(name) ? null : name,
+              );
+            }}
           />
-          <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} />
+          <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
         </PlanningV2MainPaper>
         <PlanningV2ActionBar
           siteId={siteId}
@@ -876,6 +1145,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           weekPlan={weekPlan}
           effectiveAssignments={plan.displayAssignments}
           linkedSites={linkedSites}
+          readOnly={siteIsArchived}
           editingSaved={editingSaved}
           onEditingSavedChange={setEditingSaved}
           onCancelSavedEdit={async () => {
@@ -890,7 +1160,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           onAutoPullsLimitChange={plan.setAutoPullsLimit}
           autoPullsEnabled={plan.autoPullsEnabled}
           isManual={plan.isManual}
-          onIsManualChange={plan.setIsManual}
+          onIsManualChange={(next) => {
+            plan.setIsManual(next);
+            if (!next) setPullsModeStationIdx(null);
+          }}
           onEnterManualWithGridReset={plan.enterManualWithGridReset}
           onSavePlan={handleSavePlan}
           onDraftClear={plan.clearDraft}

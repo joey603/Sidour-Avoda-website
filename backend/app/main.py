@@ -45,6 +45,8 @@ def create_app() -> FastAPI:
                 col_names = {c[1] for c in cols}
                 if "config" not in col_names:
                     conn.exec_driver_sql("ALTER TABLE sites ADD COLUMN config JSON")
+                if "deleted_at" not in col_names:
+                    conn.exec_driver_sql("ALTER TABLE sites ADD COLUMN deleted_at BIGINT")
                 
                 # Migration pour la table users: ajouter phone et rendre email nullable
                 # Vérifier si la table users existe
@@ -240,6 +242,13 @@ def create_app() -> FastAPI:
                     )
                 except Exception as e:
                     logger.info(f"Migration Postgres site_workers.removed_from_week_iso ignorée ou impossible: {e}")
+                try:
+                    logger.info("Vérification de la colonne deleted_at sur sites")
+                    conn.exec_driver_sql(
+                        "ALTER TABLE sites ADD COLUMN IF NOT EXISTS deleted_at BIGINT"
+                    )
+                except Exception as e:
+                    logger.info(f"Migration Postgres sites.deleted_at ignorée ou impossible: {e}")
     except Exception:
         # Safe to ignore in dev if another process handles migration
         pass

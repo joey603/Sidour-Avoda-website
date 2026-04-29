@@ -24,10 +24,17 @@ from .auth import (
 )
 import re
 import secrets
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/public/sites", tags=["public-workers"])
 
 _WEEK_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _ensure_site_active(site: Site) -> None:
+    """Sites soft-supprimés : plus d’usage actif côté travailleur / inscription publique."""
+    if getattr(site, "deleted_at", None):
+        raise HTTPException(status_code=404, detail="Site introuvable")
 
 
 def _validate_week_iso(week_iso: str) -> str:
@@ -35,6 +42,13 @@ def _validate_week_iso(week_iso: str) -> str:
     if not _WEEK_ISO_RE.match(wk):
         raise HTTPException(status_code=400, detail="week invalide (YYYY-MM-DD)")
     return wk
+
+
+def _current_week_iso() -> str:
+    now = datetime.now()
+    days_since_sunday = (now.weekday() + 1) % 7
+    sunday = now - timedelta(days=days_since_sunday)
+    return sunday.date().isoformat()
 
 
 def _norm_worker_name(value: str | None) -> str:
@@ -50,6 +64,7 @@ def _resolve_invited_site(token: str, db: Session) -> tuple[Site, User]:
     site = db.get(Site, int(payload["site_id"]))
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
+    _ensure_site_active(site)
     director = db.get(User, int(payload["director_id"]))
     if not director or director.role != UserRole.director or int(site.director_id) != int(director.id):
         raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
@@ -125,16 +140,28 @@ def claim_worker_invitation(
 
 
 def _get_affiliated_site_workers(user: User, db: Session) -> list[SiteWorker]:
-    query = db.query(SiteWorker)
+    """Fiches SiteWorker liées au compte : (user_id ou même téléphone) ∪ (même nom normalisé), dédupliqué.
+
+    Ne pas retourner dès le premier groupe seul : sinon on omet des sites actifs où la fiche n'a
+    ni user_id ni téléphone aligné, comme le voit pourtant le directeur (all-workers / fiche עובד)."""
+    q = db.query(SiteWorker)
     phone = (user.phone or "").strip()
     user_name = _norm_worker_name(user.full_name)
     filters = [SiteWorker.user_id == user.id]
     if phone:
         filters.append(SiteWorker.phone == phone)
-    rows = query.filter(or_(*filters)).all()
-    if rows:
-        return rows
-    return query.filter(func.lower(SiteWorker.name) == user_name).all()
+    rows_linked = list(q.filter(or_(*filters)).all())
+    rows_name: list[SiteWorker] = []
+    if user_name:
+        rows_name = list(db.query(SiteWorker).filter(func.lower(SiteWorker.name) == user_name).all())
+    seen: set[int] = set()
+    out: list[SiteWorker] = []
+    for r in rows_linked + rows_name:
+        rid = int(r.id)
+        if rid not in seen:
+            seen.add(rid)
+            out.append(r)
+    return out
 
 
 def _extract_week_answers(raw_answers: dict | None, week_iso: str | None) -> dict:
@@ -163,7 +190,32 @@ def get_worker_sites(user: User = Depends(get_current_user), db: Session = Depen
         return []
     sites = db.query(Site).filter(Site.id.in_(site_ids)).all()
     by_id = {int(s.id): s for s in sites}
-    return [{"id": sid, "name": by_id[sid].name} for sid in site_ids if sid in by_id]
+    out = []
+    current_week_iso = _current_week_iso()
+    rows_by_site: dict[int, list[SiteWorker]] = {}
+    for row in rows:
+        rows_by_site.setdefault(int(row.site_id), []).append(row)
+    for sid in site_ids:
+        sn = by_id.get(sid)
+        if not sn:
+            continue
+        removed_from_values = [
+            str(getattr(r, "removed_from_week_iso", "") or "").strip()
+            for r in rows_by_site.get(sid, [])
+            if str(getattr(r, "removed_from_week_iso", "") or "").strip()
+        ]
+        removed_from_week_iso = min(removed_from_values) if removed_from_values else None
+        removed_by_planning = bool(removed_from_week_iso and current_week_iso >= removed_from_week_iso)
+        out.append(
+            {
+                "id": sid,
+                "name": sn.name,
+                "site_deleted": bool(getattr(sn, "deleted_at", None)),
+                "removed_from_week_iso": removed_from_week_iso,
+                "removed_by_planning": removed_by_planning,
+            }
+        )
+    return out
 
 
 @router.get("/worker-context", response_model=WorkerContextOut)
@@ -178,8 +230,11 @@ def get_worker_context(
     wk = _validate_week_iso(week_key) if week_key else None
     rows = _get_affiliated_site_workers(user, db)
     site_ids = sorted({int(r.site_id) for r in rows})
-    sites = db.query(Site).filter(Site.id.in_(site_ids)).all() if site_ids else []
-    sites_by_id = {int(s.id): s for s in sites}
+    all_sites_list = db.query(Site).filter(Site.id.in_(site_ids)).all() if site_ids else []
+    all_by_id = {int(s.id): s for s in all_sites_list}
+    sites_by_id_active = {
+        int(s.id): s for s in all_sites_list if getattr(s, "deleted_at", None) is None
+    }
 
     shifts_set: set[str] = set()
     questions: list[dict] = []
@@ -189,7 +244,7 @@ def get_worker_context(
     max_shifts_candidates: list[int] = []
 
     for row in rows:
-        site = sites_by_id.get(int(row.site_id))
+        site = sites_by_id_active.get(int(row.site_id))
         if not site:
             continue
         config = site.config or {}
@@ -247,7 +302,32 @@ def get_worker_context(
 
     return WorkerContextOut(
         worker_name=user.full_name or "",
-        sites=[{"id": sid, "name": sites_by_id[sid].name} for sid in site_ids if sid in sites_by_id],
+        sites=[
+            {
+                "id": sid,
+                "name": all_by_id[sid].name,
+                "site_deleted": bool(getattr(all_by_id[sid], "deleted_at", None)),
+                "removed_from_week_iso": (
+                    min(
+                        [
+                            str(getattr(r, "removed_from_week_iso", "") or "").strip()
+                            for r in rows
+                            if int(r.site_id) == sid and str(getattr(r, "removed_from_week_iso", "") or "").strip()
+                        ]
+                    )
+                    if any(int(r.site_id) == sid and str(getattr(r, "removed_from_week_iso", "") or "").strip() for r in rows)
+                    else None
+                ),
+                "removed_by_planning": any(
+                    int(r.site_id) == sid
+                    and str(getattr(r, "removed_from_week_iso", "") or "").strip()
+                    and _current_week_iso() >= str(getattr(r, "removed_from_week_iso", "") or "").strip()
+                    for r in rows
+                ),
+            }
+            for sid in site_ids
+            if sid in all_by_id
+        ],
         shifts=sorted(shifts_set),
         questions=questions,
         availability=merged_availability,
@@ -269,6 +349,17 @@ def save_worker_context(
     rows = _get_affiliated_site_workers(user, db)
     if not rows:
         raise HTTPException(status_code=404, detail="Aucun site affilié")
+
+    active_site_ids = {
+        int(r.id)
+        for r in db.query(Site.id).filter(
+            Site.id.in_({int(x.site_id) for x in rows}),
+            Site.deleted_at.is_(None),
+        ).all()
+    }
+    rows = [r for r in rows if int(r.site_id) in active_site_ids]
+    if not rows:
+        return {"ok": True}
 
     payload_answers = payload.answers if isinstance(payload.answers, dict) else {}
     general_answers = payload_answers.get("general") if isinstance(payload_answers.get("general"), dict) else {}
@@ -311,7 +402,8 @@ def get_site_info(site_id: int, db: Session = Depends(get_db)):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    
+    _ensure_site_active(site)
+
     # Extraire les shifts depuis la config
     shifts = []
     config = site.config or {}
@@ -353,7 +445,8 @@ def get_site_config(site_id: int, user: User = Depends(get_current_user), db: Se
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    
+    _ensure_site_active(site)
+
     # Vérifier que le worker est enregistré sur ce site
     worker = (
         db.query(SiteWorker)
@@ -363,10 +456,10 @@ def get_site_config(site_id: int, user: User = Depends(get_current_user), db: Se
         )
         .first()
     )
-    
+
     if not worker:
         raise HTTPException(status_code=403, detail="Vous n'êtes pas enregistré sur ce site")
-    
+
     return {"id": site.id, "name": site.name, "config": site.config or {}}
 
 
@@ -379,7 +472,8 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    
+    _ensure_site_active(site)
+
     # Récupérer le worker par nom
     worker = (
         db.query(SiteWorker)
@@ -389,7 +483,7 @@ def get_worker_availability(site_id: int, week_key: str | None = Query(None), us
         )
         .first()
     )
-    
+
     if not worker:
         # Si le worker n'existe pas encore, retourner des valeurs par défaut
         return WorkerOut(
@@ -454,6 +548,10 @@ def get_published_week_plan(
     """Planning publié (scope=shared) pour une semaine donnée (visible pour les workers authentifiés)."""
     if user.role.value != "worker":
         raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    _ensure_site_active(site)
     wk = _validate_week_iso(week)
     row = (
         db.query(SiteWeekPlan)
@@ -480,6 +578,7 @@ def get_site_messages_for_worker(
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
+    _ensure_site_active(site)
 
     # Vérifier que le worker est enregistré sur ce site
     worker = (
@@ -516,7 +615,8 @@ def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = 
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    
+    _ensure_site_active(site)
+
     # Vérifier si un worker avec ce nom existe déjà pour ce site
     existing = (
         db.query(SiteWorker)

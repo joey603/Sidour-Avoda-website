@@ -24,7 +24,7 @@ type WorkerContextAnswers = {
 };
 type WorkerContextResponse = {
   worker_name: string;
-  sites: Array<{ id: number; name: string }>;
+  sites: Array<{ id: number; name: string; site_deleted?: boolean; removed_by_planning?: boolean }>;
   shifts: string[];
   questions: SiteQuestion[];
   max_shifts: number;
@@ -36,7 +36,7 @@ type LocalWorkerContextCache = {
   availability?: Record<string, string[]>;
   maxShifts?: number;
   answers?: WorkerContextAnswers | Record<string, AnswerValue>;
-  sites?: Array<{ id: number; name: string }>;
+  sites?: Array<{ id: number; name: string; site_deleted?: boolean; removed_by_planning?: boolean }>;
   shifts?: string[];
   questions?: SiteQuestion[];
   siteName?: string;
@@ -86,7 +86,9 @@ export default function WorkerAvailabilityPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [sites, setSites] = useState<Array<{ id: number; name: string }>>([]);
+  const [sites, setSites] = useState<Array<{ id: number; name: string; site_deleted?: boolean; removed_by_planning?: boolean }>>([]);
+  /** True si le travailleur n’a que des fiches sur des sites soft-deleted (rien à afficher pour זמינות active). */
+  const [onlyArchivedSites, setOnlyArchivedSites] = useState(false);
   const [siteName, setSiteName] = useState<string>("");
   const [shifts, setShifts] = useState<string[]>([]);
   const [siteQuestions, setSiteQuestions] = useState<SiteQuestion[]>([]);
@@ -148,7 +150,12 @@ export default function WorkerAvailabilityPage() {
       if (saved) {
         const parsed = JSON.parse(saved) as LocalWorkerContextCache;
         if (parsed && typeof parsed === 'object') {
-          if (Array.isArray(parsed.sites)) setSites(parsed.sites);
+          if (Array.isArray(parsed.sites)) {
+            const raw = parsed.sites;
+            const active = raw.filter((s: { site_deleted?: boolean; removed_by_planning?: boolean }) => !s.site_deleted && !s.removed_by_planning);
+            setSites(active);
+            setOnlyArchivedSites(raw.length > 0 && active.length === 0);
+          }
           if (Array.isArray(parsed.shifts)) setShifts(parsed.shifts);
           if (Array.isArray(parsed.questions)) setSiteQuestions(parsed.questions);
           if (typeof parsed.siteName === "string") setSiteName(parsed.siteName);
@@ -189,13 +196,15 @@ export default function WorkerAvailabilityPage() {
       });
 
       if (workerData) {
-        setSites(Array.isArray(workerData.sites) ? workerData.sites : []);
-        const mergedSites = Array.isArray(workerData.sites) ? workerData.sites : [];
+        const rawSites = Array.isArray(workerData.sites) ? workerData.sites : [];
+        const activeSites = rawSites.filter((s) => !s.site_deleted && !s.removed_by_planning);
+        setSites(activeSites);
+        setOnlyArchivedSites(rawSites.length > 0 && activeSites.length === 0);
         setSiteName(
-          mergedSites.length === 1
-            ? (mergedSites[0]?.name || "")
-            : mergedSites.length > 1
-            ? `${mergedSites.length} אתרים מחוברים`
+          activeSites.length === 1
+            ? (activeSites[0]?.name || "")
+            : activeSites.length > 1
+            ? `${activeSites.length} אתרים מחוברים`
             : ""
         );
         setShifts(Array.isArray(workerData.shifts) && workerData.shifts.length > 0 ? workerData.shifts : ["06-14", "14-22", "22-06"]);
@@ -237,14 +246,14 @@ export default function WorkerAvailabilityPage() {
           availability: workerData.availability || {},
           maxShifts: workerData.max_shifts,
           answers: workerData.answers || {},
-          sites: workerData.sites || [],
+          sites: activeSites,
           shifts: workerData.shifts || [],
           questions: workerData.questions || [],
           siteName:
-            mergedSites.length === 1
-              ? (mergedSites[0]?.name || "")
-              : mergedSites.length > 1
-              ? `${mergedSites.length} אתרים מחוברים`
+            activeSites.length === 1
+              ? (activeSites[0]?.name || "")
+              : activeSites.length > 1
+              ? `${activeSites.length} אתרים מחוברים`
               : "",
         }));
       }
@@ -344,6 +353,10 @@ export default function WorkerAvailabilityPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (sites.length === 0 || onlyArchivedSites) {
+      toast.error("אין אתרים פעילים — לא ניתן לשמור זמינות");
+      return;
+    }
     if (!workerName.trim()) {
       toast.error("נא להזין שם");
       return;
@@ -444,6 +457,22 @@ export default function WorkerAvailabilityPage() {
     );
   }
 
+  if (sites.length === 0 && onlyArchivedSites) {
+    return (
+      <div className="min-h-screen p-6">
+        <div className="mx-auto max-w-2xl">
+          <h1 className="mb-6 text-2xl font-bold">רישום זמינות</h1>
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 shadow-lg dark:border-amber-800 dark:bg-amber-950/40">
+            <div className="py-6 text-center text-sm text-amber-950 dark:text-amber-100">
+              <p className="font-medium">כל האתרים המקושרים אליך בארכיון (הוסרו על ידי המנהל).</p>
+              <p className="mt-2 text-amber-900/90 dark:text-amber-200/90">לא ניתן לעדכן זמינות פעילה כאן — השתמש בהיסטוריה לצפייה בתכנונים ישנים במידה ונשמרו.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (sites.length === 0) {
     return (
       <div className="min-h-screen p-6">
@@ -531,7 +560,7 @@ export default function WorkerAvailabilityPage() {
                     max="6"
                     value={maxShifts}
                     onChange={handleMaxShiftsChange}
-                    disabled={submitting || (success && isEditing)}
+                    disabled={onlyArchivedSites || submitting || (success && isEditing)}
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 disabled:opacity-60"
                   />
                 </div>
@@ -561,7 +590,7 @@ export default function WorkerAvailabilityPage() {
                                 key={shift}
                                 type="button"
                                 onClick={() => toggleAvailability(day.key, shift)}
-                                disabled={submitting || (success && isEditing)}
+                                disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                                   isSelected
                                     ? "bg-blue-600 text-white hover:bg-blue-700"
@@ -582,7 +611,7 @@ export default function WorkerAvailabilityPage() {
                               .map((q) => {
                                 const dayAns = (answersPerDay?.[q.id] || {}) as Record<string, AnswerValue>;
                                 const value = dayAns[day.key];
-                                const disabled = submitting || (success && isEditing);
+                                const disabled = onlyArchivedSites || submitting || (success && isEditing);
                                 return (
                                   <div key={`${q.id}_${day.key}`} className="space-y-2">
                                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
@@ -711,7 +740,7 @@ export default function WorkerAvailabilityPage() {
                                 type="text"
                                 value={String(answersGeneral?.[q.id] || "")}
                                 onChange={(e) => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: e.target.value }))}
-                                disabled={submitting || (success && isEditing)}
+                                disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 disabled:opacity-60"
                               />
                             )}
@@ -720,7 +749,7 @@ export default function WorkerAvailabilityPage() {
                               <select
                                 value={String(answersGeneral?.[q.id] || "")}
                                 onChange={(e) => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: e.target.value }))}
-                                disabled={submitting || (success && isEditing)}
+                                disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100 disabled:opacity-60"
                               >
                                 <option value="">בחר</option>
@@ -740,7 +769,7 @@ export default function WorkerAvailabilityPage() {
                                     name={`q_${q.id}`}
                                     checked={answersGeneral?.[q.id] === true}
                                     onChange={() => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: true }))}
-                                    disabled={submitting || (success && isEditing)}
+                                    disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                   />
                                   כן
                                 </label>
@@ -750,7 +779,7 @@ export default function WorkerAvailabilityPage() {
                                     name={`q_${q.id}`}
                                     checked={answersGeneral?.[q.id] === false}
                                     onChange={() => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: false }))}
-                                    disabled={submitting || (success && isEditing)}
+                                    disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                   />
                                   לא
                                 </label>
@@ -766,7 +795,7 @@ export default function WorkerAvailabilityPage() {
                                   step={q.slider?.step ?? 1}
                                   value={generalSliderValue}
                                   onChange={(e) => setAnswersGeneral((prev) => ({ ...(prev || {}), [q.id]: Number(e.target.value) }))}
-                                  disabled={submitting || (success && isEditing)}
+                                  disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                   className="w-full"
                                 />
                                 <div className="text-xs text-zinc-600 dark:text-zinc-400">
@@ -785,7 +814,7 @@ export default function WorkerAvailabilityPage() {
                   {!isEditing || !success ? (
                     <button
                       type="submit"
-                      disabled={submitting || !workerName.trim()}
+                      disabled={onlyArchivedSites || submitting || !workerName.trim()}
                       className="rounded-md bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
                     >
                       {submitting ? "שומר..." : (hasBeenSaved ? "עדכן" : "שמור זמינות")}
@@ -794,7 +823,7 @@ export default function WorkerAvailabilityPage() {
                 </div>
               </form>
 
-              {isEditing && success && (
+              {isEditing && success && !onlyArchivedSites && (
                 <div className="flex items-center justify-center gap-3 pt-4">
                   <button
                     type="button"

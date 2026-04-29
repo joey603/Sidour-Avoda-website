@@ -17,11 +17,14 @@ type PlanningWorkersSectionProps = {
   weekStart: Date;
   workers: PlanningWorker[];
   rows: Array<PlanningWorker & { availability: PlanningWorker["availability"] }>;
+  availabilityOverlays?: Record<string, Record<string, string[]>>;
   workersLoading: boolean;
   onWorkersChanged: () => void;
   /** גרירת שם לגריד במצב ידני */
   workersNameDraggable?: boolean;
   onWorkerNameDragPreview?: (workerName: string | null) => void;
+  /** Site archivé — pas d’ajout / édition travailleurs */
+  readOnly?: boolean;
 };
 
 export function PlanningWorkersSection({
@@ -30,12 +33,14 @@ export function PlanningWorkersSection({
   weekStart,
   workers,
   rows,
+  availabilityOverlays = {},
   workersLoading,
   onWorkersChanged,
   workersNameDraggable = false,
   onWorkerNameDragPreview,
+  readOnly = false,
 }: PlanningWorkersSectionProps) {
-  const modals = usePlanningV2WorkerModals(siteId, site, weekStart, workers, () => {
+  const modals = usePlanningV2WorkerModals(siteId, site, weekStart, workers, availabilityOverlays, () => {
     onWorkersChanged();
   });
 
@@ -74,7 +79,13 @@ export function PlanningWorkersSection({
               <button
                 type="button"
                 onClick={() => modals.openAddWorkerEditor()}
-                className="inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
+                disabled={readOnly}
+                title={readOnly ? "אתר בארכיון — צפייה בלבד" : undefined}
+                className={
+                  readOnly
+                    ? "inline-flex cursor-not-allowed items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                    : "inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
+                }
               >
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
                   <path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" />
@@ -89,7 +100,8 @@ export function PlanningWorkersSection({
             <PlanningWorkersTable
               rows={rows}
               enabledRoleNames={enabledRoleNames}
-              onRowClick={modals.onTableRowClick}
+              availabilityOverlays={availabilityOverlays}
+              onRowClick={readOnly ? undefined : modals.onTableRowClick}
               workerNameDraggable={workersNameDraggable}
               onWorkerNameDragPreview={onWorkerNameDragPreview}
             />

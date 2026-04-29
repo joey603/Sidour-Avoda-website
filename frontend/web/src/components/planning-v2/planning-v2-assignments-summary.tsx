@@ -1,9 +1,9 @@
 "use client";
 
-import { type ReactElement, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import NumberPicker from "@/components/number-picker";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "./types";
-import { buildWorkerNameColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
+import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
 import {
   buildTotalAssignmentsByIdentity,
   countAssignmentsPerWorkerName,
@@ -23,29 +23,59 @@ function truncateSummaryMobile(value: unknown): string {
   return chars.length > 10 ? chars.slice(0, 8).join("") + "…" : str;
 }
 
+function normHighlightName(s: string): string {
+  return String(s || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
 function SummaryWorkerChip({
   name,
   nameColorMap,
+  highlighted,
 }: {
   name: string;
   nameColorMap: Map<string, { bg: string; border: string; text: string }>;
+  highlighted?: boolean;
 }): ReactElement {
   const col = workerNameChipColor(name, nameColorMap);
+  /** Dépliage comme le chip du גריד au survol : élargir jusqu’au nom complet, sans changer la taille du texte. */
   return (
     <span
-      className="inline-flex min-h-6 w-fit max-w-[8rem] min-w-0 items-start overflow-hidden rounded-full border px-1.5 py-0.5 shadow-sm md:min-h-9 md:max-w-[24rem] md:px-3 md:py-1"
+      className={
+        "inline-flex min-h-6 items-center rounded-full border px-1.5 py-0.5 shadow-sm transition-[max-width] duration-200 ease-out md:min-h-9 md:px-3 md:py-1 " +
+        (highlighted
+          ? "max-w-[min(100%,85vw)] shrink-0 overflow-visible ring-2 ring-[#00A8E0] ring-offset-2 ring-offset-white dark:ring-offset-zinc-950 "
+          : "max-w-[8rem] min-w-0 overflow-hidden md:max-w-[24rem] ")
+      }
       style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
     >
-      <span className="flex min-w-0 max-w-full flex-col items-center overflow-hidden text-center leading-tight">
+      <span
+        className={
+          "flex min-w-0 flex-col items-center justify-center text-center leading-tight " +
+          (highlighted ? "max-w-none overflow-visible" : "max-w-full overflow-hidden")
+        }
+      >
         <span
           className={
-            "block min-w-0 max-w-full leading-tight md:text-center " +
+            "block max-w-full leading-tight md:text-center " +
+            (highlighted ? "whitespace-nowrap " : "") +
             (isRtlName(name) ? "text-right" : "text-left")
           }
           dir={isRtlName(name) ? "rtl" : "ltr"}
         >
-          <span className="text-[8px] md:hidden">{truncateSummaryMobile(name)}</span>
-          <span className="hidden truncate text-[8px] md:block md:text-sm">{name}</span>
+          {highlighted ? (
+            <>
+              <span className="text-[8px] md:hidden">{name}</span>
+              <span className="hidden md:inline md:text-sm">{name}</span>
+            </>
+          ) : (
+            <>
+              <span className="text-[8px] md:hidden">{truncateSummaryMobile(name)}</span>
+              <span className="hidden truncate text-[8px] md:block md:text-sm">{name}</span>
+            </>
+          )}
         </span>
       </span>
     </span>
@@ -65,6 +95,11 @@ type PlanningV2AssignmentsSummaryProps = {
   onSelectedAlternativeChange?: (index: number) => void;
   onFilteredAlternativesChange?: (payload: { indices: number[]; hasActiveFilters: boolean }) => void;
   loading?: boolean;
+  /** Pendant יצירת תכנון (SSE), ne pas forcer l’index — évite « Maximum update depth exceeded ». */
+  generationRunning?: boolean;
+  /** Aligné avec la surbrillance dans גריד שבועי לפי עמדה. */
+  highlightedWorkerName?: string | null;
+  onHighlightWorkerToggle?: (workerName: string) => void;
 };
 
 export function PlanningV2AssignmentsSummary({
@@ -80,6 +115,9 @@ export function PlanningV2AssignmentsSummary({
   onSelectedAlternativeChange,
   onFilteredAlternativesChange,
   loading,
+  generationRunning = false,
+  highlightedWorkerName = null,
+  onHighlightWorkerToggle,
 }: PlanningV2AssignmentsSummaryProps) {
   const { linkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const showMultiSiteTotalColumn = linkedSites.length > 1;
@@ -108,13 +146,12 @@ export function PlanningV2AssignmentsSummary({
   }, [workers, weekStart, assignments, pulls, memoryTick]);
 
   const nameColorMap = useMemo(() => {
-    const names: string[] = [];
-    for (const w of workers) {
-      const n = String(w?.name || "").trim();
-      if (n) names.push(n);
-    }
-    return buildWorkerNameColorMap(names);
-  }, [workers]);
+    const bundles = [assignments, ...(assignmentVariants || [])].filter(
+      (x): x is Record<string, Record<string, string[][]>> =>
+        !!x && typeof x === "object",
+    );
+    return buildDistinctWorkerColorMap(workers, bundles);
+  }, [workers, assignments, assignmentVariants]);
 
   const [assignmentCountFilters, setAssignmentCountFilters] = useState<Record<string, string>>({});
   const hasActiveAssignmentCountFilters = useMemo(
@@ -190,6 +227,7 @@ export function PlanningV2AssignmentsSummary({
   }
 
   useEffect(() => {
+    if (generationRunning) return;
     if (!onSelectedAlternativeChange) return;
     if (assignmentCountsByVariant.length <= 1) return;
     if (!filteredAlternativeIndicesKey) return;
@@ -207,6 +245,19 @@ export function PlanningV2AssignmentsSummary({
     assignmentCountsByVariant.length,
     filteredAlternativeIndicesKey,
     selectedAlternativeIndex,
+    generationRunning,
+  ]);
+
+  /** Combinaison de filtres impossible → réinitialiser avant peinture pour éviter état bloquant. */
+  useLayoutEffect(() => {
+    if (!hasActiveAssignmentCountFilters) return;
+    if (assignmentCountsByVariant.length <= 1) return;
+    if (filteredAlternativeIndices.length !== 0) return;
+    setAssignmentCountFilters({});
+  }, [
+    hasActiveAssignmentCountFilters,
+    assignmentCountsByVariant.length,
+    filteredAlternativeIndices.length,
   ]);
 
   const lastFilterNotifyKey = useRef<string>("");
@@ -301,11 +352,13 @@ export function PlanningV2AssignmentsSummary({
           אין חלופות שתואמות את מספרי המשמרות שנבחרו.
         </div>
       ) : null}
-      <div className="max-h-[24rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto">
-        <table className="w-full border-collapse table-fixed text-[10px] md:text-sm">
+      <div className="max-h-[24rem] overflow-y-auto overflow-x-auto [-webkit-overflow-scrolling:touch]">
+        <table className="min-w-[280px] w-full border-collapse text-[10px] md:text-sm">
           <thead>
             <tr className="border-b dark:border-zinc-800">
-              <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-32 md:w-64 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">עובד</th>
+              <th className="sticky top-0 z-20 min-w-[8rem] bg-white px-1 md:px-2 py-1 md:py-2 text-center shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
+                עובד
+              </th>
               <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס&apos; משמרות</th>
               {showMultiSiteTotalColumn ? (
                 <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
@@ -320,47 +373,73 @@ export function PlanningV2AssignmentsSummary({
               const minAllowed = allowedCounts[0] ?? 0;
               const maxAllowed = allowedCounts[allowedCounts.length - 1] ?? c;
               const isManuallyModified = Object.prototype.hasOwnProperty.call(assignmentCountFilters, nm);
+              const rawFilter =
+                assignmentCountFilters[nm] !== undefined && String(assignmentCountFilters[nm]).trim() !== ""
+                  ? Number(assignmentCountFilters[nm])
+                  : c;
+              const pickerValue = allowedCounts.includes(rawFilter)
+                ? rawFilter
+                : allowedCounts.reduce(
+                    (best, x) => (Math.abs(x - rawFilter) < Math.abs(best - rawFilter) ? x : best),
+                    allowedCounts[0] ?? c,
+                  );
+              const filterSelectClass =
+                "w-full max-w-[4.5rem] rounded-md border px-1.5 py-1 text-center text-[10px] outline-none md:max-w-[5.5rem] md:px-2 md:py-1 md:text-sm " +
+                (isManuallyModified
+                  ? "border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
+                  : "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-950");
+              const rowSummaryHighlight =
+                !!highlightedWorkerName &&
+                !!onHighlightWorkerToggle &&
+                normHighlightName(nm) === normHighlightName(highlightedWorkerName);
               return (
               <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                <td className="px-1 md:px-2 py-1 md:py-2 w-32 md:w-64 overflow-hidden text-center">
-                  <SummaryWorkerChip name={nm} nameColorMap={nameColorMap} />
+                <td
+                  className={
+                    "px-1 md:px-2 py-1 md:py-2 text-center align-middle " +
+                    (rowSummaryHighlight
+                      ? "max-w-[min(92vw,42rem)] overflow-visible whitespace-nowrap "
+                      : "w-32 max-w-[10rem] overflow-hidden md:w-64 md:max-w-[26rem] ") +
+                    (onHighlightWorkerToggle
+                      ? "cursor-pointer touch-manipulation rounded-md outline-none transition-[background-color,max-width] duration-200 focus-visible:ring-2 focus-visible:ring-[#00A8E0] "
+                      : "") +
+                    (rowSummaryHighlight
+                      ? "bg-sky-50 ring-1 ring-[#00A8E0]/50 dark:bg-sky-950/40 dark:ring-[#00A8E0]/40 "
+                      : "")
+                  }
+                  role={onHighlightWorkerToggle ? "button" : undefined}
+                  tabIndex={onHighlightWorkerToggle ? 0 : undefined}
+                  aria-pressed={rowSummaryHighlight ? true : undefined}
+                  onClick={() => onHighlightWorkerToggle?.(nm)}
+                  onKeyDown={(e) => {
+                    if (!onHighlightWorkerToggle) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onHighlightWorkerToggle(nm);
+                    }
+                  }}
+                >
+                  <span className="inline-flex max-w-full justify-center">
+                    <SummaryWorkerChip
+                      name={nm}
+                      nameColorMap={nameColorMap}
+                      highlighted={rowSummaryHighlight}
+                    />
+                  </span>
                 </td>
                 <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
                   {assignmentCountsByVariant.length > 1 ? (
-                    <>
-                      <div className="md:hidden">
-                        <NumberPicker
-                          value={Number(assignmentCountFilters[nm] ?? c)}
-                          onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
-                          min={minAllowed}
-                          max={maxAllowed}
-                          placeholder={String(c)}
-                          className={
-                            "w-14 rounded-md border px-2 py-1 text-center text-[10px] outline-none " +
-                            (isManuallyModified
-                              ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
-                              : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
-                          }
-                        />
-                      </div>
-                      <input
-                        type="number"
-                        min={minAllowed}
-                        max={maxAllowed}
-                        inputMode="numeric"
-                        value={assignmentCountFilters[nm] ?? ""}
-                        placeholder={String(c)}
-                        onChange={(e) => handleAssignmentCountFilterChange(nm, e.target.value, maxAllowed)}
-                        className={
-                          "hidden md:block w-14 rounded-md border px-2 py-1 text-center text-[10px] md:text-sm outline-none " +
-                          (isManuallyModified
-                            ? "border-orange-400 bg-orange-50 text-orange-700 focus:border-orange-500 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
-                            : "border-zinc-300 bg-white focus:border-[#00A8E0] dark:border-zinc-700 dark:bg-zinc-950")
-                        }
-                        aria-label={`מספר משמרות עבור ${nm}`}
-                        title={`Valeurs générées: ${allowedCounts.join(", ")}`}
-                      />
-                    </>
+                    <NumberPicker
+                      value={pickerValue}
+                      onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
+                      min={minAllowed}
+                      max={maxAllowed}
+                      allowedOptions={allowedCounts}
+                      placeholder={String(c)}
+                      className={filterSelectClass}
+                      inputAriaLabel={`מספר משמרות עבור ${nm}`}
+                      title={`אפשרויות: ${allowedCounts.join(", ")}`}
+                    />
                   ) : (
                     c
                   )}

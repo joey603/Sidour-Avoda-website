@@ -8,9 +8,15 @@ import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
 import {
   canHighlightManualDropTarget,
-  computeRoleHintsForCell,
   getLinkedSiteConflictReason,
+  workerHasRole,
 } from "../lib/planning-v2-manual-full-drop";
+import {
+  alignNamesToRoleSlots,
+  buildPullRoleMapForCell,
+  computeRoleDisplayForCell,
+  resolvePullRoleNameForWorker,
+} from "../lib/planning-v2-slot-role-display";
 import { PlanningV2ManualWorkerPalette } from "../planning-v2-manual-worker-palette";
 import {
   DAY_COLS,
@@ -22,7 +28,12 @@ import {
   shiftNamesFromSite,
   stationHasIsolatedHole,
 } from "../lib/station-grid-helpers";
-import { buildWorkerNameColorMap, workerNameChipColor } from "../lib/worker-name-chip-color";
+import {
+  buildDistinctWorkerColorMap,
+  buildPlanningRoleColorMapFromSite,
+  planningColorForRoleChip,
+  workerNameChipColor,
+} from "../lib/worker-name-chip-color";
 import TimePicker from "@/components/time-picker";
 
 type PlanningV2StationWeekGridProps = {
@@ -31,6 +42,8 @@ type PlanningV2StationWeekGridProps = {
   weekStart: Date;
   workers?: PlanningWorker[];
   assignments: Record<string, Record<string, string[][]>> | null | undefined;
+  /** חלופות — כמו `aiPlan.alternatives` ב-planning : couleurs stables par travailleur sur toutes les variantes. */
+  assignmentVariants?: Array<Record<string, Record<string, string[][]>>> | null;
   /** מפת שיבוצים כמו `getLatestAssignmentBase` — להדגשת יעד גרירה תואמת ל-analyzeManualSlotDrop */
   assignmentHighlightBase?: Record<string, Record<string, string[][]>> | null;
   pulls?: Record<string, unknown> | null;
@@ -46,6 +59,7 @@ type PlanningV2StationWeekGridProps = {
   draggingWorkerName?: string | null;
   onDraggingWorkerChange?: (workerName: string | null) => void;
   availabilityByWorkerName?: Record<string, Record<string, string[]>>;
+  availabilityOverlays?: Record<string, Record<string, string[]>>;
   onManualSlotDragOutside?: (dragSource: ManualDragSource) => void | Promise<void>;
   onUpsertPull?: (key: string, entry: PlanningV2PullEntry) => boolean | void | Promise<boolean | void>;
   onRemovePull?: (key: string) => void | boolean | Promise<boolean | void>;
@@ -57,6 +71,8 @@ type PlanningV2StationWeekGridProps = {
     workerName: string;
     dragSource: ManualDragSource | null;
   }) => void | Promise<void>;
+  /** Surbrillance globale (ex. clic sur l’עובד dans סיכום שיבוצים). */
+  summaryHighlightWorkerName?: string | null;
 };
 
 function normName(s: unknown): string {
@@ -353,6 +369,7 @@ export function PlanningV2StationWeekGrid({
   weekStart,
   workers = [],
   assignments,
+  assignmentVariants = null,
   assignmentHighlightBase = null,
   pulls,
   draftFixedAssignmentsSnapshot = null,
@@ -365,12 +382,14 @@ export function PlanningV2StationWeekGrid({
   draggingWorkerName = null,
   onDraggingWorkerChange,
   availabilityByWorkerName = {},
+  availabilityOverlays = {},
   onManualSlotDragOutside,
   onUpsertPull,
   onRemovePull,
   onTogglePullsModeStation,
   onResetStation,
   onManualSlotDrop,
+  summaryHighlightWorkerName = null,
 }: PlanningV2StationWeekGridProps) {
   const [expandedSlotKey, setExpandedSlotKey] = useState<string | null>(null);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
@@ -399,14 +418,32 @@ export function PlanningV2StationWeekGrid({
     unknown
   >[];
   const shiftNamesAll = shiftNamesFromSite(site);
+  const summaryHighlightNorm = summaryHighlightWorkerName ? normName(summaryHighlightWorkerName) : "";
   const nameColorMap = useMemo(() => {
-    const names: string[] = [];
-    for (const w of workers) {
-      const n = String(w?.name || "").trim();
-      if (n) names.push(n);
+    const bundles = [assignments, ...(assignmentVariants ?? [])].filter(
+      (x): x is Record<string, Record<string, string[][]>> => !!x && typeof x === "object",
+    );
+    return buildDistinctWorkerColorMap(workers || [], bundles);
+  }, [workers, assignments, assignmentVariants]);
+
+  /** Même `roleColorMap` / `colorForRole` que la page planning classique */
+  const roleColorMapPlanning = useMemo(
+    () => buildPlanningRoleColorMapFromSite(site, workers || []),
+    [site, workers],
+  );
+  const availabilityOverlayByNormName = useMemo(() => {
+    const out: Record<string, Record<string, Set<string>>> = {};
+    for (const [workerName, byDay] of Object.entries(availabilityOverlays || {})) {
+      const key = normName(workerName);
+      if (!key) continue;
+      const nextByDay: Record<string, Set<string>> = {};
+      for (const [dayKey, shifts] of Object.entries(byDay || {})) {
+        nextByDay[dayKey] = new Set((shifts || []).map((s) => String(s || "").trim()).filter(Boolean));
+      }
+      out[key] = nextByDay;
     }
-    return buildWorkerNameColorMap(names);
-  }, [workers]);
+    return out;
+  }, [availabilityOverlays]);
 
   const onWorkerDragStart = (e: DragEvent, workerName: string) => {
     dragSourceRef.current = null;
@@ -425,7 +462,13 @@ export function PlanningV2StationWeekGrid({
     }
     const nm = (workerName || "").trim();
     if (dayKey && shiftName && Number.isFinite(stationIndex) && Number.isFinite(slotIndex) && nm) {
-      dragSourceRef.current = { dayKey, shiftName, stationIndex, slotIndex, workerName: nm };
+      const srcPayload: ManualDragSource = { dayKey, shiftName, stationIndex, slotIndex, workerName: nm };
+      dragSourceRef.current = srcPayload;
+      try {
+        e.dataTransfer.setData("application/x-planning-v2-drag-source", JSON.stringify(srcPayload));
+      } catch {
+        /* ignore */
+      }
     }
     if (manualEditable && nm) onDraggingWorkerChange?.(nm);
   };
@@ -433,7 +476,7 @@ export function PlanningV2StationWeekGrid({
   const onSlotDragOver = (e: DragEvent) => {
     e.preventDefault();
     try {
-      e.dataTransfer.dropEffect = "copy";
+      e.dataTransfer.dropEffect = dragSourceRef.current ? "move" : "copy";
     } catch {
       /* ignore */
     }
@@ -448,14 +491,35 @@ export function PlanningV2StationWeekGrid({
   ) => {
     e.preventDefault();
     let name = "";
+    let sourceFromData: ManualDragSource | null = null;
     try {
       name = e.dataTransfer.getData("text/plain");
+      const srcRaw = e.dataTransfer.getData("application/x-planning-v2-drag-source");
+      if (srcRaw) {
+        const parsed = JSON.parse(srcRaw) as Partial<ManualDragSource>;
+        if (
+          parsed &&
+          typeof parsed.dayKey === "string" &&
+          typeof parsed.shiftName === "string" &&
+          Number.isFinite(Number(parsed.stationIndex)) &&
+          Number.isFinite(Number(parsed.slotIndex)) &&
+          typeof parsed.workerName === "string"
+        ) {
+          sourceFromData = {
+            dayKey: parsed.dayKey,
+            shiftName: parsed.shiftName,
+            stationIndex: Number(parsed.stationIndex),
+            slotIndex: Number(parsed.slotIndex),
+            workerName: parsed.workerName,
+          };
+        }
+      }
     } catch {
       /* ignore */
     }
     const trimmed = name.trim();
     if (!trimmed || !onManualSlotDrop) return;
-    const src = dragSourceRef.current;
+    const src = sourceFromData || dragSourceRef.current;
     didDropRef.current = true;
     setHoverSlotKey(null);
     onDraggingWorkerChange?.(null);
@@ -678,19 +742,32 @@ export function PlanningV2StationWeekGrid({
                           const showCell = activeDay && required > 0;
                           const pullsInCell = countPullEntriesInCell(pulls || null, d.key, sn, idx);
                           const assignedCount = Math.max(0, assignedNamesNonEmpty.length - pullsInCell);
-                          const slotCount = Math.max(
-                            required + pullsInCell,
-                            assignedNamesNonEmpty.length,
-                            cellRaw.length,
-                            1,
-                          );
-                          const cellBaseRow = (highlightMap[d.key]?.[sn]?.[idx] || []) as string[];
-                          const roleHintsFromBase = computeRoleHintsForCell(
+                          const pullRoleMap = buildPullRoleMapForCell(pulls || null, d.key, sn, idx);
+                          const baseRoleDisplay = computeRoleDisplayForCell(
                             workers,
                             st,
                             sn,
                             d.key,
-                            cellBaseRow,
+                            cellRaw,
+                            pullRoleMap,
+                          );
+                          const { roleHints } = baseRoleDisplay;
+                          const displayCellRaw =
+                            manualEditable ? cellRaw : alignNamesToRoleSlots(workers, cellRaw, roleHints);
+                          const alignedRoleDisplay =
+                            manualEditable || displayCellRaw === cellRaw
+                              ? null
+                              : computeRoleDisplayForCell(workers, st, sn, d.key, displayCellRaw, pullRoleMap);
+                          const roleHintsExtended = alignedRoleDisplay?.roleHintsExtended ?? baseRoleDisplay.roleHintsExtended;
+                          const roleForSlot = alignedRoleDisplay?.roleForSlot ?? baseRoleDisplay.roleForSlot;
+                          const roleForName = alignedRoleDisplay?.roleForName ?? baseRoleDisplay.roleForName;
+                          const slotCount = Math.max(
+                            required + pullsInCell,
+                            assignedNamesNonEmpty.length,
+                            cellRaw.length,
+                            displayCellRaw.length,
+                            roleHints.length,
+                            1,
                           );
                           const dragNm = (draggingWorkerName || "").trim();
                           const prevRef =
@@ -732,6 +809,7 @@ export function PlanningV2StationWeekGrid({
                           const slotCanHighlight = (roleHint: string | null) =>
                             !!dragNm &&
                             dndHere &&
+                            !availabilityOverlayByNormName[normName(dragNm)]?.[d.key]?.has(String(sn || "").trim()) &&
                             !getLinkedSiteConflictReason(siteId || "", weekStart, workers, dragNm, d.key, sn) &&
                             canHighlightManualDropTarget({
                               assignments: highlightMap,
@@ -744,6 +822,7 @@ export function PlanningV2StationWeekGrid({
                               shiftName: sn,
                               stationIndex: idx,
                               roleHint,
+                              dragSource: dragSourceRef.current,
                             });
                           const linkedConflictReason =
                             dragNm && dndHere
@@ -766,11 +845,15 @@ export function PlanningV2StationWeekGrid({
                                   {showCell ? (
                                 <div className="mb-1 flex min-w-full flex-col items-center gap-1">
                                   {Array.from({ length: slotCount }).map((_, slotIdx) => {
-                                    const nm = String(cellRaw[slotIdx] || "").trim();
+                                    const nm = String(displayCellRaw[slotIdx] || "").trim();
                                     if (!nm) {
                                       const slotHoverKey = `${d.key}|${sn}|${idx}|${slotIdx}`;
                                       const isSlotHovered = hoverSlotKey === slotHoverKey;
-                                      const emptyOk = slotCanHighlight(null);
+                                      const emptyHintStr = String(roleHintsExtended[slotIdx] || "").trim();
+                                      const emptyOk = slotCanHighlight(emptyHintStr || null);
+                                      const erc = emptyHintStr
+                                        ? planningColorForRoleChip(emptyHintStr, roleColorMapPlanning)
+                                        : null;
                                       return (
                                         <div
                                           key={`empty-${d.key}-${sn}-${idx}-${slotIdx}`}
@@ -820,11 +903,17 @@ export function PlanningV2StationWeekGrid({
                                           data-sname={sn}
                                           data-stidx={idx}
                                           data-slotidx={slotIdx}
+                                          data-rolehint={emptyHintStr || undefined}
                                         >
                                           <span
                                             aria-hidden
                                             className={
-                                              "inline-flex min-h-6 min-w-[2.15rem] w-auto max-w-[6rem] flex-col items-center justify-center overflow-hidden rounded-full border border-zinc-200 bg-zinc-100 px-1 py-0.5 text-[8px] text-zinc-400 transition-[max-width,transform] duration-200 ease-out md:min-h-9 md:w-full md:max-w-[6rem] md:px-3 md:py-1 md:text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] " +
+                                              "inline-flex min-h-6 min-w-[2.15rem] w-auto max-w-[6rem] flex-col items-center justify-center overflow-hidden rounded-full border px-1 py-0.5 text-[8px] transition-[max-width,transform] duration-200 ease-out md:min-h-9 md:w-full md:max-w-[6rem] md:px-3 md:py-1 md:text-xs md:group-hover/slot:max-w-[18rem] md:group-focus-within/slot:max-w-[18rem] " +
+                                              (emptyHintStr
+                                                ? erc && pullsActiveHere && isPullable
+                                                  ? " border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900 "
+                                                  : " bg-white dark:bg-zinc-900 "
+                                                : " border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 ") +
                                               (pullsActiveHere && isPullable ? " ring-2 ring-orange-400 cursor-pointer" : "") +
                                               (!dragNm && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                               (dragNm && emptyOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
@@ -838,6 +927,11 @@ export function PlanningV2StationWeekGrid({
                                               (dragNm && !emptyOk && isSlotHovered
                                                 ? "ring-2 ring-[#00A8E0] cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]"
                                                 : "")
+                                            }
+                                            style={
+                                              erc && !(pullsActiveHere && isPullable)
+                                                ? { borderColor: erc.border }
+                                                : undefined
                                             }
                                             onClick={() => {
                                               if (!pullsActiveHere || !isPullable) return;
@@ -892,22 +986,65 @@ export function PlanningV2StationWeekGrid({
                                               });
                                             }}
                                           >
-                                            <span className="text-[7px] font-medium opacity-0 md:text-[10px]">
-                                              —
-                                            </span>
-                                            <span className="text-[8px] leading-none text-zinc-400 md:text-xs dark:text-zinc-400">
-                                              —
-                                            </span>
+                                            {emptyHintStr ? (
+                                              <>
+                                                <span
+                                                  className="max-w-full truncate px-0.5 text-center text-[6px] font-semibold leading-tight md:text-[9px]"
+                                                  style={{ color: erc?.text }}
+                                                >
+                                                  {emptyHintStr}
+                                                </span>
+                                                <span className="text-[8px] leading-none text-zinc-400 md:text-xs dark:text-zinc-400">
+                                                  —
+                                                </span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <span className="text-[7px] font-medium opacity-0 md:text-[10px]">
+                                                  —
+                                                </span>
+                                                <span className="text-[8px] leading-none text-zinc-400 md:text-xs dark:text-zinc-400">
+                                                  —
+                                                </span>
+                                              </>
+                                            )}
                                           </span>
                                         </div>
                                       );
                                     }
                                     const c = workerNameChipColor(nm, nameColorMap);
+                                    const nmTrim = String(nm || "").trim();
+                                    /** Comme la page planning (`rn` puis `pullRoleName`) : map משיחה avec validation rôle, puis attribution besoins, puis roleName sur l’entrée משיחה. */
+                                    const pullRnMap = pullRoleMap.get(nmTrim) || null;
+                                    const slotExpectedRole = String(
+                                      roleForSlot[slotIdx] || roleHintsExtended[slotIdx] || roleHints[slotIdx] || "",
+                                    ).trim();
+                                    const slotRoleFromCell =
+                                      slotExpectedRole && workerHasRole(workers, nmTrim, slotExpectedRole)
+                                        ? slotExpectedRole
+                                        : null;
+                                    const rn =
+                                      (pullRnMap && workerHasRole(workers, nmTrim, pullRnMap) ? pullRnMap : null) ||
+                                      slotRoleFromCell ||
+                                      (roleForName.get(nmTrim) ?? null);
+                                    const pullRoleName = resolvePullRoleNameForWorker(
+                                      pulls || null,
+                                      d.key,
+                                      sn,
+                                      idx,
+                                      nm,
+                                    );
+                                    const roleToShow = slotExpectedRole || rn || pullRoleName || null;
+                                    const rcRole = roleToShow
+                                      ? planningColorForRoleChip(roleToShow, roleColorMapPlanning)
+                                      : null;
                                     const ring = pullRingClass(pulls || null, d.key, sn, idx, nm);
                                     const nmKey = normName(nm);
                                     const pullRel = pullHighlightByNormName.get(nmKey);
                                     const pullAdjacentRing =
                                       pullRel === "before" || pullRel === "after" ? " ring-2 ring-orange-400" : "";
+                                    const pullOrangeOutline =
+                                      ring.trim().length > 0 || pullAdjacentRing.trim().length > 0;
                                     const expKey = expandedKeyFor(
                                       d.key,
                                       sn,
@@ -934,7 +1071,7 @@ export function PlanningV2StationWeekGrid({
                                     );
                                     const slotHoverKey = `${d.key}|${sn}|${idx}|${slotIdx}`;
                                     const isSlotHovered = hoverSlotKey === slotHoverKey;
-                                    const fillHint = (roleHintsFromBase[slotIdx] ?? null) as string | null;
+                                    const fillHint = (roleHintsExtended[slotIdx] ?? null) as string | null;
                                     const fillOk = slotCanHighlight(fillHint);
                                     const slotPullKey = `${d.key}|${sn}|${idx}|${slotIdx}`;
                                     const pullsMap = (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || {};
@@ -958,6 +1095,8 @@ export function PlanningV2StationWeekGrid({
                                     const hasPullOnSlot =
                                       !!String(existingPull?.before?.name || "").trim() ||
                                       !!String(existingPull?.after?.name || "").trim();
+                                    const summaryPickActive =
+                                      !!summaryHighlightNorm && !!nmKey && nmKey === summaryHighlightNorm;
                                     return (
                                       <div
                                         key={`${d.key}-${sn}-${idx}-slot-${slotIdx}-${nmKey}`}
@@ -965,6 +1104,9 @@ export function PlanningV2StationWeekGrid({
                                           "group/slot relative flex w-full justify-center py-0.5 " +
                                           (dndHere && dragNm && isSlotHovered
                                             ? "z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
+                                            : "") +
+                                          (summaryPickActive
+                                            ? " z-[25] rounded-full transition-shadow duration-200"
                                             : "")
                                         }
                                         onDragEnter={
@@ -1027,7 +1169,12 @@ export function PlanningV2StationWeekGrid({
                                             ring +
                                             pullAdjacentRing +
                                             (hasPullOnSlot ? " cursor-pointer" : "") +
-                                            (!dragNm && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
+                                            (((!dragNm && isSlotHovered) || summaryPickActive)
+                                              ? " z-[40] scale-110 ring-2 ring-[#00A8E0] " +
+                                                (summaryPickActive
+                                                  ? "ring-offset-1 ring-offset-white dark:ring-offset-zinc-950 "
+                                                  : "")
+                                              : "") +
                                             (dragNm && fillOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
                                             (dragNm && hasLinkedConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
                                             (dragNm && fillOk && isSlotHovered
@@ -1042,7 +1189,12 @@ export function PlanningV2StationWeekGrid({
                                           }
                                           style={{
                                             backgroundColor: c.bg,
-                                            borderColor: c.border,
+                                            borderColor:
+                                              pullOrangeOutline
+                                                ? c.border
+                                                : rcRole
+                                                  ? rcRole.border
+                                                  : c.border,
                                             color: c.text,
                                           }}
                                           title={nm}
@@ -1108,6 +1260,15 @@ export function PlanningV2StationWeekGrid({
                                           }}
                                         >
                                           <span className="flex w-full min-w-0 flex-1 flex-col items-center overflow-hidden text-center leading-tight">
+                                            {roleToShow && rcRole ? (
+                                              <span
+                                                className="mb-0.5 max-w-full truncate text-[5px] font-semibold leading-tight opacity-95 md:text-[8px]"
+                                                dir="rtl"
+                                                style={{ color: rcRole.text }}
+                                              >
+                                                {roleToShow}
+                                              </span>
+                                            ) : null}
                                             <span
                                               className="flex w-full min-w-0 max-w-full items-center justify-center gap-0.5 leading-tight"
                                               dir={isRtlName(nm) ? "rtl" : "ltr"}
@@ -1192,6 +1353,7 @@ export function PlanningV2StationWeekGrid({
       {manualEditable && workers.length > 0 ? (
         <PlanningV2ManualWorkerPalette
           workers={workers}
+          nameColorMap={nameColorMap}
           onDragPreviewStart={(name) => onDraggingWorkerChange?.(name)}
           onDragPreviewEnd={() => onDraggingWorkerChange?.(null)}
         />

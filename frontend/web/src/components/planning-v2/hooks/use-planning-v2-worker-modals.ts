@@ -20,6 +20,7 @@ export function usePlanningV2WorkerModals(
   site: SiteSummary | null,
   weekStart: Date,
   workers: PlanningWorker[],
+  availabilityOverlaysByWorkerName: Record<string, Record<string, string[]>>,
   reloadWorkers: () => void,
 ) {
   const [filterOpen, setFilterOpen] = useState(false);
@@ -49,7 +50,7 @@ export function usePlanningV2WorkerModals(
   const enabledRoleNameSet = useMemo(() => buildEnabledRoleNameSet(site), [site]);
   const allRoleNames = useMemo(
     () => Array.from(enabledRoleNameSet).sort((a, b) => a.localeCompare(b)),
-    [enabledRoleNameSet],
+    [enabledRoleNameSet, availabilityOverlaysByWorkerName],
   );
   const allShiftNames = useMemo(() => collectShiftNamesFromSiteConfig(site), [site]);
 
@@ -143,7 +144,13 @@ export function usePlanningV2WorkerModals(
     (row: WorkerRowForEditor) => {
       setCreateStepOpen(false);
       setExistingPickerOpen(false);
+      const overlay = (availabilityOverlaysByWorkerName[String(row.name || "").trim()] || {}) as WorkerAvailability;
       const nextAvailability = cloneWorkerAvailability(row.availability);
+      for (const d of DAY_DEFS) {
+        const k = d.key;
+        const merged = new Set<string>([...(nextAvailability[k] || []), ...((overlay[k] || []) as string[])]);
+        nextAvailability[k] = Array.from(merged);
+      }
       setEditingWorkerId(row.id);
       setNewWorkerName(row.name);
       setNewWorkerMax(row.maxShifts);
@@ -152,7 +159,7 @@ export function usePlanningV2WorkerModals(
       setNewWorkerAvailability(nextAvailability);
       setEditorOpen(true);
     },
-    [enabledRoleNameSet],
+    [enabledRoleNameSet, availabilityOverlaysByWorkerName],
   );
 
   /** Même flux que le planning : d’abord la petite modale שם/טלפון, puis la grande (זמינות…). */
@@ -251,14 +258,15 @@ export function usePlanningV2WorkerModals(
   const handleDeleteWorker = useCallback(async () => {
     const wid = editingWorkerId;
     if (!wid) return;
-    if (!confirm(`למחוק את ${newWorkerName}?`)) return;
+    if (!confirm(`להסיר את ${newWorkerName} מהשבוע הנבחר והלאה?`)) return;
     setDeletingId(wid);
     try {
-      await apiFetch(`/director/sites/${siteId}/workers/${wid}`, {
+      const weekIso = getWeekKeyISO(weekStart);
+      await apiFetch(`/director/sites/${siteId}/workers/${wid}?week=${encodeURIComponent(weekIso)}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
-      toast.success("העובד נמחק בהצלחה");
+      toast.success("העובד הוסר מהשבוע הנבחר והלאה");
       closeWorkerEditor();
       reloadWorkers();
     } catch (e: unknown) {
@@ -267,7 +275,7 @@ export function usePlanningV2WorkerModals(
     } finally {
       setDeletingId(null);
     }
-  }, [closeWorkerEditor, editingWorkerId, newWorkerName, reloadWorkers, siteId]);
+  }, [closeWorkerEditor, editingWorkerId, newWorkerName, reloadWorkers, siteId, weekStart]);
 
   const handleSaveWorker = useCallback(async () => {
     if (workerModalSaving) return;
@@ -449,11 +457,17 @@ export function usePlanningV2WorkerModals(
       workerModalShiftBuckets,
       workerModalBulkSelection,
       workerModalQuestionView,
+      workerAvailabilityOverlay:
+        (availabilityOverlaysByWorkerName[String(editingWorkerResolved?.name || newWorkerName || "").trim()] as
+          | Record<string, string[]>
+          | undefined) || {},
       showRestoreAvailabilityButton: isNextWeekDisplayed(weekStart),
       onRestoreAvailability: () => {
+        // Restaurer depuis la disponibilité "source worker" (menu עובדים),
+        // pas depuis l’état mergé/édité courant de la modale.
         const base =
-          originalAvailability ||
           (editingWorkerResolved?.availability as WorkerAvailability | undefined) ||
+          originalAvailability ||
           EMPTY_WORKER_AVAILABILITY;
         setNewWorkerAvailability(cloneWorkerAvailability(base));
         toast.info("הזמינות חזרה להגדרת העובד מהמערכת");

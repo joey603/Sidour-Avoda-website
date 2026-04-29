@@ -44,10 +44,16 @@ type PlanningV2SitePaperHeaderProps = {
   /** Données site chargées par le parent (évite un double fetch). */
   site: SiteSummary | null;
   siteLoading: boolean;
+  readOnly?: boolean;
 };
 
 /** Bloc « אתר » + nom + לינק לעובד / הגדרות — aligné sur `planning/[id]`. */
-export function PlanningV2SitePaperHeader({ siteId, site, siteLoading }: PlanningV2SitePaperHeaderProps) {
+export function PlanningV2SitePaperHeader({
+  siteId,
+  site,
+  siteLoading,
+  readOnly = false,
+}: PlanningV2SitePaperHeaderProps) {
   const router = useRouter();
   const idNum = Number(siteId);
   const idValid = Number.isFinite(idNum) && idNum > 0;
@@ -64,7 +70,7 @@ export function PlanningV2SitePaperHeader({ siteId, site, siteLoading }: Plannin
           <button
             type="button"
             onClick={async () => {
-              if (!idValid) return;
+              if (!idValid || readOnly) return;
               try {
                 setWorkerInviteLinkLoading(true);
                 const result = await apiFetch<{ invite_path: string }>(`/director/sites/${siteId}/worker-invite`, {
@@ -85,7 +91,8 @@ export function PlanningV2SitePaperHeader({ siteId, site, siteLoading }: Plannin
                 setWorkerInviteLinkLoading(false);
               }
             }}
-            disabled={workerInviteLinkLoading || !idValid}
+            disabled={readOnly || workerInviteLinkLoading || !idValid}
+            title={readOnly ? "אתר בארכיון — לינק לא זמין" : undefined}
             className="inline-flex items-center gap-1.5 rounded-lg border border-sky-300 bg-gradient-to-b from-sky-50 to-sky-100/80 px-3 py-2 text-sm font-medium text-sky-900 shadow-sm transition hover:border-sky-400 hover:from-sky-100 hover:to-sky-100 disabled:opacity-60 dark:border-sky-700 dark:from-sky-950/50 dark:to-sky-950/30 dark:text-sky-100 dark:hover:border-sky-600 dark:hover:from-sky-900/60"
           >
             <svg
@@ -103,12 +110,14 @@ export function PlanningV2SitePaperHeader({ siteId, site, siteLoading }: Plannin
           <button
             type="button"
             onClick={() => {
+              if (readOnly) return;
               if (site?.id != null) {
                 clearAllPlanningSessionCaches();
                 router.push(`/director/sites/${site.id}/edit`);
               }
             }}
-            disabled={!site?.id}
+            disabled={readOnly || !site?.id}
+            title={readOnly ? "אתר בארכיון — עריכת הגדרות לא זמינה" : undefined}
             className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm transition hover:border-zinc-400 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-500 dark:hover:bg-zinc-800"
           >
             <svg
