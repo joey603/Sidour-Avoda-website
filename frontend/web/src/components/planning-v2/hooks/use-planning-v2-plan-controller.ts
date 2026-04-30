@@ -92,6 +92,20 @@ type PlanControllerArgs = {
   weekPurgeSiteIds: number[];
 };
 
+function normalizeDraftAlternatives(
+  value: Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap } | null | undefined>,
+): Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap }> {
+  return (value || []).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const assignments = item.assignments;
+    if (!assignments || typeof assignments !== "object") return [];
+    return [{
+      assignments,
+      pulls: (item.pulls || {}) as PlanningV2PullsMap,
+    }];
+  });
+}
+
 export function usePlanningV2PlanController({
   siteId,
   weekStart,
@@ -206,10 +220,13 @@ export function usePlanningV2PlanController({
       setDraftPulls((plan.pulls as PlanningV2PullsMap) || {});
       const altsAssignments = Array.isArray(plan.alternatives) ? plan.alternatives : [];
       const altsPulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
-      const alts = altsAssignments.map((asg, idx) => ({
-        assignments: (asg || {}) as Record<string, Record<string, string[][]>>,
-        pulls: ((altsPulls[idx] || {}) as PlanningV2PullsMap),
-      }));
+      const alts = altsAssignments.flatMap((asg, idx) => {
+        if (!asg || typeof asg !== "object") return [];
+        return [{
+          assignments: asg as Record<string, Record<string, string[][]>>,
+          pulls: ((altsPulls[idx] || {}) as PlanningV2PullsMap),
+        }];
+      });
       setDraftAlternatives(alts);
       setSelectedAlternativeIndex(activeIdx);
     };
@@ -229,7 +246,8 @@ export function usePlanningV2PlanController({
 
   const assignmentVariants = useMemo<Array<Record<string, Record<string, string[][]>>>>(() => {
     if (draftAssignments) {
-      return [draftAssignments, ...draftAlternatives.map((x) => x.assignments)];
+      const normalized = normalizeDraftAlternatives(draftAlternatives);
+      return [draftAssignments, ...normalized.map((x) => x.assignments)];
     }
     const base = weekPlan?.assignments ? [weekPlan.assignments] : [];
     const alts = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
@@ -239,7 +257,8 @@ export function usePlanningV2PlanController({
   const pullVariants = useMemo<PlanningV2PullsMap[]>(() => {
     if (draftAssignments) {
       const basePulls = draftPulls || {};
-      return [basePulls, ...draftAlternatives.map((x) => x.pulls || {})];
+      const normalized = normalizeDraftAlternatives(draftAlternatives);
+      return [basePulls, ...normalized.map((x) => x.pulls || {})];
     }
     const basePulls =
       weekPlan?.pulls && typeof weekPlan.pulls === "object" ? (weekPlan.pulls as PlanningV2PullsMap) : {};
@@ -393,7 +412,7 @@ export function usePlanningV2PlanController({
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
         alternativesFlushRafRef.current = null;
         setDraftAlternatives((prev) => {
-          const next = draftAlternativesRef.current || [];
+          const next = normalizeDraftAlternatives(draftAlternativesRef.current || []);
           // Évite les renders inutiles quand rien n'a changé.
           if (prev.length === next.length) return prev;
           return [...next];
@@ -549,6 +568,7 @@ export function usePlanningV2PlanController({
         if (evt.type === "alternative") {
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
+          const altSlot = Math.max(0, Math.trunc(Number(evt.index || 0)) - 1);
           let altAssignments: Record<string, Record<string, string[][]>> | null = null;
           let altPulls: PlanningV2PullsMap = {};
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
@@ -579,24 +599,14 @@ export function usePlanningV2PlanController({
               } else if (nextAssignments) {
                 const prevAlternatives = Array.isArray(prev.alternatives) ? prev.alternatives : [];
                 const prevAlternativePulls = Array.isArray(prev.alternative_pulls) ? prev.alternative_pulls : [];
-                let isDuplicateAlternative = false;
-                try {
-                  const lastAltAsg = prevAlternatives.length > 0 ? prevAlternatives[prevAlternatives.length - 1] : null;
-                  const lastAltPulls =
-                    prevAlternativePulls.length > 0 ? prevAlternativePulls[prevAlternativePulls.length - 1] : null;
-                  if (lastAltAsg && JSON.stringify(lastAltAsg) === JSON.stringify(nextAssignments)) {
-                    const lastPullsNorm = lastAltPulls || {};
-                    const nextPullsNorm = nextPulls || {};
-                    isDuplicateAlternative = JSON.stringify(lastPullsNorm) === JSON.stringify(nextPullsNorm);
-                  }
-                } catch {
-                  isDuplicateAlternative = false;
-                }
-                if (isDuplicateAlternative) continue;
+                const nextAlternatives = [...prevAlternatives];
+                const nextAlternativePulls = [...prevAlternativePulls];
+                nextAlternatives[altSlot] = nextAssignments;
+                nextAlternativePulls[altSlot] = nextPulls;
                 merged[k] = {
                   ...prev,
-                  alternatives: [...prevAlternatives, nextAssignments],
-                  alternative_pulls: [...prevAlternativePulls, nextPulls],
+                  alternatives: nextAlternatives,
+                  alternative_pulls: nextAlternativePulls,
                 };
                 mergedChanged = true;
               }
@@ -629,10 +639,12 @@ export function usePlanningV2PlanController({
             if (nextSnapshot) {
               lastAlternativeSnapshotRef.current = nextSnapshot;
             }
-            draftAlternativesRef.current = [
-              ...(draftAlternativesRef.current || []),
-              { assignments: altAssignments as Record<string, Record<string, string[][]>>, pulls: altPulls },
-            ];
+            const nextDraftAlternatives = [...(draftAlternativesRef.current || [])];
+            nextDraftAlternatives[altSlot] = {
+              assignments: altAssignments as Record<string, Record<string, string[][]>>,
+              pulls: altPulls,
+            };
+            draftAlternativesRef.current = nextDraftAlternatives;
             scheduleAlternativesFlush();
           }
           return false;
@@ -679,6 +691,12 @@ export function usePlanningV2PlanController({
       setGenerationRunning(false);
       genBusyRef.current = false;
       abortRef.current = null;
+      console.info("[planning-v2] generation finished", {
+        siteId,
+        weekIso,
+        sawPlanToPersist,
+        alternativesBuffered: draftAlternativesRef.current?.length || 0,
+      });
       if (sawPlanToPersist) {
         void (async () => {
           try {
@@ -838,7 +856,17 @@ export function usePlanningV2PlanController({
   const setSelectedAlternativeIndexSynced = useCallback(
     (index: number) => {
       const next = Math.max(0, Number(index || 0));
-      setSelectedAlternativeIndex((prev) => (prev === next ? prev : next));
+      setSelectedAlternativeIndex((prev) => {
+        if (prev !== next) {
+          console.info("[planning-v2] alternative changed", {
+            siteId,
+            weekIso,
+            prev,
+            next,
+          });
+        }
+        return prev === next ? prev : next;
+      });
       if (linkedSitesLength > 1) {
         const mem = readLinkedPlansFromMemory(weekStart);
         if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
@@ -849,7 +877,7 @@ export function usePlanningV2PlanController({
         }
       }
     },
-    [linkedSitesLength, weekStart],
+    [siteId, weekIso, linkedSitesLength, weekStart],
   );
 
   return {

@@ -323,7 +323,7 @@ export default function TopNav() {
 
   return (
     <>
-      <div className="w-full border-b bg-white/80 backdrop-blur dark:bg-zinc-900/80">
+      <div id="app-top-nav" className="w-full border-b bg-white/80 backdrop-blur dark:bg-zinc-900/80">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 py-3 pr-3 pl-0">
           <div className="flex items-center gap-2">
             {/* Bouton hamburger (mobile uniquement) */}

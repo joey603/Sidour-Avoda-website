@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -49,6 +49,16 @@ function normWorkerName(value: string): string {
     .normalize("NFKC")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function truncateMobile6(value: unknown): string {
+  const s = String(value ?? "");
+  const chars = Array.from(s);
+  return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
+}
+
+function isRtlName(value: string): boolean {
+  return /[\u0590-\u05FF]/.test(String(value || ""));
 }
 
 function PlanningV2PageInner({ siteId }: { siteId: string }) {
@@ -867,6 +877,81 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     linkedPlansMemoryTick,
   ]);
 
+  const linkedSiteRailBadges = useMemo(() => {
+    const weekIso = getWeekKeyISO(weekStart);
+    const ids = new Set<number>();
+    const current = Number(siteId);
+    if (Number.isFinite(current) && current > 0) ids.add(current);
+    linkedSites.forEach((ls) => {
+      const n = Number(ls.id);
+      if (Number.isFinite(n) && n > 0) ids.add(n);
+    });
+    const linkedSiteIdsKey = Array.from(ids)
+      .sort((a, b) => a - b)
+      .join("-");
+    const filterStorageKey = `planning_v2_multisite_assignment_filters_by_site_${weekIso}_${linkedSiteIdsKey}`;
+    const savedBySiteId = new Map<number, boolean>();
+    const filterCountBySiteId = new Map<number, number>();
+    if (typeof window === "undefined") {
+      return { savedBySiteId, filterCountBySiteId };
+    }
+    try {
+      const hasSavedFromApiBySiteId = new Map<number, boolean>();
+      linkedSites.forEach((ls) => {
+        const sid = Number(ls.id);
+        if (!Number.isFinite(sid) || sid <= 0) return;
+        hasSavedFromApiBySiteId.set(sid, !!ls.has_saved_plan);
+      });
+      for (const ls of linkedSites) {
+        const sid = Number(ls.id);
+        if (!Number.isFinite(sid) || sid <= 0) continue;
+        const localGeneric = !!localStorage.getItem(`plan_${sid}_${weekIso}`);
+        const localDirector = !!localStorage.getItem(`plan_director_${sid}_${weekIso}`);
+        const localShared = !!localStorage.getItem(`plan_shared_${sid}_${weekIso}`);
+        const sessionGeneric = !!sessionStorage.getItem(`plan_${sid}_${weekIso}`);
+        const sessionDirector = !!sessionStorage.getItem(`plan_director_${sid}_${weekIso}`);
+        const sessionShared = !!sessionStorage.getItem(`plan_shared_${sid}_${weekIso}`);
+        const currentSitePersistedFromApi =
+          String(sid) === String(siteId) &&
+          assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
+          (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
+        savedBySiteId.set(
+          sid,
+          !!hasSavedFromApiBySiteId.get(sid) ||
+          localGeneric ||
+            localDirector ||
+            localShared ||
+            sessionGeneric ||
+            sessionDirector ||
+            sessionShared ||
+            currentSitePersistedFromApi,
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = localStorage.getItem(filterStorageKey);
+      const parsed = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
+      for (const ls of linkedSites) {
+        const sid = String(ls.id);
+        const byWorker = parsed?.[sid];
+        if (!byWorker || typeof byWorker !== "object") {
+          filterCountBySiteId.set(Number(ls.id), 0);
+          continue;
+        }
+        const count = Object.values(byWorker).filter((v) => {
+          const n = Number(v);
+          return Number.isFinite(n) && n >= 0;
+        }).length;
+        filterCountBySiteId.set(Number(ls.id), count);
+      }
+    } catch {
+      linkedSites.forEach((ls) => filterCountBySiteId.set(Number(ls.id), 0));
+    }
+    return { savedBySiteId, filterCountBySiteId };
+  }, [linkedSites, siteId, weekStart, summaryFilterState, weekPlan?.assignments, weekPlan?.sourceScope]);
+
   const refreshWorkersAndGrid = () => {
     void reloadWorkers();
     void reloadWeeklyAvailability();
@@ -889,22 +974,92 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   );
   const hasLinkedSitesRail = linkedSites.length > 1 && hasMultiWorkersThisWeek;
 
+  /** Pas de défilement de la page sous le panneau mobile « אתרים מקושרים » lorsqu’il est ouvert (< lg). */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const apply = () => {
+      const lock = mq.matches && hasLinkedSitesRail && showLinkedSitesRail;
+      document.body.style.overflow = lock ? "hidden" : "";
+      document.documentElement.style.overflow = lock ? "hidden" : "";
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => {
+      mq.removeEventListener("change", apply);
+      document.body.style.overflow = "";
+      document.documentElement.style.overflow = "";
+    };
+  }, [hasLinkedSitesRail, showLinkedSitesRail]);
+
+  /** Insets du rail mobile : bas de `#app-top-nav` → `top`, haut de la barre d’action → `bottom`. */
+  useLayoutEffect(() => {
+    const syncRailInsets = () => {
+      const navEl = document.getElementById("app-top-nav");
+      const barEl = document.getElementById("planning-v2-action-bar");
+
+      let topPx = 0;
+      if (navEl) {
+        const cs = window.getComputedStyle(navEl);
+        const nr = navEl.getBoundingClientRect();
+        const navVisible =
+          cs.display !== "none" && cs.visibility !== "hidden" && nr.height > 0.5 && nr.bottom > 0;
+        topPx = navVisible ? Math.max(0, nr.bottom) : 0;
+      }
+      document.documentElement.style.setProperty("--planning-v2-rail-top-px", `${topPx}px`);
+
+      if (barEl) {
+        const br = barEl.getBoundingClientRect();
+        document.documentElement.style.setProperty(
+          "--planning-v2-action-bar-px",
+          `${Math.max(0, window.innerHeight - br.top)}px`,
+        );
+      }
+    };
+
+    syncRailInsets();
+    const ro = new ResizeObserver(() => requestAnimationFrame(syncRailInsets));
+    const navEl = document.getElementById("app-top-nav");
+    const barEl = document.getElementById("planning-v2-action-bar");
+    if (navEl) ro.observe(navEl);
+    if (barEl) ro.observe(barEl);
+    window.addEventListener("resize", syncRailInsets);
+    window.addEventListener("orientationchange", syncRailInsets);
+    window.addEventListener("scroll", syncRailInsets, true);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", syncRailInsets);
+    vv?.addEventListener("scroll", syncRailInsets);
+    requestAnimationFrame(() => requestAnimationFrame(syncRailInsets));
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", syncRailInsets);
+      window.removeEventListener("orientationchange", syncRailInsets);
+      window.removeEventListener("scroll", syncRailInsets, true);
+      vv?.removeEventListener("resize", syncRailInsets);
+      vv?.removeEventListener("scroll", syncRailInsets);
+      document.documentElement.style.removeProperty("--planning-v2-rail-top-px");
+      document.documentElement.style.removeProperty("--planning-v2-action-bar-px");
+    };
+  }, []);
+
   const renderLinkedSitesRailContent = () => (
-    <>
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
-        <div className="flex flex-col items-end gap-0.5">
-          <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-            חלופה מסוננת{" "}
-            {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
-            /{Math.max(1, visibleAlternativeIndices.length)}
-          </span>
+    <div className="flex h-full min-h-0 w-full max-w-full flex-1 flex-col gap-3 overflow-hidden">
+      <div className="shrink-0 border-b border-zinc-100 bg-white pb-2 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
+          <div className="flex flex-col items-end gap-0.5">
+            <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+              חלופה מסוננת{" "}
+              {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
+              /{Math.max(1, visibleAlternativeIndices.length)}
+            </span>
+          </div>
+        </div>
+        <div className="text-xs leading-snug text-zinc-500 dark:text-zinc-400">
+          מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
         </div>
       </div>
-      <div className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-        מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
-      </div>
-      <div className="max-h-[70vh] space-y-2 overflow-y-auto pr-1">
+      <div className="planning-v2-linked-rail-scroll min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-auto overscroll-y-contain pt-1 pb-2 pl-0.5 pr-0.5 touch-pan-y [-webkit-overflow-scrolling:touch]">
         {linkedSitesRailData.length === 0 ? (
           <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
             אין אתרים מקושרים נוספים להצגה.
@@ -916,6 +1071,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
                     <span className="min-w-0 break-words">{siteBlock.siteName}</span>
+                    {linkedSiteRailBadges.savedBySiteId.get(siteBlock.siteId) ? (
+                      <span className="shrink-0 rounded bg-emerald-100 px-1 py-px text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                        תכנון שמור
+                      </span>
+                    ) : null}
                     {siteBlock.siteDeleted ? (
                       <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
                         ארכיון
@@ -937,6 +1097,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
                 <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
                   עובדים רב-אתריים משובצים באתר זה
+                  {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
+                    <span className="ms-1 inline-flex items-center rounded border border-orange-200 bg-orange-50 px-1.5 py-px text-[9px] font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/30 dark:text-orange-300">
+                      פילטר
+                    </span>
+                  ) : null}
                 </div>
                 {siteBlock.workerCounts.length === 0 ? (
                   <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
@@ -948,7 +1113,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                       <thead>
                         <tr className="border-b dark:border-zinc-800">
                           <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">עובד</th>
-                          <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">שיבוצים</th>
+                          <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
+                            {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
+                              <span className="inline-flex items-center rounded border border-orange-300 px-1.5 py-0.5 text-orange-700 dark:border-orange-700 dark:text-orange-300">
+                                שיבוצים
+                              </span>
+                            ) : (
+                              "שיבוצים"
+                            )}
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
@@ -956,7 +1129,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                           <tr key={`${siteBlock.siteId}-${entry.workerName}`} className="border-b last:border-0 dark:border-zinc-800">
                             <td className="px-1 py-1 text-zinc-700 dark:text-zinc-200">{entry.workerName}</td>
                             <td className="px-1 py-1 text-center font-semibold text-zinc-700 dark:text-zinc-200">
-                              {entry.count}
+                              {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
+                                <span className="inline-flex min-w-6 items-center justify-center rounded border border-orange-300 px-1 py-px text-orange-700 dark:border-orange-700 dark:text-orange-300">
+                                  {entry.count}
+                                </span>
+                              ) : (
+                                entry.count
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -1065,14 +1244,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                                               return (
                                                 <span
                                                   key={`${k}-${idx}-${nm}`}
-                                                  className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px]"
+                                                  className="inline-flex max-w-[6.5rem] min-w-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] md:max-w-[10rem]"
                                                   style={{
                                                     backgroundColor: col.bg,
                                                     borderColor: col.border,
                                                     color: col.text,
                                                   }}
+                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
                                                 >
-                                                  {nm}
+                                                  <span className="md:hidden">{truncateMobile6(nm)}</span>
+                                                  <span className="hidden max-w-full truncate md:inline">{nm}</span>
                                                 </span>
                                               );
                                             })}
@@ -1095,7 +1276,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           ))
         )}
       </div>
-    </>
+    </div>
   );
 
   return (
@@ -1149,9 +1330,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           {hasLinkedSitesRail ? (
             <aside
               className={
-                "absolute inset-y-0 left-0 z-20 h-full w-full rounded-l-2xl border-r border-zinc-200 bg-white/95 p-3 shadow-xl backdrop-blur-sm transition-transform duration-300 dark:border-zinc-800 dark:bg-zinc-950/95 lg:w-[20rem] lg:max-w-[85vw] " +
-                (showLinkedSitesRail ? "translate-x-0" : "-translate-x-[102%]") +
-                " lg:hidden"
+                "fixed left-0 flex min-h-0 w-full max-w-full flex-col overflow-hidden rounded-r-2xl border-r border-zinc-200 bg-white px-3 pb-0 shadow-xl transition-transform duration-300 dark:border-zinc-800 dark:bg-zinc-950 lg:hidden " +
+                (showLinkedSitesRail
+                  ? "top-0 z-[35] h-[calc(100dvh-var(--planning-v2-action-bar-px))] pt-[max(0.75rem,env(safe-area-inset-top))] translate-x-0"
+                  : "top-[var(--planning-v2-rail-top-px,4.5rem)] z-30 bottom-[var(--planning-v2-action-bar-px)] pt-3 -translate-x-[102%] pointer-events-none")
               }
             >
               {renderLinkedSitesRailContent()}
@@ -1235,7 +1417,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
         </PlanningV2MainPaper>
         {hasLinkedSitesRail ? (
-          <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:block lg:max-h-[calc(100vh-2rem)] lg:w-[20rem] lg:overflow-y-auto lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
+          <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:flex lg:h-[calc(100dvh-var(--planning-v2-rail-top-px)-var(--planning-v2-action-bar-px)-0.75rem)] lg:min-h-0 lg:w-[20rem] lg:flex-col lg:overflow-hidden lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
             {renderLinkedSitesRailContent()}
           </aside>
         ) : null}

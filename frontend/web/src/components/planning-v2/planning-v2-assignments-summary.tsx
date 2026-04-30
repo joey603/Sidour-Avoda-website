@@ -462,27 +462,10 @@ export function PlanningV2AssignmentsSummary({
     });
   }
 
-  useEffect(() => {
-    if (generationRunning) return;
-    if (!onSelectedAlternativeChange) return;
-    if (assignmentCountsByVariant.length <= 1) return;
-    if (!filteredAlternativeIndicesKey) return;
-    const indices = filteredAlternativeIndicesKey
-      .split(",")
-      .map((s) => Number(s))
-      .filter((n) => Number.isFinite(n));
-    if (indices.length === 0) return;
-    if (indices.includes(selectedAlternativeIndex)) return;
-    const pick = indices[0];
-    if (typeof pick !== "number" || pick === selectedAlternativeIndex) return;
-    onSelectedAlternativeChange(pick);
-  }, [
-    onSelectedAlternativeChange,
-    assignmentCountsByVariant.length,
-    filteredAlternativeIndicesKey,
-    selectedAlternativeIndex,
-    generationRunning,
-  ]);
+  // Ne pas auto-bascule d'alternative ici:
+  // dans certains cas multi-sites, la liste filtrée peut évoluer rapidement
+  // et provoquer un enchaînement 0->1->2->... non souhaité.
+  // Le changement d'alternative doit rester piloté par l'utilisateur.
 
   /** Combinaison de filtres impossible → réinitialiser avant peinture pour éviter état bloquant. */
   useLayoutEffect(() => {

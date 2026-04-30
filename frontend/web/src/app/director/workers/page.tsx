@@ -274,7 +274,7 @@ export default function WorkersList() {
           </div>
         </section>
 
-        <div className="rounded-xl border p-4 dark:border-zinc-800">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           {/* Desktop: grid avec titre, recherche et bouton sur la même ligne */}
           <div className="mb-2 hidden md:grid grid-cols-3 items-center gap-3">
             <h2 className="text-lg font-semibold justify-self-start">רשימת עובדים</h2>

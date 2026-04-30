@@ -187,6 +187,49 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
     return days, shifts, stations
 
 
+def enforce_max_shifts_on_plan(
+    assignments: Dict[str, Dict[str, List[List[str]]]],
+    workers: List[Dict[str, Any]],
+    label: str = "",
+) -> None:
+    """Retire les affectations qui dépassent max_shifts par worker.
+    Parcourt le plan dans l'ordre naturel (jour → shift → station) et supprime
+    l'occurrence en trop dès que le compteur d'un worker atteint son plafond.
+    Mutates in-place.
+    """
+    _log = logging.getLogger("ai_solver")
+    name_to_max: Dict[str, int] = {
+        str(w.get("name") or "").strip(): int(w.get("max_shifts") or 5)
+        for w in workers
+        if str(w.get("name") or "").strip()
+    }
+    count: Dict[str, int] = {}
+    removed: Dict[str, int] = {}
+    for day_key, day_map in assignments.items():
+        for sh_name, per_station in day_map.items():
+            for t_idx, cell in enumerate(per_station):
+                if not isinstance(cell, list):
+                    continue
+                kept: List[str] = []
+                for nm in cell:
+                    nm = str(nm or "").strip()
+                    if not nm:
+                        continue
+                    max_s = name_to_max.get(nm, 5)
+                    if count.get(nm, 0) >= max_s:
+                        removed[nm] = removed.get(nm, 0) + 1
+                        _log.warning(
+                            "[MAX_SHIFTS][%s] removed extra assignment: worker=%r day=%s shift=%s station_idx=%d (count=%d max=%d)",
+                            label, nm, day_key, sh_name, t_idx, count.get(nm, 0), max_s,
+                        )
+                        continue
+                    count[nm] = count.get(nm, 0) + 1
+                    kept.append(nm)
+                cell[:] = kept
+    if removed:
+        _log.warning("[MAX_SHIFTS][%s] total removed=%d workers=%s", label, sum(removed.values()), dict(removed))
+
+
 def sanitize_plan(assignments: Dict[str, Dict[str, List[List[str]]]],
                   days: List[DayKey],
                   shifts: List[ShiftName],
@@ -268,6 +311,9 @@ def solve_schedule(
     # Pre-assign map: (d,s,t) -> set of worker indices
     pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
     fixed_assignments = fixed_assignments or {}
+    # Détection de figeages contradictoires: même worker sur deux stations au même créneau.
+    worker_fixed_slots: Dict[Tuple[int, int], int] = {}  # (w, d, s) -> t
+    fixed_conflicts: List[str] = []
     for d, day_key in enumerate(days):
         day_map = fixed_assignments.get(day_key) or {}
         for s, sh_name in enumerate(shifts):
@@ -287,7 +333,20 @@ def solve_schedule(
                     widx = name_to_w.get(nm_str)
                     if widx is None:
                         continue
+                    slot_key = (widx, d, s)
+                    if slot_key in worker_fixed_slots and worker_fixed_slots[slot_key] != t:
+                        conflict_msg = (
+                            f"worker '{nm_str}' fixed on day={day_key} shift={sh_name} "
+                            f"at station {worker_fixed_slots[slot_key]} AND {t} simultaneously"
+                        )
+                        fixed_conflicts.append(conflict_msg)
+                        logger.warning("[FIXED] Contradictory fixed assignment ignored: %s", conflict_msg)
+                        # Ignorer ce figeage contradictoire pour éviter l'infaisabilité
+                        continue
+                    worker_fixed_slots[slot_key] = t
                     pre_assign.setdefault((d, s, t), set()).add(widx)
+    if fixed_conflicts:
+        logger.warning("[FIXED] %d contradictory fixed assignments detected and skipped", len(fixed_conflicts))
 
     # Decision variables: x[w,d,s,t] in {0,1} worker w works shift s at station t on day d
     x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
@@ -330,6 +389,12 @@ def solve_schedule(
                 role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
                 # Borne supérieure par défaut (on ajustera avec la pénurie de rôles)
                 if role_map_norm:
+                    all_required_roles = set(role_map_norm.keys())
+                    # Bloquer les workers sans aucun rôle requis sur cette cellule:
+                    # évite qu'ils soient affectés par le solver puis retirés par le post-traitement.
+                    for w in W:
+                        if not (worker_roles_norm[w] & all_required_roles):
+                            model.Add(x[(w, d, s, t)] == 0)
                     # Variables de pénurie par rôle (shortfall)
                     shortfalls: List[cp_model.IntVar] = []
                     for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
@@ -344,21 +409,20 @@ def solve_schedule(
                     short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"short_total_t{t}_d{d}_s{s}")
                     if len(shortfalls) > 1:
                         model.Add(short_total == sum(shortfalls))
-                    # Ajouter à la liste pour pénalisation dans l'objectif
                     role_shortfalls_total.append(short_total)
-                    # Permettre de remplir jusqu'à required même avec pénurie de rôles (pour maximiser les assignations)
-                    # mais pénaliser les pénuries dans l'objectif
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
                 else:
                     # Pas de rôles requis: simple borne supérieure sur la cellule
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
-    # Allow multiple non-adjacent shifts per day for a worker.
-    # The adjacency constraints below already forbid back-to-back shifts (including across stations),
-    # so we remove the strict "one shift per day" cap to maximize feasible coverage.
+    # At most one station per (worker, day, shift): prevents the solver from placing the
+    # same worker in two different stations at the same time-slot (multi-site or same site).
+    for w in W:
+        for d in D:
+            for s in S:
+                model.Add(sum(x[(w, d, s, t)] for t in T) <= 1)
 
     # No adjacent shifts for a worker (including across day boundary)
-    # Build adjacency pairs (d,s,t1),(d,s+1,t2) across any stations
     for w in W:
         for d in D:
             # same day adjacents between consecutive shifts
@@ -450,10 +514,23 @@ def solve_schedule(
             for start in range(0, len(D) - 6):
                 model.Add(sum(day_work[d] for d in range(start, start + 7)) <= 6)
 
-    # Per-worker weekly max
+    # Per-worker weekly max (global)
     for w in W:
         max_shifts = int(workers[w].get("max_shifts") or 5)
         model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in T) <= max_shifts)
+
+    # Per-worker per-site max (contrainte spécifique multi-site)
+    site_limit_count = 0
+    for w in W:
+        site_limits = workers[w].get("site_limits") or []
+        for limit in site_limits:
+            t_indices = [t for t in limit.get("station_indices", []) if t in range(len(stations))]
+            site_max = int(limit.get("max") or 5)
+            if t_indices:
+                model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in t_indices) <= site_max)
+                site_limit_count += 1
+    if site_limit_count > 0:
+        logger.info("[SOLVER] applied %d per-site max_shifts constraints for multi-site workers", site_limit_count)
 
     # Objective: maximize coverage, + mild fairness term to approach targets
     coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
@@ -562,6 +639,18 @@ def solve_schedule(
 
     # Greedy post-processing: try to fill remaining holes without violating constraints
     try:
+        # Log compteurs avant greedy
+        _pre_greedy_counts: Dict[str, int] = {}
+        for _dk, _sm in assignments.items():
+            for _sn, _perst in _sm.items():
+                for _lst in _perst:
+                    for _nm in (_lst or []):
+                        _pre_greedy_counts[_nm] = _pre_greedy_counts.get(_nm, 0) + 1
+        _over_before = {nm: (cnt, workers[name_to_w.get(str(nm or "").strip(), -1)].get("max_shifts", 5) if name_to_w.get(str(nm or "").strip(), -1) >= 0 else 5) for nm, cnt in _pre_greedy_counts.items() if cnt > (workers[name_to_w.get(str(nm or "").strip(), -1)].get("max_shifts", 5) if name_to_w.get(str(nm or "").strip(), -1) >= 0 else 5)}
+        if _over_before:
+            logger.warning("[GREEDY][PRE] workers already over max_shifts BEFORE greedy: %s", _over_before)
+        else:
+            logger.info("[GREEDY][PRE] all workers within max_shifts before greedy. counts=%s", dict(sorted(_pre_greedy_counts.items())))
         # Helpers for checks
         shift_index = {nm: i for i, nm in enumerate(shifts)}
         day_index = {dk: i for i, dk in enumerate(days)}
@@ -690,8 +779,22 @@ def solve_schedule(
                         added += 1
         if added:
             logger.info("[GREEDY] trous comblés=%d (post-process)", added)
+        # Log compteurs après greedy
+        _post_greedy_counts: Dict[str, int] = {}
+        for _dk, _sm in assignments.items():
+            for _sn, _perst in _sm.items():
+                for _lst in _perst:
+                    for _nm in (_lst or []):
+                        _post_greedy_counts[_nm] = _post_greedy_counts.get(_nm, 0) + 1
+        _over_after = {nm: (cnt, workers[name_to_w.get(str(nm or "").strip(), -1)].get("max_shifts", 5) if name_to_w.get(str(nm or "").strip(), -1) >= 0 else 5) for nm, cnt in _post_greedy_counts.items() if cnt > (workers[name_to_w.get(str(nm or "").strip(), -1)].get("max_shifts", 5) if name_to_w.get(str(nm or "").strip(), -1) >= 0 else 5)}
+        if _over_after:
+            logger.warning("[GREEDY][POST] workers over max_shifts AFTER greedy (before enforce): %s", _over_after)
+        else:
+            logger.info("[GREEDY][POST] all workers within max_shifts after greedy.")
     except Exception:
         pass
+    # Garantie finale: aucun worker ne dépasse son max_shifts après le greedy
+    enforce_max_shifts_on_plan(assignments, workers, label="solve_schedule")
     # Diagnostic: trous (holes) par cellule et candidats potentiels simples
     try:
         # index utilitaires
@@ -1257,13 +1360,6 @@ def solve_schedule(
                                 continue
                             if has_adjacent_in_candidate(cand, nm, dkey, s_to):
                                 continue
-                            # roles feasibility at destination and keep source valid
-                            if not _meets_roles([n for n in names_here if n != nm], t_idx, dkey, sname):
-                                continue
-                            role_caps_to = (stations[t_idx].get("capacity_roles", {}) or {}).get(dkey, {}) or {}
-                            role_caps_to = role_caps_to.get(s_to, {}) or {}
-                            if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
-                                continue
                             new_to2 = names_to + [nm]
                             if len(set(new_to2)) != len(new_to2):
                                 continue
@@ -1330,11 +1426,6 @@ def solve_schedule(
                     if not is_allowed(nm, dnext, s_to):
                         continue
                     if has_adjacent_in_candidate(cand, nm, dnext, s_to):
-                        continue
-                    # role feasibility for destination
-                    role_caps_to = (stations[t_idx].get("capacity_roles", {}) or {}).get(dnext, {}) or {}
-                    role_caps_to = role_caps_to.get(s_to, {}) or {}
-                    if role_caps_to and not can_assign_with_roles(list(names_to), nm, role_caps_to):
                         continue
                     new_to_last = names_to + [nm]
                     if len(set(new_to_last)) != len(new_to_last):
@@ -1420,6 +1511,7 @@ def solve_schedule_stream(
     # Pre-assign map
     pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
     fixed_assignments = fixed_assignments or {}
+    worker_fixed_slots_s: Dict[Tuple[int, int, int], int] = {}  # (w, d, s) -> t
     for d, day_key in enumerate(days):
         day_map = fixed_assignments.get(day_key) or {}
         for s, sh_name in enumerate(shifts):
@@ -1439,6 +1531,14 @@ def solve_schedule_stream(
                     widx = name_to_w.get(nm_str)
                     if widx is None:
                         continue
+                    slot_key = (widx, d, s)
+                    if slot_key in worker_fixed_slots_s and worker_fixed_slots_s[slot_key] != t:
+                        logger.warning(
+                            "[STREAM][FIXED] Contradictory fixed assignment ignored: worker '%s' day=%s shift=%s stations %d and %d",
+                            nm_str, day_key, sh_name, worker_fixed_slots_s[slot_key], t,
+                        )
+                        continue
+                    worker_fixed_slots_s[slot_key] = t
                     pre_assign.setdefault((d, s, t), set()).add(widx)
 
     # Normalisation locale des rôles et cache par employé
@@ -1481,6 +1581,11 @@ def solve_schedule_stream(
                 role_map_raw: Dict[str, int] = (cap_roles.get(day_key, {}) or {}).get(sh_name, {}) or {}
                 role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
                 if role_map_norm:
+                    all_required_roles = set(role_map_norm.keys())
+                    # Bloquer les workers sans aucun rôle requis (stream)
+                    for w in W:
+                        if not (worker_roles_norm[w] & all_required_roles):
+                            model.Add(x[(w, d, s, t)] == 0)
                     shortfalls: List[cp_model.IntVar] = []
                     for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
                         cap_int = max(0, int(r_cap))
@@ -1491,17 +1596,18 @@ def solve_schedule_stream(
                     short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"s_short_total_t{t}_d{d}_s{s}")
                     if len(shortfalls) > 1:
                         model.Add(short_total == sum(shortfalls))
-                    # Ajouter à la liste pour pénalisation dans l'objectif
                     role_shortfalls_total.append(short_total)
-                    # Permettre de remplir jusqu'à required même avec pénurie de rôles (pour maximiser les assignations)
-                    # mais pénaliser les pénuries dans l'objectif
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
                 else:
                     model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
 
-    # Allow multiple non-adjacent shifts per day (adjacency constraints below prevent back-to-back)
+    # At most one station per (worker, day, shift)
+    for w in W:
+        for d in D:
+            for s in S:
+                model.Add(sum(x[(w, d, s, t)] for t in T) <= 1)
 
-    # no adjacent
+    # No adjacent shifts
     for w in W:
         for d in D:
             for s in range(len(S) - 1):
@@ -1522,6 +1628,19 @@ def solve_schedule_stream(
     for w in W:
         max_sh = int(workers[w].get("max_shifts") or 5)
         model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in T) <= max_sh)
+
+    # Per-worker per-site max (contrainte spécifique multi-site)
+    site_limit_count_stream = 0
+    for w in W:
+        site_limits = workers[w].get("site_limits") or []
+        for limit in site_limits:
+            t_indices = [t for t in limit.get("station_indices", []) if t in range(len(stations))]
+            site_max = int(limit.get("max") or 5)
+            if t_indices:
+                model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in t_indices) <= site_max)
+                site_limit_count_stream += 1
+    if site_limit_count_stream > 0:
+        logger.info("[STREAM][SOLVER] applied %d per-site max_shifts constraints for multi-site workers", site_limit_count_stream)
 
     # objective coverage + fairness
     coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
@@ -1578,6 +1697,27 @@ def solve_schedule_stream(
                 model.Add(both <= night_any)
                 model.Add(both >= morn_any + night_any - 1)
                 morning_night_pairs.append(both)
+        # Noon day d + Morning day d+1 (même boucle que solve_schedule)
+        if noon_indices:
+            for w in W:
+                for d in range(len(D) - 1):
+                    noon_any = model.NewBoolVar(f"s_mn2_noon_any_w{w}_d{d}")
+                    next_morn_any = model.NewBoolVar(f"s_mn2_morn_any_w{w}_d{d+1}")
+                    noon_lits = [x[(w, d, s, t)] for s in noon_indices for t in T]
+                    morn_lits_next = [x[(w, d + 1, s, t)] for s in morning_indices for t in T]
+                    if noon_lits:
+                        model.AddMaxEquality(noon_any, noon_lits)
+                    else:
+                        model.Add(noon_any == 0)
+                    if morn_lits_next:
+                        model.AddMaxEquality(next_morn_any, morn_lits_next)
+                    else:
+                        model.Add(next_morn_any == 0)
+                    both2 = model.NewBoolVar(f"s_mn2_both_w{w}_d{d}")
+                    model.Add(both2 <= noon_any)
+                    model.Add(both2 <= next_morn_any)
+                    model.Add(both2 >= noon_any + next_morn_any - 1)
+                    noon_next_morning_pairs.append(both2)
     mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
     nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
 
@@ -1721,9 +1861,22 @@ def solve_schedule_stream(
                         added += 1
         if added:
             logger.info("[STREAM][GREEDY] trous comblés=%d", added)
+        # Log compteurs après greedy stream
+        _post_stream: Dict[str, int] = {}
+        for _dk in days:
+            for _sn in shifts:
+                for _lst in (base.get(_dk, {}).get(_sn, []) or []):
+                    for _nm in (_lst or []):
+                        _post_stream[_nm] = _post_stream.get(_nm, 0) + 1
+        _over_stream = {nm: (cnt, name_to_max.get(nm, 5)) for nm, cnt in _post_stream.items() if cnt > name_to_max.get(nm, 5)}
+        if _over_stream:
+            logger.warning("[STREAM][GREEDY][POST] workers over max_shifts: %s", _over_stream)
+        else:
+            logger.info("[STREAM][GREEDY][POST] all workers within max_shifts after greedy.")
     except Exception:
         pass
-
+    # Garantie finale: aucun worker ne dépasse son max_shifts après le greedy
+    enforce_max_shifts_on_plan(base, workers, label="solve_schedule_stream")
     sanitize_plan(base, days, shifts, stations)
     yield {"type": "base", "index": 0, "source": "BASE", "days": days, "shifts": shifts, "stations": [st.get("name") for st in stations], "assignments": base}
 

@@ -9,6 +9,8 @@ export type LinkedSiteRow = {
   name: string;
   /** Site retiré de la liste active (soft-delete) — affiché après les sites actifs. */
   site_deleted?: boolean;
+  /** Indique qu'un plan מנהל/משותף existe pour cette semaine côté serveur. */
+  has_saved_plan?: boolean;
   assigned_count?: number;
   required_count?: number;
 };

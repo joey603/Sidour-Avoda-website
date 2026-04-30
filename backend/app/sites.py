@@ -1050,10 +1050,29 @@ def _build_multi_site_generation_context(
             override = current_site_overrides.get(row.name)
         if not isinstance(override, dict):
             override = site_weekly_overrides.get(row.name)
+        # Fusionner les disponibilités par union des jours/quarts entre les sites:
+        # ne pas écraser la disponibilité déjà accumulée — prendre l'union pour que
+        # le worker logique soit disponible sur un créneau dès qu'il l'est sur l'un de ses sites.
         if isinstance(override, dict):
-            group["availability"] = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
-        if group["availability"] is None and isinstance(row.availability, dict):
-            group["availability"] = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+            new_avail = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
+        elif isinstance(row.availability, dict):
+            new_avail = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+        else:
+            new_avail = None
+        if new_avail is not None:
+            if group["availability"] is None:
+                group["availability"] = new_avail
+            else:
+                # Union : pour chaque jour, réunion des shifts disponibles
+                merged = dict(group["availability"])
+                for day_k, shifts_list in new_avail.items():
+                    if day_k in merged:
+                        existing = set(merged[day_k])
+                        existing.update(shifts_list)
+                        merged[day_k] = sorted(existing)
+                    else:
+                        merged[day_k] = list(shifts_list)
+                group["availability"] = merged
 
     combined_stations: list[dict] = []
     station_map: list[dict] = []
@@ -1078,16 +1097,38 @@ def _build_multi_site_generation_context(
             station_map.append({"site_id": site_id, "site_station_index": idx})
 
     combined_config = {"stations": combined_stations}
-    combined_workers = [
-        {
+
+    # Pour chaque site, construire la liste des indices de stations dans combined_stations
+    site_station_indices: dict[int, list[int]] = {}
+    for combined_idx, meta in enumerate(station_map):
+        sid = int(meta["site_id"])
+        site_station_indices.setdefault(sid, []).append(combined_idx)
+
+    combined_workers = []
+    for idx, (key, group) in enumerate(worker_groups.items()):
+        global_max = min(group["max_shifts"]) if group["max_shifts"] else 5
+        # site_limits: contrainte max_shifts par site pour ce worker multi-site
+        # Chaque entrée = (liste d'indices de stations du site, max_shifts pour ce site)
+        site_limits = []
+        for site_id in group["site_ids"]:
+            st_indices = site_station_indices.get(int(site_id), [])
+            # max_shifts du worker sur ce site spécifique
+            # On prend le max_shifts de la première (et unique) occurrence du worker sur ce site
+            site_row_max = 5
+            for row in rows:
+                if int(row.site_id) == int(site_id) and _worker_identity_key(row) == key:
+                    site_row_max = int(row.max_shifts or 5)
+                    break
+            if st_indices:
+                site_limits.append({"station_indices": st_indices, "max": site_row_max})
+        combined_workers.append({
             "id": idx + 1,
             "name": group["solver_name"],
-            "max_shifts": min(group["max_shifts"]) if group["max_shifts"] else 5,
+            "max_shifts": global_max,
             "roles": sorted(group["roles"]),
             "availability": group["availability"] or {},
-        }
-        for idx, group in enumerate(worker_groups.values())
-    ]
+            "site_limits": site_limits,
+        })
 
     fixed_assignments_by_site: dict[int, dict[str, dict[str, list[list[str]]]]] = {}
     for site_id in connected_site_ids:
@@ -1209,14 +1250,105 @@ def _split_multi_site_assignments(
                     for name in names
                     if str(name or "").strip()
                 ]
+    # Comptage final par worker sur la grille combinée (avant découpe) et par site après découpe
+    _logger = logging.getLogger("sites")
+    # Comptage dans le plan combiné brut
+    combined_worker_counts: dict[str, int] = {}
+    for day_map in combined_assignments.values():
+        for per_station in day_map.values():
+            for cell in per_station:
+                for nm in (cell or []):
+                    nm = str(nm or "").strip()
+                    if nm:
+                        combined_worker_counts[nm] = combined_worker_counts.get(nm, 0) + 1
+    # Workers solver qui dépassent leur max_shifts dans le combiné
+    context_workers = context.get("combined_workers") if context else None
+    if context_workers:
+        solver_max: dict[str, int] = {
+            str(w.get("name") or "").strip(): int(w.get("max_shifts") or 5)
+            for w in context_workers
+        }
+        over_combined = {
+            nm: (cnt, solver_max.get(nm, 5))
+            for nm, cnt in combined_worker_counts.items()
+            if cnt > solver_max.get(nm, 5)
+        }
+        if over_combined:
+            _logger.warning(
+                "[SPLIT] workers over max_shifts in COMBINED plan (before split): %s",
+                over_combined,
+            )
+        else:
+            _logger.info(
+                "[SPLIT] all workers within max_shifts in combined plan. counts=%s",
+                dict(sorted(combined_worker_counts.items())),
+            )
+
+    # Construire la map display_name → max_shifts global (min des sites du groupe)
+    # pour pouvoir appliquer le plafond global après la découpe.
+    display_name_to_max: dict[str, int] = {}
+    display_name_by_solver_site_local = context.get("display_name_by_solver_site") or {}
+    context_workers_list = context.get("combined_workers") or []
+    for w in context_workers_list:
+        solver_name = str(w.get("name") or "").strip()
+        max_s = int(w.get("max_shifts") or 5)
+        # Récupérer tous les display_names associés à ce solver_name (toutes les (solver_name, site_id))
+        for (sn, _sid), dname in display_name_by_solver_site_local.items():
+            if str(sn) == solver_name:
+                dname = str(dname or "").strip()
+                if dname:
+                    # Prendre le minimum en cas d'incohérence
+                    display_name_to_max[dname] = min(display_name_to_max.get(dname, max_s), max_s)
+
+    # Appliquer le plafond global cross-sites :
+    # compter toutes les occurrences du display_name sur TOUS les sites, puis retirer les surplus.
+    if display_name_to_max:
+        global_counts: dict[str, int] = {}
+        # Parcourir dans un ordre déterministe (sites triés) pour un comportement reproductible
+        for site_id_str in sorted(site_plans_local.keys()):
+            sp = site_plans_local[site_id_str]
+            for day_key in sp["days"]:
+                for shift_name in sp["shifts"]:
+                    per_station = (sp["assignments"].get(day_key, {}) or {}).get(shift_name, [])
+                    for cell in per_station:
+                        if not isinstance(cell, list):
+                            continue
+                        kept = []
+                        for nm in cell:
+                            nm = str(nm or "").strip()
+                            if not nm:
+                                continue
+                            max_g = display_name_to_max.get(nm)
+                            if max_g is not None and global_counts.get(nm, 0) >= max_g:
+                                _logger.warning(
+                                    "[SPLIT][GLOBAL_CAP] removed extra assignment: worker=%r site=%s day=%s shift=%s (global_count=%d max=%d)",
+                                    nm, site_id_str, day_key, shift_name,
+                                    global_counts.get(nm, 0), max_g,
+                                )
+                                continue
+                            global_counts[nm] = global_counts.get(nm, 0) + 1
+                            kept.append(nm)
+                        cell[:] = kept
+
     for site_plan in site_plans_local.values():
         assigned_count = 0
+        site_worker_counts: dict[str, int] = {}
         for day_key in site_plan["days"]:
             for shift_name in site_plan["shifts"]:
                 for cell in (site_plan["assignments"].get(day_key, {}) or {}).get(shift_name, []):
                     if isinstance(cell, list):
-                        assigned_count += len([name for name in cell if str(name or "").strip()])
+                        for nm in cell:
+                            nm = str(nm or "").strip()
+                            if nm:
+                                assigned_count += 1
+                                site_worker_counts[nm] = site_worker_counts.get(nm, 0) + 1
         site_plan["assigned_count"] = assigned_count
+        _logger.info(
+            "[SPLIT] site=%s assigned=%d worker_counts=%s",
+            site_plan.get("site_id"),
+            assigned_count,
+            dict(sorted(site_worker_counts.items())),
+        )
     return site_plans_local
 
 
@@ -3306,9 +3438,14 @@ def get_linked_sites(
             "id": linked_site_int,
             "name": linked_site.name,
             "site_deleted": bool(getattr(linked_site, "deleted_at", None)),
+            "has_saved_plan": False,
         }
         if week_iso:
-            preferred_row = _preferred_week_plan(plan_rows_by_site.get(linked_site_int, []))
+            site_rows = plan_rows_by_site.get(linked_site_int, [])
+            preferred_row = _preferred_week_plan(site_rows)
+            entry["has_saved_plan"] = any(
+                str(getattr(r, "scope", "") or "").lower() in {"director", "shared"} for r in site_rows
+            )
             data = preferred_row.data if preferred_row and isinstance(preferred_row.data, dict) else {}
             summary = _summarize_auto_planning_result(
                 linked_site,

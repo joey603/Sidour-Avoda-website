@@ -547,7 +547,10 @@ export function PlanningV2ActionBar({
         </div>
       ) : null}
 
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-zinc-800 dark:bg-zinc-900/90">
+      <div
+        id="planning-v2-action-bar"
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-zinc-800 dark:bg-zinc-900/90"
+      >
         <div className="mx-auto grid w-full max-w-none grid-cols-1 place-items-center gap-3 px-3 py-3 text-sm md:gap-4 md:py-4 sm:px-6">
           <div className="order-2 flex flex-wrap items-center justify-center gap-2 md:order-1 md:justify-center [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
             <div className="flex w-full flex-wrap items-center justify-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">

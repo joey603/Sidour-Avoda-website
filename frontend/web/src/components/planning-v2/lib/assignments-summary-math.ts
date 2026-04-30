@@ -111,18 +111,56 @@ export function buildTotalAssignmentsByIdentity(
   };
   const mem = readLinkedPlansFromMemory(weekStart);
   if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-    const idx =
-      typeof selectedAlternativeIndex === "number" && Number.isFinite(selectedAlternativeIndex)
-        ? Math.max(0, Math.trunc(selectedAlternativeIndex))
-        : (mem.activeAltIndex || 0);
-    for (const plan of Object.values(mem.plansBySite)) {
-      accumulate(
-        resolveAssignmentsForAlternative(plan, idx),
-        resolvePullsForAlternative(plan, idx) as Record<
-          string,
-          { before?: { name?: string }; after?: { name?: string } }
-        > | null,
-      );
+    const sharedIdx = Math.max(0, Math.trunc(Number(mem.activeAltIndex || 0)));
+    const debugBySite: Record<string, { altIdx: number; counts: Record<string, number> }> = {};
+    for (const [sitePlanId, plan] of Object.entries(mem.plansBySite)) {
+      const planAlts = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      // Si sharedIdx dépasse les alternatives disponibles pour ce site,
+      // utiliser la dernière alternative disponible (pas le plan de base)
+      // pour éviter de mixer des plans de moments différents.
+      let safeIdx: number;
+      if (sharedIdx <= 0) {
+        safeIdx = 0;
+      } else if (sharedIdx - 1 < planAlts.length) {
+        safeIdx = sharedIdx;
+      } else {
+        safeIdx = planAlts.length; // dernière alternative (1-indexed)
+      }
+      const resolvedAsg = resolveAssignmentsForAlternative(plan, safeIdx);
+      const resolvedPulls = resolvePullsForAlternative(plan, safeIdx) as Record<
+        string,
+        { before?: { name?: string }; after?: { name?: string } }
+      > | null;
+      const nameCounts = countAssignmentsPerWorkerName(resolvedAsg);
+      const adjusted = subtractPullExtrasFromWorkerCounts(nameCounts, resolvedPulls ?? null);
+      const siteDebug: Record<string, number> = {};
+      for (const [name, count] of adjusted) {
+        const w = workersByName.get(name);
+        if (!w) continue;
+        const id = colorIdentityForWorker(w);
+        totals.set(id, (totals.get(id) || 0) + count);
+        siteDebug[name] = count;
+      }
+      debugBySite[sitePlanId] = { altIdx: safeIdx, counts: siteDebug };
+    }
+    // Log des contributions par site pour les workers multi-sites dépassant leur max
+    const overWorkers: Array<{ name: string; total: number; max: number; bySite: Record<string, number> }> = [];
+    for (const w of workers) {
+      if ((w.linkedSiteIds || []).length <= 1) continue;
+      const id = colorIdentityForWorker(w);
+      const total = totals.get(id) || 0;
+      const maxS = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
+      if (maxS > 0 && total > maxS) {
+        const bySite: Record<string, number> = {};
+        for (const [sid, { altIdx, counts }] of Object.entries(debugBySite)) {
+          const c = counts[w.name];
+          if (c !== undefined) bySite[`site_${sid}(alt${altIdx})`] = c;
+        }
+        overWorkers.push({ name: w.name, total, max: maxS, bySite });
+      }
+    }
+    if (overWorkers.length > 0) {
+      console.debug("[planning-v2][total-assignments] workers over max_shifts (peut être faux si alternatives désynchronisées entre sites):", overWorkers, { sharedIdx });
     }
     return totals;
   }

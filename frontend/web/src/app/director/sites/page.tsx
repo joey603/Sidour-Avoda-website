@@ -1008,7 +1008,7 @@ export default function SitesList() {
           </div>
         </section>
 
-        <div className="rounded-xl border p-4 dark:border-zinc-800">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           {/* Desktop: grid avec titre, recherche et bouton sur la même ligne */}
           <div className="mb-2 hidden md:grid grid-cols-3 items-center gap-3">
             <h2 className="text-lg font-semibold justify-self-start">רשימת אתרים</h2>
@@ -1196,7 +1196,7 @@ export default function SitesList() {
               {filteredSites.length === 0 ? (
                 <p className="py-6 text-sm text-zinc-500">אין אתרים עדיין</p>
               ) : viewMode === "list" ? (
-                <div dir="rtl" className="-mx-4 max-h-[43rem] divide-y divide-zinc-200 overflow-y-auto px-4 dark:divide-zinc-700">
+                <div dir="rtl" className="-mx-4 max-h-[43rem] overflow-y-auto px-4 divide-y">
                   {siteDisplayGroups.map((group) => {
                     const isMulti = group.length > 1;
                     return (
