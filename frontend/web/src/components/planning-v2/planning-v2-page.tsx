@@ -25,7 +25,8 @@ import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-n
 import { analyzeManualSlotDrop, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
-import type { PlanningV2PullEntry, PlanningV2PullsMap } from "./types";
+import type { PlanningV2PullEntry, PlanningV2PullsMap, WorkerAvailability } from "./types";
+import { EMPTY_WORKER_AVAILABILITY } from "./lib/constants";
 import { getRequiredFor } from "./lib/station-grid-helpers";
 import { getWeekKeyISO } from "./lib/week";
 import { computeLinkedSiteHoleEntries } from "./lib/linked-site-holes";
@@ -37,11 +38,6 @@ import {
   type LinkedSitePlan,
 } from "./lib/multi-site-linked-memory";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-import {
-  buildFirstAlternativeDebugRows,
-  logPlanningV2FirstAltAfterGeneration,
-} from "./lib/planning-v2-first-alt-debug-log";
-
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
 
 function normWorkerName(value: string): string {
@@ -49,6 +45,10 @@ function normWorkerName(value: string): string {
     .normalize("NFKC")
     .trim()
     .replace(/\s+/g, " ");
+}
+
+function planningV2PullEntryIsReal(e: PlanningV2PullEntry | undefined): boolean {
+  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
 }
 
 function truncateMobile6(value: unknown): string {
@@ -88,6 +88,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const router = useRouter();
   const [editingSaved, setEditingSaved] = useState(false);
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
+  const [shiftHoursModeStationIdx, setShiftHoursModeStationIdx] = useState<number | null>(null);
   const [manualConfirm, setManualConfirm] = useState<{
     title: string;
     body: string;
@@ -104,6 +105,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const [summaryHighlightWorkerName, setSummaryHighlightWorkerName] = useState<string | null>(null);
   const [pullScopeDialog, setPullScopeDialog] = useState<{
     mode: "upsert" | "remove";
+    kind?: "pull" | "guard_hours";
     resolve: (scope: "current_only" | "all_sites" | null) => void;
   } | null>(null);
 
@@ -120,32 +122,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekPurgeSiteIds,
   });
 
-  /** Debug console : alternative 0 uniquement — snapshot après fin de `יצירת תכנון` (positions sous-slots, nom brut vs affichage auto, rôles). */
-  const generationWasRunningRef = useRef(false);
-  useEffect(() => {
-    const prev = generationWasRunningRef.current;
-    generationWasRunningRef.current = plan.generationRunning;
-    if (!prev || plan.generationRunning) return;
-    const asg0 = plan.assignmentVariants?.[0];
-    const pulls0 = plan.pullVariants?.[0];
-    if (!asg0 || !assignmentsNonEmpty(asg0)) return;
-    const rows = buildFirstAlternativeDebugRows(site, workers, asg0, pulls0 ?? null);
-    logPlanningV2FirstAltAfterGeneration("apres-yetzirat-tehnun-alt0", {
-      siteId,
-      weekIso: getWeekKeyISO(weekStart),
-      alternativeIndex: 0,
-      rowCount: rows.length,
-      cells: rows,
-    });
-  }, [
-    plan.generationRunning,
-    plan.assignmentVariants,
-    plan.pullVariants,
-    site,
-    workers,
-    siteId,
-    weekStart,
-  ]);
+  /** חלופות : pas de bandeau 1/1 — seulement après יצירת תכנון, grille remplie, et au moins 2 variantes. */
+  const alternativesUiEnabled = useMemo(
+    () =>
+      plan.alternativesUnlocked &&
+      !plan.isManual &&
+      assignmentsNonEmpty(plan.displayAssignments) &&
+      plan.alternativeCount > 1,
+    [plan.alternativesUnlocked, plan.isManual, plan.displayAssignments, plan.alternativeCount],
+  );
 
   /** Recalculer la barre « אתרים מקושרים » quand sessionStorage (linked plans) change — le useMemo lit la mémoire sans que les autres deps bougent (ex. pendant SSE). */
   const [linkedPlansMemoryTick, setLinkedPlansMemoryTick] = useState(0);
@@ -233,16 +218,19 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, []);
 
   const availabilityByWorkerName = useMemo(() => {
-    const o: Record<string, Record<string, string[]>> = {};
+    const o: Record<string, WorkerAvailability> = {};
     for (const r of workerRowsForTable) {
       const nm = String(r.name || "").trim();
       if (!nm) continue;
-      const base = (r.availability || {}) as Record<string, string[]>;
+      const base = (r.availability || {}) as WorkerAvailability;
       const overlay = (availabilityOverlays[nm] || {}) as Record<string, string[]>;
-      const merged: Record<string, string[]> = {};
+      const merged: WorkerAvailability = { ...EMPTY_WORKER_AVAILABILITY };
       for (const d of ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const) {
         const next = new Set<string>([...(base[d] || []), ...(overlay[d] || [])]);
         merged[d] = Array.from(next);
+      }
+      if (Array.isArray(base._stations) && base._stations.length > 0) {
+        merged._stations = [...base._stations];
       }
       o[nm] = merged;
     }
@@ -405,6 +393,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           workerName: p.workerName,
           dragSource: p.dragSource,
           flags,
+          pulls: plan.displayPulls ?? null,
         });
         if (r.action === "block") {
           toast.error("לא ניתן לשבץ", { description: r.message });
@@ -497,6 +486,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           );
           if (!ok) return;
           flags = { ...flags, forceRules: true };
+          continue;
+        }
+        if (r.action === "confirm_max_shifts") {
+          const ok = await waitManualConfirm(
+            "מקסימום משמרות",
+            `השיבוץ יגיע ל-${r.total} משמרות השבוע, מעל המקסימום המוגדר לעובד (${r.maxShifts}). להקצות בכל זאת?`,
+          );
+          if (!ok) return;
+          flags = { ...flags, forceMaxShifts: true };
           continue;
         }
       }
@@ -751,6 +749,134 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     [plan, linkedSites.length, weekStart],
   );
 
+  const handleUpsertGuardDisplay = useCallback(
+    async (key: string, start: string, end: string) => {
+      const parts = String(key || "").split("|");
+      if (parts.length < 4) return false;
+      const dayKey = String(parts[0] || "");
+      const shiftName = String(parts[1] || "");
+      const stationIdx = Number(parts[2] || -1);
+      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
+
+      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
+      const existing = nextPulls[key] || {};
+      nextPulls[key] = {
+        ...existing,
+        guardDisplay: { start: String(start || "").trim(), end: String(end || "").trim() },
+      };
+
+      const applyCurrentOnly = () => {
+        plan.commitDraftPulls(nextPulls);
+      };
+
+      if (linkedSites.length <= 1) {
+        applyCurrentOnly();
+        return true;
+      }
+      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
+        setPullScopeDialog({ mode: "upsert", kind: "guard_hours", resolve });
+      });
+      if (!scope) return false;
+      applyCurrentOnly();
+      if (scope === "all_sites") {
+        const mem = readLinkedPlansFromMemory(weekStart);
+        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
+          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
+          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
+          for (const sid of Object.keys(nextPlans)) {
+            const planForSite = nextPlans[sid];
+            if (!planForSite) continue;
+            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
+            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
+            const ex = pls[key] || {};
+            pls[key] = {
+              ...ex,
+              guardDisplay: { start: String(start || "").trim(), end: String(end || "").trim() },
+            };
+            if (activeIdx <= 0) {
+              planForSite.pulls = pls;
+            } else {
+              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
+              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
+              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
+              planForSite.alternative_pulls = altPulls;
+            }
+          }
+          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
+        }
+      }
+      return true;
+    },
+    [plan, linkedSites.length, weekStart],
+  );
+
+  const handleRemoveGuardDisplay = useCallback(
+    async (key: string) => {
+      const parts = String(key || "").split("|");
+      if (parts.length < 4) return false;
+      const dayKey = String(parts[0] || "");
+      const shiftName = String(parts[1] || "");
+      const stationIdx = Number(parts[2] || -1);
+      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
+
+      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
+      const existing = nextPulls[key];
+      if (!existing?.guardDisplay) return true;
+
+      const nextEntry: PlanningV2PullEntry = { ...existing };
+      delete nextEntry.guardDisplay;
+      if (planningV2PullEntryIsReal(nextEntry)) {
+        nextPulls[key] = nextEntry;
+      } else {
+        delete nextPulls[key];
+      }
+
+      const applyCurrentOnly = () => {
+        plan.commitDraftPulls(nextPulls);
+      };
+
+      if (linkedSites.length <= 1) {
+        applyCurrentOnly();
+        return true;
+      }
+      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
+        setPullScopeDialog({ mode: "remove", kind: "guard_hours", resolve });
+      });
+      if (!scope) return false;
+      applyCurrentOnly();
+      if (scope === "all_sites") {
+        const mem = readLinkedPlansFromMemory(weekStart);
+        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
+          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
+          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
+          for (const sid of Object.keys(nextPlans)) {
+            const planForSite = nextPlans[sid];
+            if (!planForSite) continue;
+            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
+            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
+            const exIn = pls[key];
+            if (!exIn?.guardDisplay) continue;
+            const ne: PlanningV2PullEntry = { ...exIn };
+            delete ne.guardDisplay;
+            if (planningV2PullEntryIsReal(ne)) pls[key] = ne;
+            else delete pls[key];
+            if (activeIdx <= 0) {
+              planForSite.pulls = pls;
+            } else {
+              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
+              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
+              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
+              planForSite.alternative_pulls = altPulls;
+            }
+          }
+          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
+        }
+      }
+      return true;
+    },
+    [plan, linkedSites.length, weekStart],
+  );
+
   const savedHighlight = useMemo(
     () =>
       assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
@@ -760,11 +886,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   );
 
   const visibleAlternativeIndices = useMemo(() => {
+    if (!alternativesUiEnabled) {
+      return [0];
+    }
     if (!summaryFilterState.hasActiveFilters) {
       return Array.from({ length: Math.max(0, plan.alternativeCount) }, (_, i) => i);
     }
     return summaryFilterState.indices;
-  }, [summaryFilterState, plan.alternativeCount]);
+  }, [summaryFilterState, plan.alternativeCount, alternativesUiEnabled]);
 
   const selectedVisibleAlternativeIndex = useMemo(() => {
     return visibleAlternativeIndices.indexOf(plan.selectedAlternativeIndex);
@@ -780,6 +909,26 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     return visibleAlternativeIndices[0] ?? 0;
   }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
+
+  useEffect(() => {
+    if (plan.generationRunning) return;
+    if (!summaryFilterState.hasActiveFilters) return;
+    if (effectiveAlternativeIndex === plan.selectedAlternativeIndex) return;
+    plan.setSelectedAlternativeIndex(effectiveAlternativeIndex);
+  }, [
+    effectiveAlternativeIndex,
+    plan.generationRunning,
+    plan.selectedAlternativeIndex,
+    plan.setSelectedAlternativeIndex,
+    summaryFilterState.hasActiveFilters,
+  ]);
+
+  useEffect(() => {
+    if (alternativesUiEnabled) return;
+    if (plan.selectedAlternativeIndex !== 0) {
+      plan.setSelectedAlternativeIndex(0);
+    }
+  }, [alternativesUiEnabled, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
 
   const linkedSitesRailData = useMemo(() => {
     if (linkedSites.length <= 1) return [];
@@ -854,9 +1003,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const out = otherSiteIds.map((sid) => {
       const siteRows = rowsForSite(sid);
       return {
-        siteId: sid,
-        siteName: linkedById.get(sid) || `אתר ${sid}`,
-        siteDeleted: archivedById.get(sid) === true,
+      siteId: sid,
+      siteName: linkedById.get(sid) || `אתר ${sid}`,
+      siteDeleted: archivedById.get(sid) === true,
         rows: siteRows.rows,
         workerCounts: siteRows.workerCounts,
       };
@@ -1048,52 +1197,54 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
           <div className="flex flex-col items-end gap-0.5">
-            <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-              חלופה מסוננת{" "}
-              {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
-              /{Math.max(1, visibleAlternativeIndices.length)}
-            </span>
-          </div>
+            {alternativesUiEnabled ? (
+                <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                חלופה מסוננת{" "}
+                {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
+                /{Math.max(1, visibleAlternativeIndices.length)}
+                </span>
+            ) : null}
+              </div>
         </div>
         <div className="text-xs leading-snug text-zinc-500 dark:text-zinc-400">
-          מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
-        </div>
+                מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
+              </div>
       </div>
       <div className="planning-v2-linked-rail-scroll min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-auto overscroll-y-contain pt-1 pb-2 pl-0.5 pr-0.5 touch-pan-y [-webkit-overflow-scrolling:touch]">
-        {linkedSitesRailData.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-            אין אתרים מקושרים נוספים להצגה.
-          </div>
-        ) : (
-          linkedSitesRailData.map((siteBlock) => (
-            <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
-              <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
-                    <span className="min-w-0 break-words">{siteBlock.siteName}</span>
+                {linkedSitesRailData.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                    אין אתרים מקושרים נוספים להצגה.
+                  </div>
+                ) : (
+                  linkedSitesRailData.map((siteBlock) => (
+                    <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
+                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                            <span className="min-w-0 break-words">{siteBlock.siteName}</span>
                     {linkedSiteRailBadges.savedBySiteId.get(siteBlock.siteId) ? (
                       <span className="shrink-0 rounded bg-emerald-100 px-1 py-px text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
                         תכנון שמור
                       </span>
                     ) : null}
-                    {siteBlock.siteDeleted ? (
-                      <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
-                        ארכיון
-                      </span>
-                    ) : null}
-                  </div>
+                            {siteBlock.siteDeleted ? (
+                              <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
+                                ארכיון
+                              </span>
+                            ) : null}
+                          </div>
                   <div className="mt-0.5 text-[10px] font-bold text-red-600 dark:text-red-400">
-                    חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => navigateToLinkedSiteFromRail(siteBlock.siteId)}
-                  className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                >
-                  פתח אתר
-                </button>
-              </div>
+                            חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => navigateToLinkedSiteFromRail(siteBlock.siteId)}
+                          className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                        >
+                          פתח אתר
+                        </button>
+                      </div>
               <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
                 <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
                   עובדים רב-אתריים משובצים באתר זה
@@ -1143,139 +1294,139 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                     </table>
                   </div>
                 )}
-              </div>
-              {(() => {
-                const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];
-                const dayLabel: Record<string, string> = {
-                  sun: "א׳",
-                  sunday: "א׳",
-                  mon: "ב׳",
-                  monday: "ב׳",
-                  tue: "ג׳",
-                  tuesday: "ג׳",
-                  wed: "ד׳",
-                  wednesday: "ד׳",
-                  thu: "ה׳",
-                  thursday: "ה׳",
-                  fri: "ו׳",
-                  friday: "ו׳",
-                  sat: "ש׳",
-                  saturday: "ש׳",
-                };
-                const shiftOrder = ["morning", "noon", "night", "בוקר", "צהריים", "לילה"];
+                      </div>
+                      {(() => {
+                        const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];
+                        const dayLabel: Record<string, string> = {
+                          sun: "א׳",
+                          sunday: "א׳",
+                          mon: "ב׳",
+                          monday: "ב׳",
+                          tue: "ג׳",
+                          tuesday: "ג׳",
+                          wed: "ד׳",
+                          wednesday: "ד׳",
+                          thu: "ה׳",
+                          thursday: "ה׳",
+                          fri: "ו׳",
+                          friday: "ו׳",
+                          sat: "ש׳",
+                          saturday: "ש׳",
+                        };
+                        const shiftOrder = ["morning", "noon", "night", "בוקר", "צהריים", "לילה"];
 
-                if (siteBlock.rows.length === 0) {
-                  return (
-                    <div className="overflow-x-auto">
-                      <table className="w-full border-collapse text-[11px]">
-                        <thead>
-                          <tr className="border-b dark:border-zinc-800">
-                            <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                            <th className="min-w-[10rem] px-1 py-1 text-center text-zinc-500 dark:text-zinc-400"> </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr className="border-b dark:border-zinc-800">
-                            <td className="whitespace-nowrap px-1 py-2 align-middle text-zinc-400 dark:text-zinc-500">—</td>
-                            <td className="border border-dashed border-zinc-200 px-2 py-3 text-center text-[10px] leading-snug text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                              אין עובדים רב-אתריים משובצים בחלופה זו.
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                }
+                        if (siteBlock.rows.length === 0) {
+                          return (
+                            <div className="overflow-x-auto">
+                              <table className="w-full border-collapse text-[11px]">
+                                <thead>
+                                  <tr className="border-b dark:border-zinc-800">
+                                    <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
+                                    <th className="min-w-[10rem] px-1 py-1 text-center text-zinc-500 dark:text-zinc-400"> </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b dark:border-zinc-800">
+                                    <td className="whitespace-nowrap px-1 py-2 align-middle text-zinc-400 dark:text-zinc-500">—</td>
+                                    <td className="border border-dashed border-zinc-200 px-2 py-3 text-center text-[10px] leading-snug text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                                      אין עובדים רב-אתריים משובצים בחלופה זו.
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        }
 
-                const days = [...new Set(siteBlock.rows.map((r) => String(r.dayKey || "")))]
-                  .sort((a, b) => {
-                    const ia = dayOrder.indexOf(a.toLowerCase());
-                    const ib = dayOrder.indexOf(b.toLowerCase());
-                    if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                    return a.localeCompare(b);
-                  });
-                const shifts = [...new Set(siteBlock.rows.map((r) => String(r.shiftName || "")))]
-                  .sort((a, b) => {
-                    const ia = shiftOrder.findIndex((x) => a.toLowerCase().includes(x.toLowerCase()));
-                    const ib = shiftOrder.findIndex((x) => b.toLowerCase().includes(x.toLowerCase()));
-                    if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                    return a.localeCompare(b);
-                  });
-                const cellMap = new Map<string, Array<{ stationLabel: string; workers: string[] }>>();
-                siteBlock.rows.forEach((r) => {
-                  const k = `${r.dayKey}||${r.shiftName}`;
-                  const current = cellMap.get(k) || [];
-                  cellMap.set(k, [...current, { stationLabel: r.stationLabel, workers: r.workers }]);
-                });
-                return (
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-[11px]">
-                      <thead>
-                        <tr className="border-b dark:border-zinc-800">
-                          <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                          {days.map((d) => (
-                            <th key={`${siteBlock.siteId}-${d}`} className="px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
-                              {dayLabel[d.toLowerCase()] || d}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {shifts.map((s) => (
-                          <tr key={`${siteBlock.siteId}-${s}`} className="border-b last:border-0 dark:border-zinc-800">
-                            <td className="whitespace-nowrap px-1 py-1 font-medium text-zinc-700 dark:text-zinc-200">{s}</td>
-                            {days.map((d) => {
-                              const k = `${d}||${s}`;
-                              const lines = cellMap.get(k) || [];
-                              return (
-                                <td key={`${siteBlock.siteId}-${d}-${s}`} className="align-top px-1 py-1">
-                                  {lines.length === 0 ? (
-                                    <span className="text-zinc-400 dark:text-zinc-500">—</span>
-                                  ) : (
-                                    <div className="space-y-0.5">
-                                      {lines.slice(0, 3).map((line, idx) => (
-                                        <div key={`${k}-${idx}`} className="rounded bg-zinc-50 px-1 py-0.5 dark:bg-zinc-900/50">
-                                          <div className="mb-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                                            {line.stationLabel}
-                                          </div>
-                                          <div className="flex flex-wrap gap-1">
-                                            {line.workers.map((nm) => {
-                                              const col = workerNameChipColor(nm, workerColorMap);
-                                              return (
-                                                <span
-                                                  key={`${k}-${idx}-${nm}`}
+                        const days = [...new Set(siteBlock.rows.map((r) => String(r.dayKey || "")))]
+                          .sort((a, b) => {
+                            const ia = dayOrder.indexOf(a.toLowerCase());
+                            const ib = dayOrder.indexOf(b.toLowerCase());
+                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                            return a.localeCompare(b);
+                          });
+                        const shifts = [...new Set(siteBlock.rows.map((r) => String(r.shiftName || "")))]
+                          .sort((a, b) => {
+                            const ia = shiftOrder.findIndex((x) => a.toLowerCase().includes(x.toLowerCase()));
+                            const ib = shiftOrder.findIndex((x) => b.toLowerCase().includes(x.toLowerCase()));
+                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                            return a.localeCompare(b);
+                          });
+                        const cellMap = new Map<string, Array<{ stationLabel: string; workers: string[] }>>();
+                        siteBlock.rows.forEach((r) => {
+                          const k = `${r.dayKey}||${r.shiftName}`;
+                          const current = cellMap.get(k) || [];
+                          cellMap.set(k, [...current, { stationLabel: r.stationLabel, workers: r.workers }]);
+                        });
+                        return (
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-[11px]">
+                              <thead>
+                                <tr className="border-b dark:border-zinc-800">
+                                  <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
+                                  {days.map((d) => (
+                                    <th key={`${siteBlock.siteId}-${d}`} className="px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
+                                      {dayLabel[d.toLowerCase()] || d}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {shifts.map((s) => (
+                                  <tr key={`${siteBlock.siteId}-${s}`} className="border-b last:border-0 dark:border-zinc-800">
+                                    <td className="whitespace-nowrap px-1 py-1 font-medium text-zinc-700 dark:text-zinc-200">{s}</td>
+                                    {days.map((d) => {
+                                      const k = `${d}||${s}`;
+                                      const lines = cellMap.get(k) || [];
+                                      return (
+                                        <td key={`${siteBlock.siteId}-${d}-${s}`} className="align-top px-1 py-1">
+                                          {lines.length === 0 ? (
+                                            <span className="text-zinc-400 dark:text-zinc-500">—</span>
+                                          ) : (
+                                            <div className="space-y-0.5">
+                                              {lines.slice(0, 3).map((line, idx) => (
+                                                <div key={`${k}-${idx}`} className="rounded bg-zinc-50 px-1 py-0.5 dark:bg-zinc-900/50">
+                                                  <div className="mb-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
+                                                    {line.stationLabel}
+                                                  </div>
+                                                  <div className="flex flex-wrap gap-1">
+                                                    {line.workers.map((nm) => {
+                                                      const col = workerNameChipColor(nm, workerColorMap);
+                                                      return (
+                                                        <span
+                                                          key={`${k}-${idx}-${nm}`}
                                                   className="inline-flex max-w-[6.5rem] min-w-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] md:max-w-[10rem]"
-                                                  style={{
-                                                    backgroundColor: col.bg,
-                                                    borderColor: col.border,
-                                                    color: col.text,
-                                                  }}
+                                                          style={{
+                                                            backgroundColor: col.bg,
+                                                            borderColor: col.border,
+                                                            color: col.text,
+                                                          }}
                                                   dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                >
+                                                        >
                                                   <span className="md:hidden">{truncateMobile6(nm)}</span>
                                                   <span className="hidden max-w-full truncate md:inline">{nm}</span>
-                                                </span>
-                                              );
-                                            })}
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })()}
-            </div>
-          ))
-        )}
-      </div>
+                                                        </span>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  ))
+                )}
+              </div>
     </div>
   );
 
@@ -1361,7 +1512,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             availabilityOverlays={availabilityOverlays}
             workersLoading={workersLoading}
             onWorkersChanged={refreshWorkersAndGrid}
-            workersNameDraggable={manualEditable && pullsModeStationIdx === null}
+            workersNameDraggable={
+              manualEditable && pullsModeStationIdx === null && shiftHoursModeStationIdx === null
+            }
             onWorkerNameDragPreview={setManualDragWorkerName}
             readOnly={siteIsArchived}
           />
@@ -1381,11 +1534,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             isManual={plan.isManual}
             manualEditable={manualEditable}
             pullsModeStationIdx={pullsModeStationIdx}
+            shiftHoursModeStationIdx={shiftHoursModeStationIdx}
             draggingWorkerName={manualDragWorkerName}
             onDraggingWorkerChange={setManualDragWorkerName}
             availabilityByWorkerName={availabilityByWorkerName}
             availabilityOverlays={displayedAvailabilityOverlays}
-            onTogglePullsModeStation={(idx) => setPullsModeStationIdx((prev) => (prev === idx ? null : idx))}
+            onTogglePullsModeStation={(idx) => {
+              setShiftHoursModeStationIdx(null);
+              setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
+            }}
+            onToggleShiftHoursModeStation={(idx) => {
+              setPullsModeStationIdx(null);
+              setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
+            }}
+            onUpsertGuardDisplay={handleUpsertGuardDisplay}
+            onRemoveGuardDisplay={handleRemoveGuardDisplay}
             onResetStation={handleResetStation}
             onManualSlotDragOutside={handleManualSlotDragOutside}
             onManualSlotDrop={handleManualSlotDrop}
@@ -1402,16 +1565,27 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             pulls={plan.displayPulls}
             assignmentVariants={plan.assignmentVariants}
             pullVariants={plan.pullVariants}
-            selectedAlternativeIndex={plan.selectedAlternativeIndex}
+            alternativesEnabled={alternativesUiEnabled}
+            selectedAlternativeIndex={effectiveAlternativeIndex}
             onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
             onFilteredAlternativesChange={setSummaryFilterState}
             loading={weekPlanLoading}
             generationRunning={plan.generationRunning}
             highlightedWorkerName={summaryHighlightWorkerName}
             onHighlightWorkerToggle={(name) => {
-              setSummaryHighlightWorkerName((prev) =>
-                normWorkerName(prev || "") === normWorkerName(name) ? null : name,
-              );
+              setSummaryHighlightWorkerName((prev) => {
+                const next =
+                  normWorkerName(prev || "") === normWorkerName(name) ? null : name;
+                if (
+                  next !== null &&
+                  typeof window !== "undefined" &&
+                  window.matchMedia("(max-width: 1023px)").matches &&
+                  hasLinkedSitesRail
+                ) {
+                  queueMicrotask(() => setShowLinkedSitesRail(false));
+                }
+                return next;
+              });
             }}
           />
           <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
@@ -1433,6 +1607,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           onEditingSavedChange={setEditingSaved}
           onCancelSavedEdit={async () => {
             setPullsModeStationIdx(null);
+            setShiftHoursModeStationIdx(null);
             await plan.cancelSavedEditing();
           }}
           reloadWeekPlan={reloadWeekPlan}
@@ -1445,7 +1620,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           isManual={plan.isManual}
           onIsManualChange={(next) => {
             plan.setIsManual(next);
-            if (!next) setPullsModeStationIdx(null);
+            if (!next) {
+              setPullsModeStationIdx(null);
+              setShiftHoursModeStationIdx(null);
+            }
           }}
           onEnterManualWithGridReset={plan.enterManualWithGridReset}
           onSavePlan={handleSavePlan}
@@ -1453,6 +1631,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           draftActive={plan.draftActive}
           alternativeCount={visibleAlternativeIndices.length}
           selectedAlternativeIndex={Math.max(0, selectedVisibleAlternativeIndex)}
+          selectedAlternativeDisplayIndex={effectiveAlternativeIndex}
+          onRequestMoreAlternatives={plan.startMoreAlternatives}
+          alternativesEnabled={alternativesUiEnabled}
           alternativesFiltered={summaryFilterState.hasActiveFilters}
           alternativesTotalCount={plan.alternativeCount}
           onSelectedAlternativeChange={(visibleIndex) => {
@@ -1485,9 +1666,17 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       {pullScopeDialog ? (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="text-base font-semibold">משיכות באתרים מקושרים</div>
+            <div className="text-base font-semibold">
+              {pullScopeDialog.kind === "guard_hours"
+                ? "שינוי שעות באתרים מקושרים"
+                : "משיכות באתרים מקושרים"}
+            </div>
             <div className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-              {pullScopeDialog.mode === "remove"
+              {pullScopeDialog.kind === "guard_hours"
+                ? pullScopeDialog.mode === "remove"
+                  ? "באיזה היקף למחוק את שינוי השעות?"
+                  : "באיזה היקף לשמור את שינוי השעות?"
+                : pullScopeDialog.mode === "remove"
                 ? "באיזה היקף למחוק את המשיכה?"
                 : "באיזה היקף לשמור את המשיכה?"}
             </div>

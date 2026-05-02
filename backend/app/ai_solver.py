@@ -2,12 +2,22 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 import logging
+import os
 
 from ortools.sat.python import cp_model
 
 
 DayKey = str  # "sun".."sat"
 ShiftName = str  # e.g. "06-14", "14-22", "22-06"
+
+
+def _solver_num_search_workers() -> int:
+    """Cap solver parallelism to avoid saturating the host."""
+    try:
+        env_value = int(os.getenv("PLANNING_SOLVER_NUM_WORKERS", "4"))
+    except Exception:
+        env_value = 4
+    return max(1, min(env_value, 4))
 
 
 def order_days(days: List[DayKey]) -> List[DayKey]:
@@ -79,6 +89,30 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
         s = s.replace('"', "'")
         return s
 
+    def enabled(value: Any) -> bool:
+        return value is not False
+
+    def base_day_active(st_cfg: Dict[str, Any], day_key: DayKey) -> bool:
+        days_map = st_cfg.get("days") or {}
+        if isinstance(days_map, dict) and day_key in days_map:
+            return bool(days_map.get(day_key) is not False)
+        return True
+
+    def effective_day_override(st_cfg: Dict[str, Any], day_key: DayKey) -> Dict[str, Any]:
+        raw_overrides = st_cfg.get("dayOverrides") or {}
+        ov = raw_overrides.get(day_key) if isinstance(raw_overrides, dict) else None
+        if isinstance(ov, dict):
+            shifts_value = ov.get("shifts") or st_cfg.get("shifts") or []
+            return {
+                **ov,
+                "active": ov.get("active", True) is not False,
+                "shifts": shifts_value,
+            }
+        return {
+            "active": base_day_active(st_cfg, day_key),
+            "shifts": st_cfg.get("shifts") or [],
+        }
+
     excl_set = set(exclude_days or [])
 
     for st in stations_cfg:
@@ -90,28 +124,35 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
         cap_roles: Dict[DayKey, Dict[ShiftName, Dict[str, int]]] = {}
 
         if per_day_custom:
-            day_overrides = st.get("dayOverrides") or {}
-            for day, ov in day_overrides.items():
-                active = bool((ov or {}).get("active", False))
+            raw_day_overrides = st.get("dayOverrides") or {}
+            day_keys = set(raw_day_overrides.keys()) if isinstance(raw_day_overrides, dict) else set()
+            days_map = st.get("days") or {}
+            if isinstance(days_map, dict):
+                day_keys.update(days_map.keys())
+            if not day_keys:
+                day_keys.update(["sun", "mon", "tue", "wed", "thu", "fri", "sat"])
+            for day in day_keys:
+                ov = effective_day_override(st, day)
+                active = bool((ov or {}).get("active", True))
                 if not active:
                     continue
                 all_days.add(day)
                 shifts_list = (ov or {}).get("shifts") or []
                 for sh in shifts_list:
-                    if not sh or not sh.get("enabled"):
+                    if not sh or not enabled(sh.get("enabled")):
                         continue
                     sh_name = sh.get("name")
                     # roles per shift (if uniform_roles -> from station roles, else from shift roles)
                     role_counts: Dict[str, int] = {}
                     if uniform_roles:
                         for r in (st.get("roles") or []):
-                            if r and r.get("enabled"):
+                            if r and enabled(r.get("enabled")):
                                 cnt = int(r.get("count") or 0)
                                 if cnt > 0:
                                     role_counts[norm_role(r.get("name"))] = cnt
                     else:
                         for r in (sh.get("roles") or []):
-                            if r and r.get("enabled"):
+                            if r and enabled(r.get("enabled")):
                                 cnt = int(r.get("count") or 0)
                                 if cnt > 0:
                                     role_counts[norm_role(r.get("name"))] = cnt
@@ -141,19 +182,19 @@ def build_capacities_from_config(config: Dict[str, Any], exclude_days: List[DayK
                     continue
                 all_days.add(day)
                 for sh in shifts_list:
-                    if not sh or not sh.get("enabled"):
+                    if not sh or not enabled(sh.get("enabled")):
                         continue
                     sh_name = sh.get("name")
                     role_counts: Dict[str, int] = {}
                     if uniform_roles:
                         for r in (st.get("roles") or []):
-                            if r and r.get("enabled"):
+                            if r and enabled(r.get("enabled")):
                                 cnt = int(r.get("count") or 0)
                                 if cnt > 0:
                                     role_counts[norm_role(r.get("name"))] = cnt
                     else:
                         for r in (sh.get("roles") or []):
-                            if r and r.get("enabled"):
+                            if r and enabled(r.get("enabled")):
                                 cnt = int(r.get("count") or 0)
                                 if cnt > 0:
                                     role_counts[norm_role(r.get("name"))] = cnt
@@ -361,12 +402,17 @@ def solve_schedule(
                     allowed = sh_name in avail if isinstance(avail, list) else False
                     station_allowed_workers = stations[t].get("allowed_workers") or []
                     allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
+                    worker_station_allow = [
+                        i for i in (workers[w].get("allowed_station_indices") or [])
+                        if isinstance(i, int) and i in range(len(stations))
+                    ]
+                    allowed_for_worker_station = (not worker_station_allow) or (t in worker_station_allow)
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
                     # Pré-affectation prioritaire: force à 1 et ignore indisponibilité
                     if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
                         model.Add(var == 1)
                     else:
-                        if not allowed or not allowed_for_station:
+                        if not allowed or not allowed_for_station or not allowed_for_worker_station:
                             model.Add(var == 0)
                     x[(w, d, s, t)] = var
 
@@ -572,7 +618,7 @@ def solve_schedule(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = _solver_num_search_workers()
 
     res = solver.Solve(model)
 
@@ -963,7 +1009,7 @@ def solve_schedule(
         model.Add(sum(true_lits) <= len(true_lits) - 1)
         solver2 = cp_model.CpSolver()
         solver2.parameters.max_time_in_seconds = float(max(1, int(time_limit_seconds)))
-        solver2.parameters.num_search_workers = 8
+        solver2.parameters.num_search_workers = _solver_num_search_workers()
         res2 = solver2.Solve(model)
         if res2 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
             break
@@ -1556,12 +1602,17 @@ def solve_schedule_stream(
                     allowed = sh_name in avail if isinstance(avail, list) else False
                     station_allowed_workers = stations[t].get("allowed_workers") or []
                     allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
+                    worker_station_allow = [
+                        i for i in (workers[w].get("allowed_station_indices") or [])
+                        if isinstance(i, int) and i in range(len(stations))
+                    ]
+                    allowed_for_worker_station = (not worker_station_allow) or (t in worker_station_allow)
                     var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
                     # Pré-affectation prioritaire
                     if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
                         model.Add(var == 1)
                     else:
-                        if not allowed or not allowed_for_station:
+                        if not allowed or not allowed_for_station or not allowed_for_worker_station:
                             model.Add(var == 0)
                     x[(w, d, s, t)] = var
 
@@ -1725,7 +1776,7 @@ def solve_schedule_stream(
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
-    solver.parameters.num_search_workers = 8
+    solver.parameters.num_search_workers = _solver_num_search_workers()
     res = solver.Solve(model)
     if res not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         logger.warning("[STREAM] base solve failed status=%s", res)
@@ -2318,7 +2369,7 @@ def solve_schedule_stream(
             model.Add(sum(true_lits) <= len(true_lits) - 1)
             solver2 = cp_model.CpSolver()
             solver2.parameters.max_time_in_seconds = float(max(1, int(time_limit_seconds)))
-            solver2.parameters.num_search_workers = 8
+            solver2.parameters.num_search_workers = _solver_num_search_workers()
             res2 = solver2.Solve(model)
             if res2 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 logger.info("[STREAM] re-solve ended with status=%s", res2)

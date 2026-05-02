@@ -10,6 +10,12 @@ const EMPTY_WORKER_AVAILABILITY = {
 
 const AVAILABILITY_DAY_KEYS = Object.keys(EMPTY_WORKER_AVAILABILITY) as Array<keyof typeof EMPTY_WORKER_AVAILABILITY>;
 
+function normStationsMeta(x: Record<string, unknown> | null | undefined): string {
+  const raw = x?._stations;
+  if (!Array.isArray(raw)) return "";
+  return JSON.stringify([...raw].map(String).sort());
+}
+
 /** Vrai seulement si la grille jour / משמרת a changé (pas nom, rôles, max_shifts). */
 export function isAvailabilityDayShiftChanged(
   before: Record<string, string[]> | null | undefined,
@@ -24,7 +30,10 @@ export function isAvailabilityDayShiftChanged(
       }
       return JSON.stringify(o);
     };
-    return norm(before) !== norm(after);
+    return (
+      norm(before) !== norm(after) ||
+      normStationsMeta(before as Record<string, unknown>) !== normStationsMeta(after as Record<string, unknown>)
+    );
   } catch {
     return true;
   }

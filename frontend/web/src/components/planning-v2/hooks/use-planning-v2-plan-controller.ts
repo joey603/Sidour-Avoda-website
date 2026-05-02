@@ -23,10 +23,10 @@ function apiBaseUrl(): string {
 }
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
-const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 1200;
-const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 45;
-const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 500;
-const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 20;
+const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
+const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 30;
+const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 70;
+const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 18;
 
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
@@ -86,15 +86,17 @@ type PlanControllerArgs = {
   weekPlanLoading: boolean;
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
-  reloadWeekPlan: () => void | Promise<void>;
+  reloadWeekPlan: (opts?: { silent?: boolean }) => void | Promise<void>;
   linkedSitesLength: number;
   /** Sites du groupe (courant + liés) pour purger les טיוטות auto issues d’une ריצה depuis la liste sites. */
   weekPurgeSiteIds: number[];
 };
 
+type DraftAlternative = { assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap };
+
 function normalizeDraftAlternatives(
-  value: Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap } | null | undefined>,
-): Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap }> {
+  value: Array<DraftAlternative | null | undefined>,
+): DraftAlternative[] {
   return (value || []).flatMap((item) => {
     if (!item || typeof item !== "object") return [];
     const assignments = item.assignments;
@@ -104,6 +106,30 @@ function normalizeDraftAlternatives(
       pulls: (item.pulls || {}) as PlanningV2PullsMap,
     }];
   });
+}
+
+const PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX = "planning_v2_alternatives_unlock_";
+
+function alternativesUnlockSessionKey(weekIso: string, siteId: string) {
+  return `${PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX}${weekIso}_${siteId}`;
+}
+
+function readAlternativesUnlockedFromSession(weekIso: string, siteId: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(alternativesUnlockSessionKey(weekIso, siteId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeAlternativesUnlockedToSession(weekIso: string, siteId: string) {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(alternativesUnlockSessionKey(weekIso, siteId), "1");
+  } catch {
+    /* ignore */
+  }
 }
 
 export function usePlanningV2PlanController({
@@ -126,9 +152,7 @@ export function usePlanningV2PlanController({
     null,
   );
   const [draftPulls, setDraftPulls] = useState<PlanningV2PullsMap | null>(null);
-  const [draftAlternatives, setDraftAlternatives] = useState<
-    Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap }>
-  >([]);
+  const [draftAlternatives, setDraftAlternatives] = useState<DraftAlternative[]>([]);
   const [draftFixedAssignmentsSnapshot, setDraftFixedAssignmentsSnapshot] = useState<
     Record<string, Record<string, string[][]>> | null
   >(null);
@@ -138,12 +162,11 @@ export function usePlanningV2PlanController({
   const [autoPullsLimit, setAutoPullsLimit] = useState("");
   const [isManual, setIsManual] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const generationIdRef = useRef<string | null>(null);
   const genBusyRef = useRef(false);
   const draftAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const draftPullsRef = useRef<PlanningV2PullsMap>({});
-  const draftAlternativesRef = useRef<Array<{ assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap }>>(
-    [],
-  );
+  const draftAlternativesRef = useRef<DraftAlternative[]>([]);
   const lastAlternativeSnapshotRef = useRef<string>("");
   const alternativesFlushRafRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
@@ -167,6 +190,16 @@ export function usePlanningV2PlanController({
 
   const weekIso = getWeekKeyISO(weekStart);
   const autoPullsStorageKey = `${AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX}${weekIso}`;
+  const [alternativesUnlockNonce, setAlternativesUnlockNonce] = useState(0);
+  const [clientStorageReady, setClientStorageReady] = useState(false);
+
+  useEffect(() => {
+    setAlternativesUnlockNonce((n) => n + 1);
+  }, [siteId, weekIso]);
+
+  useEffect(() => {
+    setClientStorageReady(true);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -269,6 +302,15 @@ export function usePlanningV2PlanController({
   }, [draftAssignments, draftPulls, draftAlternatives, weekPlan?.pulls, weekPlan?.alternativePulls]);
 
   const alternativeCount = assignmentVariants.length;
+
+  /** Débloqué seulement après יצירת תכנון dans cet onglet (session), ou pendant la génération SSE. */
+  const alternativesUnlocked = useMemo(() => {
+    void alternativesUnlockNonce;
+    if (generationRunning) return true;
+    if (clientStorageReady && readAlternativesUnlockedFromSession(weekIso, siteId)) return true;
+    return false;
+  }, [clientStorageReady, weekIso, siteId, generationRunning, alternativesUnlockNonce]);
+
   const safeAlternativeIndex = useMemo(() => {
     if (alternativeCount <= 0) return 0;
     return Math.min(Math.max(0, selectedAlternativeIndex), alternativeCount - 1);
@@ -312,10 +354,11 @@ export function usePlanningV2PlanController({
     genBusyRef.current = false;
   }, []);
 
-  const startGeneration = useCallback(async (options?: GenerateOptions) => {
+  const runGeneration = useCallback(async (options?: GenerateOptions, mode: "replace" | "append" = "replace") => {
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) return;
     if (genBusyRef.current) return;
+    const appendMode = mode === "append";
     try {
       abortRef.current?.abort();
     } catch {
@@ -323,16 +366,44 @@ export function usePlanningV2PlanController({
     }
     const controller = new AbortController();
     abortRef.current = controller;
+    generationIdRef.current = null;
     genBusyRef.current = true;
     setGenerationRunning(true);
-    setSelectedAlternativeIndex(0);
-    draftAssignmentsRef.current = null;
-    draftPullsRef.current = {};
-    draftAlternativesRef.current = [];
-    lastAlternativeSnapshotRef.current = "";
-    setDraftAssignments(null);
-    setDraftPulls(null);
-    setDraftAlternatives([]);
+    if (!appendMode) {
+      setSelectedAlternativeIndex(0);
+      draftAssignmentsRef.current = null;
+      draftPullsRef.current = {};
+      draftAlternativesRef.current = [];
+      lastAlternativeSnapshotRef.current = "";
+      setDraftAssignments(null);
+      setDraftPulls(null);
+      setDraftAlternatives([]);
+    } else {
+      const baseAssignments =
+        draftAssignmentsRef.current ??
+        weekPlanAssignmentsRef.current ??
+        (assignmentVariants[0] && typeof assignmentVariants[0] === "object" ? assignmentVariants[0] : null);
+      const basePulls =
+        draftPullsRef.current ||
+        ((pullVariants[0] && typeof pullVariants[0] === "object" ? pullVariants[0] : {}) as PlanningV2PullsMap);
+      const existingAlternatives = normalizeDraftAlternatives(
+        draftAssignmentsRef.current
+          ? draftAlternativesRef.current || []
+          : assignmentVariants.slice(1).map((assignments, idx) => ({
+              assignments,
+              pulls: (pullVariants[idx + 1] || {}) as PlanningV2PullsMap,
+            })),
+      );
+      if (baseAssignments && typeof baseAssignments === "object") {
+        draftAssignmentsRef.current = baseAssignments;
+        draftPullsRef.current = basePulls;
+        draftAlternativesRef.current = existingAlternatives;
+        setDraftAssignments(baseAssignments);
+        setDraftPulls(basePulls);
+        setDraftAlternatives(existingAlternatives);
+      }
+      lastAlternativeSnapshotRef.current = "";
+    }
     if (alternativesFlushRafRef.current != null) {
       try {
         window.cancelAnimationFrame(alternativesFlushRafRef.current);
@@ -342,28 +413,30 @@ export function usePlanningV2PlanController({
       alternativesFlushRafRef.current = null;
     }
     // Session « mémoire » multi-sites (clés multi_site_*) : efface tout état client lié à une ריצה / navigation précédente.
-    clearAllPlanningSessionCaches();
-    const purgeIds =
-      weekPurgeSiteIds.length > 0
-        ? weekPurgeSiteIds
-        : Number.isFinite(Number(siteId)) && Number(siteId) > 0
-          ? [Number(siteId)]
-          : [];
-    if (purgeIds.length > 0) {
-      try {
-        await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
+    if (!appendMode) {
+      clearAllPlanningSessionCaches();
+      const purgeIds =
+        weekPurgeSiteIds.length > 0
+          ? weekPurgeSiteIds
+          : Number.isFinite(Number(siteId)) && Number(siteId) > 0
+            ? [Number(siteId)]
+            : [];
+      if (purgeIds.length > 0) {
         try {
-          window.dispatchEvent(
-            new CustomEvent("planning-v2-assignment-filters-reset", {
-              detail: { weekIso },
-            }),
-          );
+          await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
+          try {
+            window.dispatchEvent(
+              new CustomEvent("planning-v2-assignment-filters-reset", {
+                detail: { weekIso },
+              }),
+            );
+          } catch {
+            /* ignore */
+          }
+          await reloadWeekPlan();
         } catch {
           /* ignore */
         }
-        await reloadWeekPlan();
-      } catch {
-        /* ignore */
       }
     }
     const excludeDays = options?.excludeDays;
@@ -509,8 +582,19 @@ export function usePlanningV2PlanController({
       }, 1000);
       await readSseStream(resp.body.getReader(), (evt) => {
         if (stopped) return true;
+        const evtGenerationId =
+          typeof evt.generation_id === "string" && String(evt.generation_id).trim()
+            ? String(evt.generation_id).trim()
+            : null;
+        if (evtGenerationId) {
+          if (!generationIdRef.current) {
+            generationIdRef.current = evtGenerationId;
+          } else if (generationIdRef.current !== evtGenerationId) {
+            return false;
+          }
+        }
         lastSseEventAt = Date.now();
-        if (evt.type === "base") {
+        if (evt.type === "base" && !appendMode) {
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
@@ -565,6 +649,67 @@ export function usePlanningV2PlanController({
           }
           return false;
         }
+        if (evt.type === "base" && appendMode) {
+          sawGeneratedPlan = true;
+          sawPlanToPersist = true;
+          let altAssignments: Record<string, Record<string, string[][]>> | null = null;
+          let altPulls: PlanningV2PullsMap = {};
+          if (linked && evt.site_plans && typeof evt.site_plans === "object") {
+            const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            const existing = readLinkedPlansFromMemory(weekStart);
+            const merged: Record<string, LinkedSitePlan> = { ...(existing?.plansBySite || {}) };
+            let mergedChanged = false;
+            for (const [k, p] of Object.entries(plans)) {
+              if (!p || typeof p !== "object" || !p.assignments || typeof p.assignments !== "object") continue;
+              const prev = (merged[k] || {}) as LinkedSitePlan;
+              const prevAlternatives = Array.isArray(prev.alternatives) ? prev.alternatives : [];
+              const prevAlternativePulls = Array.isArray(prev.alternative_pulls) ? prev.alternative_pulls : [];
+              merged[k] = {
+                ...prev,
+                alternatives: [...prevAlternatives, p.assignments as Record<string, Record<string, string[][]>>],
+                alternative_pulls: [
+                  ...prevAlternativePulls,
+                  (p.pulls && typeof p.pulls === "object" ? p.pulls : {}) as Record<string, unknown>,
+                ],
+              };
+              mergedChanged = true;
+            }
+            if (mergedChanged) {
+              saveLinkedPlansToMemory(weekStart, merged, Number(existing?.activeAltIndex || 0));
+            }
+            const curEvent = plans[String(siteId)];
+            if (curEvent?.assignments && typeof curEvent.assignments === "object") {
+              altAssignments = curEvent.assignments as Record<string, Record<string, string[][]>>;
+              altPulls =
+                curEvent.pulls && typeof curEvent.pulls === "object"
+                  ? (curEvent.pulls as PlanningV2PullsMap)
+                  : {};
+            }
+          } else if (!linked && evt.assignments && typeof evt.assignments === "object") {
+            altAssignments = evt.assignments as Record<string, Record<string, string[][]>>;
+            altPulls = evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {};
+          }
+          if (altAssignments) {
+            let nextSnapshot = "";
+            try {
+              nextSnapshot = JSON.stringify({ assignments: altAssignments, pulls: altPulls || {} });
+            } catch {
+              nextSnapshot = "";
+            }
+            if (nextSnapshot && nextSnapshot === lastAlternativeSnapshotRef.current) {
+              return false;
+            }
+            if (nextSnapshot) {
+              lastAlternativeSnapshotRef.current = nextSnapshot;
+            }
+            draftAlternativesRef.current = [
+              ...(draftAlternativesRef.current || []),
+              { assignments: altAssignments, pulls: altPulls },
+            ];
+            scheduleAlternativesFlush();
+          }
+          return false;
+        }
         if (evt.type === "alternative") {
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
@@ -601,8 +746,9 @@ export function usePlanningV2PlanController({
                 const prevAlternativePulls = Array.isArray(prev.alternative_pulls) ? prev.alternative_pulls : [];
                 const nextAlternatives = [...prevAlternatives];
                 const nextAlternativePulls = [...prevAlternativePulls];
-                nextAlternatives[altSlot] = nextAssignments;
-                nextAlternativePulls[altSlot] = nextPulls;
+                const targetAltSlot = appendMode ? nextAlternatives.length : altSlot;
+                nextAlternatives[targetAltSlot] = nextAssignments;
+                nextAlternativePulls[targetAltSlot] = nextPulls;
                 merged[k] = {
                   ...prev,
                   alternatives: nextAlternatives,
@@ -640,7 +786,8 @@ export function usePlanningV2PlanController({
               lastAlternativeSnapshotRef.current = nextSnapshot;
             }
             const nextDraftAlternatives = [...(draftAlternativesRef.current || [])];
-            nextDraftAlternatives[altSlot] = {
+            const targetAltSlot = appendMode ? nextDraftAlternatives.length : altSlot;
+            nextDraftAlternatives[targetAltSlot] = {
               assignments: altAssignments as Record<string, Record<string, string[][]>>,
               pulls: altPulls,
             };
@@ -687,21 +834,21 @@ export function usePlanningV2PlanController({
           /* ignore */
         }
         alternativesFlushRafRef.current = null;
+        // Après annulation du RAF, synchroniser pour que React reflète toutes les alternatives reçues.
+        const nextAlternatives = normalizeDraftAlternatives(draftAlternativesRef.current || []);
+        setDraftAlternatives([...nextAlternatives]);
       }
       setGenerationRunning(false);
       genBusyRef.current = false;
       abortRef.current = null;
-      console.info("[planning-v2] generation finished", {
-        siteId,
-        weekIso,
-        sawPlanToPersist,
-        alternativesBuffered: draftAlternativesRef.current?.length || 0,
-      });
+      generationIdRef.current = null;
       if (sawPlanToPersist) {
+        writeAlternativesUnlockedToSession(weekIso, siteId);
+        setAlternativesUnlockNonce((n) => n + 1);
         void (async () => {
           try {
             await persistGeneratedAutoDraftToServer();
-            await reloadWeekPlan();
+            await reloadWeekPlan({ silent: true });
           } catch (err) {
             console.warn("[planning-v2] persist auto draft after generation:", err);
           }
@@ -709,6 +856,8 @@ export function usePlanningV2PlanController({
       }
     }
   }, [
+    assignmentVariants,
+    pullVariants,
     siteId,
     weekIso,
     weekStart,
@@ -717,9 +866,20 @@ export function usePlanningV2PlanController({
     autoPullsLimit,
     linkedSitesLength,
     reloadWeekPlan,
-    weekPurgeSiteIds.join(","),
+    weekPurgeSiteIds,
     alternativesFlushRafRef,
   ]);
+
+  const startGeneration = useCallback(
+    async (options?: GenerateOptions) => {
+      await runGeneration(options, "replace");
+    },
+    [runGeneration],
+  );
+
+  const startMoreAlternatives = useCallback(async () => {
+    await runGeneration(undefined, "append");
+  }, [runGeneration]);
 
   const savePlan = useCallback(
     async (publishToWorkers: boolean) => {
@@ -824,12 +984,17 @@ export function usePlanningV2PlanController({
   );
 
   const getLatestAssignmentBase = useCallback((): Record<string, Record<string, string[][]>> => {
-    return JSON.parse(
-      JSON.stringify(
-        draftAssignmentsRef.current ?? weekPlanAssignmentsRef.current ?? buildEmptyAssignmentsForSite(site),
-      ),
-    ) as Record<string, Record<string, string[][]>>;
-  }, [site]);
+    // Même matrice que le גריד : `displayAssignments` (brouillon + index d’alternative actif).
+    // Ne pas lire seulement `draftAssignments` / refs : après « מצב ידני + שמור מיקומים » ou autre
+    // parcours, la surbrillance de drag et analyzeManualSlotDrop doivent suivre l’affichage exact.
+    if (!displayAssignments || typeof displayAssignments !== "object") {
+      return JSON.parse(JSON.stringify(buildEmptyAssignmentsForSite(site))) as Record<
+        string,
+        Record<string, string[][]>
+      >;
+    }
+    return JSON.parse(JSON.stringify(displayAssignments)) as Record<string, Record<string, string[][]>>;
+  }, [site, displayAssignments]);
 
   const commitDraftAssignments = useCallback((next: Record<string, Record<string, string[][]>>) => {
     setDraftAssignments(next);
@@ -857,14 +1022,6 @@ export function usePlanningV2PlanController({
     (index: number) => {
       const next = Math.max(0, Number(index || 0));
       setSelectedAlternativeIndex((prev) => {
-        if (prev !== next) {
-          console.info("[planning-v2] alternative changed", {
-            siteId,
-            weekIso,
-            prev,
-            next,
-          });
-        }
         return prev === next ? prev : next;
       });
       if (linkedSitesLength > 1) {
@@ -887,6 +1044,7 @@ export function usePlanningV2PlanController({
     pullVariants,
     generationRunning,
     startGeneration,
+    startMoreAlternatives,
     stopGeneration,
     savePlan,
     autoPullsLimit,
@@ -897,6 +1055,7 @@ export function usePlanningV2PlanController({
     selectedAlternativeIndex: safeAlternativeIndex,
     setSelectedAlternativeIndex: setSelectedAlternativeIndexSynced,
     alternativeCount,
+    alternativesUnlocked,
     draftFixedAssignmentsSnapshot,
     draftActive: draftAssignments !== null,
     clearDraft,

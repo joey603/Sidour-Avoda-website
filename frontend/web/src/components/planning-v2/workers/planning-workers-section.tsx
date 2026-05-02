@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { FilterWorkersAnswersModal } from "@/components/planning-shared/filter-workers-answers-modal";
 import { LinkedAvailabilityConfirmDialog } from "@/components/planning-shared/linked-availability-confirm-dialog";
 import { WorkerEditModal } from "@/components/planning-shared/worker-edit-modal";
@@ -10,6 +10,14 @@ import { usePlanningV2WorkerModals } from "../hooks/use-planning-v2-worker-modal
 import { CreateWorkerStepModal } from "./create-worker-step-modal";
 import { ExistingWorkersPickerModal } from "./existing-workers-picker-modal";
 import { PlanningWorkersTable } from "./planning-workers-table";
+
+function normalizeWorkerSearch(value: string): string {
+  return String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
 
 type PlanningWorkersSectionProps = {
   siteId: string;
@@ -44,7 +52,20 @@ export function PlanningWorkersSection({
     onWorkersChanged();
   });
 
+  const [workerListSearch, setWorkerListSearch] = useState("");
+
   const enabledRoleNames = useMemo(() => buildEnabledRoleNameSet(site), [site]);
+
+  const filteredRows = useMemo(() => {
+    const qRaw = workerListSearch.trim();
+    if (!qRaw) return rows;
+    const q = normalizeWorkerSearch(qRaw);
+    return rows.filter((w) => {
+      if (normalizeWorkerSearch(w.name).includes(q)) return true;
+      const rolesHay = normalizeWorkerSearch(w.roles.join(" "));
+      return rolesHay.includes(q);
+    });
+  }, [rows, workerListSearch]);
   const questions = (site?.config as { questions?: unknown[] } | undefined)?.questions;
   const hasQuestions = Array.isArray(questions) && questions.length > 0;
 
@@ -94,11 +115,29 @@ export function PlanningWorkersSection({
               </button>
             </div>
           </div>
+          {!workersLoading && rows.length > 0 ? (
+            <label className="block">
+              <span className="sr-only">חיפוש עובדים</span>
+              <input
+                type="search"
+                value={workerListSearch}
+                onChange={(e) => setWorkerListSearch(e.target.value)}
+                placeholder="חיפוש לפי שם או תפקיד…"
+                className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-[#00A8E0] focus:outline-none focus:ring-1 focus:ring-[#00A8E0] dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-[#00A8E0]"
+                dir="rtl"
+                autoComplete="off"
+              />
+            </label>
+          ) : null}
           {workersLoading ? (
             <div className="py-8 text-center text-sm text-zinc-500">טוען עובדים…</div>
+          ) : rows.length === 0 ? (
+            <div className="py-8 text-center text-sm text-zinc-500">אין עובדים</div>
+          ) : filteredRows.length === 0 ? (
+            <div className="py-8 text-center text-sm text-zinc-500">לא נמצאו עובדים התואמים לחיפוש</div>
           ) : (
             <PlanningWorkersTable
-              rows={rows}
+              rows={filteredRows}
               enabledRoleNames={enabledRoleNames}
               availabilityOverlays={availabilityOverlays}
               onRowClick={readOnly ? undefined : modals.onTableRowClick}

@@ -18,6 +18,13 @@ export function mergeWorkerAvailability(
       merged[dayKey] = [];
     }
   });
+  const metaWeek = weekOverride?._stations;
+  const metaBase = baseAvailability?._stations;
+  if (Array.isArray(metaWeek)) {
+    merged._stations = [...metaWeek];
+  } else if (isNextWeekDisplay && Array.isArray(metaBase)) {
+    merged._stations = [...metaBase];
+  }
   return merged;
 }
 
@@ -26,5 +33,8 @@ export function cloneWorkerAvailability(av: WorkerAvailability | undefined): Wor
   DAY_DEFS.forEach((dayDef) => {
     out[dayDef.key] = [...(av?.[dayDef.key] || [])];
   });
+  if (Array.isArray(av?._stations)) {
+    out._stations = [...av._stations];
+  }
   return out;
 }

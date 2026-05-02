@@ -1,4 +1,5 @@
-import type { PlanningWorker, SiteSummary } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import { workerAdjustedWeeklyTotalAcrossLinkedSites } from "./assignments-summary-math";
 import type { ManualDragSource } from "./planning-v2-manual-drop";
 import {
   readLinkedPlansFromMemory,
@@ -343,6 +344,19 @@ function hasWorkerAssignmentOnOtherLinkedSite(
   return false;
 }
 
+/** Restriction עמדות (מודל זמינות — מפתח `_stations`). */
+export function isWorkerAllowedOnStation(
+  effAvail: Record<string, string[]> | undefined,
+  stationIndex: number,
+  stationsCount: number,
+): boolean {
+  if (stationsCount <= 1) return true;
+  const meta = (effAvail as { _stations?: string[] } | undefined)?._stations;
+  if (!meta || !Array.isArray(meta) || meta.length === 0) return true;
+  const allowed = new Set(meta.map((x) => parseInt(String(x), 10)).filter((n) => Number.isFinite(n)));
+  return allowed.has(stationIndex);
+}
+
 /** זמינות (כולל התאמת סוג משמרת) — כמו `isWorkerAvailableForSlot` ב-planning. */
 export function isWorkerAvailableForSlot(
   workers: PlanningWorker[],
@@ -377,12 +391,19 @@ export function canHighlightManualDropTarget(ctx: {
   dayKey: string;
   shiftName: string;
   stationIndex: number;
+  stationsCount: number;
   roleHint?: string | null;
   dragSource?: ManualDragSource | null;
 }): boolean {
   const trimmed = String(ctx.workerName || "").trim();
   if (!trimmed) return false;
   if (!isWorkerAvailableForSlot(ctx.workers, ctx.availabilityByWorkerName, trimmed, ctx.dayKey, ctx.shiftName)) {
+    return false;
+  }
+  const effAvail =
+    (ctx.availabilityByWorkerName[trimmed] as Record<string, string[]> | undefined) ||
+    ((ctx.workers.find((x) => (x.name || "").trim() === trimmed)?.availability || {}) as Record<string, string[]>);
+  if (!isWorkerAllowedOnStation(effAvail, ctx.stationIndex, ctx.stationsCount)) {
     return false;
   }
   if (ctx.roleHint && !workerHasRole(ctx.workers, trimmed, ctx.roleHint)) return false;
@@ -488,6 +509,7 @@ export type ManualDropFlags = {
   forceAvailability?: boolean;
   forceRole?: boolean;
   forceRules?: boolean;
+  forceMaxShifts?: boolean;
 };
 
 export type ManualSlotDropAnalysis =
@@ -495,7 +517,8 @@ export type ManualSlotDropAnalysis =
   | { action: "block"; message: string }
   | { action: "confirm_availability"; workerName: string; dayKey: string; shiftName: string }
   | { action: "confirm_role"; workerName: string; roleName: string }
-  | { action: "confirm_rules"; lines: string[] };
+  | { action: "confirm_rules"; lines: string[] }
+  | { action: "confirm_max_shifts"; maxShifts: number; total: number };
 
 export function analyzeManualSlotDrop(ctx: {
   site: SiteSummary | null;
@@ -511,6 +534,8 @@ export function analyzeManualSlotDrop(ctx: {
   workerName: string;
   dragSource: ManualDragSource | null;
   flags: ManualDropFlags;
+  /** משיכות du site courant — pour le comptage max משמרות (comme le סיכום). */
+  pulls?: PlanningV2PullsMap | null;
 }): ManualSlotDropAnalysis {
   const trimmed = String(ctx.workerName || "").trim();
   if (!trimmed) return { action: "block", message: "לא נבחר עובד" };
@@ -544,6 +569,16 @@ export function analyzeManualSlotDrop(ctx: {
       workerName: trimmed,
       dayKey: ctx.dayKey,
       shiftName: ctx.shiftName,
+    };
+  }
+
+  if (
+    !isWorkerAllowedOnStation(effAvail as Record<string, string[]>, ctx.stationIndex, stationsCount) &&
+    !ctx.flags.forceAvailability
+  ) {
+    return {
+      action: "block",
+      message: "העובד לא מוגדר לעמדה זו (עמדות מורשות בהגדרת הזמינות).",
     };
   }
 
@@ -596,6 +631,23 @@ export function analyzeManualSlotDrop(ctx: {
     const conflicts = collectManualRuleViolations(next, trimmed, ctx.dayKey, ctx.shiftName, ctx.stationIndex);
     if (conflicts.length > 0) {
       return { action: "confirm_rules", lines: conflicts };
+    }
+  }
+
+  if (!ctx.flags.forceMaxShifts && w) {
+    const maxShifts = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
+    if (Number.isFinite(maxShifts) && maxShifts > 0) {
+      const total = workerAdjustedWeeklyTotalAcrossLinkedSites(
+        ctx.workers,
+        trimmed,
+        ctx.siteId,
+        ctx.weekStart,
+        next,
+        ctx.pulls ?? null,
+      );
+      if (total > Math.trunc(maxShifts)) {
+        return { action: "confirm_max_shifts", maxShifts: Math.trunc(maxShifts), total };
+      }
     }
   }
 

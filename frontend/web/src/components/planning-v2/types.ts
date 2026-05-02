@@ -1,4 +1,8 @@
-export type WorkerAvailability = Record<string, string[]>;
+/** Jours (sun…sat) + métadonnées optionnelles pour le serveur. */
+export type WorkerAvailability = Record<string, string[]> & {
+  /** Indices d’עמדה autorisés pour cette semaine sur ce site (strings) ; absent ou vide = toutes. */
+  _stations?: string[];
+};
 
 /** Aligné sur la page planning : liste עובדים. */
 export type PlanningWorker = {
@@ -28,6 +32,8 @@ export type SiteSummary = {
 export type PlanningV2PullEntry = {
   before?: { name?: string; start?: string; end?: string };
   after?: { name?: string; start?: string; end?: string };
+  /** שינוי שעות — affichage (arrivée / fin de garde), sans être une משיכה à deux noms. */
+  guardDisplay?: { start?: string; end?: string };
 };
 
 export type PlanningV2PullsMap = Record<string, PlanningV2PullEntry>;

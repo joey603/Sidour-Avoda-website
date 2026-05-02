@@ -1,5 +1,5 @@
 import { getRequiredFor } from "./station-grid-helpers";
-import type { PlanningWorker } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker } from "../types";
 import {
   readLinkedPlansFromMemory,
   resolveAssignmentsForAlternative,
@@ -43,6 +43,47 @@ export function subtractPullExtrasFromWorkerCounts(
     if (after) out.set(after, Math.max(0, (out.get(after) || 0) - 1));
   }
   return out;
+}
+
+/**
+ * Total hebdomadaire d’affectations pour un nom (après retrait des משיכות), comme le סיכום —
+ * site courant avec `nextAssignmentsCurrentSite` + autres sites liés depuis la mémoire session.
+ */
+export function workerAdjustedWeeklyTotalAcrossLinkedSites(
+  workers: PlanningWorker[],
+  workerName: string,
+  currentSiteId: string,
+  weekStart: Date,
+  nextAssignmentsCurrentSite: Record<string, Record<string, string[][]>>,
+  pullsCurrentSite: PlanningV2PullsMap | null | undefined,
+): number {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return 0;
+  const w = workers.find((x) => (x.name || "").trim() === trimmed);
+
+  const countForSite = (
+    asg: Record<string, Record<string, string[][]>> | null | undefined,
+    pulls: PlanningV2PullsMap | null | undefined,
+  ) =>
+    subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(asg), pulls).get(trimmed) || 0;
+
+  let total = countForSite(nextAssignmentsCurrentSite, pullsCurrentSite ?? null);
+
+  if (!w || !Array.isArray(w.linkedSiteIds) || w.linkedSiteIds.length <= 1) return total;
+
+  const mem = readLinkedPlansFromMemory(weekStart);
+  const activeIdx = Math.max(0, Math.trunc(Number(mem?.activeAltIndex || 0)));
+
+  for (const lid of w.linkedSiteIds) {
+    const sid = String(lid);
+    if (sid === String(currentSiteId)) continue;
+    const sitePlan = mem?.plansBySite?.[sid];
+    if (!sitePlan) continue;
+    const asg = resolveAssignmentsForAlternative(sitePlan, activeIdx);
+    const pls = resolvePullsForAlternative(sitePlan, activeIdx) as PlanningV2PullsMap | undefined;
+    total += countForSite(asg || {}, pls ?? null);
+  }
+  return total;
 }
 
 export function colorIdentityForWorker(worker: PlanningWorker): string {
@@ -112,8 +153,7 @@ export function buildTotalAssignmentsByIdentity(
   const mem = readLinkedPlansFromMemory(weekStart);
   if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
     const sharedIdx = Math.max(0, Math.trunc(Number(mem.activeAltIndex || 0)));
-    const debugBySite: Record<string, { altIdx: number; counts: Record<string, number> }> = {};
-    for (const [sitePlanId, plan] of Object.entries(mem.plansBySite)) {
+    for (const [, plan] of Object.entries(mem.plansBySite)) {
       const planAlts = Array.isArray(plan.alternatives) ? plan.alternatives : [];
       // Si sharedIdx dépasse les alternatives disponibles pour ce site,
       // utiliser la dernière alternative disponible (pas le plan de base)
@@ -133,34 +173,12 @@ export function buildTotalAssignmentsByIdentity(
       > | null;
       const nameCounts = countAssignmentsPerWorkerName(resolvedAsg);
       const adjusted = subtractPullExtrasFromWorkerCounts(nameCounts, resolvedPulls ?? null);
-      const siteDebug: Record<string, number> = {};
       for (const [name, count] of adjusted) {
         const w = workersByName.get(name);
         if (!w) continue;
         const id = colorIdentityForWorker(w);
         totals.set(id, (totals.get(id) || 0) + count);
-        siteDebug[name] = count;
       }
-      debugBySite[sitePlanId] = { altIdx: safeIdx, counts: siteDebug };
-    }
-    // Log des contributions par site pour les workers multi-sites dépassant leur max
-    const overWorkers: Array<{ name: string; total: number; max: number; bySite: Record<string, number> }> = [];
-    for (const w of workers) {
-      if ((w.linkedSiteIds || []).length <= 1) continue;
-      const id = colorIdentityForWorker(w);
-      const total = totals.get(id) || 0;
-      const maxS = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
-      if (maxS > 0 && total > maxS) {
-        const bySite: Record<string, number> = {};
-        for (const [sid, { altIdx, counts }] of Object.entries(debugBySite)) {
-          const c = counts[w.name];
-          if (c !== undefined) bySite[`site_${sid}(alt${altIdx})`] = c;
-        }
-        overWorkers.push({ name: w.name, total, max: maxS, bySite });
-      }
-    }
-    if (overWorkers.length > 0) {
-      console.debug("[planning-v2][total-assignments] workers over max_shifts (peut être faux si alternatives désynchronisées entre sites):", overWorkers, { sharedIdx });
     }
     return totals;
   }

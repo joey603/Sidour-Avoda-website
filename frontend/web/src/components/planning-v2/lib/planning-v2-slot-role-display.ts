@@ -151,57 +151,49 @@ export function alignNamesToRoleSlots(
   workers: PlanningWorker[],
   assignedNamesBySlot: string[],
   roleHints: string[],
+  roleForSlot: (string | null)[] = [],
 ): string[] {
   /** Même nombre de sous-slots que la config (ex. חמוש + אחמש) même si l’API n’a qu’un seul nom dans le tableau. */
   const targetLen = Math.max(assignedNamesBySlot.length, roleHints.length);
   if (targetLen === 0) return [];
   const slots = Array.from({ length: targetLen }, (_, i) => String(assignedNamesBySlot[i] ?? ""));
-  const pool = slots
-    .map((nm) => String(nm || "").trim())
-    .filter(Boolean);
-  if (pool.length === 0) return slots;
+  const entries = slots
+    .map((nm, idx) => ({
+      originalIndex: idx,
+      name: String(nm || "").trim(),
+      resolvedRole: String(roleForSlot[idx] || "").trim() || null,
+    }))
+    .filter((entry) => !!entry.name);
+  if (entries.length === 0) return slots;
 
-  const used = new Set<number>();
+  const roleOrder = Array.from(
+    new Set(
+      roleHints
+        .map((roleName) => String(roleName || "").trim())
+        .filter(Boolean),
+    ),
+  );
+  const roleRank = new Map<string, number>(roleOrder.map((roleName, idx) => [roleName, idx]));
+  const inferRole = (entry: (typeof entries)[number]): string | null => {
+    if (entry.resolvedRole) return entry.resolvedRole;
+    for (const roleName of roleOrder) {
+      if (workerHasRole(workers, entry.name, roleName)) return roleName;
+    }
+    return null;
+  };
+
+  const sorted = [...entries].sort((a, b) => {
+    const roleA = inferRole(a);
+    const roleB = inferRole(b);
+    const rankA = roleA && roleRank.has(roleA) ? (roleRank.get(roleA) as number) : Number.MAX_SAFE_INTEGER;
+    const rankB = roleB && roleRank.has(roleB) ? (roleRank.get(roleB) as number) : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    return a.originalIndex - b.originalIndex;
+  });
+
   const out = Array.from({ length: targetLen }, () => "");
-
-  // 1) Remplir d'abord les slots qui ont un rôle attendu.
-  for (let idx = 0; idx < targetLen; idx++) {
-    const expectedRole = String(roleHints[idx] || "").trim();
-    if (!expectedRole) continue;
-    let pick = -1;
-    for (let i = 0; i < pool.length; i++) {
-      if (used.has(i)) continue;
-      if (!workerHasRole(workers, pool[i], expectedRole)) continue;
-      pick = i;
-      break;
-    }
-    if (pick >= 0) {
-      out[idx] = pool[pick];
-      used.add(pick);
-    }
-  }
-
-  // 2) Conserver autant que possible les noms déjà en place.
-  for (let idx = 0; idx < targetLen; idx++) {
-    if (String(out[idx] || "").trim()) continue;
-    const cur = String(slots[idx] || "").trim();
-    if (!cur) continue;
-    const curIdx = pool.findIndex((x, i) => !used.has(i) && x === cur);
-    if (curIdx >= 0) {
-      out[idx] = pool[curIdx];
-      used.add(curIdx);
-    }
-  }
-
-  // 3) Compléter les trous restants avec les noms non utilisés.
-  let cursor = 0;
-  for (let idx = 0; idx < targetLen; idx++) {
-    if (String(out[idx] || "").trim()) continue;
-    while (cursor < pool.length && used.has(cursor)) cursor++;
-    if (cursor >= pool.length) break;
-    out[idx] = pool[cursor];
-    used.add(cursor);
-    cursor++;
+  for (let idx = 0; idx < sorted.length; idx++) {
+    out[idx] = sorted[idx].name;
   }
   return out;
 }

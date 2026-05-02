@@ -22,7 +22,7 @@ type PlanningV2ActionBarProps = {
   onEditingSavedChange: (v: boolean) => void;
   /** ביטול מצב עריכה — ניקוי טיוטה והצגת התכנון השמור (לפני סגירת ה־UI). */
   onCancelSavedEdit?: () => void | Promise<void>;
-  reloadWeekPlan: () => void | Promise<void>;
+  reloadWeekPlan: (opts?: { silent?: boolean }) => void | Promise<void>;
   generationRunning: boolean;
   onRequestGenerate: (options?: {
     excludeDays?: string[];
@@ -40,9 +40,16 @@ type PlanningV2ActionBarProps = {
   onDraftClear?: () => void;
   /** טיוטת IA ללא שמירה — מאפשר שמור בלי מצב ערוך */
   draftActive: boolean;
+  /** Nombre d’alternatives navigables actuellement (peut être filtré). */
   alternativeCount: number;
+  /** Index dans l’ensemble navigable actuel (peut être filtré). */
   selectedAlternativeIndex: number;
+  /** Index réel dans l’ensemble total des alternatives. */
+  selectedAlternativeDisplayIndex?: number;
   onSelectedAlternativeChange: (index: number) => void;
+  onRequestMoreAlternatives?: () => void;
+  /** Faux tant qu’aucune יצירת תכנון n’a produit de plan (ou pas d’alternatives côté serveur / brouillon). */
+  alternativesEnabled?: boolean;
   alternativesFiltered?: boolean;
   alternativesTotalCount?: number;
 };
@@ -74,7 +81,10 @@ export function PlanningV2ActionBar({
   draftActive,
   alternativeCount,
   selectedAlternativeIndex,
+  selectedAlternativeDisplayIndex,
   onSelectedAlternativeChange,
+  onRequestMoreAlternatives,
+  alternativesEnabled = true,
   alternativesFiltered = false,
   alternativesTotalCount,
 }: PlanningV2ActionBarProps) {
@@ -165,10 +175,25 @@ export function PlanningV2ActionBar({
     [],
   );
 
+  const alternativesInteractive = alternativesEnabled;
   const hasAlternatives = alternativeCount >= 1;
   const altCurrent = Math.max(0, Math.min(Math.max(0, selectedAlternativeIndex), Math.max(0, alternativeCount - 1)));
-  const canAltPrev = hasAlternatives && altCurrent > 0;
-  const canAltNext = hasAlternatives && altCurrent < alternativeCount - 1;
+  const altTotalCount = Math.max(0, alternativesTotalCount ?? alternativeCount);
+  const altDisplayCurrent = Math.max(
+    0,
+    Math.min(
+      Math.max(0, selectedAlternativeDisplayIndex ?? selectedAlternativeIndex),
+      Math.max(0, altTotalCount - 1),
+    ),
+  );
+  const canAltPrev = alternativesInteractive && hasAlternatives && altCurrent > 0;
+  const canAltNext = alternativesInteractive && hasAlternatives && altCurrent < alternativeCount - 1;
+  const canRequestMoreAlternatives =
+    alternativesInteractive &&
+    hasAlternatives &&
+    !generationBlocked &&
+    assignmentsNonEmpty(effectiveAssignments) &&
+    typeof onRequestMoreAlternatives === "function";
 
   const handleDelete = useCallback(async () => {
     if (readOnly) return;
@@ -552,8 +577,8 @@ export function PlanningV2ActionBar({
         className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/70 dark:border-zinc-800 dark:bg-zinc-900/90"
       >
         <div className="mx-auto grid w-full max-w-none grid-cols-1 place-items-center gap-3 px-3 py-3 text-sm md:gap-4 md:py-4 sm:px-6">
-          <div className="order-2 flex flex-wrap items-center justify-center gap-2 md:order-1 md:justify-center [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
-            <div className="flex w-full flex-wrap items-center justify-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+          <div className="order-2 flex w-full flex-col items-center justify-center gap-2 md:order-1 md:gap-2">
+            <div className="flex w-full flex-nowrap items-center justify-center gap-2 overflow-x-auto [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
               {generationRunning && (
                 <button
                   type="button"
@@ -567,7 +592,7 @@ export function PlanningV2ActionBar({
               )}
               <div
                 className={
-                  "inline-flex overflow-hidden rounded-md border disabled:opacity-60 " +
+                  "inline-flex shrink-0 overflow-hidden rounded-md border disabled:opacity-60 " +
                   (generationBlocked ? "border-zinc-300 dark:border-zinc-600" : "border-[#00A8E0]")
                 }
               >
@@ -645,7 +670,7 @@ export function PlanningV2ActionBar({
               </div>
 
               {showAutoManual && (
-                <div className="flex items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
+                <div className="flex shrink-0 items-center gap-2 [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -689,63 +714,92 @@ export function PlanningV2ActionBar({
                     </svg>
                     ידני
                   </button>
-                  {hasAlternatives ? (
-                    <div className="inline-flex flex-col gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
-                      <div className="text-center text-[10px] font-medium text-zinc-600 dark:text-zinc-300">חלופות</div>
-                      <div className="inline-flex items-center gap-1">
-                        {alternativesFiltered ? (
-                          <span
-                            className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-                            title={
-                              typeof alternativesTotalCount === "number"
-                                ? `מסונן: ${alternativeCount}/${alternativesTotalCount}`
-                                : "מסונן לפי פילטרים"
-                            }
-                          >
-                            מסונן
-                          </span>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => canAltPrev && onSelectedAlternativeChange(altCurrent - 1)}
-                          disabled={!canAltPrev}
-                          className={
-                            "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
-                            (canAltPrev
-                              ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                              : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
-                          }
-                          aria-label="אלטרנטיבה קודמת"
-                        >
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
-                            <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
-                          </svg>
-                        </button>
-                        <span className="min-w-14 text-center text-xs font-medium text-zinc-700 dark:text-zinc-200" dir="ltr">
-                          {altCurrent + 1}/{alternativeCount}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => canAltNext && onSelectedAlternativeChange(altCurrent + 1)}
-                          disabled={!canAltNext}
-                          className={
-                            "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
-                            (canAltNext
-                              ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                              : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
-                          }
-                          aria-label="אלטרנטיבה הבאה"
-                        >
-                          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
-                            <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               )}
             </div>
+
+            {showAutoManual && hasAlternatives && alternativesInteractive ? (
+              <div className="flex w-full justify-center">
+                <div className="inline-flex flex-col gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
+                  <div className="text-center text-[10px] font-medium text-zinc-600 dark:text-zinc-300">חלופות</div>
+                  <div className="inline-flex items-center gap-1">
+                    {alternativesFiltered ? (
+                      <span
+                        className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                        title={
+                          typeof alternativesTotalCount === "number"
+                            ? `מסונן: ${alternativeCount}/${alternativesTotalCount}`
+                            : "מסונן לפי פילטרים"
+                        }
+                      >
+                        {typeof alternativesTotalCount === "number" ? `מסונן ${alternativeCount}/${alternativesTotalCount}` : "מסונן"}
+                      </span>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!canAltPrev) return;
+                        onSelectedAlternativeChange(altCurrent - 1);
+                      }}
+                      disabled={!canAltPrev}
+                      className={
+                        "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
+                        (canAltPrev
+                          ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
+                      }
+                      aria-label="אלטרנטיבה קודמת"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+                        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
+                      </svg>
+                    </button>
+                    <span className="min-w-14 text-center text-xs font-medium text-zinc-700 dark:text-zinc-200" dir="ltr">
+                      {altDisplayCurrent + 1}/{altTotalCount || alternativeCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!canAltNext) return;
+                        onSelectedAlternativeChange(altCurrent + 1);
+                      }}
+                      disabled={!canAltNext}
+                      className={
+                        "inline-flex items-center justify-center rounded-md border px-2 py-1 text-xs " +
+                        (canAltNext
+                          ? "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                          : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
+                      }
+                      aria-label="אלטרנטיבה הבאה"
+                    >
+                      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+                        <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!canRequestMoreAlternatives) return;
+                        onRequestMoreAlternatives?.();
+                      }}
+                      disabled={!canRequestMoreAlternatives}
+                      className={
+                        "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs whitespace-nowrap " +
+                        (canRequestMoreAlternatives
+                          ? "border-[#00A8E0] bg-[#00A8E0] text-white hover:bg-[#0092c6]"
+                          : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
+                      }
+                      title="יצירת חלופות נוספות"
+                    >
+                      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden>
+                        <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />
+                      </svg>
+                      עוד
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex w-full flex-wrap items-center justify-center gap-2 md:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:flex-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
               <button

@@ -52,7 +52,8 @@ export function usePlanningV2WeekPlan(siteId: string, weekStart: Date) {
   const [plan, setPlan] = useState<V2WeekPlanData>(null);
   const [loading, setLoading] = useState(true);
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) {
       setPlan(null);
@@ -60,7 +61,7 @@ export function usePlanningV2WeekPlan(siteId: string, weekStart: Date) {
       return;
     }
     const isoWeek = getWeekKeyISO(weekStart);
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const [fromDirector, fromShared, fromAuto] = await Promise.all([
         fetchWeekPlanScope(siteId, isoWeek, "director"),
@@ -86,7 +87,7 @@ export function usePlanningV2WeekPlan(siteId: string, weekStart: Date) {
     } catch {
       setPlan(null);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [siteId, weekStart]);
 

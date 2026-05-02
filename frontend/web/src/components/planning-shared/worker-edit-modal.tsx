@@ -20,7 +20,7 @@ export type WorkerEditModalProps = {
   editingWorkerLinkedSiteNames: string[];
   dayDefs: readonly DayDef[];
   allShiftNames: string[];
-  newWorkerAvailability: Record<string, string[]>;
+  newWorkerAvailability: Record<string, string[]> & { _stations?: string[] };
   workerAvailabilityOverlay?: Record<string, string[]>;
   onToggleAvailability: (dayKey: string, shiftName: string) => void;
   onToggleAvailabilityForAllDays: (shiftName: string | undefined, checked: boolean) => void;
@@ -42,6 +42,9 @@ export type WorkerEditModalProps = {
   onDelete: () => void | Promise<void>;
   workerModalSaving: boolean;
   onSave: () => void | Promise<void>;
+  /** Plusieurs עמדות sur ce site — sélection des postes autorisés pour la semaine. */
+  stationPickerOptions?: { index: number; label: string }[];
+  onToggleStation?: (stationIndex: number, checked: boolean) => void;
 };
 
 export function WorkerEditModal({
@@ -72,6 +75,8 @@ export function WorkerEditModal({
   onDelete,
   workerModalSaving,
   onSave,
+  stationPickerOptions = [],
+  onToggleStation,
 }: WorkerEditModalProps) {
   if (!open) return null;
 
@@ -164,6 +169,32 @@ export function WorkerEditModal({
               </div>
             </div>
           )}
+          {stationPickerOptions.length > 1 && typeof onToggleStation === "function" ? (
+            <div className="mt-3 rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-700">
+              <div className="mb-2 block text-sm font-semibold">עמדות מורשות השבוע באתר זה</div>
+              <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+                ברירת המחדל: כל העמדות. ניתן להגביל את העובד לעמדות נבחרות בלבד.
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-3 text-sm">
+                {stationPickerOptions.map(({ index, label }) => {
+                  const st = newWorkerAvailability._stations;
+                  const restricted = Array.isArray(st) && st.length > 0;
+                  const checked = !restricted || (st || []).includes(String(index));
+                  return (
+                    <label key={index} className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => onToggleStation(index, e.target.checked)}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           <div className="mt-3 text-center">
             <div className="mb-1 block text-sm font-semibold">זמינות לפי יום/משמרת</div>
             <div className="space-y-2">

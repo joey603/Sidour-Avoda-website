@@ -92,6 +92,47 @@ export function usePlanningV2WorkerModals(
     [allShiftNames],
   );
 
+  const stationPickerOptions = useMemo(() => {
+    const raw = (site?.config?.stations as unknown[]) || [];
+    if (!Array.isArray(raw) || raw.length <= 1) return [] as { index: number; label: string }[];
+    return raw.map((st, index) => ({
+      index,
+      label: String((st as { name?: string })?.name || "").trim() || `עמדה ${index + 1}`,
+    }));
+  }, [site]);
+
+  const toggleWorkerStation = useCallback(
+    (stationIndex: number, checked: boolean) => {
+      setNewWorkerAvailability((prev) => {
+        if (stationPickerOptions.length <= 1) return prev;
+        const allIdx = stationPickerOptions.map((o) => o.index);
+        const prevListed = prev._stations;
+        const prevSet = new Set(
+          (Array.isArray(prevListed) ? prevListed : [])
+            .map((s) => parseInt(String(s), 10))
+            .filter((n) => Number.isFinite(n)),
+        );
+        const effective =
+          !Array.isArray(prevListed) || prevListed.length === 0 ? new Set(allIdx) : prevSet;
+        const next = new Set(effective);
+        if (checked) next.add(stationIndex);
+        else next.delete(stationIndex);
+        if (next.size === 0) {
+          toast.info("נדרשת לפחות עמדה אחת — נשארו כל העמדות.");
+          const { _stations: _drop, ...rest } = prev;
+          return { ...rest } as WorkerAvailability;
+        }
+        if (next.size >= allIdx.length) {
+          const { _stations: _drop, ...rest } = prev;
+          return { ...rest } as WorkerAvailability;
+        }
+        const sorted = allIdx.filter((i) => next.has(i)).map((i) => String(i));
+        return { ...prev, _stations: sorted };
+      });
+    },
+    [stationPickerOptions],
+  );
+
   const workerModalBulkSelection = useMemo(() => {
     const isAllSelected = (shiftName?: string) => {
       if (!shiftName) return false;
@@ -356,6 +397,7 @@ export function usePlanningV2WorkerModals(
         return;
       }
 
+      const { _stations: _newWorkerStations, ...availabilityForProfile } = newWorkerAvailability;
       const result = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
@@ -364,7 +406,7 @@ export function usePlanningV2WorkerModals(
           phone: null,
           max_shifts: newWorkerMax,
           roles: newWorkerRoles,
-          availability: newWorkerAvailability,
+          availability: availabilityForProfile,
           week_iso: getWeekKeyISO(weekStart),
         }),
       });
@@ -480,6 +522,8 @@ export function usePlanningV2WorkerModals(
       onDelete: handleDeleteWorker,
       workerModalSaving,
       onSave: handleSaveWorker,
+      stationPickerOptions,
+      onToggleStation: toggleWorkerStation,
     },
     linkedDialogProps: {
       open: !!linkedAvailabilityConfirmSites && linkedAvailabilityConfirmSites.length > 0,

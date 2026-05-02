@@ -97,6 +97,8 @@ type PlanningV2AssignmentsSummaryProps = {
   pulls?: PlanningV2PullsMap | null;
   assignmentVariants?: Array<Record<string, Record<string, string[][]>>>;
   pullVariants?: PlanningV2PullsMap[];
+  /** Faux tant que יצירת תכנון n’a pas encore produit d’alternatives (bloque filtres multi-variantes). */
+  alternativesEnabled?: boolean;
   selectedAlternativeIndex?: number;
   onSelectedAlternativeChange?: (index: number) => void;
   onFilteredAlternativesChange?: (payload: { indices: number[]; hasActiveFilters: boolean }) => void;
@@ -117,6 +119,7 @@ export function PlanningV2AssignmentsSummary({
   pulls,
   assignmentVariants = [],
   pullVariants = [],
+  alternativesEnabled = true,
   selectedAlternativeIndex = 0,
   onSelectedAlternativeChange,
   onFilteredAlternativesChange,
@@ -233,7 +236,6 @@ export function PlanningV2AssignmentsSummary({
 
   const persistLocalFilterForWorker = useMemo(
     () => (workerName: string, valueOrNull: number | null) => {
-      if (!showMultiSiteTotalColumn) return;
       const cleanWorker = String(workerName || "").trim();
       if (!cleanWorker) return;
       setPersistedMultiSiteFilters((prev) => {
@@ -254,7 +256,7 @@ export function PlanningV2AssignmentsSummary({
         return next;
       });
     },
-    [showMultiSiteTotalColumn, siteId, multiSiteFiltersStorageKey],
+    [siteId, multiSiteFiltersStorageKey],
   );
   const hasLocalAssignmentCountFilters = useMemo(
     () => Object.values(assignmentCountFilters).some((v) => String(v || "").trim() !== ""),
@@ -481,7 +483,18 @@ export function PlanningV2AssignmentsSummary({
 
   const lastFilterNotifyKey = useRef<string>("");
   useEffect(() => {
+    lastFilterNotifyKey.current = "";
+  }, [alternativesEnabled]);
+
+  useEffect(() => {
     if (!onFilteredAlternativesChange) return;
+    if (!alternativesEnabled) {
+      const notifyKey = "alternatives-locked|nofilter";
+      if (notifyKey === lastFilterNotifyKey.current) return;
+      lastFilterNotifyKey.current = notifyKey;
+      onFilteredAlternativesChange({ indices: [], hasActiveFilters: false });
+      return;
+    }
     const notifyKey = `${filteredAlternativeIndicesKey}|${hasActiveAssignmentCountFilters ? 1 : 0}`;
     if (notifyKey === lastFilterNotifyKey.current) return;
     lastFilterNotifyKey.current = notifyKey;
@@ -490,6 +503,7 @@ export function PlanningV2AssignmentsSummary({
       hasActiveFilters: hasActiveAssignmentCountFilters || hasCrossSiteAlternativeFilters,
     });
   }, [
+    alternativesEnabled,
     onFilteredAlternativesChange,
     combinedFilteredAlternativeIndices,
     filteredAlternativeIndicesKey,
@@ -671,9 +685,14 @@ export function PlanningV2AssignmentsSummary({
                       max={maxAllowed}
                       allowedOptions={boundedAllowedCounts}
                       placeholder={String(c)}
+                      disabled={!alternativesEnabled}
                       className={filterSelectClass}
                       inputAriaLabel={`מספר משמרות עבור ${nm}`}
-                      title={`אפשרויות: ${boundedAllowedCounts.join(", ")}`}
+                      title={
+                        !alternativesEnabled
+                          ? "יש ליצור תכנון לפני סינון חלופות"
+                          : `אפשרויות: ${boundedAllowedCounts.join(", ")}`
+                      }
                     />
                   ) : (
                     c

@@ -1,8 +1,65 @@
 "use client";
 
-import { useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { toast } from "sonner";
 import type { PlanningV2PullEntry, PlanningWorker, SiteSummary } from "../types";
+
+function isRealPullEntry(entry: unknown): boolean {
+  const e = entry as PlanningV2PullEntry | undefined;
+  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
+}
+
+/** Plage שינוי שעות affichée sous le nom (rouge), clé = même slot que משיכה. */
+/** Vérifie le format HH:MM et si [start,end] garde est dans la plage משמרת (pour confirmation optionnelle). */
+function checkGuardDisplayVsShift(ed: {
+  shiftStart: string;
+  shiftEnd: string;
+  start: string;
+  end: string;
+}): { formatOk: false } | { formatOk: true; inRange: boolean } {
+  const toMinutesLocal = (t: string): number | null => {
+    const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+    return hh * 60 + mm;
+  };
+  const s0 = toMinutesLocal(ed.shiftStart);
+  const e0 = toMinutesLocal(ed.shiftEnd);
+  const gS = toMinutesLocal(ed.start);
+  const gE = toMinutesLocal(ed.end);
+  if ([s0, e0, gS, gE].some((x) => x == null)) return { formatOk: false };
+  const s = s0 as number;
+  let e = e0 as number;
+  const crossesMidnight = e <= s;
+  if (crossesMidnight) e += 24 * 60;
+  const abs = (m: number) => (crossesMidnight && m < s ? m + 24 * 60 : m);
+  const within = (m: number) => {
+    const am = abs(m);
+    return am >= s && am <= e;
+  };
+  const okRange = (startM: number, endM: number) =>
+    within(startM) && within(endM) && abs(startM) <= abs(endM);
+  return { formatOk: true, inRange: okRange(gS as number, gE as number) };
+}
+
+function guardDisplayTimeForSlot(
+  pulls: Record<string, unknown> | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  slotIdx: number,
+): string | null {
+  if (!pulls) return null;
+  const key = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
+  const e = pulls[key] as PlanningV2PullEntry | undefined;
+  const s = String(e?.guardDisplay?.start || "").trim();
+  const en = String(e?.guardDisplay?.end || "").trim();
+  if (s && en) return `${s}–${en}`;
+  return null;
+}
 import { addDays, formatHebDate } from "../lib/week";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
@@ -24,7 +81,9 @@ import {
   hoursFromConfig,
   hoursOf,
   isDayActive,
+  isShiftEnabledForStation,
   planningCellNames,
+  pullSlotsAllowDistinctWorkers,
   shiftNamesFromSite,
   stationHasIsolatedHole,
 } from "../lib/station-grid-helpers";
@@ -55,6 +114,11 @@ type PlanningV2StationWeekGridProps = {
   manualEditable?: boolean;
   pullsModeStationIdx?: number | null;
   onTogglePullsModeStation?: (stationIdx: number) => void;
+  /** Mode שינוי שעות — clic sur une cellule occupée pour fixer arrivée / fin d’affichage (rouge). */
+  shiftHoursModeStationIdx?: number | null;
+  onToggleShiftHoursModeStation?: (stationIdx: number) => void;
+  onUpsertGuardDisplay?: (key: string, start: string, end: string) => boolean | void | Promise<boolean | void>;
+  onRemoveGuardDisplay?: (key: string) => boolean | void | Promise<boolean | void>;
   onResetStation?: (stationIdx: number) => void;
   draggingWorkerName?: string | null;
   onDraggingWorkerChange?: (workerName: string | null) => void;
@@ -194,7 +258,8 @@ function countPullEntriesInCell(
   const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
   let n = 0;
   for (const k of Object.keys(pulls)) {
-    if (String(k).startsWith(prefix)) n++;
+    if (!String(k).startsWith(prefix)) continue;
+    if (isRealPullEntry(pulls[k])) n++;
   }
   return n;
 }
@@ -229,6 +294,7 @@ function mergeCellRawWithPulls(
     if (pulls) {
       Object.entries(pulls).forEach(([k, entry]) => {
         if (!String(k).startsWith(cellPrefix)) return;
+        if (!isRealPullEntry(entry)) return;
         const e = entry as { before?: { name?: string }; after?: { name?: string } };
         const b = String(e?.before?.name || "").trim();
         const a = String(e?.after?.name || "").trim();
@@ -379,6 +445,7 @@ export function PlanningV2StationWeekGrid({
   isManual = false,
   manualEditable = false,
   pullsModeStationIdx = null,
+  shiftHoursModeStationIdx = null,
   draggingWorkerName = null,
   onDraggingWorkerChange,
   availabilityByWorkerName = {},
@@ -386,7 +453,10 @@ export function PlanningV2StationWeekGrid({
   onManualSlotDragOutside,
   onUpsertPull,
   onRemovePull,
+  onUpsertGuardDisplay,
+  onRemoveGuardDisplay,
   onTogglePullsModeStation,
+  onToggleShiftHoursModeStation,
   onResetStation,
   onManualSlotDrop,
   summaryHighlightWorkerName = null,
@@ -411,8 +481,25 @@ export function PlanningV2StationWeekGrid({
     afterStart: string;
     afterEnd: string;
   }>(null);
+  const [shiftHoursEditor, setShiftHoursEditor] = useState<null | {
+    key: string;
+    dayKey: string;
+    shiftName: string;
+    stationIdx: number;
+    slotIdx: number;
+    workerName: string;
+    start: string;
+    end: string;
+    shiftStart: string;
+    shiftEnd: string;
+  }>(null);
+  const [shiftHoursOorConfirm, setShiftHoursOorConfirm] = useState(false);
   const dragSourceRef = useRef<ManualDragSource | null>(null);
   const didDropRef = useRef(false);
+
+  useEffect(() => {
+    if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
+  }, [shiftHoursEditor]);
   const stations = (Array.isArray(site?.config?.stations) ? site?.config?.stations : []) as Record<
     string,
     unknown
@@ -591,7 +678,11 @@ export function PlanningV2StationWeekGrid({
             key={idx}
             className={
               "rounded-xl border border-zinc-200 p-3 dark:border-zinc-800 " +
-              (pullsModeStationIdx === idx ? "ring-2 ring-orange-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950" : "")
+              (pullsModeStationIdx === idx
+                ? "ring-2 ring-orange-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
+                : shiftHoursModeStationIdx === idx
+                  ? "ring-2 ring-yellow-500 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
+                  : "")
             }
           >
             <div className="mb-2 flex items-center justify-between">
@@ -601,6 +692,34 @@ export function PlanningV2StationWeekGrid({
               <div className="flex items-center gap-1">
                 {isManual && manualEditable && (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isSavedMode && !editingSaved) return;
+                        if (shiftHoursModeStationIdx === idx) {
+                          onToggleShiftHoursModeStation?.(idx);
+                          return;
+                        }
+                        if (!assignmentsNonEmpty(assignmentsSafe)) {
+                          toast.error("אין תכנון פעיל", {
+                            description: "צור תכנון כדי לשנות שעות בתצוגה",
+                          });
+                          return;
+                        }
+                        onToggleShiftHoursModeStation?.(idx);
+                      }}
+                      disabled={isSavedMode && !editingSaved}
+                      className={
+                        "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
+                        (isSavedMode && !editingSaved
+                          ? "cursor-not-allowed border-zinc-200 text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                          : shiftHoursModeStationIdx === idx
+                            ? "border-yellow-500 bg-yellow-500 text-white hover:bg-yellow-600 dark:border-yellow-600 dark:bg-yellow-600 dark:hover:bg-yellow-700"
+                            : "border-yellow-400 text-yellow-600 hover:bg-yellow-50 dark:border-yellow-700 dark:text-yellow-400 dark:hover:bg-yellow-900/20")
+                      }
+                    >
+                      שינוי שעות
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -686,10 +805,7 @@ export function PlanningV2StationWeekGrid({
                       );
                     }
                     return shiftNamesAll.map((sn) => {
-                      const stationShift = ((st.shifts as unknown[]) || []).find(
-                        (x) => (x as { name?: string })?.name === sn,
-                      ) as { name?: string; enabled?: boolean } | undefined;
-                      const shiftRowEnabled = !!stationShift?.enabled;
+                      const shiftRowEnabled = isShiftEnabledForStation(st, sn);
                       return (
                       <tr key={sn} className="border-b last:border-0 dark:border-zinc-800">
                         <td className="w-10 px-0 py-0.5 md:w-28 md:px-2 md:py-2">
@@ -725,10 +841,12 @@ export function PlanningV2StationWeekGrid({
                           const dateCell = addDays(weekStart, dayIdx);
                           const isPastDay = dateCell < today0;
                           const pullsActiveHere = pullsModeStationIdx === idx;
+                          const shiftHoursActiveHere = shiftHoursModeStationIdx === idx;
                           const dndHere =
                             manualEditable &&
                             typeof onManualSlotDrop === "function" &&
-                            pullsModeStationIdx !== idx;
+                            pullsModeStationIdx !== idx &&
+                            shiftHoursModeStationIdx !== idx;
                           const cellRaw = mergeCellRawWithPulls(
                             assignmentsSafe,
                             pulls || null,
@@ -753,7 +871,9 @@ export function PlanningV2StationWeekGrid({
                           );
                           const { roleHints } = baseRoleDisplay;
                           const displayCellRaw =
-                            manualEditable ? cellRaw : alignNamesToRoleSlots(workers, cellRaw, roleHints);
+                            manualEditable
+                              ? cellRaw
+                              : alignNamesToRoleSlots(workers, cellRaw, roleHints, baseRoleDisplay.roleForSlot);
                           const alignedRoleDisplay =
                             manualEditable || displayCellRaw === cellRaw
                               ? null
@@ -794,9 +914,10 @@ export function PlanningV2StationWeekGrid({
                               const nextDayKey = DAY_COLS[nextRef.dayIdx]?.key;
                               const prevShift = shiftNamesAll[prevRef.shiftIdx];
                               const nextShift = shiftNamesAll[nextRef.shiftIdx];
-                              const prevNames = planningCellNames(assignmentsSafe?.[prevDayKey]?.[prevShift]?.[idx]);
-                              const nextNames = planningCellNames(assignmentsSafe?.[nextDayKey]?.[nextShift]?.[idx]);
-                              return prevNames.length > 0 && nextNames.length > 0;
+                              return pullSlotsAllowDistinctWorkers(
+                                assignmentsSafe?.[prevDayKey]?.[prevShift]?.[idx],
+                                assignmentsSafe?.[nextDayKey]?.[nextShift]?.[idx],
+                              );
                             })();
                           const pullHighlightByNormName = buildPullHighlightKindByNormName(
                             pulls || null,
@@ -821,6 +942,7 @@ export function PlanningV2StationWeekGrid({
                               dayKey: d.key,
                               shiftName: sn,
                               stationIndex: idx,
+                              stationsCount: stations.length,
                               roleHint,
                               dragSource: dragSourceRef.current,
                             });
@@ -1040,11 +1162,14 @@ export function PlanningV2StationWeekGrid({
                                       : null;
                                     const ring = pullRingClass(pulls || null, d.key, sn, idx, nm);
                                     const nmKey = normName(nm);
+                                    const summaryPickActive =
+                                      !!summaryHighlightNorm && !!nmKey && nmKey === summaryHighlightNorm;
                                     const pullRel = pullHighlightByNormName.get(nmKey);
                                     const pullAdjacentRing =
                                       pullRel === "before" || pullRel === "after" ? " ring-2 ring-orange-400" : "";
                                     const pullOrangeOutline =
-                                      ring.trim().length > 0 || pullAdjacentRing.trim().length > 0;
+                                      !summaryPickActive &&
+                                      (ring.trim().length > 0 || pullAdjacentRing.trim().length > 0);
                                     const expKey = expandedKeyFor(
                                       d.key,
                                       sn,
@@ -1059,6 +1184,14 @@ export function PlanningV2StationWeekGrid({
                                       idx,
                                       nm,
                                     );
+                                    const guardTimeStr = guardDisplayTimeForSlot(
+                                      pulls || null,
+                                      d.key,
+                                      sn,
+                                      idx,
+                                      slotIdx,
+                                    );
+                                    const redTimeLine = guardTimeStr || pullTime;
                                     const showDraftFixedPin = shouldShowDraftFixedPinForWorker(
                                       draftFixedAssignmentsSnapshot,
                                       isSavedMode,
@@ -1095,8 +1228,6 @@ export function PlanningV2StationWeekGrid({
                                     const hasPullOnSlot =
                                       !!String(existingPull?.before?.name || "").trim() ||
                                       !!String(existingPull?.after?.name || "").trim();
-                                    const summaryPickActive =
-                                      !!summaryHighlightNorm && !!nmKey && nmKey === summaryHighlightNorm;
                                     return (
                                       <div
                                         key={`${d.key}-${sn}-${idx}-slot-${slotIdx}-${nmKey}`}
@@ -1106,7 +1237,7 @@ export function PlanningV2StationWeekGrid({
                                             ? "z-50 scale-[1.15] origin-center will-change-transform transition-transform duration-150 ease-out"
                                             : "") +
                                           (summaryPickActive
-                                            ? " z-[25] rounded-full transition-shadow duration-200"
+                                            ? " z-20 rounded-full transition-shadow duration-200"
                                             : "")
                                         }
                                         onDragEnter={
@@ -1166,15 +1297,15 @@ export function PlanningV2StationWeekGrid({
                                             (expandedSlotKey === expKey
                                               ? " z-30 w-[18rem] max-w-[18rem]"
                                               : "") +
-                                            ring +
-                                            pullAdjacentRing +
-                                            (hasPullOnSlot ? " cursor-pointer" : "") +
-                                            (((!dragNm && isSlotHovered) || summaryPickActive)
-                                              ? " z-[40] scale-110 ring-2 ring-[#00A8E0] " +
-                                                (summaryPickActive
-                                                  ? "ring-offset-1 ring-offset-white dark:ring-offset-zinc-950 "
-                                                  : "")
-                                              : "") +
+                                            (summaryPickActive ? "" : ring + pullAdjacentRing) +
+                                            (hasPullOnSlot || shiftHoursActiveHere ? " cursor-pointer" : "") +
+                                            (shiftHoursActiveHere && !summaryPickActive ? " ring-2 ring-yellow-500" : "") +
+                                            ((!dragNm && isSlotHovered && !summaryPickActive
+                                              ? " z-[40] scale-110 ring-2 ring-[#00A8E0] "
+                                              : "") ||
+                                              (summaryPickActive
+                                                ? " relative z-[21] scale-110 ring-2 ring-[#00A8E0] ring-offset-2 ring-offset-white dark:ring-offset-zinc-950 "
+                                                : "")) +
                                             (dragNm && fillOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
                                             (dragNm && hasLinkedConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
                                             (dragNm && fillOk && isSlotHovered
@@ -1212,6 +1343,24 @@ export function PlanningV2StationWeekGrid({
                                             setExpandedSlotKey((k) => (k === expKey ? null : k))
                                           }
                                           onClick={() => {
+                                            if (shiftHoursActiveHere && nmTrim && onUpsertGuardDisplay) {
+                                              const hours = hoursFromConfig(st, sn) || hoursOf(sn);
+                                              const parsed = parseHoursRange(hours);
+                                              const gd = pullsMap[slotPullKey]?.guardDisplay;
+                                              setShiftHoursEditor({
+                                                key: slotPullKey,
+                                                dayKey: d.key,
+                                                shiftName: sn,
+                                                stationIdx: idx,
+                                                slotIdx,
+                                                workerName: nmTrim,
+                                                start: String(gd?.start || parsed?.start || "00:00"),
+                                                end: String(gd?.end || parsed?.end || "23:59"),
+                                                shiftStart: parsed?.start || "00:00",
+                                                shiftEnd: parsed?.end || "23:59",
+                                              });
+                                              return;
+                                            }
                                             if (!hasPullOnSlot) return;
                                             const used = new Set<string>();
                                             const prefix = `${d.key}|${sn}|${idx}|`;
@@ -1295,12 +1444,12 @@ export function PlanningV2StationWeekGrid({
                                                 {nm}
                                               </span>
                                             </span>
-                                            {pullTime ? (
+                                            {redTimeLine ? (
                                               <span
                                                 dir="ltr"
-                                                className="mt-0.5 max-w-full truncate text-[6px] leading-tight text-zinc-800/85 dark:text-zinc-200/85 md:text-[10px]"
+                                                className="mt-0.5 max-w-full truncate text-[6px] font-medium leading-tight text-red-600 dark:text-red-400 md:text-[10px]"
                                               >
-                                                {pullTime}
+                                                {redTimeLine}
                                               </span>
                                             ) : null}
                                           </span>
@@ -1564,6 +1713,151 @@ export function PlanningV2StationWeekGrid({
                 }}
               >
                 שמירה
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {shiftHoursEditor ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShiftHoursEditor(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-lg font-semibold text-yellow-800 dark:text-yellow-200">שינוי שעות</div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setShiftHoursEditor(null)}
+                aria-label="סגור"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+              </button>
+            </div>
+            <div className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
+              {(() => {
+                const dayLabels: Record<string, string> = {
+                  sun: "א'",
+                  mon: "ב'",
+                  tue: "ג'",
+                  wed: "ד'",
+                  thu: "ה'",
+                  fri: "ו'",
+                  sat: "ש'",
+                };
+                const dayLabel = dayLabels[shiftHoursEditor.dayKey] || shiftHoursEditor.dayKey;
+                return `${dayLabel} • ${shiftHoursEditor.shiftName} • עמדה ${shiftHoursEditor.stationIdx + 1}`;
+              })()}
+            </div>
+            <div className="rounded-md border border-yellow-200 p-3 dark:border-yellow-700">
+              <div className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-100">
+                {shiftHoursEditor.workerName}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-zinc-500">
+                  התחלת משמרת
+                  <TimePicker
+                    value={shiftHoursEditor.start}
+                    onChange={(v) => setShiftHoursEditor((p) => (p ? { ...p, start: v } : p))}
+                    className="mt-1 h-9 w-full rounded-md border border-yellow-200 bg-white px-3 text-sm dark:border-yellow-700 dark:bg-zinc-900"
+                    dir="ltr"
+                  />
+                </label>
+                <label className="text-xs text-zinc-500">
+                  סיום משמרת
+                  <TimePicker
+                    value={shiftHoursEditor.end}
+                    onChange={(v) => setShiftHoursEditor((p) => (p ? { ...p, end: v } : p))}
+                    className="mt-1 h-9 w-full rounded-md border border-yellow-200 bg-white px-3 text-sm dark:border-yellow-700 dark:bg-zinc-900"
+                    dir="ltr"
+                  />
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+                onClick={async () => {
+                  const res = await onRemoveGuardDisplay?.(shiftHoursEditor.key);
+                  if (res !== false) setShiftHoursEditor(null);
+                }}
+              >
+                מחק
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setShiftHoursEditor(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-yellow-500 px-4 py-2 text-sm text-yellow-950 hover:bg-yellow-600"
+                onClick={async () => {
+                  if (!onUpsertGuardDisplay) return;
+                  const check = checkGuardDisplayVsShift(shiftHoursEditor);
+                  if (!check.formatOk) {
+                    toast.error("שעות לא תקינות", { description: "פורמט השעה חייב להיות HH:MM" });
+                    return;
+                  }
+                  if (!check.inRange) {
+                    setShiftHoursOorConfirm(true);
+                    return;
+                  }
+                  const res = await onUpsertGuardDisplay(shiftHoursEditor.key, shiftHoursEditor.start, shiftHoursEditor.end);
+                  if (res !== false) setShiftHoursEditor(null);
+                }}
+              >
+                שמירה
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {shiftHoursOorConfirm && shiftHoursEditor ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShiftHoursOorConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-4 shadow-lg dark:border-amber-800 dark:bg-zinc-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-base font-semibold text-zinc-900 dark:text-zinc-100">שימו לב</div>
+            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+              השעות שבחרת אינן בתוך טווח המשמרת. האם לשמור בכל זאת?
+            </p>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setShiftHoursOorConfirm(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-yellow-500 px-4 py-2 text-sm text-yellow-950 hover:bg-yellow-600"
+                onClick={async () => {
+                  if (!onUpsertGuardDisplay || !shiftHoursEditor) return;
+                  setShiftHoursOorConfirm(false);
+                  const res = await onUpsertGuardDisplay(
+                    shiftHoursEditor.key,
+                    shiftHoursEditor.start,
+                    shiftHoursEditor.end,
+                  );
+                  if (res !== false) setShiftHoursEditor(null);
+                }}
+              >
+                שמור בכל זאת
               </button>
             </div>
           </div>

@@ -3,12 +3,16 @@ from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 import asyncio
 from fastapi import Body, Response
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 import re
+import os
+import threading
+import time
 from datetime import datetime, timedelta
 from copy import deepcopy
+from contextlib import contextmanager
 
 from .deps import require_role, get_db
 from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole, DirectorAutoPlanningConfig
@@ -46,6 +50,15 @@ router = APIRouter(prefix="/director/sites", tags=["sites"])
 
 
 _WEEK_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_GENERATION_CONCURRENCY_LIMIT = max(1, min(int(os.getenv("PLANNING_MAX_CONCURRENT_GENERATIONS", "5") or "5"), 8))
+_DIRECTOR_GENERATION_CONCURRENCY_LIMIT = max(
+    1,
+    min(int(os.getenv("PLANNING_MAX_CONCURRENT_GENERATIONS_PER_DIRECTOR", "1") or "1"), 4),
+)
+_GENERATION_SEMAPHORE = threading.BoundedSemaphore(_GENERATION_CONCURRENCY_LIMIT)
+_GENERATION_STATE_LOCK = threading.Lock()
+_ACTIVE_GENERATIONS: dict[str, dict[str, object]] = {}
+_ACTIVE_GENERATIONS_BY_DIRECTOR: dict[int, int] = {}
 
 
 def _validate_week_iso(week_iso: str) -> str:
@@ -58,6 +71,154 @@ def _validate_week_iso(week_iso: str) -> str:
 def _now_ms() -> int:
     import time
     return int(time.time() * 1000)
+
+
+def _new_generation_id() -> str:
+    return secrets.token_hex(8)
+
+
+def _generation_busy_detail(director_id: int | None = None) -> str:
+    with _GENERATION_STATE_LOCK:
+        active = list(_ACTIVE_GENERATIONS.values())
+        director_busy = (
+            director_id is not None
+            and _ACTIVE_GENERATIONS_BY_DIRECTOR.get(int(director_id), 0) >= _DIRECTOR_GENERATION_CONCURRENCY_LIMIT
+        )
+        active_count = len(_ACTIVE_GENERATIONS)
+    if director_busy:
+        return "Une génération de planning est déjà en cours pour ce directeur. Réessaie dans quelques instants."
+    if active_count >= _GENERATION_CONCURRENCY_LIMIT:
+        return "Le serveur a déjà atteint le nombre maximum de générations simultanées. Réessaie dans quelques instants."
+    if not active:
+        return "Une autre génération de planning est déjà en cours. Réessaie dans quelques instants."
+    summary = ", ".join(
+        f"{str(item.get('kind') or 'unknown')}@site:{item.get('site_id')}@director:{item.get('director_id')}"
+        for item in active[:3]
+    )
+    return f"Une autre génération de planning est déjà en cours ({summary}). Réessaie dans quelques instants."
+
+
+def _is_generation_busy_error(errors: list[str] | None) -> bool:
+    return any("déjà en cours" in str(err or "") for err in (errors or []))
+
+
+def _acquire_generation_slot(
+    *,
+    kind: str,
+    director_id: int | None,
+    site_id: int | None,
+    linked: bool,
+    generation_id: str | None = None,
+    wait_timeout_seconds: float | None = 0.0,
+) -> str | None:
+    deadline = None if wait_timeout_seconds is None else (
+        time.monotonic() + float(wait_timeout_seconds) if wait_timeout_seconds > 0 else 0.0
+    )
+    while True:
+        if deadline is None:
+            _GENERATION_SEMAPHORE.acquire()
+            acquired = True
+        elif deadline > 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            acquired = _GENERATION_SEMAPHORE.acquire(timeout=min(0.25, remaining))
+        else:
+            acquired = _GENERATION_SEMAPHORE.acquire(blocking=False)
+        if not acquired:
+            return None
+
+        director_busy = False
+        token = _new_generation_id()
+        payload = {
+            "token": token,
+            "kind": kind,
+            "director_id": director_id,
+            "site_id": site_id,
+            "linked": linked,
+            "generation_id": generation_id,
+            "started_at_ms": _now_ms(),
+        }
+        with _GENERATION_STATE_LOCK:
+            if director_id is not None and _ACTIVE_GENERATIONS_BY_DIRECTOR.get(int(director_id), 0) >= _DIRECTOR_GENERATION_CONCURRENCY_LIMIT:
+                director_busy = True
+            else:
+                _ACTIVE_GENERATIONS[token] = payload
+                if director_id is not None:
+                    _ACTIVE_GENERATIONS_BY_DIRECTOR[int(director_id)] = _ACTIVE_GENERATIONS_BY_DIRECTOR.get(int(director_id), 0) + 1
+                active_count = len(_ACTIVE_GENERATIONS)
+        if not director_busy:
+            logger.info(
+                "[GENERATION][LOCK] acquired token=%s kind=%s director=%s site=%s linked=%s active=%s limit=%s per_director_limit=%s",
+                token,
+                kind,
+                director_id,
+                site_id,
+                linked,
+                active_count,
+                _GENERATION_CONCURRENCY_LIMIT,
+                _DIRECTOR_GENERATION_CONCURRENCY_LIMIT,
+            )
+            return token
+
+        _GENERATION_SEMAPHORE.release()
+        if deadline == 0.0:
+            return None
+        if deadline is None:
+            time.sleep(0.1)
+            continue
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+
+
+def _release_generation_slot(token: str | None) -> None:
+    if not token:
+        return
+    with _GENERATION_STATE_LOCK:
+        existed = _ACTIVE_GENERATIONS.pop(token, None)
+        director_id = int(existed.get("director_id")) if existed and existed.get("director_id") is not None else None
+        if director_id is not None:
+            current = _ACTIVE_GENERATIONS_BY_DIRECTOR.get(director_id, 0)
+            if current <= 1:
+                _ACTIVE_GENERATIONS_BY_DIRECTOR.pop(director_id, None)
+            else:
+                _ACTIVE_GENERATIONS_BY_DIRECTOR[director_id] = current - 1
+        active_count = len(_ACTIVE_GENERATIONS)
+    if existed is not None:
+        _GENERATION_SEMAPHORE.release()
+        logger.info(
+            "[GENERATION][LOCK] released token=%s kind=%s director=%s site=%s active=%s",
+            token,
+            existed.get("kind"),
+            existed.get("director_id"),
+            existed.get("site_id"),
+            active_count,
+        )
+
+
+@contextmanager
+def _generation_slot_or_wait(
+    *,
+    kind: str,
+    director_id: int | None,
+    site_id: int | None,
+    linked: bool,
+    generation_id: str | None = None,
+    wait_timeout_seconds: float | None = None,
+):
+    token = _acquire_generation_slot(
+        kind=kind,
+        director_id=director_id,
+        site_id=site_id,
+        linked=linked,
+        generation_id=generation_id,
+        wait_timeout_seconds=wait_timeout_seconds,
+    )
+    if token is None:
+        raise HTTPException(status_code=429, detail=_generation_busy_detail(director_id))
+    try:
+        yield token
+    finally:
+        _release_generation_slot(token)
 
 
 def _week_start_date(dt: datetime) -> datetime:
@@ -222,27 +383,47 @@ def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> A
     )
 
 
+def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, list[str]], list[int]]:
+    """Extrait {jour: [משמרות]} et indices עמדה depuis l’override hebdo (_stations)."""
+    if not isinstance(ovr, dict):
+        return {}, []
+    avail: dict[str, list[str]] = {}
+    station_allow: list[int] = []
+    for day_key, shifts_list in ovr.items():
+        sk = str(day_key or "")
+        if sk in ("_stations", "_station_indices"):
+            if isinstance(shifts_list, list):
+                for x in shifts_list:
+                    try:
+                        station_allow.append(int(x))
+                    except (TypeError, ValueError):
+                        pass
+            continue
+        if sk.startswith("_"):
+            continue
+        if isinstance(shifts_list, list):
+            valid_shifts = [s for s in shifts_list if s]
+            if valid_shifts:
+                avail[sk] = valid_shifts
+    return avail, station_allow
+
+
 def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, dict[str, list[str]]] | None) -> list[dict]:
     overrides = weekly_overrides or {}
     workers: list[dict] = []
     for r in rows:
         ovr = overrides.get(r.name)
-        if isinstance(ovr, dict):
-            avail = {}
-            for day_key, shifts_list in ovr.items():
-                if isinstance(shifts_list, list):
-                    valid_shifts = [s for s in shifts_list if s]
-                    if valid_shifts:
-                        avail[day_key] = valid_shifts
-        else:
-            avail = {}
-        workers.append({
+        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
+        wd: dict = {
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
             "roles": r.roles or [],
             "availability": avail,
-        })
+        }
+        if station_allow:
+            wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
+        workers.append(wd)
     return workers
 
 
@@ -395,12 +576,101 @@ def _pull_target_shift_priority(shift_name: str) -> tuple[int, str]:
     return (3, str(shift_name or ""))
 
 
+def _count_split_day_same_worker_patterns(site_config: dict | None, assignments: dict | None) -> int:
+    """Count worker-days with morning+night around a noon staffed by someone else.
+
+    This captures the fatigue pattern:
+      worker A in the morning, worker B at noon, worker A at night.
+    If noon also contains A (for example after a pull), the pattern is not counted.
+    """
+    from .ai_solver import build_capacities_from_config
+
+    if not isinstance(assignments, dict):
+        return 0
+    days, shifts, _stations = build_capacities_from_config(site_config or {})
+    morning_shifts = [shift_name for shift_name in shifts if _is_morning_shift_name(shift_name)]
+    noon_shifts = [shift_name for shift_name in shifts if _is_noon_shift_name(shift_name)]
+    night_shifts = [shift_name for shift_name in shifts if _is_night_shift_name(shift_name)]
+    if not morning_shifts or not noon_shifts or not night_shifts:
+        return 0
+
+    def _names_for(day_key: str, shift_name: str) -> set[str]:
+        out: set[str] = set()
+        per_shift = (assignments.get(day_key) or {}).get(shift_name) or []
+        for raw_cell in per_shift:
+            if not isinstance(raw_cell, list):
+                continue
+            for raw_name in raw_cell:
+                name = _norm_name_local(raw_name)
+                if name:
+                    out.add(name)
+        return out
+
+    total = 0
+    for day_key in days:
+        morning_names: set[str] = set()
+        noon_names: set[str] = set()
+        night_names: set[str] = set()
+        for shift_name in morning_shifts:
+            morning_names.update(_names_for(day_key, shift_name))
+        for shift_name in noon_shifts:
+            noon_names.update(_names_for(day_key, shift_name))
+        for shift_name in night_shifts:
+            night_names.update(_names_for(day_key, shift_name))
+        if not noon_names:
+            continue
+        for worker_name in morning_names.intersection(night_names):
+            if worker_name in noon_names:
+                continue
+            if any(other_name != worker_name for other_name in noon_names):
+                total += 1
+    return total
+
+
+def _single_site_candidate_sort_key(
+    site: Site,
+    assignments: dict | None,
+    week_iso: str,
+    pulls: dict | None = None,
+) -> tuple[int, int, int, int]:
+    summary = _summarize_auto_planning_result(
+        site,
+        assignments if isinstance(assignments, dict) else {},
+        week_iso,
+        "candidate-rank",
+        pulls=pulls if isinstance(pulls, dict) else None,
+    )
+    assigned = int(summary.get("assigned_count") or 0)
+    required = int(summary.get("required_count") or 0)
+    holes = max(0, required - assigned)
+    split_count = _count_split_day_same_worker_patterns(site.config or {}, assignments)
+    return (holes, -assigned, split_count, _pulls_count(pulls))
+
+
 def _boost_generation_budget_for_pulls(
     time_limit_seconds: int,
     num_alternatives: int,
 ) -> tuple[int, int]:
     # Les plannings avec משיכות ont plus de combinaisons valides à explorer.
     return max(int(time_limit_seconds), 20), max(int(num_alternatives), 80)
+
+
+def _clamp_generation_budget(
+    time_limit_seconds: int,
+    num_alternatives: int,
+    *,
+    linked: bool,
+) -> tuple[int, int]:
+    """Apply conservative server-side caps for planning generation."""
+    if linked:
+        return (
+            max(10, min(int(time_limit_seconds), 35)),
+            max(1, min(int(num_alternatives), 320)),
+        )
+    return (
+        max(6, min(int(time_limit_seconds), 20)),
+        max(1, min(int(num_alternatives), 120)),
+    )
 
 
 def _summarize_auto_planning_result(
@@ -549,6 +819,17 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
             return (day_idx + 1, 0)
         return (day_idx, shift_idx + 1)
 
+    def _has_same_worker_around_middle(day_idx: int, shift_idx: int, station_idx: int) -> bool:
+        if not _is_noon_shift_name(shifts[shift_idx]):
+            return False
+        prev_coord = prev_of(day_idx, shift_idx)
+        next_coord = next_of(day_idx, shift_idx)
+        if not prev_coord or not next_coord:
+            return False
+        prev_names = set(get_cell_names(days[prev_coord[0]], shifts[prev_coord[1]], station_idx))
+        next_names = set(get_cell_names(days[next_coord[0]], shifts[next_coord[1]], station_idx))
+        return bool(prev_names.intersection(next_names))
+
     target_cells: list[tuple[tuple[int, str], int, int, str]] = []
     for station_idx, station in enumerate(stations):
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
@@ -560,7 +841,10 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
                 next_coord = next_of(day_idx, shift_idx)
                 if required <= 0 or not prev_coord or not next_coord:
                     continue
-                target_cells.append((_pull_target_shift_priority(shift_name), station_idx, day_idx, shift_name))
+                pull_priority = _pull_target_shift_priority(shift_name)
+                if _has_same_worker_around_middle(day_idx, shift_idx, station_idx):
+                    pull_priority = (-1, pull_priority[1])
+                target_cells.append((pull_priority, station_idx, day_idx, shift_name))
 
     target_cells.sort(key=lambda item: (item[0], item[2], item[1]))
 
@@ -1054,9 +1338,17 @@ def _build_multi_site_generation_context(
         # ne pas écraser la disponibilité déjà accumulée — prendre l'union pour que
         # le worker logique soit disponible sur un créneau dès qu'il l'est sur l'un de ses sites.
         if isinstance(override, dict):
-            new_avail = {str(k): list(v) for k, v in override.items() if isinstance(v, list)}
+            new_avail = {
+                str(k): list(v)
+                for k, v in override.items()
+                if isinstance(v, list) and not str(k).startswith("_")
+            }
         elif isinstance(row.availability, dict):
-            new_avail = {str(k): list(v) for k, v in row.availability.items() if isinstance(v, list)}
+            new_avail = {
+                str(k): list(v)
+                for k, v in row.availability.items()
+                if isinstance(v, list) and not str(k).startswith("_")
+            }
         else:
             new_avail = None
         if new_avail is not None:
@@ -1360,6 +1652,7 @@ def _generate_multi_site_memory_plans(
     weekly_availability: dict[str, dict[str, list[str]]] | None = None,
     exclude_days: list[str] | None = None,
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None,
+    time_limit_seconds: int | None = 20,
     num_alternatives: int | None = 20,
 ) -> dict:
     context = _build_multi_site_generation_context(
@@ -1375,7 +1668,7 @@ def _generate_multi_site_memory_plans(
     result = solve_schedule(
         context["combined_config"],
         context["combined_workers"],
-        time_limit_seconds=45,
+        time_limit_seconds=int(time_limit_seconds or 20),
         max_nights_per_worker=3,
         num_alternatives=num_alternatives,
         fixed_assignments=context["combined_fixed"],
@@ -1679,18 +1972,12 @@ def _generate_director_week_plan_payload(
     for idx, candidate in enumerate(candidate_assignments):
         candidate_payload = make_payload(candidate)
         candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload, pulls_limit=pulls_limit)
-        summary = _summarize_auto_planning_result(
+        candidate_key = _single_site_candidate_sort_key(
             site,
-            candidate_payload.get("assignments"),
+            candidate_payload.get("assignments") if isinstance(candidate_payload.get("assignments"), dict) else {},
             week_iso,
-            "auto-pulls-eval",
-            pulls=candidate_payload.get("pulls") if isinstance(candidate_payload.get("pulls"), dict) else None,
+            candidate_payload.get("pulls") if isinstance(candidate_payload.get("pulls"), dict) else {},
         )
-        assigned = int(summary.get("assigned_count") or 0)
-        required = int(summary.get("required_count") or 0)
-        holes = max(0, required - assigned)
-        pulls_count = len(candidate_payload.get("pulls") or {}) if isinstance(candidate_payload.get("pulls"), dict) else 0
-        candidate_key = (holes, -assigned, pulls_count)
         if best_key is None or candidate_key < best_key:
             best_key = candidate_key
             best_payload = candidate_payload
@@ -1726,6 +2013,19 @@ def _run_auto_planning_for_director(
     pulls_limit: int | None = None,
     pulls_limits_by_site: dict[int, int | None] | None = None,
 ) -> tuple[int, list[str]]:
+    slot_token = _acquire_generation_slot(
+        kind="auto-planning",
+        director_id=int(director_id),
+        site_id=None,
+        linked=False,
+        generation_id=None,
+        wait_timeout_seconds=float(os.getenv("PLANNING_AUTO_WAIT_TIMEOUT_SECONDS", "300") or "300"),
+    )
+    if slot_token is None:
+        detail = _generation_busy_detail(int(director_id))
+        logger.warning("[AUTO-PLANNING] skipped director_id=%s reason=busy detail=%s", director_id, detail)
+        return 0, [detail]
+
     sites = db.query(Site).filter(Site.director_id == director_id).all()
     errors: list[str] = []
     success_count = 0
@@ -1758,124 +2058,127 @@ def _run_auto_planning_for_director(
         _store_site_auto_planning_status(site, summary)
         success_count += 1
 
-    for site in sites:
-        site_id_int = int(site.id)
-        if site_id_int in processed_site_ids:
-            continue
-        linked_ids = [int(x) for x in (cluster_map.get(site_id_int) or []) if int(x) in sites_by_id]
-        # Multi-sites: une seule ריצה solver par groupe lié, puis split des plans par site.
-        if len(linked_ids) > 1:
-            root_site_id = min(linked_ids)
+    try:
+        for site in sites:
+            site_id_int = int(site.id)
+            if site_id_int in processed_site_ids:
+                continue
+            linked_ids = [int(x) for x in (cluster_map.get(site_id_int) or []) if int(x) in sites_by_id]
+            # Multi-sites: une seule ריצה solver par groupe lié, puis split des plans par site.
+            if len(linked_ids) > 1:
+                root_site_id = min(linked_ids)
+                try:
+                    logger.info(
+                        "[AUTO-PLANNING] multi-site group start director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                        director_id,
+                        root_site_id,
+                        len(linked_ids),
+                        target_week_iso,
+                        source,
+                    )
+                    generated = _generate_multi_site_memory_plans(
+                        db,
+                        director_id,
+                        root_site_id,
+                        target_week_iso,
+                        num_alternatives=20 if auto_pulls_enabled else 1,
+                    )
+                    site_plans = generated.get("site_plans") if isinstance(generated, dict) else {}
+                    if not isinstance(site_plans, dict):
+                        site_plans = {}
+                    if auto_pulls_enabled:
+                        site_plans = _apply_auto_pulls_to_site_plans(
+                            db,
+                            {sid: s for sid, s in sites_by_id.items() if sid in linked_ids},
+                            site_plans,
+                            pulls_limit=pulls_limit,
+                            pulls_limits_by_site=pulls_limits_by_site,
+                        )
+                    for linked_sid in linked_ids:
+                        linked_site = sites_by_id.get(linked_sid)
+                        if not linked_site:
+                            continue
+                        site_payload = site_plans.get(str(linked_sid)) or site_plans.get(linked_sid)
+                        if not isinstance(site_payload, dict):
+                            raise RuntimeError(f"missing generated plan for linked site {linked_sid}")
+                        _persist_generated_payload(linked_site, site_payload)
+                        processed_site_ids.add(linked_sid)
+                    db.commit()
+                    logger.info(
+                        "[AUTO-PLANNING] multi-site group success director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                        director_id,
+                        root_site_id,
+                        len(linked_ids),
+                        target_week_iso,
+                        source,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "[AUTO-PLANNING] multi-site group failed director_id=%s root_site_id=%s",
+                        director_id,
+                        root_site_id,
+                    )
+                    for linked_sid in linked_ids:
+                        linked_site = sites_by_id.get(linked_sid)
+                        if not linked_site:
+                            continue
+                        _store_site_auto_planning_status(
+                            linked_site,
+                            _summarize_auto_planning_result(linked_site, None, target_week_iso, source, str(exc)),
+                        )
+                        processed_site_ids.add(linked_sid)
+                    db.commit()
+                    errors.append(f"multi-site group {root_site_id}: {exc}")
+                continue
+
             try:
                 logger.info(
-                    "[AUTO-PLANNING] multi-site group start director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                    "[AUTO-PLANNING] site start director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
                     director_id,
-                    root_site_id,
-                    len(linked_ids),
+                    site.id,
+                    site.name,
                     target_week_iso,
                     source,
                 )
-                generated = _generate_multi_site_memory_plans(
+                site_pulls_limit = _effective_auto_pulls_limit_for_site(int(site.id), pulls_limit, pulls_limits_by_site)
+                payload = _generate_director_week_plan_payload(
                     db,
-                    director_id,
-                    root_site_id,
+                    site,
                     target_week_iso,
-                    num_alternatives=20 if auto_pulls_enabled else 1,
+                    auto_pulls_enabled=auto_pulls_enabled,
+                    pulls_limit=site_pulls_limit,
                 )
-                site_plans = generated.get("site_plans") if isinstance(generated, dict) else {}
-                if not isinstance(site_plans, dict):
-                    site_plans = {}
-                if auto_pulls_enabled:
-                    site_plans = _apply_auto_pulls_to_site_plans(
-                        db,
-                        {sid: s for sid, s in sites_by_id.items() if sid in linked_ids},
-                        site_plans,
-                        pulls_limit=pulls_limit,
-                        pulls_limits_by_site=pulls_limits_by_site,
-                    )
-                for linked_sid in linked_ids:
-                    linked_site = sites_by_id.get(linked_sid)
-                    if not linked_site:
-                        continue
-                    site_payload = site_plans.get(str(linked_sid)) or site_plans.get(linked_sid)
-                    if not isinstance(site_payload, dict):
-                        raise RuntimeError(f"missing generated plan for linked site {linked_sid}")
-                    _persist_generated_payload(linked_site, site_payload)
-                    processed_site_ids.add(linked_sid)
+                _persist_generated_payload(site, payload)
                 db.commit()
                 logger.info(
-                    "[AUTO-PLANNING] multi-site group success director_id=%s root_site_id=%s group_size=%s target_week=%s source=%s",
+                    "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
                     director_id,
-                    root_site_id,
-                    len(linked_ids),
+                    site.id,
+                    site.name,
                     target_week_iso,
                     source,
                 )
+                processed_site_ids.add(site_id_int)
             except Exception as exc:
-                logger.exception(
-                    "[AUTO-PLANNING] multi-site group failed director_id=%s root_site_id=%s",
-                    director_id,
-                    root_site_id,
+                logger.exception("[AUTO-PLANNING] Failed for director=%s site=%s", director_id, site.id)
+                _store_site_auto_planning_status(
+                    site,
+                    _summarize_auto_planning_result(site, None, target_week_iso, source, str(exc)),
                 )
-                for linked_sid in linked_ids:
-                    linked_site = sites_by_id.get(linked_sid)
-                    if not linked_site:
-                        continue
-                    _store_site_auto_planning_status(
-                        linked_site,
-                        _summarize_auto_planning_result(linked_site, None, target_week_iso, source, str(exc)),
-                    )
-                    processed_site_ids.add(linked_sid)
+                processed_site_ids.add(site_id_int)
                 db.commit()
-                errors.append(f"multi-site group {root_site_id}: {exc}")
-            continue
-
-        try:
-            logger.info(
-                "[AUTO-PLANNING] site start director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
-                director_id,
-                site.id,
-                site.name,
-                target_week_iso,
-                source,
-            )
-            site_pulls_limit = _effective_auto_pulls_limit_for_site(int(site.id), pulls_limit, pulls_limits_by_site)
-            payload = _generate_director_week_plan_payload(
-                db,
-                site,
-                target_week_iso,
-                auto_pulls_enabled=auto_pulls_enabled,
-                pulls_limit=site_pulls_limit,
-            )
-            _persist_generated_payload(site, payload)
-            db.commit()
-            logger.info(
-                "[AUTO-PLANNING] site success director_id=%s site_id=%s site_name=%s target_week=%s source=%s",
-                director_id,
-                site.id,
-                site.name,
-                target_week_iso,
-                source,
-            )
-            processed_site_ids.add(site_id_int)
-        except Exception as exc:
-            logger.exception("[AUTO-PLANNING] Failed for director=%s site=%s", director_id, site.id)
-            _store_site_auto_planning_status(
-                site,
-                _summarize_auto_planning_result(site, None, target_week_iso, source, str(exc)),
-            )
-            processed_site_ids.add(site_id_int)
-            db.commit()
-            errors.append(f"{site.name}: {exc}")
-    logger.info(
-        "[AUTO-PLANNING] run end director_id=%s source=%s target_week=%s success_sites=%s errors=%s",
-        director_id,
-        source,
-        target_week_iso,
-        success_count,
-        len(errors),
-    )
-    return success_count, errors
+                errors.append(f"{site.name}: {exc}")
+        logger.info(
+            "[AUTO-PLANNING] run end director_id=%s source=%s target_week=%s success_sites=%s errors=%s",
+            director_id,
+            source,
+            target_week_iso,
+            success_count,
+            len(errors),
+        )
+        return success_count, errors
+    finally:
+        _release_generation_slot(slot_token)
 
 
 def process_auto_planning_tick(db: Session) -> None:
@@ -1930,6 +2233,15 @@ def process_auto_planning_tick(db: Session) -> None:
             pulls_limit=gpl,
             pulls_limits_by_site=by_site,
         )
+        if _is_generation_busy_error(errors):
+            logger.warning(
+                "[AUTO-PLANNING] tick postpone director_id=%s target_week=%s reason=busy",
+                config.director_id,
+                target_week_iso,
+            )
+            config.last_error = "\n".join(errors)[:1000] if errors else None
+            db.commit()
+            continue
         config.last_run_week_iso = target_week_iso
         config.last_run_at = _now_ms()
         config.last_error = "\n".join(errors)[:1000] if errors else None
@@ -2577,8 +2889,10 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
     )
     pending_counts = {r.site_id: int(r.pending_workers_count or 0) for r in pending_counts_rows}
     next_week_iso = _next_week_iso(datetime.now())
+    site_ids = [int(s.id) for s in sites]
     plan_rows = (
         db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id.in_(site_ids) if site_ids else False)
         .filter(SiteWeekPlan.week_iso == next_week_iso)
         .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
         .all()
@@ -2634,108 +2948,94 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
 @router.get("/all-workers", response_model=list[WorkerOut])
 def list_all_workers(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
     """Retourne tous les travailleurs de tous les sites du directeur (sites actifs ou archivés)."""
+    def _norm_person_name(value: str | None) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
     # Sites du directeur y compris soft-deleted (pour afficher encore le nom du site dans la liste travailleurs)
     all_dir_sites = db.query(Site).filter(Site.director_id == user.id).all()
     site_by_id = {int(s.id): s for s in all_dir_sites}
     site_ids = list(site_by_id.keys())
-    logger.info(f"[all-workers] Director {user.id} has {len(site_ids)} sites: {site_ids}")
     if not site_ids:
         return []
-    # Récupérer tous les travailleurs de ces sites, y compris retirés du planning (historique multi-sites).
-    rows = [r for r in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()]
+
+    rows = list(db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all())
+    if not rows:
+        return []
+
     current_week_iso = _week_start_date(datetime.now()).date().isoformat()
-    logger.info(f"[all-workers] Found {len(rows)} SiteWorkers: {[(r.id, r.name, r.site_id) for r in rows]}")
+    candidate_user_ids = {int(r.user_id) for r in rows if getattr(r, "user_id", None)}
+    candidate_phones = {str(r.phone).strip() for r in rows if str(getattr(r, "phone", "") or "").strip()}
+    candidate_names = {_norm_person_name(getattr(r, "name", None)) for r in rows if _norm_person_name(getattr(r, "name", None))}
+
+    user_filters = []
+    if candidate_user_ids:
+        user_filters.append(User.id.in_(candidate_user_ids))
+    if candidate_phones:
+        user_filters.append(User.phone.in_(candidate_phones))
+    if candidate_names:
+        user_filters.append(func.lower(User.full_name).in_(list(candidate_names)))
+
+    candidate_users = (
+        db.query(User)
+        .filter(User.role == UserRole.worker)
+        .filter(or_(*user_filters))
+        .all()
+        if user_filters
+        else []
+    )
+    users_by_id = {int(u.id): u for u in candidate_users}
+    users_by_phone = {str(u.phone).strip(): u for u in candidate_users if str(getattr(u, "phone", "") or "").strip()}
+    users_by_name: dict[str, list[User]] = {}
+    for u in candidate_users:
+        users_by_name.setdefault(_norm_person_name(getattr(u, "full_name", None)), []).append(u)
+
     result = []
-    # Récupérer tous les workers users une seule fois pour optimiser
-    all_workers = db.query(User).filter(User.role == UserRole.worker).all()
-    logger.info(f"[all-workers] Found {len(all_workers)} worker users in database")
-    
     for r in rows:
         user_worker = None
         phone = None
-        
-        # PRIORITÉ 1: Utiliser user_id si disponible (lien direct) MAIS seulement si le nom correspond
-        if r.user_id:
-            user_worker = db.get(User, r.user_id)
-            if user_worker:
-                # Si le lien est incohérent (mauvais user_id), ignorer et continuer la recherche
-                if (user_worker.full_name or "").strip().lower() != (r.name or "").strip().lower():
-                    logger.warning(
-                        f"[all-workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to '{user_worker.full_name}' -> mismatch, ignoring link"
-                    )
-                    user_worker = None
-                else:
-                    phone = user_worker.phone
-                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by user_id={r.user_id}: '{user_worker.full_name}' (phone={phone})")
-            else:
-                logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): user_id={r.user_id} points to non-existent User")
-        
-        # PRIORITÉ 2: si pas de user_id valide mais phone présent dans SiteWorker, chercher par téléphone (et vérifier nom)
-        if not user_worker and r.phone:
-            user_worker = db.query(User).filter(User.role == UserRole.worker, User.phone == r.phone).first()
-            if user_worker:
-                if (user_worker.full_name or "").strip().lower() != (r.name or "").strip().lower():
-                    logger.warning(
-                        f"[all-workers] Worker '{r.name}' (id={r.id}): phone {r.phone} belongs to '{user_worker.full_name}' -> mismatch, ignoring"
-                    )
-                    user_worker = None
-                else:
-                    phone = user_worker.phone
-                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Found User by phone in SiteWorker {r.phone}: '{user_worker.full_name}' (id={user_worker.id})")
+        worker_name = _norm_person_name(getattr(r, "name", None))
 
-        # PRIORITÉ 2: Si pas de user_id, chercher par nom ET téléphone (si disponible dans un autre SiteWorker)
-        if not user_worker:
-            worker_name_clean = re.sub(r'\s+', ' ', (r.name or "").strip()).lower()
-            
-            # Chercher d'abord par correspondance exacte du nom
-            for u in all_workers:
-                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
-                if user_name_clean == worker_name_clean:
-                    # Vérifier si ce User est déjà lié à un autre SiteWorker du même site avec le même nom
-                    # Si oui, c'est probablement le bon
-                    user_worker = u
-                    phone = u.phone
-                    logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Exact name match with User '{u.full_name}' (id={u.id}, phone={phone})")
-                    break
-        
-            # Si pas trouvé, essayer une recherche plus flexible
-            if not user_worker and worker_name_clean:
-                for u in all_workers:
-                    user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
-                    if worker_name_clean in user_name_clean or user_name_clean in worker_name_clean:
-                        if abs(len(worker_name_clean) - len(user_name_clean)) <= 2:
-                            user_worker = u
-                            phone = u.phone
-                            logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): Partial name match with User '{u.full_name}' (id={u.id}, phone={phone})")
-                            break
-        
-        # Si toujours pas trouvé, logger pour debug
-        if not user_worker:
-            logger.warning(f"[all-workers] Worker '{r.name}' (id={r.id}): No matching User found. Available users: {[(u.id, u.full_name, u.phone) for u in all_workers]}")
+        if r.user_id:
+            linked_user = users_by_id.get(int(r.user_id))
+            if linked_user and _norm_person_name(getattr(linked_user, "full_name", None)) == worker_name:
+                user_worker = linked_user
+                phone = linked_user.phone
+
+        if not user_worker and str(getattr(r, "phone", "") or "").strip():
+            phone_user = users_by_phone.get(str(r.phone).strip())
+            if phone_user and _norm_person_name(getattr(phone_user, "full_name", None)) == worker_name:
+                user_worker = phone_user
+                phone = phone_user.phone
+
+        if not user_worker and worker_name:
+            exact_matches = users_by_name.get(worker_name) or []
+            if exact_matches:
+                user_worker = exact_matches[0]
+                phone = user_worker.phone
+
         if not phone:
             phone = r.phone
-        logger.info(f"[all-workers] Worker '{r.name}' (id={r.id}): phone={phone}, user_worker found={user_worker is not None}")
         sn = site_by_id.get(int(r.site_id))
         removed_from_week_iso = str(getattr(r, "removed_from_week_iso", "") or "").strip() or None
         removed_by_planning = bool(removed_from_week_iso and current_week_iso >= removed_from_week_iso)
-        worker_out = WorkerOut(
-            id=r.id,
-            site_id=r.site_id,
-            created_at=getattr(r, "created_at", None),
-            name=r.name,
-            max_shifts=r.max_shifts,
-            roles=r.roles or [],
-            availability=r.availability or {},
-            answers=r.answers or {},
-            phone=phone,
-            site_name=(sn.name if sn else None),
-            site_deleted=bool(getattr(sn, "deleted_at", None)) if sn else False,
-            removed_from_week_iso=removed_from_week_iso,
-            removed_by_planning=removed_by_planning,
+        result.append(
+            WorkerOut(
+                id=r.id,
+                site_id=r.site_id,
+                created_at=getattr(r, "created_at", None),
+                name=r.name,
+                max_shifts=r.max_shifts,
+                roles=r.roles or [],
+                availability=r.availability or {},
+                answers=r.answers or {},
+                phone=phone,
+                site_name=(sn.name if sn else None),
+                site_deleted=bool(getattr(sn, "deleted_at", None)) if sn else False,
+                removed_from_week_iso=removed_from_week_iso,
+                removed_by_planning=removed_by_planning,
+            )
         )
-        logger.info(f"[all-workers] WorkerOut created for '{r.name}': phone field = {worker_out.phone}")
-        result.append(worker_out)
-    logger.info(f"[all-workers] Returning {len(result)} workers. Sample worker phone: {result[0].phone if result else 'N/A'}")
+    logger.info("[all-workers] director=%s sites=%d workers=%d candidate_users=%d", user.id, len(site_ids), len(result), len(candidate_users))
     return result
 
 
@@ -2873,7 +3173,11 @@ def list_workers(
     }
     users_by_name_key: dict[str, User] = {}
     if unmatched_name_keys:
-        for worker_user in db.query(User).filter(User.role == UserRole.worker).all():
+        for worker_user in (
+            db.query(User)
+            .filter(User.role == UserRole.worker, func.lower(User.full_name).in_(list(unmatched_name_keys)))
+            .all()
+        ):
             user_name_key = re.sub(r"\s+", " ", str(worker_user.full_name or "").strip()).lower()
             if user_name_key and user_name_key in unmatched_name_keys and user_name_key not in users_by_name_key:
                 users_by_name_key[user_name_key] = worker_user
@@ -3066,13 +3370,13 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
         # Si pas trouvé par téléphone, chercher par nom
         if not user_worker:
             worker_name_clean = re.sub(r'\s+', ' ', (payload.name or "").strip()).lower()
-            all_workers = db.query(User).filter(User.role == UserRole.worker).all()
-            for u in all_workers:
-                user_name_clean = re.sub(r'\s+', ' ', (u.full_name or "").strip()).lower()
-                if user_name_clean == worker_name_clean:
-                    user_worker = u
-                    logger.info(f"[create-worker] Found User by name '{payload.name}': '{u.full_name}' (id={u.id}, phone={u.phone})")
-                    break
+            user_worker = (
+                db.query(User)
+                .filter(User.role == UserRole.worker, func.lower(User.full_name) == worker_name_clean)
+                .first()
+            )
+            if user_worker:
+                logger.info(f"[create-worker] Found User by name '{payload.name}' (id={user_worker.id})")
         
         # Vérifier si un worker avec ce nom existe déjà
         existing = (
@@ -3478,16 +3782,32 @@ def ai_generate_linked_planning(
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     week_iso = _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now())
-    result = _generate_multi_site_memory_plans(
-        db,
-        user.id,
-        site_id,
-        week_iso,
-        weekly_availability=(payload.weekly_availability or {}) if payload else None,
-        exclude_days=payload.exclude_days if payload else None,
-        fixed_assignments=payload.fixed_assignments if payload else None,
-        num_alternatives=payload.num_alternatives if payload else 20,
+    eff_time, eff_num_alts = _clamp_generation_budget(
+        int(payload.time_limit_seconds or 20),
+        int(payload.num_alternatives or 40),
+        linked=True,
     )
+    if payload and payload.auto_pulls_enabled:
+        eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
+        eff_time, eff_num_alts = _clamp_generation_budget(eff_time, eff_num_alts, linked=True)
+    with _generation_slot_or_wait(
+        kind="linked-sync",
+        director_id=int(user.id),
+        site_id=int(site_id),
+        linked=True,
+        wait_timeout_seconds=None,
+    ):
+        result = _generate_multi_site_memory_plans(
+            db,
+            user.id,
+            site_id,
+            week_iso,
+            weekly_availability=(payload.weekly_availability or {}) if payload else None,
+            exclude_days=payload.exclude_days if payload else None,
+            fixed_assignments=payload.fixed_assignments if payload else None,
+            time_limit_seconds=eff_time,
+            num_alternatives=eff_num_alts,
+        )
     pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
     if payload and payload.auto_pulls_enabled:
         context = _build_multi_site_generation_context(
@@ -3606,11 +3926,12 @@ async def ai_generate_linked_planning_stream(
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
 
-    eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 45))
+    eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 20))
     eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
-    eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 1200))
+    eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 40))
     if payload and payload.auto_pulls_enabled:
         eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
+    eff_time, eff_num_alts = _clamp_generation_budget(eff_time, eff_num_alts, linked=True)
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
     eff_pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
 
@@ -3629,13 +3950,60 @@ async def ai_generate_linked_planning_stream(
         for linked_site_id in context["connected_site_ids"]
         if linked_site_id in context["sites_by_id"]
     ]
+    generation_id = _new_generation_id()
+
+    slot_token = await asyncio.to_thread(
+        _acquire_generation_slot,
+        kind="linked-stream",
+        director_id=int(user.id),
+        site_id=int(site_id),
+        linked=True,
+        generation_id=generation_id,
+        wait_timeout_seconds=None,
+    )
+    if slot_token is None:
+        raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
 
     async def event_stream():
         import threading, queue, json, asyncio as _asyncio
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
+        released = False
+
+        def _release_slot_once() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            _release_generation_slot(slot_token)
 
         def _producer():
             matched_candidates = 0
+            dropped_alternatives = 0
+            kept_alternative_signatures: set[str] = set()
+            target_kept_alternatives = max(1, int(eff_num_alts))
+            kept_alternatives_count = 0
+            search_num_alts = _clamp_generation_budget(
+                eff_time,
+                max(target_kept_alternatives, target_kept_alternatives * 2),
+                linked=False,
+            )[1]
+
+            def _enqueue(item: dict | None, *, drop_if_full: bool = False) -> None:
+                nonlocal dropped_alternatives
+                if item is None:
+                    q.put(None)
+                    return
+                payload = dict(item)
+                payload.setdefault("generation_id", generation_id)
+                payload.setdefault("generated_at_ms", _now_ms())
+                if drop_if_full:
+                    try:
+                        q.put(payload, timeout=0.05)
+                    except queue.Full:
+                        dropped_alternatives += 1
+                    return
+                q.put(payload)
+
             try:
                 gen = solve_schedule_stream(
                     context["combined_config"],
@@ -3682,16 +4050,16 @@ async def ai_generate_linked_planning_stream(
                             ):
                                 continue
                             matched_candidates += 1
-                        q.put({
+                        _enqueue({
                             "type": item.get("type"),
                             "index": item.get("index"),
                             "source": item.get("source"),
                             "linked_sites": linked_sites,
                             "site_plans": split_site_plans,
-                        })
+                        }, drop_if_full=item.get("type") == "alternative")
                     else:
                         if item.get("type") == "done" and (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
-                            q.put({
+                            _enqueue({
                                 "type": "status",
                                 "status": "ERROR",
                                 "detail": _planning_limit_error_detail_for_request(
@@ -3703,23 +4071,34 @@ async def ai_generate_linked_planning_stream(
                             continue
                         enriched = dict(item)
                         enriched["linked_sites"] = linked_sites
-                        q.put(enriched)
+                        _enqueue(enriched, drop_if_full=item.get("type") == "alternative")
             except Exception as e:
-                q.put({"type": "status", "status": "ERROR", "detail": str(e), "linked_sites": linked_sites})
+                _enqueue({"type": "status", "status": "ERROR", "detail": str(e), "linked_sites": linked_sites})
             finally:
-                q.put(None)
+                if dropped_alternatives > 0:
+                    _enqueue({
+                        "type": "status",
+                        "status": "INFO",
+                        "detail": f"{dropped_alternatives} alternatives SSE skipped because the client was too slow.",
+                        "linked_sites": linked_sites,
+                    })
+                _enqueue(None)
+                _release_slot_once()
 
         threading.Thread(target=_producer, daemon=True).start()
 
-        while True:
-            item = await _asyncio.to_thread(q.get)
-            if item is None:
-                break
-            try:
-                chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-                yield chunk
-            finally:
-                await asyncio.sleep(0)
+        try:
+            while True:
+                item = await _asyncio.to_thread(q.get)
+                if item is None:
+                    break
+                try:
+                    chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    yield chunk
+                finally:
+                    await asyncio.sleep(0)
+        finally:
+            _release_slot_once()
 
     headers = {
         "Cache-Control": "no-cache",
@@ -3757,25 +4136,17 @@ def ai_generate_planning(
         # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
         # Ignorer la disponibilité de base des workers
         ovr = overrides.get(r.name)
-        if isinstance(ovr, dict):
-            # Utiliser uniquement les overrides de la semaine
-            avail = {}
-            for day_key, shifts_list in ovr.items():
-                if isinstance(shifts_list, list):
-                    # Filtrer les valeurs vides
-                    valid_shifts = [s for s in shifts_list if s]
-                    if valid_shifts:
-                        avail[day_key] = valid_shifts
-        else:
-            # Si pas de disponibilité pour cette semaine, utiliser un dict vide
-            avail = {}
-        workers.append({
+        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
+        wd: dict = {
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
             "roles": r.roles or [],
             "availability": avail,
-        })
+        }
+        if station_allow:
+            wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
+        workers.append(wd)
     logger.info(f"[AI-GEN] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
     for w in workers:
         avail_count = sum(len(shifts) for shifts in w['availability'].values())
@@ -3793,15 +4164,22 @@ def ai_generate_planning(
             status="NO_WORKERS",
             objective=0.0,
         )
-    result = solve_schedule(
-        site.config or {},
-        workers,
-        time_limit_seconds=int(payload.time_limit_seconds or 25),
-        max_nights_per_worker=int(payload.max_nights_per_worker or 3),
-        num_alternatives=int(payload.num_alternatives or 20),
-        fixed_assignments=payload.fixed_assignments or None,
-        exclude_days=(payload.exclude_days or None),
-    )
+    with _generation_slot_or_wait(
+        kind="single-sync",
+        director_id=int(user.id),
+        site_id=int(site_id),
+        linked=False,
+        wait_timeout_seconds=None,
+    ):
+        result = solve_schedule(
+            site.config or {},
+            workers,
+            time_limit_seconds=_clamp_generation_budget(int(payload.time_limit_seconds or 12), int(payload.num_alternatives or 20), linked=False)[0],
+            max_nights_per_worker=int(payload.max_nights_per_worker or 3),
+            num_alternatives=_clamp_generation_budget(int(payload.time_limit_seconds or 12), int(payload.num_alternatives or 20), linked=False)[1],
+            fixed_assignments=payload.fixed_assignments or None,
+            exclude_days=(payload.exclude_days or None),
+        )
     base_pulls: dict = {}
     alt_pulls: list[dict] = []
     assignments_out = _enforce_role_requirements_on_assignments(
@@ -3848,10 +4226,20 @@ def ai_generate_planning(
         if payload.pulls_limit is not None and not candidate_pairs:
             raise HTTPException(status_code=422, detail=_planning_limit_error_detail(payload.pulls_limit))
         if candidate_pairs:
+            candidate_pairs.sort(
+                key=lambda pair: _single_site_candidate_sort_key(site, pair[0], week_for_rows, pair[1]),
+            )
             assignments_out = candidate_pairs[0][0]
             base_pulls = candidate_pairs[0][1]
             alternatives_out = [assignments for assignments, _ in candidate_pairs[1:]]
             alt_pulls = [pulls for _, pulls in candidate_pairs[1:]]
+    else:
+        ordered_candidates = [(assignments_out, {})] + [(alt, {}) for alt in alternatives_out]
+        ordered_candidates.sort(
+            key=lambda pair: _single_site_candidate_sort_key(site, pair[0], week_for_rows, pair[1]),
+        )
+        assignments_out = ordered_candidates[0][0]
+        alternatives_out = [assignments for assignments, _ in ordered_candidates[1:]]
     return AIPlanningResponse(
         days=result["days"],
         shifts=result["shifts"],
@@ -3933,31 +4321,25 @@ async def ai_generate_stream(
         # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
         # Ignorer la disponibilité de base des workers
         ovr = overrides.get(r.name)
-        if isinstance(ovr, dict):
-            # Utiliser uniquement les overrides de la semaine
-            avail = {}
-            for day_key, shifts_list in ovr.items():
-                if isinstance(shifts_list, list):
-                    # Filtrer les valeurs vides
-                    valid_shifts = [s for s in shifts_list if s]
-                    if valid_shifts:
-                        avail[day_key] = valid_shifts
-        else:
-            # Si pas de disponibilité pour cette semaine, utiliser un dict vide
-            avail = {}
-        workers.append({
+        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
+        wd: dict = {
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
             "roles": r.roles or [],
             "availability": avail,
-        })
-    logger.info(f"[SSE] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
-    for w in workers:
-        avail_count = sum(len(shifts) for shifts in w['availability'].values())
-        logger.info(f"[SSE] Worker {w['name']}: availability keys={len(w['availability'])}, total shifts={avail_count}, max_shifts={w['max_shifts']}, roles={w['roles']}")
-        if avail_count == 0:
-            logger.warning(f"[SSE] Worker {w['name']} has NO availability - this will prevent assignments!")
+        }
+        if station_allow:
+            wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
+        workers.append(wd)
+    logger.info("[SSE] loaded workers=%d for site=%s", len(workers), site_id)
+    workers_without_availability = [
+        str(w.get("name") or "")
+        for w in workers
+        if sum(len(shifts) for shifts in (w.get("availability") or {}).values()) == 0
+    ]
+    if workers_without_availability:
+        logger.warning("[SSE] workers without availability site=%s count=%d names=%s", site_id, len(workers_without_availability), workers_without_availability)
 
     # Choose effective parameters (query overrides body if provided)
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
@@ -3965,84 +4347,196 @@ async def ai_generate_stream(
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
     if payload.auto_pulls_enabled:
         eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
+    eff_time, eff_num_alts = _clamp_generation_budget(eff_time, eff_num_alts, linked=False)
     eff_pulls_limit = int(payload.pulls_limit) if payload.pulls_limit is not None else None
-    logger.info("[SSE] start site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%s", site_id, eff_time, eff_max_nights, eff_num_alts, [w["name"] for w in workers])
+    generation_id = _new_generation_id()
+    logger.info("[SSE] start generation=%s site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%d", generation_id, site_id, eff_time, eff_max_nights, eff_num_alts, len(workers))
+
+    slot_token = await asyncio.to_thread(
+        _acquire_generation_slot,
+        kind="single-stream",
+        director_id=int(user.id),
+        site_id=int(site_id),
+        linked=False,
+        generation_id=generation_id,
+        wait_timeout_seconds=None,
+    )
+    if slot_token is None:
+        raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
 
     async def event_stream():
         """Non-bloquant: exécute le solveur dans un thread et stream via une queue."""
-        import threading, queue, json, asyncio as _asyncio
+        import threading, queue, json, asyncio as _asyncio, time as _time
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
+        released = False
+
+        def _release_slot_once() -> None:
+            nonlocal released
+            if released:
+                return
+            released = True
+            _release_generation_slot(slot_token)
 
         def _producer():
             matched_candidates = 0
+            dropped_alternatives = 0
+            kept_alternative_signatures: set[str] = set()
+            target_kept_alternatives = max(1, int(eff_num_alts))
+            kept_alternatives_count = 0
+            search_num_alts = _clamp_generation_budget(
+                eff_time,
+                max(target_kept_alternatives, target_kept_alternatives * 2),
+                linked=False,
+            )[1]
+
+            def _enqueue(item: dict | None, *, drop_if_full: bool = False) -> None:
+                nonlocal dropped_alternatives
+                if item is None:
+                    q.put(None)
+                    return
+                payload = dict(item)
+                payload.setdefault("generation_id", generation_id)
+                payload.setdefault("generated_at_ms", _now_ms())
+                if drop_if_full:
+                    try:
+                        q.put(payload, timeout=0.05)
+                    except queue.Full:
+                        dropped_alternatives += 1
+                    return
+                q.put(payload)
+
             try:
-                gen = solve_schedule_stream(
-                    site.config or {},
-                    workers,
-                    time_limit_seconds=eff_time,
-                    max_nights_per_worker=eff_max_nights,
-                    num_alternatives=eff_num_alts,
-                    fixed_assignments=payload.fixed_assignments or None,
-                    exclude_days=(payload.exclude_days or None),
-                )
-                for item in gen:
-                    if item.get("type") in {"base", "alternative"} and payload.auto_pulls_enabled:
-                        cleaned_assignments = _enforce_role_requirements_on_assignments(
-                            site.config or {},
-                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
-                            rows,
-                        )
-                        transformed = _apply_auto_pulls_to_payload(
-                            site,
-                            rows,
-                            {"assignments": deepcopy(cleaned_assignments), "pulls": {}},
-                            pulls_limit=eff_pulls_limit,
-                        )
-                        if eff_pulls_limit is not None and not _matches_pulls_limit(transformed.get("pulls"), eff_pulls_limit):
+                deadline_monotonic = _time.monotonic() + max(1, int(eff_time))
+                attempts = 0
+                base_sent = False
+
+                while kept_alternatives_count < target_kept_alternatives:
+                    remaining_seconds = deadline_monotonic - _time.monotonic()
+                    if remaining_seconds <= 0:
+                        break
+                    attempts += 1
+                    attempt_time = max(1, int(remaining_seconds + 0.999))
+                    attempt_search_num_alts = _clamp_generation_budget(
+                        attempt_time,
+                        max(search_num_alts, target_kept_alternatives * 2),
+                        linked=False,
+                    )[1]
+                    gen = solve_schedule_stream(
+                        site.config or {},
+                        workers,
+                        time_limit_seconds=attempt_time,
+                        max_nights_per_worker=eff_max_nights,
+                        num_alternatives=attempt_search_num_alts,
+                        fixed_assignments=payload.fixed_assignments or None,
+                        exclude_days=(payload.exclude_days or None),
+                    )
+                    for item in gen:
+                        if item.get("type") in {"base", "alternative"} and payload.auto_pulls_enabled:
+                            cleaned_assignments = _enforce_role_requirements_on_assignments(
+                                site.config or {},
+                                item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                                rows,
+                            )
+                            transformed = _apply_auto_pulls_to_payload(
+                                site,
+                                rows,
+                                {"assignments": deepcopy(cleaned_assignments), "pulls": {}},
+                                pulls_limit=eff_pulls_limit,
+                            )
+                            if eff_pulls_limit is not None and not _matches_pulls_limit(
+                                transformed.get("pulls"),
+                                eff_pulls_limit,
+                            ):
+                                continue
+                            enriched = dict(item)
+                            enriched["assignments"] = transformed.get("assignments") or {}
+                            enriched["pulls"] = transformed.get("pulls") or {}
+                            matched_candidates += 1
+                        elif item.get("type") in {"base", "alternative"}:
+                            enriched = dict(item)
+                            enriched["assignments"] = _enforce_role_requirements_on_assignments(
+                                site.config or {},
+                                item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                                rows,
+                            )
+                        else:
+                            enriched = dict(item)
+
+                        item_type = enriched.get("type")
+                        if item_type == "base":
+                            if not base_sent:
+                                _enqueue(enriched)
+                                base_sent = True
                             continue
-                        enriched = dict(item)
-                        enriched["assignments"] = transformed.get("assignments") or {}
-                        enriched["pulls"] = transformed.get("pulls") or {}
-                        matched_candidates += 1
-                        q.put(enriched)
-                        continue
-                    if item.get("type") in {"base", "alternative"}:
-                        enriched = dict(item)
-                        enriched["assignments"] = _enforce_role_requirements_on_assignments(
-                            site.config or {},
-                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
-                            rows,
-                        )
-                        q.put(enriched)
-                        continue
-                    if item.get("type") == "done" and payload.auto_pulls_enabled and eff_pulls_limit is not None and matched_candidates == 0:
-                        q.put({"type": "status", "status": "ERROR", "detail": _planning_limit_error_detail(eff_pulls_limit)})
-                        continue
-                    q.put(item)
+                        if item_type == "alternative":
+                            try:
+                                sig = json.dumps(
+                                    {
+                                        "assignments": enriched.get("assignments") or {},
+                                        "pulls": enriched.get("pulls") or {},
+                                    },
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                )
+                            except Exception:
+                                sig = ""
+                            if sig and sig in kept_alternative_signatures:
+                                continue
+                            if sig:
+                                kept_alternative_signatures.add(sig)
+                            kept_alternatives_count += 1
+                            next_alternative = dict(enriched)
+                            next_alternative["index"] = kept_alternatives_count
+                            _enqueue(next_alternative, drop_if_full=False)
+                            continue
+                        if item_type == "done":
+                            if payload.auto_pulls_enabled and eff_pulls_limit is not None and matched_candidates == 0:
+                                _enqueue(
+                                    {"type": "status", "status": "ERROR", "detail": _planning_limit_error_detail(eff_pulls_limit)}
+                                )
+                            continue
+                        _enqueue(enriched, drop_if_full=False)
+
+                    if kept_alternatives_count >= target_kept_alternatives:
+                        break
+
+                kept_final_count = min(kept_alternatives_count, target_kept_alternatives)
+                timeout_reached = kept_final_count < target_kept_alternatives
+                _enqueue({"type": "done"})
             except Exception as e:  # met l'erreur dans le flux
-                q.put({"type": "status", "status": "ERROR", "detail": str(e)})
+                _enqueue({"type": "status", "status": "ERROR", "detail": str(e)})
             finally:
-                q.put(None)
+                if dropped_alternatives > 0:
+                    _enqueue({
+                        "type": "status",
+                        "status": "INFO",
+                        "detail": f"{dropped_alternatives} alternatives SSE skipped because the client was too slow.",
+                    })
+                _enqueue(None)
+                _release_slot_once()
 
         threading.Thread(target=_producer, daemon=True).start()
 
-        while True:
-            item = await _asyncio.to_thread(q.get)
-            if item is None:
-                break
-            try:
-                if item.get("type") == "alternative":
-                    logger.debug("[SSE] push alternative index=%s", item.get("index"))
-                elif item.get("type") == "base":
-                    logger.info("[SSE] push base plan")
-                elif item.get("type") == "done":
-                    logger.info("[SSE] push done")
-                elif item.get("type") == "status":
-                    logger.warning("[SSE] status=%s", item.get("status"))
-                chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
-                yield chunk
-            finally:
-                await asyncio.sleep(0)
+        try:
+            while True:
+                item = await _asyncio.to_thread(q.get)
+                if item is None:
+                    break
+                try:
+                    if item.get("type") == "alternative":
+                        logger.debug("[SSE] push alternative index=%s", item.get("index"))
+                    elif item.get("type") == "base":
+                        logger.info("[SSE] push base plan generation=%s", item.get("generation_id"))
+                    elif item.get("type") == "done":
+                        logger.info("[SSE] push done generation=%s", item.get("generation_id"))
+                    elif item.get("type") == "status":
+                        logger.warning("[SSE] generation=%s status=%s", item.get("generation_id"), item.get("status"))
+                    chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                    yield chunk
+                finally:
+                    await asyncio.sleep(0)
+        finally:
+            _release_slot_once()
 
     headers = {
         "Cache-Control": "no-cache",

@@ -84,6 +84,9 @@ type WorkerHomeSitePanelsProps = {
   /** Bloc résumé (טבלת סיכום) sous la grille — construit par la page */
   summaryCurrent: React.ReactNode;
   summaryNext: React.ReactNode;
+  /** Clic sur une ligne du סיכום → surbrillance de l’עובד dans le גריד (comme planning v2). */
+  summaryHighlightWorkerNameCurrent?: string | null;
+  summaryHighlightWorkerNameNext?: string | null;
 };
 
 export function WorkerHomeSitePanels({
@@ -99,6 +102,8 @@ export function WorkerHomeSitePanels({
   messagesNext,
   summaryCurrent,
   summaryNext,
+  summaryHighlightWorkerNameCurrent = null,
+  summaryHighlightWorkerNameNext = null,
 }: WorkerHomeSitePanelsProps) {
   const siteSummary: SiteSummary = {
     id: siteId,
@@ -135,6 +140,7 @@ export function WorkerHomeSitePanels({
               loading={false}
               isManual={false}
               manualEditable={false}
+              summaryHighlightWorkerName={summaryHighlightWorkerNameCurrent}
             />
             {summaryCurrent}
           </>
@@ -175,6 +181,7 @@ export function WorkerHomeSitePanels({
               loading={false}
               isManual={false}
               manualEditable={false}
+              summaryHighlightWorkerName={summaryHighlightWorkerNameNext}
             />
             {summaryNext}
           </>

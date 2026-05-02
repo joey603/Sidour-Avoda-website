@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -16,6 +16,17 @@ interface Site {
 }
 
 const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || ""));
+
+function normWorkerKey(name: string): string {
+  return String(name || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function weekIsoLocal(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export default function WorkerDashboard() {
   const router = useRouter();
@@ -33,6 +44,9 @@ export default function WorkerDashboard() {
     created_at: number;
     updated_at: number;
   };
+  /** Surbrillance grille ↔ clic sur סיכום שיבוצים (clé `${siteId}_${weekIso}`). */
+  const [workerSummaryHighlight, setWorkerSummaryHighlight] = useState<Record<string, string | null>>({});
+
   const [sitePlans, setSitePlans] = useState<
     Record<
       number,
@@ -331,7 +345,23 @@ export default function WorkerDashboard() {
     return `${formatHebDate(weekStart)} — ${formatHebDate(end)}`;
   }
 
-  function stationSummaryBlock(weekPlan: any, config: any) {
+  const toggleWorkerSummaryHighlight = useCallback((siteId: number, weekStart: Date, workerName: string) => {
+    const k = `${siteId}_${weekIsoLocal(weekStart)}`;
+    setWorkerSummaryHighlight((prev) => {
+      const cur = prev[k] ?? null;
+      const next = normWorkerKey(cur || "") === normWorkerKey(workerName) ? null : workerName;
+      return { ...prev, [k]: next };
+    });
+  }, []);
+
+  function stationSummaryBlock(
+    siteId: number,
+    weekStart: Date,
+    weekPlan: any,
+    config: any,
+    highlightedWorkerName: string | null,
+    onHighlightToggle: (name: string) => void,
+  ) {
     if (!weekPlan?.assignments || !config) return null;
     const workersList = (weekPlan.workers || []) as Array<{ name: string; roles?: string[] }>;
     if (workersList.length === 0) {
@@ -366,19 +396,41 @@ export default function WorkerDashboard() {
             <tbody>
               {summary.items.map(([nm, c]) => {
                 const col = getColorForName(nm, summaryColorMap);
+                const rowSummaryHighlight =
+                  !!highlightedWorkerName && normWorkerKey(nm) === normWorkerKey(highlightedWorkerName);
                 return (
                   <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
-                    <td className="w-32 px-1 py-1 md:w-64 md:px-2 md:py-2">
-                      <span
-                        className="inline-flex max-w-full min-w-0 items-center rounded-full border px-2 py-0.5 text-[10px] shadow-sm md:px-3 md:py-1 md:text-sm"
-                        style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
-                      >
+                    <td
+                      className={
+                        "w-32 px-1 py-1 md:w-64 md:px-2 md:py-2 " +
+                        "cursor-pointer touch-manipulation rounded-md outline-none transition-[background-color] duration-200 focus-visible:ring-2 focus-visible:ring-[#00A8E0] " +
+                        (rowSummaryHighlight
+                          ? "bg-sky-50 ring-1 ring-[#00A8E0]/50 dark:bg-sky-950/40 dark:ring-[#00A8E0]/40 "
+                          : "hover:bg-zinc-50 dark:hover:bg-zinc-800/60 ")
+                      }
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={rowSummaryHighlight ? true : undefined}
+                      onClick={() => onHighlightToggle(nm)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onHighlightToggle(nm);
+                        }
+                      }}
+                    >
+                      <span className="inline-flex max-w-full min-w-0 items-center justify-center">
                         <span
-                          className={"truncate min-w-0 " + (isRtlName(nm) ? "text-right" : "text-left")}
-                          dir={isRtlName(nm) ? "rtl" : "ltr"}
-                          title={nm}
+                          className="inline-flex max-w-full min-w-0 items-center rounded-full border px-2 py-0.5 text-[10px] shadow-sm md:px-3 md:py-1 md:text-sm"
+                          style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
                         >
-                          {nm}
+                          <span
+                            className={"truncate min-w-0 " + (isRtlName(nm) ? "text-right" : "text-left")}
+                            dir={isRtlName(nm) ? "rtl" : "ltr"}
+                            title={nm}
+                          >
+                            {nm}
+                          </span>
                         </span>
                       </span>
                     </td>
@@ -425,6 +477,8 @@ export default function WorkerDashboard() {
             const plan = sitePlans[site.id];
             const currentWeekStart = getCurrentWeekStart();
             const nextWeekStart = getNextWeekStart();
+            const keyCur = `${site.id}_${weekIsoLocal(currentWeekStart)}`;
+            const keyNext = `${site.id}_${weekIsoLocal(nextWeekStart)}`;
             return (
               <WorkerHomeSitePanels
                 key={site.id}
@@ -438,8 +492,24 @@ export default function WorkerDashboard() {
                 nextWeek={plan?.nextWeek ?? null}
                 messagesCurrent={plan?.messagesCurrent ?? []}
                 messagesNext={plan?.messagesNext ?? []}
-                summaryCurrent={stationSummaryBlock(plan?.currentWeek, plan?.config)}
-                summaryNext={stationSummaryBlock(plan?.nextWeek, plan?.config)}
+                summaryHighlightWorkerNameCurrent={workerSummaryHighlight[keyCur] ?? null}
+                summaryHighlightWorkerNameNext={workerSummaryHighlight[keyNext] ?? null}
+                summaryCurrent={stationSummaryBlock(
+                  site.id,
+                  currentWeekStart,
+                  plan?.currentWeek,
+                  plan?.config,
+                  workerSummaryHighlight[keyCur] ?? null,
+                  (nm) => toggleWorkerSummaryHighlight(site.id, currentWeekStart, nm),
+                )}
+                summaryNext={stationSummaryBlock(
+                  site.id,
+                  nextWeekStart,
+                  plan?.nextWeek,
+                  plan?.config,
+                  workerSummaryHighlight[keyNext] ?? null,
+                  (nm) => toggleWorkerSummaryHighlight(site.id, nextWeekStart, nm),
+                )}
               />
             );
           })
