@@ -173,6 +173,7 @@ function draftAlternativesForMode(
 }
 
 const PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX = "planning_v2_alternatives_unlock_";
+const PLANNING_V2_LINKED_GENERATION_PREFIX = "planning_v2_linked_generation_";
 
 function alternativesUnlockSessionKey(weekIso: string, siteId: string) {
   return `${PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX}${weekIso}_${siteId}`;
@@ -191,6 +192,37 @@ function writeAlternativesUnlockedToSession(weekIso: string, siteId: string) {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.setItem(alternativesUnlockSessionKey(weekIso, siteId), "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function linkedGenerationSessionKey(weekIso: string) {
+  return `${PLANNING_V2_LINKED_GENERATION_PREFIX}${weekIso}`;
+}
+
+function readLinkedGenerationRunningFromSession(weekIso: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(linkedGenerationSessionKey(weekIso)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeLinkedGenerationRunningToSession(weekIso: string, running: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    const key = linkedGenerationSessionKey(weekIso);
+    if (running) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
+    queueMicrotask(() => {
+      try {
+        window.dispatchEvent(new CustomEvent("planning-v2-linked-generation-updated", { detail: { key, running } }));
+      } catch {
+        /* ignore */
+      }
+    });
   } catch {
     /* ignore */
   }
@@ -221,7 +253,8 @@ export function usePlanningV2PlanController({
     Record<string, Record<string, string[][]>> | null
   >(null);
   const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0);
-  const [generationRunning, setGenerationRunning] = useState(false);
+  const [localGenerationRunning, setGenerationRunning] = useState(false);
+  const [sharedLinkedGenerationRunning, setSharedLinkedGenerationRunning] = useState(false);
   /** Pendant יצירה « replace », pas de brouillon : sans ça les variantes restent celles du weekPlan jusqu’au reload + premier SSE — compteur חלופות figé. */
   const [replaceGenerationUiClear, setReplaceGenerationUiClear] = useState(false);
   // Par défaut: משיכות ללא (empty string).
@@ -277,6 +310,21 @@ export function usePlanningV2PlanController({
   useEffect(() => {
     setClientStorageReady(true);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (linkedSitesLength <= 1) {
+      setSharedLinkedGenerationRunning(false);
+      return;
+    }
+    const sync = () => setSharedLinkedGenerationRunning(readLinkedGenerationRunningFromSession(weekIso));
+    sync();
+    window.addEventListener("planning-v2-linked-generation-updated", sync as EventListener);
+    return () => window.removeEventListener("planning-v2-linked-generation-updated", sync as EventListener);
+  }, [linkedSitesLength, weekIso]);
+
+  const generationRunning = localGenerationRunning || sharedLinkedGenerationRunning;
+  const generationStoppable = localGenerationRunning && abortRef.current !== null;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -523,8 +571,11 @@ export function usePlanningV2PlanController({
     }
     setGenerationRunning(false);
     setReplaceGenerationUiClear(false);
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationRunningToSession(weekIso, false);
+    }
     genBusyRef.current = false;
-  }, []);
+  }, [linkedSitesLength, weekIso]);
 
   const runGeneration = useCallback(async (options?: GenerateOptions, mode: "replace" | "append" = "replace") => {
     const id = Number(siteId);
@@ -541,6 +592,9 @@ export function usePlanningV2PlanController({
     generationIdRef.current = null;
     genBusyRef.current = true;
     setGenerationRunning(true);
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationRunningToSession(weekIso, true);
+    }
     let appendExistingAlternativesCount = 0;
     if (!appendMode) {
       setReplaceGenerationUiClear(true);
@@ -1045,6 +1099,9 @@ export function usePlanningV2PlanController({
       }
       setGenerationRunning(false);
       setReplaceGenerationUiClear(false);
+      if (linkedSitesLength > 1) {
+        writeLinkedGenerationRunningToSession(weekIso, false);
+      }
       genBusyRef.current = false;
       abortRef.current = null;
       generationIdRef.current = null;
@@ -1258,6 +1315,7 @@ export function usePlanningV2PlanController({
     assignmentVariants,
     pullVariants,
     generationRunning,
+    generationStoppable,
     startGeneration,
     startMoreAlternatives,
     stopGeneration,

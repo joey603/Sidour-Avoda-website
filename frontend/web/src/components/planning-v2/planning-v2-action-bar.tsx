@@ -24,6 +24,7 @@ type PlanningV2ActionBarProps = {
   onCancelSavedEdit?: () => void | Promise<void>;
   reloadWeekPlan: (opts?: { silent?: boolean }) => void | Promise<void>;
   generationRunning: boolean;
+  generationStoppable?: boolean;
   onRequestGenerate: (options?: {
     excludeDays?: string[];
     fixedAssignments?: Record<string, Record<string, string[][]>>;
@@ -71,6 +72,7 @@ export function PlanningV2ActionBar({
   onCancelSavedEdit,
   reloadWeekPlan,
   generationRunning,
+  generationStoppable = true,
   onRequestGenerate,
   onStopGeneration,
   autoPullsLimit,
@@ -585,7 +587,7 @@ export function PlanningV2ActionBar({
         <div className="mx-auto grid w-full max-w-none grid-cols-1 place-items-center gap-3 px-3 py-3 text-sm md:gap-4 md:py-4 sm:px-6">
           <div className="order-2 flex w-full flex-col items-center justify-center gap-2 md:order-1 md:gap-2">
             <div className="flex w-full flex-nowrap items-center justify-center gap-2 overflow-x-auto [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
-              {generationRunning && (
+              {generationRunning && generationStoppable && (
                 <button
                   type="button"
                   onClick={() => onStopGeneration()}

@@ -84,7 +84,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   } = usePlanningV2SiteWorkers(siteId);
 
   const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(siteId, weekStart);
-  const { linkedSites, reloadLinkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
+  const { linkedSites, linkedSitesLoading, reloadLinkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const weekPurgeSiteIds = useMemo(() => {
     const s = new Set<number>();
     const cur = Number(siteId);
@@ -1005,6 +1005,54 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     plan.generationRunning && !alternativesUiEnabled && alternativesBarHold !== null;
   const actionBarAltSnap = actionBarAlternativesFrozen ? alternativesBarHold : null;
   const actionBarAlternativesResetPending = plan.generationRunning && !actionBarAltSnap && plan.alternativeCount === 0;
+  const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let inAppMultiSiteNavigation = false;
+    try {
+      inAppMultiSiteNavigation = sessionStorage.getItem(MULTI_SITE_NAV_FLAG) === "1";
+    } catch {
+      inAppMultiSiteNavigation = false;
+    }
+    setMultiSiteNavigationLoading(inAppMultiSiteNavigation);
+  }, [siteId, weekStart]);
+
+  useEffect(() => {
+    if (!multiSiteNavigationLoading) return;
+    if (linkedSitesLoading || siteLoading || workersLoading || weekPlanLoading) return;
+    let targetAltIdx = 0;
+    try {
+      targetAltIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
+    } catch {
+      targetAltIdx = 0;
+    }
+    const alternativesReadyForTarget =
+      targetAltIdx <= 0 ||
+      plan.selectedAlternativeIndex === targetAltIdx ||
+      plan.alternativeCount > targetAltIdx ||
+      actionBarAlternativesFrozen;
+    const linkedRailReady = linkedSites.length > 1 || !plan.generationRunning;
+    if (!alternativesReadyForTarget || !linkedRailReady) return;
+    setMultiSiteNavigationLoading(false);
+    try {
+      sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
+    } catch {
+      /* ignore */
+    }
+  }, [
+    multiSiteNavigationLoading,
+    linkedSitesLoading,
+    linkedSites.length,
+    siteLoading,
+    workersLoading,
+    weekPlanLoading,
+    weekStart,
+    plan.selectedAlternativeIndex,
+    plan.alternativeCount,
+    plan.generationRunning,
+    actionBarAlternativesFrozen,
+  ]);
 
   useEffect(() => {
     if (plan.generationRunning) return;
@@ -1852,6 +1900,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           }}
           reloadWeekPlan={reloadWeekPlan}
           generationRunning={plan.generationRunning}
+          generationStoppable={plan.generationStoppable}
           onRequestGenerate={plan.startGeneration}
           onStopGeneration={plan.stopGeneration}
           autoPullsLimit={plan.autoPullsLimit}
@@ -1895,9 +1944,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           }}
         />
       </PlanningV2LayoutShell>
-      {siteLoading || workersLoading || weekPlanLoading ? (
+      {siteLoading || workersLoading || weekPlanLoading || multiSiteNavigationLoading ? (
         <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
-          <LoadingAnimation size={96} />
+          <div className="flex flex-col items-center justify-center gap-3">
+            <LoadingAnimation size={96} />
+            {multiSiteNavigationLoading && plan.generationRunning ? (
+              <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">יוצר...</div>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {visualizationOpen ? (
