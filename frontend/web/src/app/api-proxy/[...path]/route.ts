@@ -25,7 +25,7 @@ async function proxyToBackend(request: NextRequest, context: { params: Promise<{
     method: request.method,
     headers: buildUpstreamHeaders(request),
     body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-    redirect: "manual",
+    redirect: "follow",
   });
 
   const responseHeaders = new Headers(upstreamResponse.headers);
