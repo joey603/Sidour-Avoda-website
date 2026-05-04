@@ -135,14 +135,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekPurgeSiteIds,
   });
 
-  /** חלופות : après יצירת תכנון, grille remplie — afficher 1/1 + « עוד » même s’il n’y a qu’une seule variante (base). */
+  /** חלופות : piloté par l’état des variantes, pas par le contenu affiché momentanément dans la grille. */
   const alternativesUiEnabled = useMemo(
     () =>
       plan.alternativesUnlocked &&
       !plan.isManual &&
-      assignmentsNonEmpty(plan.displayAssignments) &&
       plan.alternativeCount >= 1,
-    [plan.alternativesUnlocked, plan.isManual, plan.displayAssignments, plan.alternativeCount],
+    [plan.alternativesUnlocked, plan.isManual, plan.alternativeCount],
   );
 
   /** Recalculer la barre « אתרים מקושרים » quand sessionStorage (linked plans) change — le useMemo lit la mémoire sans que les autres deps bougent (ex. pendant SSE). */
@@ -1005,6 +1004,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const actionBarAlternativesFrozen =
     plan.generationRunning && !alternativesUiEnabled && alternativesBarHold !== null;
   const actionBarAltSnap = actionBarAlternativesFrozen ? alternativesBarHold : null;
+  const actionBarAlternativesResetPending = plan.generationRunning && !actionBarAltSnap && plan.alternativeCount === 0;
 
   useEffect(() => {
     if (plan.generationRunning) return;
@@ -1869,7 +1869,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           onSavePlan={handleSavePlan}
           onDraftClear={plan.clearDraft}
           draftActive={plan.draftActive}
-          alternativeCount={actionBarAltSnap ? actionBarAltSnap.alternativeCount : visibleAlternativeIndices.length}
+          alternativeCount={
+            actionBarAltSnap ? actionBarAltSnap.alternativeCount : actionBarAlternativesResetPending ? 0 : visibleAlternativeIndices.length
+          }
           selectedAlternativeIndex={
             actionBarAltSnap
               ? actionBarAltSnap.selectedAlternativeIndex
@@ -1880,7 +1882,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           }
           onRequestMoreAlternatives={plan.startMoreAlternatives}
           moreAlternativesAvailable={plan.moreAlternativesAvailable}
-          alternativesEnabled={alternativesUiEnabled || actionBarAlternativesFrozen}
+          alternativesEnabled={alternativesUiEnabled || actionBarAlternativesFrozen || actionBarAlternativesResetPending}
           alternativesFrozen={actionBarAlternativesFrozen}
           alternativesFiltered={
             actionBarAltSnap ? actionBarAltSnap.alternativesFiltered : summaryFilterState.hasActiveFilters

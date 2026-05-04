@@ -599,7 +599,8 @@ export function PlanningV2ActionBar({
               <div
                 className={
                   "inline-flex shrink-0 overflow-hidden rounded-md border disabled:opacity-60 " +
-                  (generationBlocked ? "border-zinc-300 dark:border-zinc-600" : "border-[#00A8E0]")
+                  (generationBlocked ? "border-zinc-300 dark:border-zinc-600" : "border-[#00A8E0]") +
+                  (generationRunning ? " backdrop-blur-md supports-[backdrop-filter]:bg-white/25 dark:supports-[backdrop-filter]:bg-zinc-900/35" : "")
                 }
               >
                 <button
@@ -614,7 +615,13 @@ export function PlanningV2ActionBar({
                   }
                 >
                   {generationRunning ? (
-                    <>יוצר...</>
+                    <span className="inline-flex items-center gap-2">
+                      <span
+                        className="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-zinc-500/35 border-t-zinc-700 motion-safe:animate-spin dark:border-zinc-400/30 dark:border-t-zinc-100"
+                        aria-hidden
+                      />
+                      יוצר...
+                    </span>
                   ) : (
                     <>
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
@@ -719,7 +726,7 @@ export function PlanningV2ActionBar({
               )}
             </div>
 
-            {showAutoManual && hasAlternatives && alternativesEnabled ? (
+            {showAutoManual && alternativesEnabled ? (
               <div className="flex w-full justify-center">
                 <div
                   className={
@@ -763,7 +770,7 @@ export function PlanningV2ActionBar({
                       </svg>
                     </button>
                     <span className="min-w-14 text-center text-xs font-medium text-zinc-700 dark:text-zinc-200" dir="ltr">
-                      {altDisplayCurrent + 1}/{altTotalCount || alternativeCount}
+                      {hasAlternatives ? `${altDisplayCurrent + 1}/${altTotalCount || alternativeCount}` : "0/0"}
                     </span>
                     <button
                       type="button"
