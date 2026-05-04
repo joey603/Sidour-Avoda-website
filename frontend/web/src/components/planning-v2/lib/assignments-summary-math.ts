@@ -126,6 +126,7 @@ export function sumTotalRequiredFromAssignments(
  */
 export function buildTotalAssignmentsByIdentity(
   workers: PlanningWorker[],
+  currentSiteId: string,
   weekStart: Date,
   currentAssignments: Record<string, Record<string, string[][]>> | null | undefined,
   currentPulls?: Record<string, { before?: { name?: string }; after?: { name?: string } }> | null,
@@ -152,8 +153,21 @@ export function buildTotalAssignmentsByIdentity(
   };
   const mem = readLinkedPlansFromMemory(weekStart);
   if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-    const sharedIdx = Math.max(0, Math.trunc(Number(mem.activeAltIndex || 0)));
-    for (const [, plan] of Object.entries(mem.plansBySite)) {
+    const sharedIdx = Math.max(
+      0,
+      Math.trunc(
+        Number(
+          selectedAlternativeIndex != null
+            ? selectedAlternativeIndex
+            : (mem.activeAltIndex || 0),
+        ),
+      ),
+    );
+    for (const [sid, plan] of Object.entries(mem.plansBySite)) {
+      if (String(sid) === String(currentSiteId)) {
+        accumulate(currentAssignments, currentPulls ?? null);
+        continue;
+      }
       const planAlts = Array.isArray(plan.alternatives) ? plan.alternatives : [];
       // Si sharedIdx dépasse les alternatives disponibles pour ce site,
       // utiliser la dernière alternative disponible (pas le plan de base)

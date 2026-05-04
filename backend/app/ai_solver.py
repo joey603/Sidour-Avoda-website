@@ -1511,6 +1511,7 @@ def solve_schedule_stream(
     num_alternatives: int = 20,
     fixed_assignments: Dict[str, Dict[str, List[List[str]]]] | None = None,
     exclude_days: List[str] | None = None,
+    random_seed: int | None = None,
 ):
     """Generator: yields incremental planning results: base then alternatives.
     Each yield is a dict with keys: type ('base'|'alternative'|'done'|'status'), and data.
@@ -1777,6 +1778,9 @@ def solve_schedule_stream(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
     solver.parameters.num_search_workers = _solver_num_search_workers()
+    if random_seed is not None:
+        solver.parameters.random_seed = max(1, int(random_seed))
+        solver.parameters.randomize_search = True
     res = solver.Solve(model)
     if res not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         logger.warning("[STREAM] base solve failed status=%s", res)
@@ -2370,6 +2374,9 @@ def solve_schedule_stream(
             solver2 = cp_model.CpSolver()
             solver2.parameters.max_time_in_seconds = float(max(1, int(time_limit_seconds)))
             solver2.parameters.num_search_workers = _solver_num_search_workers()
+            if random_seed is not None:
+                solver2.parameters.random_seed = max(1, int(random_seed)) + max(1, tried)
+                solver2.parameters.randomize_search = True
             res2 = solver2.Solve(model)
             if res2 not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
                 logger.info("[STREAM] re-solve ended with status=%s", res2)

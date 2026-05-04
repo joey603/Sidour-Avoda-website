@@ -61,6 +61,124 @@ _ACTIVE_GENERATIONS: dict[str, dict[str, object]] = {}
 _ACTIVE_GENERATIONS_BY_DIRECTOR: dict[int, int] = {}
 
 
+def _count_assignments_per_worker(
+    assignments: dict | None,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if not assignments or not isinstance(assignments, dict):
+        return counts
+    for day_map in assignments.values():
+        if not isinstance(day_map, dict):
+            continue
+        for per_station in day_map.values():
+            if not isinstance(per_station, list):
+                continue
+            for cell in per_station:
+                if not isinstance(cell, list):
+                    continue
+                for nm in cell:
+                    clean = str(nm or "").strip()
+                    if not clean:
+                        continue
+                    counts[clean] = counts.get(clean, 0) + 1
+    return counts
+
+
+def _log_single_site_generation_worker_totals(
+    *,
+    generation_id: str,
+    site_id: int,
+    item_type: str,
+    item_index: int | None,
+    workers: list[dict],
+    assignments: dict | None,
+) -> None:
+    counts = dict(sorted(_count_assignments_per_worker(assignments).items()))
+    solver_max = {
+        str(w.get("name") or "").strip(): int(w.get("max_shifts") or 5)
+        for w in workers
+        if str(w.get("name") or "").strip()
+    }
+    over = {
+        nm: {"total": cnt, "max_shifts": solver_max.get(nm, 5)}
+        for nm, cnt in counts.items()
+        if cnt > solver_max.get(nm, 5)
+    }
+    logger.info(
+        "[GEN_DIAG][single][%s] generation=%s site=%s index=%s totals=%s",
+        item_type,
+        generation_id,
+        site_id,
+        item_index,
+        counts,
+    )
+    if over:
+        logger.warning(
+            "[GEN_DIAG][single][%s] generation=%s site=%s index=%s workers_over_max=%s",
+            item_type,
+            generation_id,
+            site_id,
+            item_index,
+            over,
+        )
+
+
+def _log_linked_generation_worker_totals(
+    *,
+    generation_id: str,
+    site_id: int,
+    item_type: str,
+    item_index: int | None,
+    site_plans: dict[str, dict] | None,
+    context: dict,
+) -> None:
+    display_name_to_max: dict[str, int] = {}
+    display_name_by_solver_site = context.get("display_name_by_solver_site") or {}
+    for w in (context.get("combined_workers") or []):
+        solver_name = str(w.get("name") or "").strip()
+        max_s = int(w.get("max_shifts") or 5)
+        for (sn, _sid), dname in display_name_by_solver_site.items():
+            if str(sn) != solver_name:
+                continue
+            clean = str(dname or "").strip()
+            if not clean:
+                continue
+            display_name_to_max[clean] = min(display_name_to_max.get(clean, max_s), max_s)
+
+    per_site_counts: dict[str, dict[str, int]] = {}
+    global_counts: dict[str, int] = {}
+    for sid, plan in (site_plans or {}).items():
+        assignments = plan.get("assignments") if isinstance(plan, dict) else None
+        counts = dict(sorted(_count_assignments_per_worker(assignments).items()))
+        per_site_counts[str(sid)] = counts
+        for nm, cnt in counts.items():
+            global_counts[nm] = global_counts.get(nm, 0) + cnt
+    global_counts = dict(sorted(global_counts.items()))
+    over = {
+        nm: {"total": cnt, "max_shifts": display_name_to_max.get(nm, 5)}
+        for nm, cnt in global_counts.items()
+        if cnt > display_name_to_max.get(nm, 5)
+    }
+    logger.info(
+        "[GEN_DIAG][linked][%s] generation=%s root_site=%s index=%s per_site=%s global=%s",
+        item_type,
+        generation_id,
+        site_id,
+        item_index,
+        per_site_counts,
+        global_counts,
+    )
+    if over:
+        logger.warning(
+            "[GEN_DIAG][linked][%s] generation=%s root_site=%s index=%s workers_over_max=%s",
+            item_type,
+            generation_id,
+            site_id,
+            item_index,
+            over,
+        )
+
+
 def _validate_week_iso(week_iso: str) -> str:
     wk = (week_iso or "").strip()
     if not _WEEK_ISO_RE.match(wk):
@@ -668,8 +786,8 @@ def _clamp_generation_budget(
             max(1, min(int(num_alternatives), 320)),
         )
     return (
-        max(6, min(int(time_limit_seconds), 20)),
-        max(1, min(int(num_alternatives), 120)),
+        max(6, min(int(time_limit_seconds), 30)),
+        max(1, min(int(num_alternatives), 180)),
     )
 
 
@@ -1644,6 +1762,129 @@ def _split_multi_site_assignments(
     return site_plans_local
 
 
+def _payload_variant_assignments(payload: dict, variant_index: int) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    if variant_index < 0:
+        src = payload.get("assignments")
+    else:
+        alternatives = payload.get("alternatives")
+        src = alternatives[variant_index] if isinstance(alternatives, list) and variant_index < len(alternatives) else None
+    return deepcopy(src) if isinstance(src, dict) else {}
+
+
+def _payload_has_variant(payload: dict, variant_index: int) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if variant_index < 0:
+        return isinstance(payload.get("assignments"), dict)
+    alternatives = payload.get("alternatives")
+    return bool(isinstance(alternatives, list) and variant_index < len(alternatives) and isinstance(alternatives[variant_index], dict))
+
+
+def _set_payload_variant_assignments(payload: dict, variant_index: int, assignments: dict) -> None:
+    if variant_index < 0:
+        payload["assignments"] = assignments
+        return
+    alternatives = payload.get("alternatives")
+    if not isinstance(alternatives, list) or variant_index >= len(alternatives):
+        return
+    alternatives[variant_index] = assignments
+
+
+def _enforce_linked_global_caps_on_site_payloads(
+    db: Session,
+    linked_site_ids: list[int],
+    week_iso: str,
+    payloads_by_site: dict[str, dict],
+) -> dict[str, dict]:
+    if len(linked_site_ids) <= 1 or not payloads_by_site:
+        return {str(site_id): deepcopy(payload) for site_id, payload in payloads_by_site.items()}
+
+    rows = [
+        row
+        for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids)).all()
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
+    ]
+    if not rows:
+        return {str(site_id): deepcopy(payload) for site_id, payload in payloads_by_site.items()}
+
+    normalized_payloads: dict[str, dict] = {
+        str(site_id): deepcopy(payload) if isinstance(payload, dict) else {}
+        for site_id, payload in payloads_by_site.items()
+    }
+    name_to_key_by_site: dict[int, dict[str, str]] = {}
+    max_by_worker_key: dict[str, int] = {}
+    for row in rows:
+        worker_key = _worker_identity_key(row)
+        if not worker_key:
+            continue
+        site_id_int = int(row.site_id)
+        display_name = _norm_name_local(getattr(row, "name", ""))
+        if display_name:
+            name_to_key_by_site.setdefault(site_id_int, {})[display_name] = worker_key
+        max_shifts = int(getattr(row, "max_shifts", 5) or 5)
+        max_by_worker_key[worker_key] = min(max_by_worker_key.get(worker_key, max_shifts), max_shifts)
+
+    if not max_by_worker_key:
+        return normalized_payloads
+
+    max_alternative_count = max(
+        (
+            len(payload.get("alternatives") or [])
+            if isinstance(payload.get("alternatives"), list) else 0
+        )
+        for payload in normalized_payloads.values()
+    ) if normalized_payloads else 0
+
+    for variant_index in [-1, *range(max_alternative_count)]:
+        global_counts: dict[str, int] = {}
+        variant_label = "base" if variant_index < 0 else f"alt:{variant_index + 1}"
+        for site_id_str in sorted(normalized_payloads.keys(), key=lambda value: int(value)):
+            payload = normalized_payloads[site_id_str]
+            if not _payload_has_variant(payload, variant_index):
+                continue
+            site_id_int = int(site_id_str)
+            assignments = _payload_variant_assignments(payload, variant_index)
+            name_to_key = name_to_key_by_site.get(site_id_int, {})
+            for day_key, shifts_map in assignments.items():
+                if not isinstance(shifts_map, dict):
+                    continue
+                for shift_name, per_station in shifts_map.items():
+                    if not isinstance(per_station, list):
+                        continue
+                    for cell in per_station:
+                        if not isinstance(cell, list):
+                            continue
+                        kept: list[str] = []
+                        for raw_name in cell:
+                            normalized_name = _norm_name_local(raw_name)
+                            if not normalized_name:
+                                continue
+                            worker_key = name_to_key.get(normalized_name)
+                            max_allowed = max_by_worker_key.get(worker_key) if worker_key else None
+                            if worker_key and max_allowed is not None and global_counts.get(worker_key, 0) >= max_allowed:
+                                logger.warning(
+                                    "[PUT_WEEK_PLAN][GLOBAL_CAP] removed extra assignment worker=%r worker_key=%s site=%s variant=%s day=%s shift=%s global_count=%d max=%d",
+                                    normalized_name,
+                                    worker_key,
+                                    site_id_str,
+                                    variant_label,
+                                    day_key,
+                                    shift_name,
+                                    global_counts.get(worker_key, 0),
+                                    max_allowed,
+                                )
+                                continue
+                            if worker_key and max_allowed is not None:
+                                global_counts[worker_key] = global_counts.get(worker_key, 0) + 1
+                            kept.append(str(raw_name).strip())
+                        cell[:] = kept
+            _set_payload_variant_assignments(payload, variant_index, assignments)
+
+    return normalized_payloads
+
+
 def _generate_multi_site_memory_plans(
     db: Session,
     director_id: int,
@@ -2481,7 +2722,35 @@ def put_week_plan(
         .filter(SiteWeekPlan.scope == sc)
         .first()
     )
-    data = payload.data or None
+    data = deepcopy(payload.data) if isinstance(payload.data, dict) else None
+    linked_auto_payloads_to_save: dict[str, dict] = {}
+    if sc == "auto" and isinstance(data, dict):
+        linked_site_ids = _connected_site_ids_for_root(db, user.id, site_id, wk)
+        if len(linked_site_ids) > 1:
+            existing_auto_rows = (
+                db.query(SiteWeekPlan)
+                .filter(SiteWeekPlan.site_id.in_(linked_site_ids))
+                .filter(SiteWeekPlan.week_iso == wk)
+                .filter(SiteWeekPlan.scope == "auto")
+                .all()
+            )
+            payloads_by_site: dict[str, dict] = {
+                str(int(existing_row.site_id)): deepcopy(existing_row.data) if isinstance(existing_row.data, dict) else {}
+                for existing_row in existing_auto_rows
+            }
+            payloads_by_site[str(site_id)] = data
+            normalized_payloads = _enforce_linked_global_caps_on_site_payloads(
+                db,
+                linked_site_ids,
+                wk,
+                payloads_by_site,
+            )
+            data = normalized_payloads.get(str(site_id), data)
+            linked_auto_payloads_to_save = {
+                site_id_key: site_payload
+                for site_id_key, site_payload in normalized_payloads.items()
+                if int(site_id_key) != int(site_id)
+            }
     if row:
         row.data = data or {}
         row.updated_at = now
@@ -2489,6 +2758,9 @@ def put_week_plan(
     else:
         row = SiteWeekPlan(site_id=site_id, week_iso=wk, scope=sc, data=data or {}, updated_at=now)
         db.add(row)
+    if sc == "auto" and linked_auto_payloads_to_save:
+        for linked_site_id_str, linked_payload in linked_auto_payloads_to_save.items():
+            _save_site_week_plan(db, int(linked_site_id_str), wk, "auto", linked_payload)
     if sc in ("director", "shared"):
         auto_row = (
             db.query(SiteWeekPlan)
@@ -3965,7 +4237,7 @@ async def ai_generate_linked_planning_stream(
         raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
 
     async def event_stream():
-        import threading, queue, json, asyncio as _asyncio
+        import threading, queue, json, asyncio as _asyncio, time as _time
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
         released = False
 
@@ -3985,7 +4257,7 @@ async def ai_generate_linked_planning_stream(
             search_num_alts = _clamp_generation_budget(
                 eff_time,
                 max(target_kept_alternatives, target_kept_alternatives * 2),
-                linked=False,
+                linked=True,
             )[1]
 
             def _enqueue(item: dict | None, *, drop_if_full: bool = False) -> None:
@@ -4005,73 +4277,141 @@ async def ai_generate_linked_planning_stream(
                 q.put(payload)
 
             try:
-                gen = solve_schedule_stream(
-                    context["combined_config"],
-                    context["combined_workers"],
-                    time_limit_seconds=eff_time,
-                    max_nights_per_worker=eff_max_nights,
-                    num_alternatives=eff_num_alts,
-                    fixed_assignments=context["combined_fixed"],
-                    exclude_days=(payload.exclude_days or None),
-                )
-                for item in gen:
-                    if item.get("type") in {"base", "alternative"}:
-                        split_site_plans = _split_multi_site_assignments(
-                            context,
-                            item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
-                            status="STREAMING" if item.get("type") == "base" else None,
-                            objective=0,
-                        )
-                        split_site_plans = _enforce_role_requirements_on_site_plans(
-                            db,
-                            context["sites_by_id"],
-                            split_site_plans,
-                        )
-                        if payload and payload.auto_pulls_enabled:
-                            split_site_plans = _apply_auto_pulls_to_site_plans(
+                deadline_monotonic = _time.monotonic() + max(1, int(eff_time))
+                attempts = 0
+                base_sent = False
+
+                while kept_alternatives_count < target_kept_alternatives:
+                    remaining_seconds = deadline_monotonic - _time.monotonic()
+                    if remaining_seconds <= 0:
+                        break
+                    attempts += 1
+                    attempt_time = max(1, int(remaining_seconds + 0.999))
+                    # Diversifie les relances multi-site pour ne pas retomber
+                    # systématiquement sur le même sous-ensemble d'alternatives.
+                    attempt_random_seed = max(1, int(site_id) * 1000 + attempts * 7919)
+                    attempt_search_num_alts = _clamp_generation_budget(
+                        attempt_time,
+                        max(search_num_alts, target_kept_alternatives * 2),
+                        linked=True,
+                    )[1]
+
+                    gen = solve_schedule_stream(
+                        context["combined_config"],
+                        context["combined_workers"],
+                        time_limit_seconds=attempt_time,
+                        max_nights_per_worker=eff_max_nights,
+                        num_alternatives=attempt_search_num_alts,
+                        fixed_assignments=context["combined_fixed"],
+                        exclude_days=(payload.exclude_days or None),
+                        random_seed=attempt_random_seed,
+                    )
+                    for item in gen:
+                        item_type = item.get("type")
+                        if item_type in {"base", "alternative"}:
+                            split_site_plans = _split_multi_site_assignments(
+                                context,
+                                item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
+                                status="STREAMING" if item_type == "base" else None,
+                                objective=0,
+                            )
+                            split_site_plans = _enforce_role_requirements_on_site_plans(
                                 db,
                                 context["sites_by_id"],
                                 split_site_plans,
-                                pulls_limit=eff_pulls_limit,
-                                pulls_limits_by_site=eff_pulls_limits_by_site or None,
                             )
-                        if eff_pulls_limit is not None or eff_pulls_limits_by_site:
-                            if not split_site_plans:
-                                continue
-                            plans = list(split_site_plans.items())
-                            if not plans or not all(
-                                _site_pulls_limit_matches(
-                                    int(site_key),
-                                    site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {},
-                                    default_pulls_limit=eff_pulls_limit,
-                                    pulls_limits_by_site=eff_pulls_limits_by_site or None,
-                                )
-                                for site_key, site_plan in plans
-                            ):
-                                continue
-                            matched_candidates += 1
-                        _enqueue({
-                            "type": item.get("type"),
-                            "index": item.get("index"),
-                            "source": item.get("source"),
-                            "linked_sites": linked_sites,
-                            "site_plans": split_site_plans,
-                        }, drop_if_full=item.get("type") == "alternative")
-                    else:
-                        if item.get("type") == "done" and (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
-                            _enqueue({
-                                "type": "status",
-                                "status": "ERROR",
-                                "detail": _planning_limit_error_detail_for_request(
+                            if payload and payload.auto_pulls_enabled:
+                                split_site_plans = _apply_auto_pulls_to_site_plans(
+                                    db,
+                                    context["sites_by_id"],
+                                    split_site_plans,
                                     pulls_limit=eff_pulls_limit,
                                     pulls_limits_by_site=eff_pulls_limits_by_site or None,
-                                ),
+                                )
+                            if eff_pulls_limit is not None or eff_pulls_limits_by_site:
+                                if not split_site_plans:
+                                    continue
+                                plans = list(split_site_plans.items())
+                                if not plans or not all(
+                                    _site_pulls_limit_matches(
+                                        int(site_key),
+                                        site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {},
+                                        default_pulls_limit=eff_pulls_limit,
+                                        pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                                    )
+                                    for site_key, site_plan in plans
+                                ):
+                                    continue
+                                matched_candidates += 1
+
+                            if item_type == "base":
+                                _log_linked_generation_worker_totals(
+                                    generation_id=generation_id,
+                                    site_id=int(site_id),
+                                    item_type="base",
+                                    item_index=None,
+                                    site_plans=split_site_plans,
+                                    context=context,
+                                )
+                                if not base_sent:
+                                    _enqueue({
+                                        "type": "base",
+                                        "source": item.get("source"),
+                                        "linked_sites": linked_sites,
+                                        "site_plans": split_site_plans,
+                                    })
+                                    base_sent = True
+                                continue
+
+                            try:
+                                sig = json.dumps(split_site_plans, ensure_ascii=False, sort_keys=True)
+                            except Exception:
+                                sig = ""
+                            if sig and sig in kept_alternative_signatures:
+                                continue
+                            if sig:
+                                kept_alternative_signatures.add(sig)
+                            kept_alternatives_count += 1
+                            _log_linked_generation_worker_totals(
+                                generation_id=generation_id,
+                                site_id=int(site_id),
+                                item_type="alternative",
+                                item_index=kept_alternatives_count,
+                                site_plans=split_site_plans,
+                                context=context,
+                            )
+                            _enqueue({
+                                "type": "alternative",
+                                "index": kept_alternatives_count,
+                                "source": item.get("source"),
                                 "linked_sites": linked_sites,
-                            })
+                                "site_plans": split_site_plans,
+                            }, drop_if_full=True)
+                            if kept_alternatives_count >= target_kept_alternatives:
+                                break
                             continue
+
+                        if item_type == "done":
+                            continue
+
                         enriched = dict(item)
                         enriched["linked_sites"] = linked_sites
-                        _enqueue(enriched, drop_if_full=item.get("type") == "alternative")
+                        _enqueue(enriched, drop_if_full=item_type == "alternative")
+
+                    if kept_alternatives_count >= target_kept_alternatives:
+                        break
+
+                if (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
+                    _enqueue({
+                        "type": "status",
+                        "status": "ERROR",
+                        "detail": _planning_limit_error_detail_for_request(
+                            pulls_limit=eff_pulls_limit,
+                            pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                        ),
+                        "linked_sites": linked_sites,
+                    })
+                _enqueue({"type": "done", "linked_sites": linked_sites})
             except Exception as e:
                 _enqueue({"type": "status", "status": "ERROR", "detail": str(e), "linked_sites": linked_sites})
             finally:
@@ -4416,6 +4756,9 @@ async def ai_generate_stream(
                         break
                     attempts += 1
                     attempt_time = max(1, int(remaining_seconds + 0.999))
+                    # Diversifie les relances d'une même génération simple pour éviter
+                    # de retomber systématiquement sur les 1-2 premières solutions.
+                    attempt_random_seed = max(1, int(site_id) * 1000 + attempts * 7919)
                     attempt_search_num_alts = _clamp_generation_budget(
                         attempt_time,
                         max(search_num_alts, target_kept_alternatives * 2),
@@ -4429,6 +4772,7 @@ async def ai_generate_stream(
                         num_alternatives=attempt_search_num_alts,
                         fixed_assignments=payload.fixed_assignments or None,
                         exclude_days=(payload.exclude_days or None),
+                        random_seed=attempt_random_seed,
                     )
                     for item in gen:
                         if item.get("type") in {"base", "alternative"} and payload.auto_pulls_enabled:
@@ -4452,12 +4796,36 @@ async def ai_generate_stream(
                             enriched["assignments"] = transformed.get("assignments") or {}
                             enriched["pulls"] = transformed.get("pulls") or {}
                             matched_candidates += 1
+                            _log_single_site_generation_worker_totals(
+                                generation_id=generation_id,
+                                site_id=int(site_id),
+                                item_type=str(item.get("type") or ""),
+                                item_index=(
+                                    int(item.get("index"))
+                                    if item.get("type") == "alternative" and str(item.get("index") or "").strip()
+                                    else None
+                                ),
+                                workers=workers,
+                                assignments=enriched.get("assignments") if isinstance(enriched.get("assignments"), dict) else {},
+                            )
                         elif item.get("type") in {"base", "alternative"}:
                             enriched = dict(item)
                             enriched["assignments"] = _enforce_role_requirements_on_assignments(
                                 site.config or {},
                                 item.get("assignments") if isinstance(item.get("assignments"), dict) else {},
                                 rows,
+                            )
+                            _log_single_site_generation_worker_totals(
+                                generation_id=generation_id,
+                                site_id=int(site_id),
+                                item_type=str(item.get("type") or ""),
+                                item_index=(
+                                    int(item.get("index"))
+                                    if item.get("type") == "alternative" and str(item.get("index") or "").strip()
+                                    else None
+                                ),
+                                workers=workers,
+                                assignments=enriched.get("assignments") if isinstance(enriched.get("assignments"), dict) else {},
                             )
                         else:
                             enriched = dict(item)

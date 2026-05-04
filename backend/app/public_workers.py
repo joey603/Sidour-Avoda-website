@@ -178,6 +178,26 @@ def _extract_week_answers(raw_answers: dict | None, week_iso: str | None) -> dic
     return answers
 
 
+def _answer_value_present(value: object) -> bool:
+    return value is not None and value != ""
+
+
+def _week_answers_submitted(week_answers: dict | None) -> bool:
+    if not isinstance(week_answers, dict):
+        return False
+    if bool(week_answers.get("_availability_submitted")):
+        return True
+    general = week_answers.get("general")
+    if isinstance(general, dict) and any(_answer_value_present(v) for v in general.values()):
+        return True
+    per_day = week_answers.get("perDay")
+    if isinstance(per_day, dict):
+        for day_answers in per_day.values():
+            if isinstance(day_answers, dict) and any(_answer_value_present(v) for v in day_answers.values()):
+                return True
+    return False
+
+
 @router.get("/worker-sites")
 def get_worker_sites(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Endpoint pour obtenir la liste des sites où un travailleur est enregistré"""
@@ -242,6 +262,7 @@ def get_worker_context(
     merged_answers_general: dict[str, object] = {}
     merged_answers_per_day: dict[str, dict[str, object]] = {}
     max_shifts_candidates: list[int] = []
+    submitted_for_week = False
 
     for row in rows:
         site = sites_by_id_active.get(int(row.site_id))
@@ -289,6 +310,8 @@ def get_worker_context(
             max_shifts_candidates.append(int(row.max_shifts))
 
         week_answers = _extract_week_answers(row.answers if isinstance(row.answers, dict) else {}, wk)
+        if wk and _week_answers_submitted(week_answers):
+            submitted_for_week = True
         general = week_answers.get("general") if isinstance(week_answers, dict) else {}
         per_day = week_answers.get("perDay") if isinstance(week_answers, dict) else {}
         if isinstance(general, dict):
@@ -333,6 +356,7 @@ def get_worker_context(
         availability=merged_availability,
         answers={"general": merged_answers_general, "perDay": merged_answers_per_day},
         max_shifts=min(max_shifts_candidates) if max_shifts_candidates else 5,
+        submitted_for_week=submitted_for_week,
     )
 
 
@@ -364,6 +388,7 @@ def save_worker_context(
     payload_answers = payload.answers if isinstance(payload.answers, dict) else {}
     general_answers = payload_answers.get("general") if isinstance(payload_answers.get("general"), dict) else {}
     per_day_answers = payload_answers.get("perDay") if isinstance(payload_answers.get("perDay"), dict) else {}
+    submitted_at = int(datetime.now().timestamp() * 1000)
 
     for row in rows:
         row.availability = payload.availability or {}
@@ -387,6 +412,8 @@ def save_worker_context(
         if wk:
             base = row.answers if isinstance(row.answers, dict) else {}
             next_answers = dict(base)
+            answers_data["_availability_submitted"] = True
+            answers_data["_submitted_at"] = submitted_at
             next_answers[wk] = answers_data
             row.answers = next_answers
         else:

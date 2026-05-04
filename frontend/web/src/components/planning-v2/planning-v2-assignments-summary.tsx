@@ -36,6 +36,48 @@ function normHighlightName(s: string): string {
     .replace(/\s+/g, " ");
 }
 
+function normSummaryWorkerName(s: string): string {
+  return String(s || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function countVisibleAssignmentsWithPulls(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  pulls: PlanningV2PullsMap | null | undefined,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  const plan = assignments ?? {};
+  for (const [dayKey, shiftsMap] of Object.entries(plan)) {
+    for (const [shiftName, perStation] of Object.entries(shiftsMap || {})) {
+      (perStation || []).forEach((cell, stationIdx) => {
+        const merged = Array.isArray(cell) ? cell.map((x) => String(x || "").trim()) : [];
+        const have = new Set(merged.map((x) => normSummaryWorkerName(x)).filter(Boolean));
+        const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
+        Object.entries(pulls || {}).forEach(([key, entry]) => {
+          if (!String(key).startsWith(cellPrefix) || !entry || typeof entry !== "object") return;
+          const before = String((entry as PlanningV2PullsMap[string])?.before?.name || "").trim();
+          const after = String((entry as PlanningV2PullsMap[string])?.after?.name || "").trim();
+          for (const name of [before, after]) {
+            const norm = normSummaryWorkerName(name);
+            if (!norm || have.has(norm)) continue;
+            merged.push(name);
+            have.add(norm);
+          }
+        });
+        for (const name of merged) {
+          const clean = String(name || "").trim();
+          if (!clean) continue;
+          counts.set(clean, (counts.get(clean) || 0) + 1);
+        }
+      });
+    }
+  }
+  return counts;
+}
+
 function SummaryWorkerChip({
   name,
   nameColorMap,
@@ -78,8 +120,8 @@ function SummaryWorkerChip({
             </>
           ) : (
             <>
-              <span className="text-[8px] md:hidden">{truncateSummaryMobile(name)}</span>
-              <span className="hidden truncate text-[8px] md:block md:text-sm">{name}</span>
+          <span className="text-[8px] md:hidden">{truncateSummaryMobile(name)}</span>
+          <span className="hidden truncate text-[8px] md:block md:text-sm">{name}</span>
             </>
           )}
         </span>
@@ -170,12 +212,13 @@ export function PlanningV2AssignmentsSummary({
     void memoryTick;
     return buildTotalAssignmentsByIdentity(
       workers,
+      siteId,
       weekStart,
       assignments ?? {},
       pulls ?? null,
       selectedAlternativeIndex,
     );
-  }, [workers, weekStart, assignments, pulls, selectedAlternativeIndex, memoryTick]);
+  }, [workers, siteId, weekStart, assignments, pulls, selectedAlternativeIndex, memoryTick]);
 
   const nameColorMap = useMemo(() => {
     const bundles = [assignments, ...(assignmentVariants || [])].filter(
@@ -536,6 +579,11 @@ export function PlanningV2AssignmentsSummary({
     return { items: sorted, totalRequired: tr, totalAssigned: ta };
   }, [assignments, workers, stations, pulls]);
 
+  const visibleCountsWithPulls = useMemo(
+    () => countVisibleAssignmentsWithPulls(assignments ?? {}, pulls ?? null),
+    [assignments, pulls],
+  );
+
   if (loading) {
     return (
       <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
@@ -678,13 +726,13 @@ export function PlanningV2AssignmentsSummary({
                 </td>
                 <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
                   {assignmentCountsByVariant.length > 1 ? (
-                    <NumberPicker
+                        <NumberPicker
                       value={pickerValue}
-                      onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
-                      min={minAllowed}
-                      max={maxAllowed}
+                          onChange={(value) => handleAssignmentCountFilterChange(nm, String(value), maxAllowed)}
+                          min={minAllowed}
+                          max={maxAllowed}
                       allowedOptions={boundedAllowedCounts}
-                      placeholder={String(c)}
+                          placeholder={String(c)}
                       disabled={!alternativesEnabled}
                       className={filterSelectClass}
                       inputAriaLabel={`מספר משמרות עבור ${nm}`}

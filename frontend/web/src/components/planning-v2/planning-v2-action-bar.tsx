@@ -48,6 +48,7 @@ type PlanningV2ActionBarProps = {
   selectedAlternativeDisplayIndex?: number;
   onSelectedAlternativeChange: (index: number) => void;
   onRequestMoreAlternatives?: () => void;
+  moreAlternativesAvailable?: boolean;
   /** Faux tant qu’aucune יצירת תכנון n’a produit de plan (ou pas d’alternatives côté serveur / brouillon). */
   alternativesEnabled?: boolean;
   alternativesFiltered?: boolean;
@@ -84,6 +85,7 @@ export function PlanningV2ActionBar({
   selectedAlternativeDisplayIndex,
   onSelectedAlternativeChange,
   onRequestMoreAlternatives,
+  moreAlternativesAvailable = true,
   alternativesEnabled = true,
   alternativesFiltered = false,
   alternativesTotalCount,
@@ -191,6 +193,7 @@ export function PlanningV2ActionBar({
   const canRequestMoreAlternatives =
     alternativesInteractive &&
     hasAlternatives &&
+    moreAlternativesAvailable &&
     !generationBlocked &&
     assignmentsNonEmpty(effectiveAssignments) &&
     typeof onRequestMoreAlternatives === "function";
@@ -789,7 +792,7 @@ export function PlanningV2ActionBar({
                           ? "border-[#00A8E0] bg-[#00A8E0] text-white hover:bg-[#0092c6]"
                           : "cursor-not-allowed border-zinc-200 text-zinc-400 dark:border-zinc-800 dark:text-zinc-500")
                       }
-                      title="יצירת חלופות נוספות"
+                      title={moreAlternativesAvailable ? "יצירת חלופות נוספות" : "אין חלופות חדשות נוספות"}
                     >
                       <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden>
                         <path d="M19 11h-6V5h-2v6H5v2h6v6h2v-6h6z" />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -31,6 +31,7 @@ type WorkerContextResponse = {
   roles: string[];
   availability: Record<string, string[]>;
   answers: WorkerContextAnswers | Record<string, AnswerValue>;
+  submitted_for_week?: boolean;
 };
 type LocalWorkerContextCache = {
   availability?: Record<string, string[]>;
@@ -42,44 +43,48 @@ type LocalWorkerContextCache = {
   siteName?: string;
 };
 
-/** True si au moins un créneau est choisi (pas seulement un objet semaine vide). */
-function hasAvailabilityShifts(av: Record<string, string[]> | undefined | null): boolean {
-  if (!av || typeof av !== "object") return false;
-  return Object.values(av).some((shifts) => Array.isArray(shifts) && shifts.length > 0);
+type WeekRange = {
+  start: Date;
+  end: Date;
+};
+
+function emptyAvailability(): WorkerAvailability {
+  return {
+    sun: [],
+    mon: [],
+    tue: [],
+    wed: [],
+    thu: [],
+    fri: [],
+    sat: [],
+  };
 }
 
-/** True si au moins une réponse est renseignée (hors null / undefined / chaîne vide). */
-function hasAnswersContent(
-  answers: WorkerContextAnswers | Record<string, AnswerValue> | undefined | null
-): boolean {
-  if (!answers || typeof answers !== "object") return false;
-  const isPresent = (v: unknown): boolean =>
-    v !== null && v !== undefined && v !== "";
+function calculateNextWeek(from: Date = new Date()): WeekRange {
+  const today = new Date(from);
+  const currentDay = today.getDay(); // 0 = dimanche, 6 = samedi
+  const daysUntilNextSunday = currentDay === 0 ? 7 : 7 - currentDay;
 
-  if ("general" in answers || "perDay" in answers) {
-    const a = answers as WorkerContextAnswers;
-    const g = a.general;
-    if (g && typeof g === "object") {
-      for (const v of Object.values(g)) {
-        if (isPresent(v)) return true;
-      }
-    }
-    const pd = a.perDay;
-    if (pd && typeof pd === "object") {
-      for (const day of Object.values(pd)) {
-        if (day && typeof day === "object") {
-          for (const v of Object.values(day)) {
-            if (isPresent(v)) return true;
-          }
-        }
-      }
-    }
-    return false;
-  }
-  for (const v of Object.values(answers as Record<string, AnswerValue>)) {
-    if (isPresent(v)) return true;
-  }
-  return false;
+  const nextSunday = new Date(today);
+  nextSunday.setDate(today.getDate() + daysUntilNextSunday);
+  nextSunday.setHours(0, 0, 0, 0);
+
+  const nextSaturday = new Date(nextSunday);
+  nextSaturday.setDate(nextSunday.getDate() + 6);
+  nextSaturday.setHours(23, 59, 59, 999);
+
+  return { start: nextSunday, end: nextSaturday };
+}
+
+function getWeekKey(date: Date, wid?: number | null): string {
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const suffix = wid ? `_w${wid}` : "";
+  return `worker_avail_global_${iso(date)}${suffix}`;
+}
+
+function getWeekKeyISO(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 export default function WorkerAvailabilityPage() {
@@ -94,57 +99,31 @@ export default function WorkerAvailabilityPage() {
   const [siteQuestions, setSiteQuestions] = useState<SiteQuestion[]>([]);
   const [answersGeneral, setAnswersGeneral] = useState<Record<string, AnswerValue>>({});
   const [answersPerDay, setAnswersPerDay] = useState<Record<string, Record<string, AnswerValue>>>({});
-  const [availability, setAvailability] = useState<WorkerAvailability>({
-    sun: [],
-    mon: [],
-    tue: [],
-    wed: [],
-    thu: [],
-    fri: [],
-    sat: [],
-  });
+  const [availability, setAvailability] = useState<WorkerAvailability>(() => emptyAvailability());
   const [success, setSuccess] = useState(false);
   const [workerName, setWorkerName] = useState<string>("");
   const [workerId, setWorkerId] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [hasBeenSaved, setHasBeenSaved] = useState(false); // Pour savoir si on a déjà sauvegardé
-  const [nextWeekStart] = useState<Date>(() => calculateNextWeek().start);
-  const [nextWeekEnd] = useState<Date>(() => calculateNextWeek().end);
+  const [targetWeek, setTargetWeek] = useState<WeekRange>(() => calculateNextWeek());
   const [maxShifts, setMaxShifts] = useState<number>(5);
+  const nextWeekStart = targetWeek.start;
+  const nextWeekEnd = targetWeek.end;
 
-  // Calculer la semaine prochaine (dimanche prochain à samedi prochain)
-  function calculateNextWeek() {
-    const today = new Date();
-    const currentDay = today.getDay(); // 0 = dimanche, 6 = samedi
-    const daysUntilNextSunday = currentDay === 0 ? 7 : 7 - currentDay; // Si c'est dimanche, prendre le dimanche suivant
-    
-    const nextSunday = new Date(today);
-    nextSunday.setDate(today.getDate() + daysUntilNextSunday);
-    nextSunday.setHours(0, 0, 0, 0);
-    
-    const nextSaturday = new Date(nextSunday);
-    nextSaturday.setDate(nextSunday.getDate() + 6);
-    nextSaturday.setHours(23, 59, 59, 999);
-    
-    return { start: nextSunday, end: nextSaturday };
-  }
-
-  // Fonction pour obtenir la clé de semaine
-  function getWeekKey(date: Date, wid?: number | null): string {
-    const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-    const suffix = wid ? `_w${wid}` : "";
-    return `worker_avail_global_${iso(date)}${suffix}`;
-  }
-
-  // Fonction pour obtenir la clé de semaine au format ISO (pour le backend)
-  function getWeekKeyISO(date: Date): string {
-    return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
-  }
+  const resetWeekSubmissionState = useCallback(() => {
+    setAvailability(emptyAvailability());
+    setAnswersGeneral({});
+    setAnswersPerDay({});
+    setMaxShifts(5);
+    setSuccess(false);
+    setIsEditing(false);
+    setHasBeenSaved(false);
+  }, []);
 
   // Charger depuis localStorage (fallback uniquement)
-  function loadSavedAvailabilityFromLocalStorage() {
+  const loadSavedAvailabilityFromLocalStorage = useCallback((wid: number | null = workerId) => {
     if (!nextWeekStart) return;
-    const keyNew = getWeekKey(nextWeekStart, workerId);
+    const keyNew = getWeekKey(nextWeekStart, wid);
     try {
       const saved = localStorage.getItem(keyNew);
       if (saved) {
@@ -185,10 +164,10 @@ export default function WorkerAvailabilityPage() {
     } catch {
       // Ignorer les erreurs de parsing
     }
-  }
+  }, [nextWeekStart, workerId]);
 
   // Charger le contexte worker global depuis le serveur
-  const loadWorkerContextFromServer = useCallback(async () => {
+  const loadWorkerContextFromServer = useCallback(async (wid: number | null = workerId) => {
     try {
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
       const workerData = await apiFetch<WorkerContextResponse>(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
@@ -209,43 +188,52 @@ export default function WorkerAvailabilityPage() {
         );
         setShifts(Array.isArray(workerData.shifts) && workerData.shifts.length > 0 ? workerData.shifts : ["06-14", "14-22", "22-06"]);
         setSiteQuestions(Array.isArray(workerData.questions) ? workerData.questions : []);
-        // Charger les זמינות depuis le serveur
-        if (workerData.availability && typeof workerData.availability === 'object') {
-          setAvailability(workerData.availability);
+        const submitted = !!workerData.submitted_for_week;
+        // Disponibilité globale en base : utile au solveur, mais pour רישום זמינות hebdo on repart
+        // d une grille vide tant que la semaine cible n a pas été soumise (sinon בוקר/צהריים/לילה restent pré-cochés).
+        if (submitted) {
+          if (workerData.availability && typeof workerData.availability === "object") {
+            setAvailability(workerData.availability);
+          } else {
+            setAvailability(emptyAvailability());
+          }
+        } else {
+          setAvailability(emptyAvailability());
         }
         if (typeof workerData.max_shifts === 'number' && workerData.max_shifts >= 1 && workerData.max_shifts <= 6) {
           setMaxShifts(workerData.max_shifts);
         }
-        
-        // Gérer les réponses aux questions
-        if (workerData.answers && typeof workerData.answers === "object") {
-          // Nouveau format: {general, perDay}
+
+        if (submitted && workerData.answers && typeof workerData.answers === "object") {
           if ("general" in workerData.answers || "perDay" in workerData.answers) {
             const answers = workerData.answers as WorkerContextAnswers;
             setAnswersGeneral(answers.general && typeof answers.general === "object" ? answers.general : {});
             setAnswersPerDay(answers.perDay && typeof answers.perDay === "object" ? answers.perDay : {});
           } else {
-            // Ancien format: answers = {qid: value}
             setAnswersGeneral(workerData.answers as Record<string, AnswerValue>);
             setAnswersPerDay({});
           }
+        } else {
+          setAnswersGeneral({});
+          setAnswersPerDay({});
         }
 
-        // Si des données réelles existent (créneaux ou réponses), marquer comme déjà enregistré côté serveur
-        const hasData =
-          hasAvailabilityShifts(workerData.availability) || hasAnswersContent(workerData.answers);
-        if (hasData) {
+        if (submitted) {
           setIsEditing(true);
           setSuccess(true);
           setHasBeenSaved(true);
+        } else {
+          setIsEditing(false);
+          setSuccess(false);
+          setHasBeenSaved(false);
         }
 
         // Mettre à jour le cache localStorage (optionnel, pour performance)
-        const keyNew = getWeekKey(nextWeekStart, workerId);
+        const keyNew = getWeekKey(nextWeekStart, wid);
         localStorage.setItem(keyNew, JSON.stringify({
-          availability: workerData.availability || {},
+          availability: submitted ? workerData.availability || {} : {},
           maxShifts: workerData.max_shifts,
-          answers: workerData.answers || {},
+          answers: submitted ? workerData.answers || {} : {},
           sites: activeSites,
           shifts: workerData.shifts || [],
           questions: workerData.questions || [],
@@ -260,9 +248,46 @@ export default function WorkerAvailabilityPage() {
     } catch (e: unknown) {
       // Si le serveur échoue, essayer de charger depuis localStorage comme fallback
       console.warn("Erreur lors du chargement depuis le serveur, tentative avec localStorage:", e);
-      loadSavedAvailabilityFromLocalStorage();
+      loadSavedAvailabilityFromLocalStorage(wid);
     }
-  }, [nextWeekStart, workerId]);
+  }, [loadSavedAvailabilityFromLocalStorage, nextWeekStart, workerId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let timeoutId: number | null = null;
+
+    const scheduleWeekRefresh = () => {
+      const now = new Date();
+      const nextBoundary = new Date(now);
+      const daysUntilNextSunday = now.getDay() === 0 ? 7 : 7 - now.getDay();
+      nextBoundary.setDate(now.getDate() + daysUntilNextSunday);
+      nextBoundary.setHours(0, 0, 1, 0);
+      const delayMs = Math.max(1_000, nextBoundary.getTime() - now.getTime());
+      timeoutId = window.setTimeout(() => {
+        setTargetWeek(calculateNextWeek());
+        scheduleWeekRefresh();
+      }, delayMs);
+    };
+
+    scheduleWeekRefresh();
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
+  /** Au passage de semaine (minuit dimanche), recharger le contexte sans garder l ancienne grille. */
+  const prevTargetWeekStartMs = useRef<number | null>(null);
+  useEffect(() => {
+    const t = nextWeekStart.getTime();
+    if (prevTargetWeekStartMs.current === null) {
+      prevTargetWeekStartMs.current = t;
+      return;
+    }
+    if (prevTargetWeekStartMs.current === t) return;
+    prevTargetWeekStartMs.current = t;
+    resetWeekSubmissionState();
+    if (workerId != null) void loadWorkerContextFromServer(workerId);
+  }, [nextWeekStart, workerId, resetWeekSubmissionState, loadWorkerContextFromServer]);
 
   useEffect(() => {
     async function loadContext() {
@@ -278,10 +303,13 @@ export default function WorkerAvailabilityPage() {
       }
 
       setWorkerName(me.full_name || "");
-      setWorkerId(typeof (me as { id?: unknown }).id === "number" ? ((me as { id: number }).id) : null);
+      const resolvedWorkerId =
+        typeof (me as { id?: unknown }).id === "number" ? ((me as { id: number }).id) : null;
+      setWorkerId(resolvedWorkerId);
+      resetWeekSubmissionState();
 
       try {
-        await loadWorkerContextFromServer();
+        await loadWorkerContextFromServer(resolvedWorkerId);
       } catch (e: unknown) {
         toast.error("שגיאה בטעינת נתוני העובד", { description: e instanceof Error ? e.message : "נסה שוב מאוחר יותר." });
     } finally {
@@ -289,7 +317,7 @@ export default function WorkerAvailabilityPage() {
     }
   }
     loadContext();
-  }, [router, loadWorkerContextFromServer]);
+  }, [router, loadWorkerContextFromServer, resetWeekSubmissionState]);
 
   const dayDefs = [
     { key: "sun", label: "א'" },

@@ -25,8 +25,8 @@ function apiBaseUrl(): string {
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
 const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
 const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 30;
-const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 70;
-const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 18;
+const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 120;
+const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 28;
 
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
@@ -108,6 +108,53 @@ function normalizeDraftAlternatives(
   });
 }
 
+function alternativeSnapshot(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  pulls: PlanningV2PullsMap | null | undefined,
+): string {
+  if (!assignments || typeof assignments !== "object") return "";
+  try {
+    return JSON.stringify({ assignments, pulls: pulls || {} });
+  } catch {
+    return "";
+  }
+}
+
+function uniqueDraftAlternatives(
+  value: Array<DraftAlternative | null | undefined>,
+): DraftAlternative[] {
+  const seen = new Set<string>();
+  return normalizeDraftAlternatives(value).filter((item) => {
+    const snap = alternativeSnapshot(item.assignments, item.pulls);
+    if (!snap) return true;
+    if (seen.has(snap)) return false;
+    seen.add(snap);
+    return true;
+  });
+}
+
+function buildSeenAlternativeSnapshots(
+  baseAssignments: Record<string, Record<string, string[][]>> | null | undefined,
+  basePulls: PlanningV2PullsMap | null | undefined,
+  alternatives: Array<DraftAlternative | null | undefined>,
+): Set<string> {
+  const seen = new Set<string>();
+  const baseSnap = alternativeSnapshot(baseAssignments, basePulls);
+  if (baseSnap) seen.add(baseSnap);
+  for (const alt of uniqueDraftAlternatives(alternatives)) {
+    const snap = alternativeSnapshot(alt.assignments, alt.pulls);
+    if (snap) seen.add(snap);
+  }
+  return seen;
+}
+
+function draftAlternativesForMode(
+  value: Array<DraftAlternative | null | undefined>,
+  dedupe: boolean,
+): DraftAlternative[] {
+  return dedupe ? uniqueDraftAlternatives(value) : normalizeDraftAlternatives(value);
+}
+
 const PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX = "planning_v2_alternatives_unlock_";
 
 function alternativesUnlockSessionKey(weekIso: string, siteId: string) {
@@ -168,6 +215,8 @@ export function usePlanningV2PlanController({
   const draftPullsRef = useRef<PlanningV2PullsMap>({});
   const draftAlternativesRef = useRef<DraftAlternative[]>([]);
   const lastAlternativeSnapshotRef = useRef<string>("");
+  const seenAlternativeSnapshotsRef = useRef<Set<string>>(new Set());
+  const appendUniqueCountRef = useRef(0);
   const alternativesFlushRafRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
   const workersRef = useRef(workers);
@@ -192,6 +241,8 @@ export function usePlanningV2PlanController({
   const autoPullsStorageKey = `${AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX}${weekIso}`;
   const [alternativesUnlockNonce, setAlternativesUnlockNonce] = useState(0);
   const [clientStorageReady, setClientStorageReady] = useState(false);
+  const [moreAlternativesAvailable, setMoreAlternativesAvailable] = useState(true);
+  const dedupeAlternatives = linkedSitesLength <= 1;
 
   useEffect(() => {
     setAlternativesUnlockNonce((n) => n + 1);
@@ -226,9 +277,16 @@ export function usePlanningV2PlanController({
     setDraftPulls(null);
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
-    setSelectedAlternativeIndex(0);
+    const preservedAltIndex = linkedSitesLength > 1
+      ? Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0))
+      : 0;
+    setSelectedAlternativeIndex(preservedAltIndex);
+    setMoreAlternativesAvailable(true);
     planLoadedForManualRef.current = false;
-  }, [siteId, weekIso]);
+    seenAlternativeSnapshotsRef.current = new Set();
+    appendUniqueCountRef.current = 0;
+    lastAlternativeSnapshotRef.current = "";
+  }, [linkedSitesLength, siteId, weekIso, weekStart]);
 
   // Multi-sites: כשעוברים בין אתרים, לשמור אלטרנטיבה פעילה זהה לכל האתרים דרך sessionStorage.
   useEffect(() => {
@@ -246,28 +304,39 @@ export function usePlanningV2PlanController({
       const snap = JSON.stringify({ activeIdx, plan });
       if (snap === lastAppliedSnap) return;
       lastAppliedSnap = snap;
-      const baseAssignments = plan.assignments as Record<string, Record<string, string[][]>> | undefined;
-      if (baseAssignments && typeof baseAssignments === "object") {
-        setDraftAssignments(baseAssignments);
+      const localAssignments =
+        draftAssignmentsRef.current ??
+        weekPlanAssignmentsRef.current ??
+        null;
+      const hasAuthoritativeLocalPlan =
+        !!localAssignments && assignmentsNonEmpty(localAssignments);
+      // En multi-site, la mémoire session sert à partager l’index d’alternative et les autres sites.
+      // Pour le site courant, si l’écran possède déjà un plan local/serveur cohérent, ne pas
+      // le réécrire depuis la mémoire (qui peut être en retard d’un render ou d’un persist).
+      if (!hasAuthoritativeLocalPlan) {
+        const baseAssignments = plan.assignments as Record<string, Record<string, string[][]>> | undefined;
+        if (baseAssignments && typeof baseAssignments === "object") {
+          setDraftAssignments(baseAssignments);
+        }
+        setDraftPulls((plan.pulls as PlanningV2PullsMap) || {});
+        const altsAssignments = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+        const altsPulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+        const alts = altsAssignments.flatMap((asg, idx) => {
+          if (!asg || typeof asg !== "object") return [];
+          return [{
+            assignments: asg as Record<string, Record<string, string[][]>>,
+            pulls: ((altsPulls[idx] || {}) as PlanningV2PullsMap),
+          }];
+        });
+        setDraftAlternatives(alts);
       }
-      setDraftPulls((plan.pulls as PlanningV2PullsMap) || {});
-      const altsAssignments = Array.isArray(plan.alternatives) ? plan.alternatives : [];
-      const altsPulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
-      const alts = altsAssignments.flatMap((asg, idx) => {
-        if (!asg || typeof asg !== "object") return [];
-        return [{
-          assignments: asg as Record<string, Record<string, string[][]>>,
-          pulls: ((altsPulls[idx] || {}) as PlanningV2PullsMap),
-        }];
-      });
-      setDraftAlternatives(alts);
       setSelectedAlternativeIndex(activeIdx);
     };
     refreshFromMemory();
     const onMem = () => refreshFromMemory();
     window.addEventListener("linked-plans-memory-updated", onMem as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", onMem as EventListener);
-  }, [linkedSitesLength, siteId, weekStart]);
+  }, [linkedSitesLength, siteId, weekStart, generationRunning]);
 
   useEffect(() => {
     if (weekPlanLoading) return;
@@ -279,27 +348,41 @@ export function usePlanningV2PlanController({
 
   const assignmentVariants = useMemo<Array<Record<string, Record<string, string[][]>>>>(() => {
     if (draftAssignments) {
-      const normalized = normalizeDraftAlternatives(draftAlternatives);
+      const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
       return [draftAssignments, ...normalized.map((x) => x.assignments)];
     }
     const base = weekPlan?.assignments ? [weekPlan.assignments] : [];
-    const alts = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
-    return [...base, ...alts];
-  }, [draftAssignments, draftAlternatives, weekPlan?.assignments, weekPlan?.alternatives]);
+    const altsAssignments = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
+    const altsPulls = Array.isArray(weekPlan?.alternativePulls) ? weekPlan.alternativePulls : [];
+    const alts = draftAlternativesForMode(
+      altsAssignments.map((assignments, idx) => ({
+        assignments,
+        pulls: (altsPulls[idx] || {}) as PlanningV2PullsMap,
+      })),
+      dedupeAlternatives,
+    );
+    return [...base, ...alts.map((x) => x.assignments)];
+  }, [dedupeAlternatives, draftAssignments, draftAlternatives, weekPlan?.assignments, weekPlan?.alternatives, weekPlan?.alternativePulls]);
 
   const pullVariants = useMemo<PlanningV2PullsMap[]>(() => {
     if (draftAssignments) {
       const basePulls = draftPulls || {};
-      const normalized = normalizeDraftAlternatives(draftAlternatives);
+      const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
       return [basePulls, ...normalized.map((x) => x.pulls || {})];
     }
     const basePulls =
       weekPlan?.pulls && typeof weekPlan.pulls === "object" ? (weekPlan.pulls as PlanningV2PullsMap) : {};
-    const altPulls = Array.isArray(weekPlan?.alternativePulls)
-      ? weekPlan.alternativePulls.map((p) => (p && typeof p === "object" ? (p as PlanningV2PullsMap) : {}))
-      : [];
-    return [basePulls, ...altPulls];
-  }, [draftAssignments, draftPulls, draftAlternatives, weekPlan?.pulls, weekPlan?.alternativePulls]);
+    const altAssignments = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
+    const altPulls = Array.isArray(weekPlan?.alternativePulls) ? weekPlan.alternativePulls : [];
+    const normalized = draftAlternativesForMode(
+      altAssignments.map((assignments, idx) => ({
+        assignments,
+        pulls: (altPulls[idx] && typeof altPulls[idx] === "object" ? altPulls[idx] : {}) as PlanningV2PullsMap,
+      })),
+      dedupeAlternatives,
+    );
+    return [basePulls, ...normalized.map((x) => x.pulls || {})];
+  }, [dedupeAlternatives, draftAssignments, draftPulls, draftAlternatives, weekPlan?.pulls, weekPlan?.alternativePulls]);
 
   const alternativeCount = assignmentVariants.length;
 
@@ -371,9 +454,12 @@ export function usePlanningV2PlanController({
     setGenerationRunning(true);
     if (!appendMode) {
       setSelectedAlternativeIndex(0);
+      setMoreAlternativesAvailable(true);
       draftAssignmentsRef.current = null;
       draftPullsRef.current = {};
       draftAlternativesRef.current = [];
+      seenAlternativeSnapshotsRef.current = new Set();
+      appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
       setDraftAssignments(null);
       setDraftPulls(null);
@@ -397,11 +483,15 @@ export function usePlanningV2PlanController({
       if (baseAssignments && typeof baseAssignments === "object") {
         draftAssignmentsRef.current = baseAssignments;
         draftPullsRef.current = basePulls;
-        draftAlternativesRef.current = existingAlternatives;
+        draftAlternativesRef.current = draftAlternativesForMode(existingAlternatives, dedupeAlternatives);
         setDraftAssignments(baseAssignments);
         setDraftPulls(basePulls);
-        setDraftAlternatives(existingAlternatives);
+        setDraftAlternatives(draftAlternativesForMode(existingAlternatives, dedupeAlternatives));
       }
+      seenAlternativeSnapshotsRef.current = dedupeAlternatives
+        ? buildSeenAlternativeSnapshots(baseAssignments, basePulls, existingAlternatives)
+        : new Set();
+      appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
     }
     if (alternativesFlushRafRef.current != null) {
@@ -480,12 +570,13 @@ export function usePlanningV2PlanController({
     let idleAutoClosed = false;
     let noResultAutoClosed = false;
     let sawPlanToPersist = false;
+    let sawGeneratedPlan = false;
     const scheduleAlternativesFlush = () => {
       if (alternativesFlushRafRef.current != null) return;
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
         alternativesFlushRafRef.current = null;
         setDraftAlternatives((prev) => {
-          const next = normalizeDraftAlternatives(draftAlternativesRef.current || []);
+          const next = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
           // Évite les renders inutiles quand rien n'a changé.
           if (prev.length === next.length) return prev;
           return [...next];
@@ -502,6 +593,12 @@ export function usePlanningV2PlanController({
           const pulls = (pl.pulls && typeof pl.pulls === "object" ? pl.pulls : {}) as Record<string, unknown>;
           const altAsg = Array.isArray(pl.alternatives) ? pl.alternatives : [];
           const altPulls = Array.isArray(pl.alternative_pulls) ? pl.alternative_pulls : [];
+          const uniqueAlts = normalizeDraftAlternatives(
+            altAsg.map((assignmentsItem, idx) => ({
+              assignments: assignmentsItem as Record<string, Record<string, string[][]>>,
+              pulls: (altPulls[idx] && typeof altPulls[idx] === "object" ? altPulls[idx] : {}) as PlanningV2PullsMap,
+            })),
+          );
           const w = String(sid) === String(siteId) ? workersRef.current : [];
           const base = buildWeekPlanDataPayload(
             Number(sid),
@@ -511,9 +608,9 @@ export function usePlanningV2PlanController({
             buildWorkersSnapshotForSave(w),
             false,
           ) as Record<string, unknown>;
-          if (altAsg.length > 0) {
-            base.alternatives = altAsg;
-            base.alternative_pulls = altPulls;
+          if (uniqueAlts.length > 0) {
+            base.alternatives = uniqueAlts.map((x) => x.assignments);
+            base.alternative_pulls = uniqueAlts.map((x) => x.pulls || {});
           }
           await persistAutoWeekPlanDraftToApi(sid, weekStart, base);
         }
@@ -522,7 +619,7 @@ export function usePlanningV2PlanController({
       const asg = draftAssignmentsRef.current;
       if (!asg || !assignmentsNonEmpty(asg)) return;
       const pulls = draftPullsRef.current || {};
-      const alts = draftAlternativesRef.current || [];
+      const alts = uniqueDraftAlternatives(draftAlternativesRef.current || []);
       const base = buildWeekPlanDataPayload(
         Number(siteId),
         weekStart,
@@ -553,7 +650,6 @@ export function usePlanningV2PlanController({
         throw new Error(`HTTP ${resp.status}`);
       }
       let stopped = false;
-      let sawGeneratedPlan = false;
       // Filet de sécurité: si aucune proposition n'arrive, ne pas laisser יוצר tourner indéfiniment.
       noResultWatch = window.setTimeout(() => {
         if (stopped || sawGeneratedPlan) return;
@@ -627,6 +723,7 @@ export function usePlanningV2PlanController({
               draftAssignmentsRef.current = nextAsg;
               draftPullsRef.current = nextPulls;
               draftAlternativesRef.current = [];
+              seenAlternativeSnapshotsRef.current = buildSeenAlternativeSnapshots(nextAsg, nextPulls, []);
               setDraftAssignments(nextAsg);
               setDraftPulls(nextPulls);
               setDraftAlternatives([]);
@@ -640,6 +737,7 @@ export function usePlanningV2PlanController({
             draftAssignmentsRef.current = nextAsg;
             draftPullsRef.current = nextPulls;
             draftAlternativesRef.current = [];
+            seenAlternativeSnapshotsRef.current = buildSeenAlternativeSnapshots(nextAsg, nextPulls, []);
             setDraftAssignments(nextAsg);
             setDraftPulls(nextPulls);
             setDraftAlternatives([]);
@@ -690,22 +788,22 @@ export function usePlanningV2PlanController({
             altPulls = evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {};
           }
           if (altAssignments) {
-            let nextSnapshot = "";
-            try {
-              nextSnapshot = JSON.stringify({ assignments: altAssignments, pulls: altPulls || {} });
-            } catch {
-              nextSnapshot = "";
-            }
-            if (nextSnapshot && nextSnapshot === lastAlternativeSnapshotRef.current) {
+            const nextSnapshot = alternativeSnapshot(altAssignments, altPulls);
+            if (dedupeAlternatives && nextSnapshot && seenAlternativeSnapshotsRef.current.has(nextSnapshot)) {
               return false;
             }
-            if (nextSnapshot) {
+            if (dedupeAlternatives && nextSnapshot) {
+              seenAlternativeSnapshotsRef.current.add(nextSnapshot);
               lastAlternativeSnapshotRef.current = nextSnapshot;
             }
             draftAlternativesRef.current = [
               ...(draftAlternativesRef.current || []),
               { assignments: altAssignments, pulls: altPulls },
             ];
+            appendUniqueCountRef.current += 1;
+            if (appendMode) {
+              setMoreAlternativesAvailable(true);
+            }
             scheduleAlternativesFlush();
           }
           return false;
@@ -773,16 +871,12 @@ export function usePlanningV2PlanController({
             altPulls = evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {};
           }
           if (altAssignments) {
-            let nextSnapshot = "";
-            try {
-              nextSnapshot = JSON.stringify({ assignments: altAssignments, pulls: altPulls || {} });
-            } catch {
-              nextSnapshot = "";
-            }
-            if (nextSnapshot && nextSnapshot === lastAlternativeSnapshotRef.current) {
+            const nextSnapshot = alternativeSnapshot(altAssignments, altPulls);
+            if (dedupeAlternatives && nextSnapshot && seenAlternativeSnapshotsRef.current.has(nextSnapshot)) {
               return false;
             }
-            if (nextSnapshot) {
+            if (dedupeAlternatives && nextSnapshot) {
+              seenAlternativeSnapshotsRef.current.add(nextSnapshot);
               lastAlternativeSnapshotRef.current = nextSnapshot;
             }
             const nextDraftAlternatives = [...(draftAlternativesRef.current || [])];
@@ -792,6 +886,10 @@ export function usePlanningV2PlanController({
               pulls: altPulls,
             };
             draftAlternativesRef.current = nextDraftAlternatives;
+            appendUniqueCountRef.current += 1;
+            if (appendMode) {
+              setMoreAlternativesAvailable(true);
+            }
             scheduleAlternativesFlush();
           }
           return false;
@@ -835,8 +933,15 @@ export function usePlanningV2PlanController({
         }
         alternativesFlushRafRef.current = null;
         // Après annulation du RAF, synchroniser pour que React reflète toutes les alternatives reçues.
-        const nextAlternatives = normalizeDraftAlternatives(draftAlternativesRef.current || []);
+        const nextAlternatives = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
         setDraftAlternatives([...nextAlternatives]);
+      }
+      // Ne pas utiliser num_alternatives du premier flux pour couper « עוד » : la génération n’est pas
+      // déterministe et peut livrer moins d’alternatives que la limite alors que d’autres existent.
+      // On désactive uniquement après un flux « append » sans aucune alternative nouvelle (voir ci‑dessous).
+      if (appendMode && appendUniqueCountRef.current === 0 && sawGeneratedPlan && (idleAutoClosed || !controller.signal.aborted)) {
+        setMoreAlternativesAvailable(false);
+        toast.message("אין חלופות חדשות נוספות");
       }
       setGenerationRunning(false);
       genBusyRef.current = false;
@@ -849,6 +954,14 @@ export function usePlanningV2PlanController({
           try {
             await persistGeneratedAutoDraftToServer();
             await reloadWeekPlan({ silent: true });
+            // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
+            // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
+            draftAssignmentsRef.current = null;
+            draftPullsRef.current = {};
+            draftAlternativesRef.current = [];
+            setDraftAssignments(null);
+            setDraftPulls(null);
+            setDraftAlternatives([]);
           } catch (err) {
             console.warn("[planning-v2] persist auto draft after generation:", err);
           }
@@ -856,6 +969,7 @@ export function usePlanningV2PlanController({
       }
     }
   }, [
+    dedupeAlternatives,
     assignmentVariants,
     pullVariants,
     siteId,
@@ -1055,6 +1169,7 @@ export function usePlanningV2PlanController({
     selectedAlternativeIndex: safeAlternativeIndex,
     setSelectedAlternativeIndex: setSelectedAlternativeIndexSynced,
     alternativeCount,
+    moreAlternativesAvailable,
     alternativesUnlocked,
     draftFixedAssignmentsSnapshot,
     draftActive: draftAssignments !== null,

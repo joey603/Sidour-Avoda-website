@@ -26,7 +26,11 @@ export function multiSiteMemoryKey(start: Date): string {
 
 export function resolveAssignmentsForAlternative(plan: LinkedSitePlan, index: number) {
   if (index <= 0) return plan.assignments;
-  return (plan.alternatives || [])[index - 1] || plan.assignments;
+  const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+  const assignments = alternatives[index - 1];
+  return assignments && typeof assignments === "object"
+    ? (assignments as Record<string, Record<string, string[][]>>)
+    : plan.assignments;
 }
 
 export function resolvePullsForAlternative(
@@ -34,9 +38,9 @@ export function resolvePullsForAlternative(
   index: number,
 ): Record<string, unknown> | undefined {
   if (index <= 0) return plan.pulls as Record<string, unknown> | undefined;
-  const alts = plan.alternative_pulls;
-  if (!Array.isArray(alts) || index - 1 < 0) return undefined;
-  return alts[index - 1] as Record<string, unknown> | undefined;
+  const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+  const pulls = alternativePulls[index - 1];
+  return pulls && typeof pulls === "object" ? (pulls as Record<string, unknown>) : undefined;
 }
 
 export function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null {

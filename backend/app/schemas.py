@@ -173,6 +173,7 @@ class WorkerContextOut(BaseModel):
     availability: dict[str, list[str]] = {}
     answers: dict[str, Any] = {}
     max_shifts: int = 5
+    submitted_for_week: bool = False
 
 
 class WorkerContextUpdatePayload(BaseModel):

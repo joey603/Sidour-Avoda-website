@@ -14,6 +14,8 @@ import { usePlanningV2SiteWorkers } from "./hooks/use-planning-v2-site-workers";
 import { usePlanningV2WeekPlan } from "./hooks/use-planning-v2-week-plan";
 import { PlanningV2AssignmentsSummary } from "./planning-v2-assignments-summary";
 import { PlanningV2OptionalMessages } from "./planning-v2-optional-messages";
+import { PlanningV2PlanExportButtons } from "./planning-v2-plan-export-buttons";
+import { PlanningV2FullscreenVisualization } from "./planning-v2-fullscreen-visualization";
 import { PlanningV2ActionBar } from "./planning-v2-action-bar";
 import { PlanningV2StationWeekGrid } from "./stations/planning-v2-station-week-grid";
 import { PlanningV2WeekNavigation } from "./planning-v2-week-navigation";
@@ -101,6 +103,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     indices: number[];
     hasActiveFilters: boolean;
   }>({ indices: [], hasActiveFilters: false });
+  const [visualizationOpen, setVisualizationOpen] = useState(false);
+  const [fullscreenReveal, setFullscreenReveal] = useState(false);
+  const lastCurrentSiteMemorySyncRef = useRef("");
   /** Clic sur une ligne du סיכום שיבוצים → surbrillance de l’עובד dans le גריד. */
   const [summaryHighlightWorkerName, setSummaryHighlightWorkerName] = useState<string | null>(null);
   const [pullScopeDialog, setPullScopeDialog] = useState<{
@@ -122,13 +127,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekPurgeSiteIds,
   });
 
-  /** חלופות : pas de bandeau 1/1 — seulement après יצירת תכנון, grille remplie, et au moins 2 variantes. */
+  /** חלופות : après יצירת תכנון, grille remplie — afficher 1/1 + « עוד » même s’il n’y a qu’une seule variante (base). */
   const alternativesUiEnabled = useMemo(
     () =>
       plan.alternativesUnlocked &&
       !plan.isManual &&
       assignmentsNonEmpty(plan.displayAssignments) &&
-      plan.alternativeCount > 1,
+      plan.alternativeCount >= 1,
     [plan.alternativesUnlocked, plan.isManual, plan.displayAssignments, plan.alternativeCount],
   );
 
@@ -164,6 +169,27 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     window.addEventListener("pagehide", onPageHide);
     return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
+
+  useEffect(() => {
+    if (!visualizationOpen) {
+      setFullscreenReveal(false);
+      return;
+    }
+    const id = requestAnimationFrame(() => setFullscreenReveal(true));
+    const prevOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setVisualizationOpen(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(id);
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [visualizationOpen]);
 
   /** Plan « officiel » (מנהל / משותף) — pas une טיוטת auto seule (pas d’encadré vert / pas de blocage génération). */
   const isSavedMode =
@@ -924,11 +950,104 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   ]);
 
   useEffect(() => {
+    // En multi-site, `alternativesUiEnabled` peut passer brièvement à false pendant une
+    // resynchronisation mémoire / affichage. Ne pas forcer un retour à l'alternative 0
+    // sur cet état transitoire, sinon la navigation "saute" au début.
+    if (linkedSites.length > 1) return;
     if (alternativesUiEnabled) return;
     if (plan.selectedAlternativeIndex !== 0) {
       plan.setSelectedAlternativeIndex(0);
     }
-  }, [alternativesUiEnabled, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
+  }, [alternativesUiEnabled, linkedSites.length, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
+
+  useEffect(() => {
+    if (linkedSites.length <= 1) return;
+    if (plan.generationRunning) return;
+    const mem = readLinkedPlansFromMemory(weekStart);
+    if (!mem?.plansBySite || Object.keys(mem.plansBySite).length === 0) return;
+    const memoryActiveIdx = Math.max(0, Number(mem.activeAltIndex || 0));
+    let inAppMultiSiteNavigation = false;
+    try {
+      inAppMultiSiteNavigation = sessionStorage.getItem(MULTI_SITE_NAV_FLAG) === "1";
+    } catch {
+      inAppMultiSiteNavigation = false;
+    }
+    const currentSiteKey = String(siteId);
+    const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
+    const activeIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
+    if (inAppMultiSiteNavigation && activeIdx !== memoryActiveIdx) {
+      return;
+    }
+    if (inAppMultiSiteNavigation && activeIdx === memoryActiveIdx) {
+      try {
+        sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
+      } catch {
+        /* ignore */
+      }
+    }
+    const displayedAssignments = plan.displayAssignments;
+    const displayedPulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
+    if (!assignmentsNonEmpty(displayedAssignments ?? null)) return;
+    const currentPlan = {
+      ...(nextPlans[currentSiteKey] || {}),
+    } as LinkedSitePlan;
+    const nextDisplayedAssignments = JSON.parse(
+      JSON.stringify(displayedAssignments),
+    ) as Record<string, Record<string, string[][]>>;
+    const nextDisplayedPulls = JSON.parse(
+      JSON.stringify(displayedPulls),
+    ) as PlanningV2PullsMap;
+    const renderSnapshot = JSON.stringify({
+      activeIdx,
+      assignments: nextDisplayedAssignments,
+      pulls: nextDisplayedPulls,
+    });
+    if (renderSnapshot === lastCurrentSiteMemorySyncRef.current) {
+      return;
+    }
+    const existingAssignmentsForActiveIdx = resolveAssignmentsForAlternative(currentPlan, activeIdx) || null;
+    const existingPullsForActiveIdx = (resolvePullsForAlternative(currentPlan, activeIdx) || {}) as PlanningV2PullsMap;
+    const existingSnapshot = JSON.stringify({
+      activeIdx,
+      assignments: existingAssignmentsForActiveIdx || {},
+      pulls: existingPullsForActiveIdx || {},
+    });
+    const nextSnapshot = JSON.stringify({
+      activeIdx,
+      assignments: nextDisplayedAssignments,
+      pulls: nextDisplayedPulls,
+    });
+    if (existingSnapshot === nextSnapshot && memoryActiveIdx === activeIdx) {
+      lastCurrentSiteMemorySyncRef.current = renderSnapshot;
+      return;
+    }
+    if (activeIdx <= 0) {
+      currentPlan.assignments = nextDisplayedAssignments;
+      currentPlan.pulls = nextDisplayedPulls;
+    } else {
+      const alts = Array.isArray(currentPlan.alternatives) ? [...currentPlan.alternatives] : [];
+      const altPulls = Array.isArray(currentPlan.alternative_pulls) ? [...currentPlan.alternative_pulls] : [];
+      while (alts.length < activeIdx) {
+        alts.push(
+          JSON.parse(
+            JSON.stringify(currentPlan.assignments || {}),
+          ) as Record<string, Record<string, string[][]>>,
+        );
+      }
+      while (altPulls.length < activeIdx) {
+        altPulls.push(
+          JSON.parse(JSON.stringify((currentPlan.pulls || {}) as Record<string, unknown>)) as Record<string, unknown>,
+        );
+      }
+      alts[activeIdx - 1] = nextDisplayedAssignments;
+      altPulls[activeIdx - 1] = nextDisplayedPulls as Record<string, unknown>;
+      currentPlan.alternatives = alts;
+      currentPlan.alternative_pulls = altPulls;
+    }
+    nextPlans[currentSiteKey] = currentPlan;
+    lastCurrentSiteMemorySyncRef.current = renderSnapshot;
+    saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
+  });
 
   const linkedSitesRailData = useMemo(() => {
     if (linkedSites.length <= 1) return [];
@@ -1190,6 +1309,116 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       document.documentElement.style.removeProperty("--planning-v2-action-bar-px");
     };
   }, []);
+
+  const handleSummaryHighlightToggle = useCallback((name: string) => {
+    setSummaryHighlightWorkerName((prev) => {
+      const next = normWorkerName(prev || "") === normWorkerName(name) ? null : name;
+      if (
+        next !== null &&
+        typeof window !== "undefined" &&
+        window.matchMedia("(max-width: 1023px)").matches &&
+        hasLinkedSitesRail
+      ) {
+        queueMicrotask(() => setShowLinkedSitesRail(false));
+      }
+      return next;
+    });
+  }, [hasLinkedSitesRail]);
+
+  const renderPlanningVisualizationContent = useCallback(() => (
+    <div className="space-y-4">
+      <PlanningV2StationWeekGrid
+        site={site}
+        siteId={siteId}
+        weekStart={weekStart}
+        workers={workers}
+        assignments={plan.displayAssignments}
+        assignmentVariants={plan.assignmentVariants}
+        assignmentHighlightBase={assignmentHighlightBase}
+        pulls={plan.displayPulls}
+        draftFixedAssignmentsSnapshot={plan.draftFixedAssignmentsSnapshot}
+        isSavedMode={isSavedMode}
+        editingSaved={editingSaved}
+        loading={weekPlanLoading}
+        isManual={plan.isManual}
+        manualEditable={manualEditable}
+        pullsModeStationIdx={pullsModeStationIdx}
+        shiftHoursModeStationIdx={shiftHoursModeStationIdx}
+        draggingWorkerName={manualDragWorkerName}
+        onDraggingWorkerChange={setManualDragWorkerName}
+        availabilityByWorkerName={availabilityByWorkerName}
+        availabilityOverlays={displayedAvailabilityOverlays}
+        onTogglePullsModeStation={(idx) => {
+          setShiftHoursModeStationIdx(null);
+          setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
+        }}
+        onToggleShiftHoursModeStation={(idx) => {
+          setPullsModeStationIdx(null);
+          setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
+        }}
+        onUpsertGuardDisplay={handleUpsertGuardDisplay}
+        onRemoveGuardDisplay={handleRemoveGuardDisplay}
+        onResetStation={handleResetStation}
+        onManualSlotDragOutside={handleManualSlotDragOutside}
+        onManualSlotDrop={handleManualSlotDrop}
+        onUpsertPull={handleUpsertPull}
+        onRemovePull={handleRemovePull}
+        summaryHighlightWorkerName={summaryHighlightWorkerName}
+      />
+      <PlanningV2AssignmentsSummary
+        siteId={siteId}
+        site={site}
+        weekStart={weekStart}
+        workers={workers}
+        assignments={plan.displayAssignments}
+        pulls={plan.displayPulls}
+        assignmentVariants={plan.assignmentVariants}
+        pullVariants={plan.pullVariants}
+        alternativesEnabled={alternativesUiEnabled}
+        selectedAlternativeIndex={effectiveAlternativeIndex}
+        onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
+        onFilteredAlternativesChange={setSummaryFilterState}
+        loading={weekPlanLoading}
+        generationRunning={plan.generationRunning}
+        highlightedWorkerName={summaryHighlightWorkerName}
+        onHighlightWorkerToggle={handleSummaryHighlightToggle}
+      />
+    </div>
+  ), [
+    assignmentHighlightBase,
+    availabilityByWorkerName,
+    displayedAvailabilityOverlays,
+    editingSaved,
+    effectiveAlternativeIndex,
+    handleManualSlotDragOutside,
+    handleManualSlotDrop,
+    handleRemoveGuardDisplay,
+    handleRemovePull,
+    handleResetStation,
+    handleSummaryHighlightToggle,
+    handleUpsertGuardDisplay,
+    handleUpsertPull,
+    isSavedMode,
+    manualDragWorkerName,
+    manualEditable,
+    plan.assignmentVariants,
+    plan.displayAssignments,
+    plan.displayPulls,
+    plan.draftFixedAssignmentsSnapshot,
+    plan.generationRunning,
+    plan.isManual,
+    plan.pullVariants,
+    plan.setSelectedAlternativeIndex,
+    pullsModeStationIdx,
+    shiftHoursModeStationIdx,
+    site,
+    siteId,
+    summaryHighlightWorkerName,
+    weekPlanLoading,
+    weekStart,
+    workers,
+    alternativesUiEnabled,
+  ]);
 
   const renderLinkedSitesRailContent = () => (
     <div className="flex h-full min-h-0 w-full max-w-full flex-1 flex-col gap-3 overflow-hidden">
@@ -1518,77 +1747,18 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             onWorkerNameDragPreview={setManualDragWorkerName}
             readOnly={siteIsArchived}
           />
-          <PlanningV2StationWeekGrid
-            site={site}
-            siteId={siteId}
-            weekStart={weekStart}
-            workers={workers}
-            assignments={plan.displayAssignments}
-            assignmentVariants={plan.assignmentVariants}
-            assignmentHighlightBase={assignmentHighlightBase}
-            pulls={plan.displayPulls}
-            draftFixedAssignmentsSnapshot={plan.draftFixedAssignmentsSnapshot}
-            isSavedMode={isSavedMode}
-            editingSaved={editingSaved}
-            loading={weekPlanLoading}
-            isManual={plan.isManual}
-            manualEditable={manualEditable}
-            pullsModeStationIdx={pullsModeStationIdx}
-            shiftHoursModeStationIdx={shiftHoursModeStationIdx}
-            draggingWorkerName={manualDragWorkerName}
-            onDraggingWorkerChange={setManualDragWorkerName}
-            availabilityByWorkerName={availabilityByWorkerName}
-            availabilityOverlays={displayedAvailabilityOverlays}
-            onTogglePullsModeStation={(idx) => {
-              setShiftHoursModeStationIdx(null);
-              setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
-            }}
-            onToggleShiftHoursModeStation={(idx) => {
-              setPullsModeStationIdx(null);
-              setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
-            }}
-            onUpsertGuardDisplay={handleUpsertGuardDisplay}
-            onRemoveGuardDisplay={handleRemoveGuardDisplay}
-            onResetStation={handleResetStation}
-            onManualSlotDragOutside={handleManualSlotDragOutside}
-            onManualSlotDrop={handleManualSlotDrop}
-            onUpsertPull={handleUpsertPull}
-            onRemovePull={handleRemovePull}
-            summaryHighlightWorkerName={summaryHighlightWorkerName}
-          />
-          <PlanningV2AssignmentsSummary
-            siteId={siteId}
-            site={site}
-            weekStart={weekStart}
-            workers={workers}
-            assignments={plan.displayAssignments}
-            pulls={plan.displayPulls}
-            assignmentVariants={plan.assignmentVariants}
-            pullVariants={plan.pullVariants}
-            alternativesEnabled={alternativesUiEnabled}
-            selectedAlternativeIndex={effectiveAlternativeIndex}
-            onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
-            onFilteredAlternativesChange={setSummaryFilterState}
-            loading={weekPlanLoading}
-            generationRunning={plan.generationRunning}
-            highlightedWorkerName={summaryHighlightWorkerName}
-            onHighlightWorkerToggle={(name) => {
-              setSummaryHighlightWorkerName((prev) => {
-                const next =
-                  normWorkerName(prev || "") === normWorkerName(name) ? null : name;
-                if (
-                  next !== null &&
-                  typeof window !== "undefined" &&
-                  window.matchMedia("(max-width: 1023px)").matches &&
-                  hasLinkedSitesRail
-                ) {
-                  queueMicrotask(() => setShowLinkedSitesRail(false));
-                }
-                return next;
-              });
-            }}
-          />
+          {!visualizationOpen ? renderPlanningVisualizationContent() : null}
           <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
+          <PlanningV2PlanExportButtons
+            siteId={siteId}
+            site={site}
+            weekStart={weekStart}
+            workers={workers}
+            assignments={plan.displayAssignments}
+            pulls={plan.displayPulls}
+            assignmentVariants={plan.assignmentVariants}
+            onOpenVisualization={() => setVisualizationOpen(true)}
+          />
         </PlanningV2MainPaper>
         {hasLinkedSitesRail ? (
           <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:flex lg:h-[calc(100dvh-var(--planning-v2-rail-top-px)-var(--planning-v2-action-bar-px)-0.75rem)] lg:min-h-0 lg:w-[20rem] lg:flex-col lg:overflow-hidden lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
@@ -1633,6 +1803,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           selectedAlternativeIndex={Math.max(0, selectedVisibleAlternativeIndex)}
           selectedAlternativeDisplayIndex={effectiveAlternativeIndex}
           onRequestMoreAlternatives={plan.startMoreAlternatives}
+          moreAlternativesAvailable={plan.moreAlternativesAvailable}
           alternativesEnabled={alternativesUiEnabled}
           alternativesFiltered={summaryFilterState.hasActiveFilters}
           alternativesTotalCount={plan.alternativeCount}
@@ -1646,6 +1817,58 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       {siteLoading || workersLoading || weekPlanLoading ? (
         <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
           <LoadingAnimation size={96} />
+        </div>
+      ) : null}
+      {visualizationOpen ? (
+        <div
+          className={
+            "fixed inset-0 z-[80] overflow-hidden bg-zinc-950/40 backdrop-blur-[2px] transition-opacity duration-300 ease-out motion-reduce:transition-none dark:bg-black/60 " +
+            (fullscreenReveal ? "opacity-100" : "opacity-0")
+          }
+          aria-modal="true"
+          role="dialog"
+          aria-labelledby="planning-v2-fs-title"
+        >
+          <div
+            className={
+              "flex h-full flex-col overflow-hidden bg-[#fafafa] transition-[transform,opacity] duration-300 ease-out motion-reduce:transition-none dark:bg-zinc-950 " +
+              (fullscreenReveal ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0")
+            }
+          >
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 md:px-6">
+              <div className="min-w-0">
+                <div id="planning-v2-fs-title" className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                  תצוגת מסך מלא
+                </div>
+                <div className="truncate text-xs text-zinc-500 dark:text-zinc-400">
+                  כמו קובץ ה-HTML מייצוא CSV — גריד צבעוני וסיכום משמרות
+                </div>
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                onClick={() => setVisualizationOpen(false)}
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
+                  <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+                סגור
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto px-3 py-4 md:px-6">
+              <div className="mx-auto flex h-full min-h-0 w-full max-w-[1800px] flex-col">
+                <PlanningV2FullscreenVisualization
+                  siteId={siteId}
+                  site={site}
+                  weekStart={weekStart}
+                  workers={workers}
+                  assignments={plan.displayAssignments}
+                  pulls={plan.displayPulls}
+                  assignmentVariants={plan.assignmentVariants}
+                />
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
       <PlanningV2ManualConfirmDialog
