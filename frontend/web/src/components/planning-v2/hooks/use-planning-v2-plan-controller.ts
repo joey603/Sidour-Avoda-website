@@ -336,10 +336,30 @@ export function usePlanningV2PlanController({
         null;
       const hasAuthoritativeLocalPlan =
         !!localAssignments && assignmentsNonEmpty(localAssignments);
+      const localAlternativeCount = (() => {
+        if (draftAssignmentsRef.current) {
+          return 1 + draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives).length;
+        }
+        const hasLocalBase = assignmentsNonEmpty(weekPlanAssignmentsRef.current ?? null);
+        const localWeekPlanAlternatives = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
+        return (hasLocalBase ? 1 : 0) + localWeekPlanAlternatives.length;
+      })();
+      const memoryHasBase = assignmentsNonEmpty(
+        (plan.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
+      );
+      const memoryAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      const memoryAlternativeCount =
+        (memoryHasBase ? 1 : 0) +
+        memoryAlternatives.filter((asg) =>
+          assignmentsNonEmpty((asg as Record<string, Record<string, string[][]>> | null | undefined) ?? null)).length;
+      const shouldHydrateFromMemory =
+        !hasAuthoritativeLocalPlan ||
+        memoryAlternativeCount > localAlternativeCount ||
+        activeIdx >= Math.max(1, localAlternativeCount);
       // En multi-site, la mémoire session sert à partager l’index d’alternative et les autres sites.
-      // Pour le site courant, si l’écran possède déjà un plan local/serveur cohérent, ne pas
-      // le réécrire depuis la mémoire (qui peut être en retard d’un render ou d’un persist).
-      if (!hasAuthoritativeLocalPlan) {
+      // Si la mémoire est plus riche (plus d’alternatives, ou index actif hors portée locale),
+      // il faut quand même la réhydrater pour préserver exactement la même חלופה après navigation.
+      if (shouldHydrateFromMemory) {
         const baseAssignments = plan.assignments as Record<string, Record<string, string[][]>> | undefined;
         if (baseAssignments && typeof baseAssignments === "object") {
           setDraftAssignments(baseAssignments);
