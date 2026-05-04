@@ -48,10 +48,33 @@ def test_login_email_case_insensitive(client):
     assert r.json()["access_token"]
 
 
-def test_role_access_control(client):
+def test_login_sets_cookie_and_logout_clears_it(client):
+    register(client, email="cookie@example.com")
+    login_resp = login(client, email="cookie@example.com", password="password123")
+    assert login_resp.status_code == 200, login_resp.text
+    set_cookie = login_resp.headers.get("set-cookie") or ""
+    assert "sidour_access_token=" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+    me = client.get("/me")
+    assert me.status_code == 200, me.text
+    assert me.json()["email"] == "cookie@example.com"
+
+    logout_resp = client.post("/auth/logout")
+    assert logout_resp.status_code == 200, logout_resp.text
+    me_after = client.get("/me")
+    assert me_after.status_code == 401
+
+
+def test_public_director_registration_is_blocked(client):
+    r = register(client, email="blocked-director@example.com", role="director")
+    assert r.status_code == 403
+
+
+def test_role_access_control(client, create_director):
     # create one worker and one director
     register(client, email="w@example.com", role="worker")
-    register(client, email="d@example.com", role="director")
+    create_director(email="d@example.com", full_name="Director Auth")
 
     # login as worker
     tok_worker = login(client, email="w@example.com").json()["access_token"]

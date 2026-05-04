@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    auth_cookie_name: str = "sidour_access_token"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
+    auth_cookie_domain: str | None = None
+    worker_invite_expire_minutes: int = 60 * 24 * 7
 
     # Have I Been Pwned (Pwned Passwords) à l’inscription — désactivé par défaut (tests / compat).
     enable_pwned_password_check: bool = False

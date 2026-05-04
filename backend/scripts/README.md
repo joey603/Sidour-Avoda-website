@@ -1,5 +1,30 @@
 # Scripts de maintenance
 
+## set_workers_password.py
+
+Script pour appliquer le **meme mot de passe** a tous les travailleurs existants.
+
+### Usage
+
+Depuis le repertoire `backend/` :
+
+```bash
+# Voir quels comptes seraient modifies sans rien changer
+python scripts/set_workers_password.py --password "MotDePasse123" --dry-run
+
+# Appliquer le mot de passe a tous les travailleurs
+python scripts/set_workers_password.py --password "MotDePasse123"
+
+# Appliquer seulement aux travailleurs qui ont un numero de telephone
+python scripts/set_workers_password.py --password "MotDePasse123" --only-with-phone
+```
+
+### Notes
+
+- Le mot de passe doit contenir au moins `8` caracteres.
+- Le script rehache le mot de passe avec le meme mecanisme que l'application.
+- `--dry-run` est recommande avant toute execution reelle.
+
 ## remove_duplicate_workers.py
 
 Script pour supprimer les doublons de travailleurs dans un même site.

@@ -4,14 +4,13 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import LoadingAnimation from "@/components/loading-animation";
-import { fetchMe, getToken } from "@/lib/auth";
+import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 
 type WorkerInviteMeta = {
   site_id: number;
   site_name: string;
   director_name: string;
-  director_code: string;
 };
 
 export default function WorkerInvitePage() {
@@ -32,14 +31,10 @@ export default function WorkerInvitePage() {
         const me = await fetchMe();
         if (cancelled) return;
         if (me?.role === "worker") {
-          const authToken = getToken();
-          if (authToken) {
-            await apiFetch("/public/sites/invitations/claim", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${authToken}` },
-              body: JSON.stringify({ token }),
-            });
-          }
+          await apiFetch("/public/sites/invitations/claim", {
+            method: "POST",
+            body: JSON.stringify({ token }),
+          });
           router.replace("/worker/availability");
           return;
         }
@@ -74,7 +69,7 @@ export default function WorkerInvitePage() {
     );
   }
 
-  const loginHref = `/login/worker?inviteToken=${encodeURIComponent(token)}&returnUrl=${encodeURIComponent("/worker/availability")}`;
+  const loginHref = `/login/worker?returnUrl=${encodeURIComponent("/worker/availability")}`;
   const registerHref = `/register/worker?inviteToken=${encodeURIComponent(token)}`;
 
   return (
@@ -89,7 +84,6 @@ export default function WorkerInvitePage() {
 
         <div className="mt-6 rounded-xl border border-zinc-200 p-4 text-sm dark:border-zinc-800">
           <div>אתר: {inviteMeta.site_name}</div>
-          <div className="mt-1">קוד מנהל: {inviteMeta.director_code}</div>
         </div>
 
         <div className="mt-6 flex flex-col gap-3">
@@ -97,7 +91,7 @@ export default function WorkerInvitePage() {
             href={registerHref}
             className="inline-flex items-center justify-center rounded-md bg-zinc-900 px-4 py-2 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
-            להרשמה
+            הגדרת סיסמה והפעלת חשבון
           </Link>
           <Link
             href={loginHref}

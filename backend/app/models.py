@@ -139,3 +139,16 @@ class SiteMessage(Base):
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
+
+class WorkerInviteToken(Base):
+    __tablename__ = "worker_invite_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    token_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    director_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    used_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True, default=0)
+    used_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True, default=None)
+

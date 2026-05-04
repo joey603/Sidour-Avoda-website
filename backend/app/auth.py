@@ -3,15 +3,16 @@ import re
 import secrets
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from .database import SessionLocal, settings
-from .models import User, UserRole, SiteWorker, Site
 from . import pwned_passwords
+from .database import SessionLocal, settings
+from .models import Site, SiteWorker, User, UserRole, WorkerInviteToken
+from .rate_limit import enforce_rate_limit
 from .schemas import LoginRequest, Token, UserCreate, UserOut, WorkerLoginRequest
 
 
@@ -27,6 +28,39 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _cookie_kwargs() -> dict:
+    domain = str(settings.auth_cookie_domain or "").strip() or None
+    same_site = str(settings.auth_cookie_samesite or "lax").strip().lower() or "lax"
+    if same_site not in {"lax", "strict", "none"}:
+        same_site = "lax"
+    return {
+        "key": settings.auth_cookie_name,
+        "httponly": True,
+        "secure": bool(settings.auth_cookie_secure),
+        "samesite": same_site,
+        "domain": domain,
+        "path": "/",
+    }
+
+
+def set_auth_cookie(response: Response, token: str) -> None:
+    cookie_kwargs = _cookie_kwargs()
+    response.set_cookie(
+        value=token,
+        max_age=int(settings.access_token_expire_minutes * 60),
+        **cookie_kwargs,
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    cookie_kwargs = _cookie_kwargs()
+    response.delete_cookie(**cookie_kwargs)
 
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
@@ -62,36 +96,36 @@ def ensure_director_code(user: User, db: Session) -> str:
             return candidate
 
 
-def resolve_director_by_code(db: Session, code: str) -> User | None:
-    normalized = str(code or "").strip()
-    if not normalized:
-        return None
-    director: User | None = (
-        db.query(User)
-        .filter(User.role == UserRole.director, User.director_code == normalized)
-        .first()
+def create_worker_invite_token(
+    site_id: int,
+    director_id: int,
+    db: Session,
+    expires_delta: timedelta | None = None,
+) -> str:
+    expires_delta = expires_delta or timedelta(minutes=settings.worker_invite_expire_minutes)
+    expire = datetime.now(timezone.utc) + expires_delta
+    token_id = secrets.token_urlsafe(24)
+    invite = WorkerInviteToken(
+        token_id=token_id,
+        site_id=int(site_id),
+        director_id=int(director_id),
+        created_at=_now_ms(),
+        expires_at=int(expire.timestamp() * 1000),
+        used_at=None,
+        used_by_user_id=None,
     )
-    if director:
-        return director
-    try:
-        director_id_int = int(normalized)
-    except Exception:
-        return None
-    return (
-        db.query(User)
-        .filter(User.role == UserRole.director, User.id == director_id_int)
-        .first()
-    )
-
-
-def create_worker_invite_token(site_id: int, director_id: int, expires_delta: timedelta | None = None) -> str:
-    return create_access_token(
+    db.add(invite)
+    db.flush()
+    return jwt.encode(
         {
             "type": WORKER_INVITE_TOKEN_TYPE,
             "site_id": int(site_id),
             "director_id": int(director_id),
+            "jti": token_id,
+            "exp": expire,
         },
-        expires_delta or timedelta(days=30),
+        settings.jwt_secret,
+        algorithm=settings.jwt_algorithm,
     )
 
 
@@ -107,7 +141,42 @@ def decode_worker_invite_token(token: str) -> dict:
         director_id = int(payload.get("director_id"))
     except Exception:
         raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
-    return {"site_id": site_id, "director_id": director_id}
+    token_id = str(payload.get("jti") or "").strip()
+    if not token_id:
+        raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
+    return {"site_id": site_id, "director_id": director_id, "jti": token_id}
+
+
+def resolve_worker_invite_token(
+    db: Session,
+    token: str,
+    *,
+    allow_used: bool = False,
+) -> tuple[WorkerInviteToken, dict]:
+    payload = decode_worker_invite_token(token)
+    invite = (
+        db.query(WorkerInviteToken)
+        .filter(WorkerInviteToken.token_id == payload["jti"])
+        .first()
+    )
+    if not invite:
+        raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
+    if int(invite.site_id) != int(payload["site_id"]) or int(invite.director_id) != int(payload["director_id"]):
+        raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
+    if int(getattr(invite, "expires_at", 0) or 0) <= _now_ms():
+        raise HTTPException(status_code=401, detail="Lien d'invitation expiré")
+    if getattr(invite, "used_at", None) and not allow_used:
+        raise HTTPException(status_code=401, detail="Lien d'invitation déjà utilisé")
+    return invite, payload
+
+
+def consume_worker_invite_token(
+    invite: WorkerInviteToken,
+    *,
+    used_by_user_id: int | None = None,
+) -> None:
+    invite.used_at = _now_ms()
+    invite.used_by_user_id = int(used_by_user_id) if used_by_user_id is not None else None
 
 
 def ensure_worker_site_membership(
@@ -117,7 +186,7 @@ def ensure_worker_site_membership(
     *,
     pending_approval: bool = False,
 ) -> tuple[SiteWorker, bool]:
-    now_ms = int(time.time() * 1000)
+    now_ms = _now_ms()
     normalized_phone = _normalize_phone(user.phone)
     normalized_name = _normalize_name(user.full_name)
 
@@ -142,8 +211,8 @@ def ensure_worker_site_membership(
         if normalized_phone and existing.phone != normalized_phone:
             existing.phone = normalized_phone
             changed = True
-        if not pending_approval and existing.pending_approval:
-            existing.pending_approval = False
+        if existing.pending_approval != bool(pending_approval):
+            existing.pending_approval = bool(pending_approval)
             changed = True
         if normalized_name and _normalize_name(existing.name) == normalized_name and existing.name != (user.full_name or ""):
             existing.name = user.full_name or existing.name
@@ -167,8 +236,16 @@ def ensure_worker_site_membership(
     return created, True
 
 
+def _issue_token_for_user(user: User, response: Response) -> Token:
+    token = create_access_token({"sub": str(user.id), "role": user.role.value})
+    set_auth_cookie(response, token)
+    return Token(access_token=token, token_type="bearer")
+
+
 @router.post("/register", response_model=UserOut, status_code=201)
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
+    if str(user_in.role) != UserRole.worker.value:
+        raise HTTPException(status_code=403, detail="La création publique de directeurs est désactivée")
     if settings.enable_pwned_password_check:
         try:
             if pwned_passwords.is_password_pwned(user_in.password):
@@ -182,7 +259,6 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
                 detail="Vérification du mot de passe impossible pour le moment. Réessayez plus tard.",
             )
     normalized_phone = _normalize_phone(user_in.phone)
-    # Vérifier si email ou phone existe déjà
     if user_in.email:
         existing_email = db.query(User).filter(User.email == user_in.email).first()
         if existing_email:
@@ -191,17 +267,15 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         existing_phone = db.query(User).filter(User.phone == normalized_phone).first()
         if existing_phone:
             raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
-    
+
     user = User(
         email=user_in.email,
         full_name=user_in.full_name,
         hashed_password=pwd_context.hash(user_in.password),
-        role=UserRole(user_in.role),
+        role=UserRole.worker,
         phone=normalized_phone or None,
     )
     db.add(user)
-    if user.role == UserRole.director:
-        ensure_director_code(user, db)
     db.commit()
     db.refresh(user)
     return UserOut(
@@ -215,8 +289,21 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(req: LoginRequest, db: Session = Depends(get_db)):
-    # Support login par email ou téléphone
+def login(
+    req: LoginRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    subject = req.email or req.phone or ""
+    enforce_rate_limit(
+        request,
+        scope="auth-login",
+        limit=10,
+        window_seconds=60,
+        subject=subject,
+        detail="Trop de tentatives de connexion. Réessaie dans une minute.",
+    )
     if req.phone:
         user: User | None = db.query(User).filter(User.phone == _normalize_phone(req.phone)).first()
     elif req.email:
@@ -226,84 +313,41 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         user = db.query(User).filter(func.lower(User.email) == email_key).first()
     else:
         raise HTTPException(status_code=400, detail="Email ou téléphone requis")
-    
+
     if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-    token = create_access_token({"sub": str(user.id), "role": user.role.value})
-    return {"access_token": token, "token_type": "bearer"}
+    return _issue_token_for_user(user, response)
 
 
 @router.post("/worker-login", response_model=Token)
-def worker_login(req: WorkerLoginRequest, db: Session = Depends(get_db)):
-    """Authentification des travailleurs avec code directeur + téléphone (sans mot de passe)"""
+def worker_login(
+    req: WorkerLoginRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     normalized_phone = _normalize_phone(req.phone)
-    # 1) Vérifier que le téléphone correspond à un utilisateur worker
+    enforce_rate_limit(
+        request,
+        scope="worker-login",
+        limit=10,
+        window_seconds=60,
+        subject=normalized_phone,
+        detail="Trop de tentatives de connexion travailleur. Réessaie dans une minute.",
+    )
     user: User | None = (
         db.query(User)
         .filter(User.phone == normalized_phone, User.role == UserRole.worker)
         .first()
     )
-    if not user:
+    if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-    
-    # 2) Le "code" identifie le directeur (champ users.director_code)
-    code = (req.code or "").strip()
-    if not code:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
-    director = resolve_director_by_code(db, code)
-    if not director:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
+    return _issue_token_for_user(user, response)
 
-    sw: SiteWorker | None = None
-    changed = False
-    if req.invite_token:
-        invite_payload = decode_worker_invite_token(req.invite_token)
-        if int(invite_payload["director_id"]) != int(director.id):
-            raise HTTPException(status_code=401, detail="Lien d'invitation invalide pour ce code directeur")
-        invite_site = db.get(Site, int(invite_payload["site_id"]))
-        if not invite_site or int(invite_site.director_id) != int(director.id):
-            raise HTTPException(status_code=401, detail="Lien d'invitation invalide pour ce site")
-        sw, changed = ensure_worker_site_membership(db, invite_site, user, pending_approval=True)
 
-    # 3) Vérifier que ce worker appartient à au moins un site du directeur
-    #    (via lien user_id, ou via phone stocké dans SiteWorker)
-    if not sw:
-        sw = (
-            db.query(SiteWorker)
-            .join(Site, Site.id == SiteWorker.site_id)
-            .filter(
-                Site.director_id == director.id,
-                (SiteWorker.user_id == user.id) | (SiteWorker.phone == normalized_phone),
-            )
-            .first()
-        )
-    if not sw:
-        raise HTTPException(status_code=401, detail="Identifiants invalides")
-
-    # 4) Lier toutes les lignes SiteWorker compatibles à ce user pour stabiliser le multi-sites
-    rows_to_link = (
-        db.query(SiteWorker)
-        .join(Site, Site.id == SiteWorker.site_id)
-        .filter(
-            Site.director_id == director.id,
-            ((SiteWorker.phone == normalized_phone) | (SiteWorker.user_id == user.id)),
-        )
-        .all()
-    )
-    for row in rows_to_link:
-        if row.user_id != user.id:
-            row.user_id = user.id
-            changed = True
-        if normalized_phone and row.phone != normalized_phone:
-            row.phone = normalized_phone
-            changed = True
-    if changed:
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-    
-    token = create_access_token({"sub": str(user.id), "role": user.role.value})
-    return {"access_token": token, "token_type": "bearer"}
+@router.post("/logout")
+def logout(response: Response):
+    clear_auth_cookie(response)
+    return {"ok": True}
 
 

@@ -10848,7 +10848,6 @@ export default function PlanningPage() {
                         const linkedResp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate-linked/stream`, {
                           method: "POST",
                           headers: {
-                            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
                             Accept: "text/event-stream",
                             "Content-Type": "application/json",
                           },
@@ -10862,6 +10861,7 @@ export default function PlanningPage() {
                             exclude_days: effectiveExcludeDays,
                             weekly_availability: weeklyAvailabilityForRequest,
                           }),
+                          credentials: "include",
                           signal: controller.signal,
                         });
                         if (!linkedResp.ok || !linkedResp.body) {
@@ -11076,7 +11076,6 @@ export default function PlanningPage() {
                       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
-                          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
                           Accept: "text/event-stream",
                           "Content-Type": "application/json",
                         },
@@ -11088,6 +11087,7 @@ export default function PlanningPage() {
                           exclude_days: effectiveExcludeDays, 
                           weekly_availability: weeklyAvailabilityForRequest
                         }),
+                        credentials: "include",
                         signal: controller.signal,
                       });
                       if (!resp.ok || !resp.body) {

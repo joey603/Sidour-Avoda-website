@@ -14,7 +14,6 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
-  getToken: jest.fn(),
 }));
 
 describe("/ home page", () => {
@@ -23,9 +22,8 @@ describe("/ home page", () => {
     jest.clearAllMocks();
   });
 
-  it("redirects to /login when there is no token", async () => {
+  it("redirects to /login when there is no active session", async () => {
     const auth = require("@/lib/auth");
-    auth.getToken.mockReturnValue(null);
     auth.fetchMe.mockResolvedValue(null);
 
     render(<Home />);
@@ -37,7 +35,6 @@ describe("/ home page", () => {
 
   it("renders worker/director info when session is valid", async () => {
     const auth = require("@/lib/auth");
-    auth.getToken.mockReturnValue("token");
     auth.fetchMe.mockResolvedValue({
       full_name: "Yoeli",
       role: "director",

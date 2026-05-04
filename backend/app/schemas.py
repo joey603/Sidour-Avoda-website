@@ -37,9 +37,8 @@ class LoginRequest(BaseModel):
 
 
 class WorkerLoginRequest(BaseModel):
-    code: str
     phone: str
-    invite_token: str | None = None
+    password: str = Field(min_length=8, max_length=72)
 
 
 class WorkerInviteLinkOut(BaseModel):
@@ -51,13 +50,13 @@ class WorkerInviteValidationOut(BaseModel):
     site_id: int
     site_name: str
     director_name: str
-    director_code: str
 
 
 class WorkerInviteRegistrationPayload(BaseModel):
     token: str
     full_name: str = Field(min_length=2, max_length=255)
     phone: str = Field(min_length=5, max_length=32)
+    password: str = Field(min_length=8, max_length=72)
 
 
 class WorkerInviteRegistrationOut(BaseModel):
@@ -65,7 +64,6 @@ class WorkerInviteRegistrationOut(BaseModel):
     already_exists: bool = False
     site_id: int
     site_name: str
-    director_code: str
     phone: str
 
 

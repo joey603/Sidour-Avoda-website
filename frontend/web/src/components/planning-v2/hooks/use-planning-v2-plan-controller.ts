@@ -639,11 +639,11 @@ export function usePlanningV2PlanController({
       const resp = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
           Accept: "text/event-stream",
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
+        credentials: "include",
         signal: controller.signal,
       });
       if (!resp.ok || !resp.body) {

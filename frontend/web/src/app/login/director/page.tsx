@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, getRoleFromToken, isTokenExpired, setToken, getToken, clearToken } from "@/lib/auth";
+import { fetchMe, logout } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function DirectorLoginInner() {
@@ -30,31 +30,7 @@ function DirectorLoginInner() {
 
   // Ne pas auto-rediriger depuis la page de login (évite les boucles).
   // On redirige seulement si /me confirme que le token est valide (avec garde-fou anti-boucle).
-  const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
   const didAutoRedirect = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    const token = getToken();
-    if (!token) {
-      setValidatedRole(null);
-      return;
-    }
-    if (isTokenExpired(token)) {
-      clearToken();
-      setValidatedRole(null);
-      return;
-    }
-    (async () => {
-      const me = await fetchMe();
-      if (cancelled) return;
-      setValidatedRole(me?.role || null);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const existingTarget = useMemo(() => {
     const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
     return returnUrl || "/director";
@@ -62,11 +38,23 @@ function DirectorLoginInner() {
   }, [searchParams]);
 
   useEffect(() => {
-    if (didAutoRedirect.current) return;
-    if (validatedRole !== "director") return;
-    didAutoRedirect.current = true;
-    router.replace(existingTarget);
-  }, [existingTarget, router, validatedRole]);
+    let cancelled = false;
+    (async () => {
+      const me = await fetchMe();
+      if (cancelled) return;
+      if (me?.role === "director" && !didAutoRedirect.current) {
+        didAutoRedirect.current = true;
+        router.replace(existingTarget);
+        return;
+      }
+      if (me?.role === "worker") {
+        setError("אתה מחובר כעובד. כדי להתחבר כמנהל, התנתק קודם.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [existingTarget, router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -74,8 +62,7 @@ function DirectorLoginInner() {
     setStatus(null);
     setLoading(true);
     try {
-      const prevToken = getToken();
-      const data = await apiFetchWithRetry<{ access_token: string }>(
+      await apiFetchWithRetry<{ access_token: string }>(
         "/auth/login",
         {
           method: "POST",
@@ -90,13 +77,10 @@ function DirectorLoginInner() {
           },
         },
       );
-      setToken(data.access_token);
-      const role = getRoleFromToken(data.access_token);
-      if (role !== "director") {
+      const me = await fetchMe();
+      if (me?.role !== "director") {
+        await logout();
         setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
-        // Restaurer le token précédent (ex: worker déjà connecté), sinon nettoyer
-        if (prevToken) setToken(prevToken);
-        else clearToken();
         return;
       }
       const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
@@ -122,8 +106,9 @@ function DirectorLoginInner() {
         </div>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-sm">אימייל</label>
+            <label htmlFor="director-email" className="block text-sm">אימייל</label>
             <input
+              id="director-email"
               dir="ltr"
               type="email"
               value={email}
@@ -133,8 +118,9 @@ function DirectorLoginInner() {
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm">סיסמה</label>
+            <label htmlFor="director-password" className="block text-sm">סיסמה</label>
             <input
+              id="director-password"
               dir="ltr"
               type="password"
               value={password}

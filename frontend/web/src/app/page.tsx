@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchMe, getToken } from "@/lib/auth";
+import { fetchMe } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 export default function Home() {
@@ -16,13 +16,6 @@ export default function Home() {
     const target = `/login?returnUrl=${encodeURIComponent("/")}`;
 
     (async () => {
-      const token = getToken();
-      // Pas de token : redirection — garder l’overlay jusqu’au changement de route
-      if (!token) {
-        router.replace(target);
-        return;
-      }
-
       try {
         const me = await fetchMe();
         if (!me) {

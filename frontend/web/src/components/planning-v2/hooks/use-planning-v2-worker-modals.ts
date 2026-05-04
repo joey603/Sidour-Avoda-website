@@ -30,6 +30,8 @@ export function usePlanningV2WorkerModals(
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingWorkerId, setEditingWorkerId] = useState<number | null>(null);
+  const [pendingInviteWorker, setPendingInviteWorker] = useState<WorkerRowForEditor | null>(null);
+  const [pendingInviteActionLoading, setPendingInviteActionLoading] = useState(false);
   const [newWorkerName, setNewWorkerName] = useState("");
   const [newWorkerMax, setNewWorkerMax] = useState(5);
   const [newWorkerRoles, setNewWorkerRoles] = useState<string[]>([]);
@@ -183,6 +185,10 @@ export function usePlanningV2WorkerModals(
 
   const openWorkerEditor = useCallback(
     (row: WorkerRowForEditor) => {
+      if (row.pendingApproval) {
+        setPendingInviteWorker(row);
+        return;
+      }
       setCreateStepOpen(false);
       setExistingPickerOpen(false);
       const overlay = (availabilityOverlaysByWorkerName[String(row.name || "").trim()] || {}) as WorkerAvailability;
@@ -202,6 +208,42 @@ export function usePlanningV2WorkerModals(
     },
     [enabledRoleNameSet, availabilityOverlaysByWorkerName],
   );
+
+  const approvePendingInviteWorker = useCallback(async () => {
+    if (!pendingInviteWorker) return;
+    try {
+      setPendingInviteActionLoading(true);
+      await apiFetch(`/director/sites/${siteId}/workers/${pendingInviteWorker.id}/approve-invite`, {
+        method: "POST",
+      });
+      setPendingInviteWorker(null);
+      toast.success("העובד אושר ונוסף לאתר");
+      reloadWorkers();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "נסה שוב מאוחר יותר.";
+      toast.error("אישור העובד נכשל", { description: msg });
+    } finally {
+      setPendingInviteActionLoading(false);
+    }
+  }, [pendingInviteWorker, reloadWorkers, siteId]);
+
+  const rejectPendingInviteWorker = useCallback(async () => {
+    if (!pendingInviteWorker) return;
+    try {
+      setPendingInviteActionLoading(true);
+      await apiFetch(`/director/sites/${siteId}/workers/${pendingInviteWorker.id}/reject-invite`, {
+        method: "DELETE",
+      });
+      setPendingInviteWorker(null);
+      toast.success("העובד נדחה והוסר מהאתר");
+      reloadWorkers();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "נסה שוב מאוחר יותר.";
+      toast.error("דחיית העובד נכשלה", { description: msg });
+    } finally {
+      setPendingInviteActionLoading(false);
+    }
+  }, [pendingInviteWorker, reloadWorkers, siteId]);
 
   /** Même flux que le planning : d’abord la petite modale שם/טלפון, puis la grande (זמינות…). */
   const openAddWorkerEditor = useCallback(() => {
@@ -546,6 +588,17 @@ export function usePlanningV2WorkerModals(
           setWorkerModalSaving(false);
         }
       },
+    },
+    pendingInviteModalProps: {
+      open: !!pendingInviteWorker,
+      workerName: String(pendingInviteWorker?.name || ""),
+      loading: pendingInviteActionLoading,
+      onClose: () => {
+        if (pendingInviteActionLoading) return;
+        setPendingInviteWorker(null);
+      },
+      onApprove: approvePendingInviteWorker,
+      onReject: rejectPendingInviteWorker,
     },
     onTableRowClick: openWorkerEditor,
   };

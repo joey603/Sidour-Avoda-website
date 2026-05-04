@@ -30,7 +30,7 @@ function LoginInner() {
             className="rounded-xl border p-4 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >
             <div className="font-semibold">עובד</div>
-            <div className="text-sm text-zinc-600 dark:text-zinc-300">התחברות עם קוד מנהל ומספר טלפון</div>
+            <div className="text-sm text-zinc-600 dark:text-zinc-300">התחברות עם מספר טלפון וסיסמה</div>
           </Link>
         </div>
       </div>

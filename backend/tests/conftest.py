@@ -9,6 +9,7 @@ from app.main import create_app
 from app.database import Base
 import app.deps as deps
 import app.auth as auth_mod
+from app.models import User, UserRole
 
 
 @pytest.fixture(scope="session")
@@ -50,5 +51,25 @@ def client(db_session):
     app.dependency_overrides[auth_mod.get_db] = override_get_db
 
     return TestClient(app)
+
+
+@pytest.fixture()
+def create_director(db_session):
+    def _create_director(*, email: str, full_name: str, password: str = "password123", phone: str | None = None):
+        user = User(
+            email=email,
+            full_name=full_name,
+            hashed_password=auth_mod.pwd_context.hash(password),
+            role=UserRole.director,
+            phone=phone,
+        )
+        db_session.add(user)
+        db_session.flush()
+        auth_mod.ensure_director_code(user, db_session)
+        db_session.commit()
+        db_session.refresh(user)
+        return user
+
+    return _create_director
 
 

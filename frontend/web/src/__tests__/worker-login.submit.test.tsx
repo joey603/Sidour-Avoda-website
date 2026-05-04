@@ -32,11 +32,7 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
-  getRoleFromToken: jest.fn(),
-  isTokenExpired: jest.fn(),
-  setToken: jest.fn(),
-  getToken: jest.fn(),
-  clearToken: jest.fn(),
+  logout: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({
@@ -57,20 +53,19 @@ describe("worker login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.getToken.mockReturnValue(null);
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("worker");
-    auth.fetchMe.mockResolvedValue(null);
-    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "346837536" });
+    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "worker" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
     returnUrlMock = "/worker/history";
 
-    render(<WorkerLoginPage />);
+    const { container } = render(<WorkerLoginPage />);
 
     const user = userEvent.setup();
-    const inputs = screen.getAllByRole("textbox");
-    await user.type(inputs[0], "346837536");
-    await user.type(inputs[1], "0585060398");
+    const phoneInput = container.querySelector('input[type="tel"]') as HTMLInputElement | null;
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement | null;
+    expect(phoneInput).toBeTruthy();
+    expect(passwordInput).toBeTruthy();
+    await user.type(phoneInput as HTMLInputElement, "0585060398");
+    await user.type(passwordInput as HTMLInputElement, "workerpass123");
     await user.click(screen.getByRole("button", { name: "התחבר" }));
 
     await waitFor(() => {
@@ -78,59 +73,59 @@ describe("worker login submit", () => {
         "/auth/worker-login",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ code: "346837536", phone: "0585060398" }),
+          body: JSON.stringify({ phone: "0585060398", password: "workerpass123" }),
         }),
         expect.any(Object),
       );
     });
 
-    expect(auth.setToken).toHaveBeenCalledWith("worker-token");
     expect(replaceMock).toHaveBeenCalledWith("/worker/history");
   });
 
-  it("shows an error and restores previous token when API returns a director token", async () => {
+  it("shows an error and logs out when backend authenticates a director", async () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.getToken.mockReturnValue("prev-token");
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("director");
-    auth.fetchMe.mockResolvedValue(null);
-    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "346837536" });
+    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "director" });
+    auth.logout.mockResolvedValue(undefined);
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "director-token" });
 
-    render(<WorkerLoginPage />);
+    const { container } = render(<WorkerLoginPage />);
 
     const user = userEvent.setup();
-    const inputs = screen.getAllByRole("textbox");
-    await user.type(inputs[0], "346837536");
-    await user.type(inputs[1], "0585060398");
+    const phoneInput = container.querySelector('input[type="tel"]') as HTMLInputElement | null;
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement | null;
+    expect(phoneInput).toBeTruthy();
+    expect(passwordInput).toBeTruthy();
+    await user.type(phoneInput as HTMLInputElement, "0585060398");
+    await user.type(passwordInput as HTMLInputElement, "workerpass123");
     await user.click(screen.getByRole("button", { name: "התחבר" }));
 
     expect(await screen.findByText("חשבון זה אינו לעובד. נא להתחבר כעובד.")).toBeInTheDocument();
-    expect(auth.setToken).toHaveBeenCalledWith("director-token");
-    expect(auth.setToken).toHaveBeenCalledWith("prev-token");
+    expect(auth.logout).toHaveBeenCalled();
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it("includes invite token in worker login and redirects to availability", async () => {
+  it("loads invite metadata and still logs in with phone/password", async () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.getToken.mockReturnValue(null);
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("worker");
-    auth.fetchMe.mockResolvedValue(null);
-    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss", director_code: "998877" });
+    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "worker" });
+    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
     inviteTokenMock = "secure-token";
     returnUrlMock = "/worker/availability";
 
-    render(<WorkerLoginPage />);
+    const { container } = render(<WorkerLoginPage />);
+    expect(await screen.findByText("הפעלת חשבון והגדרת סיסמה")).toBeInTheDocument();
 
     const user = userEvent.setup();
-    const inputs = screen.getAllByRole("textbox");
-    await user.type(inputs[1], "0585060398");
+    const phoneInput = container.querySelector('input[type="tel"]') as HTMLInputElement | null;
+    const passwordInput = container.querySelector('input[type="password"]') as HTMLInputElement | null;
+    expect(phoneInput).toBeTruthy();
+    expect(passwordInput).toBeTruthy();
+    await user.type(phoneInput as HTMLInputElement, "0585060398");
+    await user.type(passwordInput as HTMLInputElement, "workerpass123");
     await user.click(screen.getByRole("button", { name: "התחבר" }));
 
     await waitFor(() => {
@@ -138,7 +133,7 @@ describe("worker login submit", () => {
         "/auth/worker-login",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ code: "998877", phone: "0585060398", invite_token: "secure-token" }),
+          body: JSON.stringify({ phone: "0585060398", password: "workerpass123" }),
         }),
         expect.any(Object),
       );

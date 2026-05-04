@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { fetchMe, clearToken, getToken, isTokenExpired } from "@/lib/auth";
+import { fetchMe, logout } from "@/lib/auth";
 import {
   clearPlanningCreatPlanSessionStorageOnLogout,
   clearPlanningLocalStorageOnLogout,
@@ -69,10 +69,6 @@ export default function TopNav() {
     if (!isProtectedPage) return;
     if (userRole) return;
     if (typeof window === "undefined") return;
-
-    // Si un token semble encore valide, attendre le résultat de /me plutôt que de "bouncer" vers /login.
-    const token = getToken();
-    if (token && !isTokenExpired(token)) return;
 
     const cur = window.location.pathname + window.location.search;
     const isWorkerArea =
@@ -354,10 +350,10 @@ export default function TopNav() {
           {userRole && (
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 clearPlanningCreatPlanSessionStorageOnLogout();
                 clearPlanningLocalStorageOnLogout();
-                clearToken();
+                await logout();
                 setUserRole(null);
                 router.replace(userRole === "director" ? "/login/director" : "/login/worker");
               }}
@@ -418,10 +414,10 @@ export default function TopNav() {
             {userRole && (
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   clearPlanningCreatPlanSessionStorageOnLogout();
                   clearPlanningLocalStorageOnLogout();
-                  clearToken();
+                  await logout();
                   setUserRole(null);
                   setMobileMenuOpen(false);
                   router.replace(userRole === "director" ? "/login/director" : "/login/worker");

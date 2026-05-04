@@ -156,6 +156,47 @@ export function PlanningWorkersSection({
       <WorkerEditModal {...modals.workerEditModalProps} />
       <FilterWorkersAnswersModal {...modals.filterModalProps} />
       <LinkedAvailabilityConfirmDialog {...modals.linkedDialogProps} />
+      {modals.pendingInviteModalProps.open ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="space-y-2 text-center">
+              <h3 className="text-lg font-semibold">אישור עובד חדש</h3>
+              <p className="text-sm text-zinc-500">
+                האם לאשר את הוספת {modals.pendingInviteModalProps.workerName} כעובד באתר?
+              </p>
+            </div>
+            <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+              אם תאשר, העובד יהפוך לעובד רגיל באתר. אם תסרב, הוא יישאר רשום במערכת אך לא ישויך לאתר.
+            </div>
+            <div className="mt-5 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={modals.pendingInviteModalProps.onClose}
+                disabled={modals.pendingInviteModalProps.loading}
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                disabled={modals.pendingInviteModalProps.loading}
+                onClick={modals.pendingInviteModalProps.onApprove}
+                className="rounded-md bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-60"
+              >
+                אשר הוספה
+              </button>
+              <button
+                type="button"
+                disabled={modals.pendingInviteModalProps.loading}
+                onClick={modals.pendingInviteModalProps.onReject}
+                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                סרב והסר
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

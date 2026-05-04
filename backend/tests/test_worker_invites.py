@@ -29,17 +29,12 @@ def create_site(client, token: str, name: str = "Site Invite"):
     )
 
 
-def test_director_can_generate_and_validate_worker_invite_link(client):
-    register_resp = register_user(
-        client,
+def test_director_can_generate_and_validate_worker_invite_link(client, create_director):
+    director = create_director(
         email="director.invite@example.com",
         full_name="Director Invite",
-        password="password123",
-        role="director",
     )
-    assert register_resp.status_code == 201, register_resp.text
-    director_code = register_resp.json()["director_code"]
-    assert director_code
+    assert director.director_code
 
     login_resp = login_director(client, email="director.invite@example.com", password="password123")
     token = login_resp.json()["access_token"]
@@ -58,19 +53,14 @@ def test_director_can_generate_and_validate_worker_invite_link(client):
     validate_data = validate_resp.json()
     assert validate_data["site_id"] == site_id
     assert validate_data["site_name"] == "Invite Site"
-    assert validate_data["director_code"] == director_code
+    assert validate_data["director_name"] == "Director Invite"
 
 
-def test_worker_invite_registration_and_login_attach_site(client, db_session):
-    register_director_resp = register_user(
-        client,
+def test_worker_invite_registration_and_login_attach_site(client, db_session, create_director):
+    create_director(
         email="director.attach@example.com",
         full_name="Director Attach",
-        password="password123",
-        role="director",
     )
-    assert register_director_resp.status_code == 201, register_director_resp.text
-    director_code = register_director_resp.json()["director_code"]
 
     director_login_resp = login_director(client, email="director.attach@example.com", password="password123")
     director_token = director_login_resp.json()["access_token"]
@@ -86,6 +76,7 @@ def test_worker_invite_registration_and_login_attach_site(client, db_session):
             "token": invite_token,
             "full_name": "Worker Attached",
             "phone": "050-123-4567",
+            "password": "workerpass123",
         },
     )
     assert register_worker_resp.status_code == 201, register_worker_resp.text
@@ -94,9 +85,8 @@ def test_worker_invite_registration_and_login_attach_site(client, db_session):
     worker_login_resp = client.post(
         "/auth/worker-login",
         json={
-            "code": director_code,
             "phone": "0501234567",
-            "invite_token": invite_token,
+            "password": "workerpass123",
         },
     )
     assert worker_login_resp.status_code == 200, worker_login_resp.text
@@ -118,15 +108,11 @@ def test_worker_invite_registration_and_login_attach_site(client, db_session):
     assert any(site["id"] == site_id for site in worker_sites_resp.json())
 
 
-def test_director_can_approve_or_reject_pending_invited_worker(client, db_session):
-    register_director_resp = register_user(
-        client,
+def test_director_can_approve_or_reject_pending_invited_worker(client, db_session, create_director):
+    create_director(
         email="director.pending@example.com",
         full_name="Director Pending",
-        password="password123",
-        role="director",
     )
-    director_code = register_director_resp.json()["director_code"]
     director_login_resp = login_director(client, email="director.pending@example.com", password="password123")
     director_token = director_login_resp.json()["access_token"]
     site_resp = create_site(client, director_token, "Pending Site")
@@ -135,11 +121,11 @@ def test_director_can_approve_or_reject_pending_invited_worker(client, db_sessio
 
     client.post(
         "/public/sites/invitations/register",
-        json={"token": invite_token, "full_name": "Pending Worker", "phone": "0509991111"},
+        json={"token": invite_token, "full_name": "Pending Worker", "phone": "0509991111", "password": "workerpass123"},
     )
     worker_login_resp = client.post(
         "/auth/worker-login",
-        json={"code": director_code, "phone": "0509991111", "invite_token": invite_token},
+        json={"phone": "0509991111", "password": "workerpass123"},
     )
     assert worker_login_resp.status_code == 200, worker_login_resp.text
     user = db_session.query(User).filter(User.phone == "0509991111").first()
@@ -159,11 +145,11 @@ def test_director_can_approve_or_reject_pending_invited_worker(client, db_sessio
     second_invite_token = client.get(f"/director/sites/{site_id}/worker-invite", headers=auth_headers(director_token)).json()["token"]
     client.post(
         "/public/sites/invitations/register",
-        json={"token": second_invite_token, "full_name": "Rejected Worker", "phone": "0509992222"},
+        json={"token": second_invite_token, "full_name": "Rejected Worker", "phone": "0509992222", "password": "workerpass456"},
     )
     client.post(
         "/auth/worker-login",
-        json={"code": director_code, "phone": "0509992222", "invite_token": second_invite_token},
+        json={"phone": "0509992222", "password": "workerpass456"},
     )
     rejected_user = db_session.query(User).filter(User.phone == "0509992222").first()
     rejected_row = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.user_id == rejected_user.id).first()
@@ -179,15 +165,11 @@ def test_director_can_approve_or_reject_pending_invited_worker(client, db_sessio
     assert db_session.query(User).filter(User.id == rejected_user.id).first() is not None
 
 
-def test_pending_workers_are_excluded_from_planning_generation(client):
-    register_director_resp = register_user(
-        client,
+def test_pending_workers_are_excluded_from_planning_generation(client, create_director):
+    create_director(
         email="director.generate@example.com",
         full_name="Director Generate",
-        password="password123",
-        role="director",
     )
-    director_code = register_director_resp.json()["director_code"]
     director_login_resp = login_director(client, email="director.generate@example.com", password="password123")
     director_token = director_login_resp.json()["access_token"]
     site_resp = create_site(client, director_token, "Generation Site")
@@ -196,11 +178,11 @@ def test_pending_workers_are_excluded_from_planning_generation(client):
 
     client.post(
         "/public/sites/invitations/register",
-        json={"token": invite_token, "full_name": "Pending Planner", "phone": "0501113333"},
+        json={"token": invite_token, "full_name": "Pending Planner", "phone": "0501113333", "password": "workerpass123"},
     )
     login_resp = client.post(
         "/auth/worker-login",
-        json={"code": director_code, "phone": "0501113333", "invite_token": invite_token},
+        json={"phone": "0501113333", "password": "workerpass123"},
     )
     assert login_resp.status_code == 200, login_resp.text
 
@@ -218,15 +200,11 @@ def test_pending_workers_are_excluded_from_planning_generation(client):
     assert planning_resp.json()["status"] == "NO_WORKERS"
 
 
-def test_pending_invited_workers_only_appear_from_registration_week(client, db_session):
-    register_director_resp = register_user(
-        client,
+def test_pending_invited_workers_only_appear_from_registration_week(client, db_session, create_director):
+    create_director(
         email="director.weekfilter@example.com",
         full_name="Director Week Filter",
-        password="password123",
-        role="director",
     )
-    director_code = register_director_resp.json()["director_code"]
     director_login_resp = login_director(client, email="director.weekfilter@example.com", password="password123")
     director_token = director_login_resp.json()["access_token"]
     site_resp = create_site(client, director_token, "Week Filter Site")
@@ -235,11 +213,11 @@ def test_pending_invited_workers_only_appear_from_registration_week(client, db_s
 
     client.post(
         "/public/sites/invitations/register",
-        json={"token": invite_token, "full_name": "Week Pending", "phone": "0502224444"},
+        json={"token": invite_token, "full_name": "Week Pending", "phone": "0502224444", "password": "workerpass123"},
     )
     login_resp = client.post(
         "/auth/worker-login",
-        json={"code": director_code, "phone": "0502224444", "invite_token": invite_token},
+        json={"phone": "0502224444", "password": "workerpass123"},
     )
     assert login_resp.status_code == 200, login_resp.text
 

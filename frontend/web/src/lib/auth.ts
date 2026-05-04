@@ -1,19 +1,28 @@
 "use client";
 
-import { apiFetchWithRetry } from "./api";
+import { apiFetch, apiFetchWithRetry } from "./api";
 
 const TOKEN_KEY = "access_token";
 
 type Role = "worker" | "director";
 
-export function setToken(token: string) {
+export type AuthMe = {
+  id: number;
+  email: string | null;
+  role: Role;
+  full_name: string;
+  director_code?: string | null;
+  directorCode?: string | null;
+};
+
+export function setToken(_token: string) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(TOKEN_KEY, token);
+  // Compat legacy: on ne persiste plus le JWT côté navigateur.
+  localStorage.removeItem(TOKEN_KEY);
 }
 
 export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return null;
 }
 
 export function clearToken() {
@@ -40,12 +49,14 @@ function decodeJwtPayload(token: string | null): Record<string, unknown> | null 
 }
 
 export function getRoleFromToken(token: string | null): Role | null {
+  if (!token) return null;
   const payload = decodeJwtPayload(token);
   const role = String(payload?.role || "").trim();
   return role === "worker" || role === "director" ? (role as Role) : null;
 }
 
 export function isTokenExpired(token: string | null, skewSeconds = 30): boolean {
+  if (!token) return true;
   const payload = decodeJwtPayload(token);
   const expRaw = payload?.exp;
   const expSeconds = typeof expRaw === "number" ? expRaw : Number(expRaw);
@@ -54,14 +65,11 @@ export function isTokenExpired(token: string | null, skewSeconds = 30): boolean 
   return nowSeconds >= expSeconds - skewSeconds;
 }
 
-export async function fetchMe() {
-  const token = getToken();
-  if (!token) return null;
+export async function fetchMe(): Promise<AuthMe | null> {
   try {
-    return await apiFetchWithRetry<{ id: number; email: string; role: "worker" | "director"; full_name: string; director_code?: string | null; directorCode?: string | null }>(
+    return await apiFetchWithRetry<AuthMe>(
       "/me",
       {
-        headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       } as any,
       {
@@ -78,6 +86,18 @@ export async function fetchMe() {
       return null;
     }
     return null;
+  }
+}
+
+export async function logout() {
+  try {
+    await apiFetch("/auth/logout", {
+      method: "POST",
+    });
+  } catch {
+    // ignore: le cookie peut déjà être expiré côté serveur
+  } finally {
+    clearToken();
   }
 }
 

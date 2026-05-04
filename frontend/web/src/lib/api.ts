@@ -11,10 +11,14 @@ function clearTokenLocal() {
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${path}`;
   const headers = new Headers(options.headers);
+  const authHeader = headers.get("Authorization");
+  if (authHeader && /Bearer\s+(null|undefined)\s*$/i.test(authHeader)) {
+    headers.delete("Authorization");
+  }
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { ...options, headers, credentials: "include" });
   if (!res.ok) {
     const contentType = res.headers.get("content-type");
     let message = `HTTP ${res.status}`;

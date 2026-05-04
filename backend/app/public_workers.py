@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
+from fastapi import APIRouter, HTTPException, Depends, Query, Body, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from .deps import get_db, get_current_user
-from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User, UserRole
+from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User, UserRole, WorkerInviteToken
 from .schemas import (
     WorkerCreate,
     WorkerOut,
@@ -16,14 +16,15 @@ from .schemas import (
     WorkerInviteClaimOut,
 )
 from .auth import (
-    create_worker_invite_token,
-    decode_worker_invite_token,
-    ensure_director_code,
     ensure_worker_site_membership,
     pwd_context,
+    resolve_worker_invite_token,
+    consume_worker_invite_token,
 )
+from .database import settings
+from .rate_limit import enforce_rate_limit
+from . import pwned_passwords
 import re
-import secrets
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/public/sites", tags=["public-workers"])
@@ -59,8 +60,8 @@ def _norm_phone(value: str | None) -> str:
     return "".join(ch for ch in str(value or "") if ch.isdigit() or ch == "+").strip()
 
 
-def _resolve_invited_site(token: str, db: Session) -> tuple[Site, User]:
-    payload = decode_worker_invite_token(token)
+def _resolve_invited_site(token: str, db: Session) -> tuple[Site, User, WorkerInviteToken]:
+    invite, payload = resolve_worker_invite_token(db, token)
     site = db.get(Site, int(payload["site_id"]))
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
@@ -68,32 +69,58 @@ def _resolve_invited_site(token: str, db: Session) -> tuple[Site, User]:
     director = db.get(User, int(payload["director_id"]))
     if not director or director.role != UserRole.director or int(site.director_id) != int(director.id):
         raise HTTPException(status_code=401, detail="Lien d'invitation invalide")
-    ensure_director_code(director, db)
-    db.flush()
-    return site, director
+    return site, director, invite
 
 
 @router.get("/invitations/{token}", response_model=WorkerInviteValidationOut)
-def validate_worker_invitation(token: str, db: Session = Depends(get_db)):
-    site, director = _resolve_invited_site(token, db)
+def validate_worker_invitation(token: str, request: Request, db: Session = Depends(get_db)):
+    enforce_rate_limit(
+        request,
+        scope="invite-validate",
+        limit=30,
+        window_seconds=60,
+        subject=token[:16],
+        detail="Trop de vérifications de lien d'invitation. Réessaie dans une minute.",
+    )
+    site, director, _invite = _resolve_invited_site(token, db)
     return WorkerInviteValidationOut(
         site_id=int(site.id),
         site_name=site.name,
         director_name=director.full_name,
-        director_code=str(director.director_code or ""),
     )
 
 
 @router.post("/invitations/register", response_model=WorkerInviteRegistrationOut, status_code=201)
 def register_worker_via_invitation(
+    request: Request,
     payload: WorkerInviteRegistrationPayload = Body(...),
     db: Session = Depends(get_db),
 ):
-    site, director = _resolve_invited_site(payload.token, db)
+    enforce_rate_limit(
+        request,
+        scope="invite-register",
+        limit=8,
+        window_seconds=60,
+        subject=payload.phone,
+        detail="Trop de tentatives d'activation. Réessaie dans une minute.",
+    )
+    site, _director, invite = _resolve_invited_site(payload.token, db)
     normalized_phone = _norm_phone(payload.phone)
     full_name = re.sub(r"\s+", " ", str(payload.full_name or "").strip())
     if not normalized_phone or not full_name:
         raise HTTPException(status_code=400, detail="Nom et téléphone requis")
+    if settings.enable_pwned_password_check:
+        try:
+            if pwned_passwords.is_password_pwned(payload.password):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Ce mot de passe figure dans des fuites de données connues (Have I Been Pwned). Choisissez un autre mot de passe.",
+                )
+        except pwned_passwords.PwnedPasswordsServiceError:
+            raise HTTPException(
+                status_code=503,
+                detail="Vérification du mot de passe impossible pour le moment. Réessayez plus tard.",
+            )
 
     existing_user = db.query(User).filter(User.phone == normalized_phone).first()
     already_exists = False
@@ -102,40 +129,54 @@ def register_worker_via_invitation(
             raise HTTPException(status_code=400, detail="Ce numéro est déjà utilisé par un autre compte")
         if existing_user.full_name != full_name:
             existing_user.full_name = full_name
+        existing_user.hashed_password = pwd_context.hash(payload.password)
         already_exists = True
     else:
         existing_user = User(
             email=None,
             full_name=full_name,
-            hashed_password=pwd_context.hash(secrets.token_urlsafe(24)),
+            hashed_password=pwd_context.hash(payload.password),
             role=UserRole.worker,
             phone=normalized_phone,
         )
         db.add(existing_user)
+        db.flush()
 
+    _row, changed = ensure_worker_site_membership(db, site, existing_user, pending_approval=True)
+    consume_worker_invite_token(invite, used_by_user_id=existing_user.id)
+    if changed or not already_exists:
+        db.flush()
     db.commit()
     return WorkerInviteRegistrationOut(
         ok=True,
         already_exists=already_exists,
         site_id=int(site.id),
         site_name=site.name,
-        director_code=str(director.director_code or ""),
         phone=normalized_phone,
     )
 
 
 @router.post("/invitations/claim", response_model=WorkerInviteClaimOut)
 def claim_worker_invitation(
+    request: Request,
     payload: WorkerInviteClaimPayload = Body(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    enforce_rate_limit(
+        request,
+        scope="invite-claim",
+        limit=10,
+        window_seconds=60,
+        subject=str(user.id),
+        detail="Trop de tentatives de rattachement d'invitation. Réessaie dans une minute.",
+    )
     if user.role != UserRole.worker:
         raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
-    site, _director = _resolve_invited_site(payload.token, db)
+    site, _director, invite = _resolve_invited_site(payload.token, db)
     _row, changed = ensure_worker_site_membership(db, site, user, pending_approval=True)
-    if changed:
-        db.commit()
+    consume_worker_invite_token(invite, used_by_user_id=user.id)
+    db.commit()
     return WorkerInviteClaimOut(ok=True, created=changed, site_id=int(site.id), site_name=site.name)
 
 

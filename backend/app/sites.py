@@ -3338,9 +3338,9 @@ def get_worker_invite_link(site_id: int, user: User = Depends(require_role("dire
     if getattr(site, "deleted_at", None):
         raise HTTPException(status_code=404, detail="Site introuvable")
     ensure_director_code(user, db)
+    token = create_worker_invite_token(site_id=int(site.id), director_id=int(user.id), db=db)
     db.commit()
     db.refresh(user)
-    token = create_worker_invite_token(site_id=int(site.id), director_id=int(user.id))
     return WorkerInviteLinkOut(token=token, invite_path=f"/invite/worker/{token}")
 
 

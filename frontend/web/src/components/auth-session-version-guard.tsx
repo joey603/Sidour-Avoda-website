@@ -11,6 +11,7 @@ export default function AuthSessionVersionGuard() {
     try {
       const previousVersion = localStorage.getItem(SESSION_VERSION_KEY);
       if (previousVersion !== SESSION_VERSION) {
+        // Nettoyage legacy: l'auth ne persiste plus le JWT côté navigateur.
         localStorage.removeItem(TOKEN_KEY);
         localStorage.setItem(SESSION_VERSION_KEY, SESSION_VERSION);
       }

@@ -8,12 +8,14 @@ from .auth import router as auth_router
 from .sites import router as sites_router, process_auto_planning_tick
 from .public_workers import router as public_workers_router
 from .deps import get_current_user, require_role
+from .rate_limit import reset_rate_limits
 
 logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Scheduler API")
+    reset_rate_limits()
 
 
     # CORS (adapt front URL au besoin)
@@ -21,11 +23,15 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=[
             "http://localhost:3000",
+            "http://localhost:3001",
+            "http://localhost:3002",
             "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+            "http://127.0.0.1:3002",
             "http://0.0.0.0:3000",
         ],
         # Autoriser les previews Vercel (ex: https://xxx.vercel.app) + prod Vercel
-        allow_origin_regex=r"^https://.*\.vercel\.app$",
+        allow_origin_regex=r"^(https://.*\.vercel\.app|http://localhost:\d+|http://127\.0\.0\.1:\d+)$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -137,15 +143,6 @@ def create_app() -> FastAPI:
                         except Exception:
                             pass
 
-                    # Seed code pour un directeur spécifique
-                    try:
-                        conn.exec_driver_sql(
-                            "UPDATE users SET director_code = ? WHERE email = ? AND role = ?",
-                            ("123456789", "yoelibarthel603@gmail.com", "director"),
-                        )
-                    except Exception:
-                        pass
-                
                 # Migration pour la table site_workers: ajouter user_id
                 try:
                     site_worker_cols = conn.exec_driver_sql("PRAGMA table_info(site_workers)").fetchall()

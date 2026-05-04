@@ -25,11 +25,7 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
-  getRoleFromToken: jest.fn(),
-  isTokenExpired: jest.fn(),
-  setToken: jest.fn(),
-  getToken: jest.fn(),
-  clearToken: jest.fn(),
+  logout: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({
@@ -44,9 +40,6 @@ describe("login auto-redirect", () => {
 
   it("redirects worker login to /worker when session is valid", async () => {
     const auth = require("@/lib/auth");
-    auth.getToken.mockReturnValue("tkn");
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("worker");
     auth.fetchMe.mockResolvedValue({ role: "worker" });
 
     render(<WorkerLoginPage />);
@@ -58,9 +51,6 @@ describe("login auto-redirect", () => {
 
   it("redirects director login to /director when session is valid", async () => {
     const auth = require("@/lib/auth");
-    auth.getToken.mockReturnValue("tkn");
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("director");
     auth.fetchMe.mockResolvedValue({ role: "director" });
 
     render(<DirectorLoginPage />);

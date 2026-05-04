@@ -34,11 +34,7 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
-  getRoleFromToken: jest.fn(),
-  isTokenExpired: jest.fn(),
-  setToken: jest.fn(),
-  getToken: jest.fn(),
-  clearToken: jest.fn(),
+  logout: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({
@@ -56,10 +52,7 @@ describe("director login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.getToken.mockReturnValue(null);
-    auth.isTokenExpired.mockReturnValue(false);
-    auth.getRoleFromToken.mockReturnValue("director");
-    auth.fetchMe.mockResolvedValue(null);
+    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "director" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "director-token" });
 
     const { container } = render(<DirectorLoginPage />);
@@ -84,7 +77,6 @@ describe("director login submit", () => {
       );
     });
 
-    expect(auth.setToken).toHaveBeenCalledWith("director-token");
     expect(replaceMock).toHaveBeenCalledWith("/director");
   });
 
@@ -92,8 +84,6 @@ describe("director login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.getToken.mockReturnValue(null);
-    auth.isTokenExpired.mockReturnValue(false);
     auth.fetchMe.mockResolvedValue(null);
     api.apiFetchWithRetry.mockRejectedValue(new Error("timeout after retries"));
 

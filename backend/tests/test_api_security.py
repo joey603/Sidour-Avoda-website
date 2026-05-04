@@ -52,16 +52,8 @@ def test_worker_cannot_list_director_sites(client):
     assert r.status_code == 403, r.text
 
 
-def test_director_can_list_own_sites(client):
-    client.post(
-        "/auth/register",
-        json={
-            "email": "sec.director@example.com",
-            "full_name": "Sec Director",
-            "password": "password123",
-            "role": "director",
-        },
-    )
+def test_director_can_list_own_sites(client, create_director):
+    create_director(email="sec.director@example.com", full_name="Sec Director")
     tok = client.post(
         "/auth/login",
         json={"email": "sec.director@example.com", "password": "password123"},
@@ -74,6 +66,14 @@ def test_director_can_list_own_sites(client):
 def test_auth_login_rejects_unknown_user(client):
     r = client.post("/auth/login", json={"email": "nobody@example.com", "password": "x"})
     assert r.status_code == 401
+
+
+def test_auth_login_is_rate_limited_after_repeated_failures(client):
+    for _ in range(10):
+        r = client.post("/auth/login", json={"email": "nobody@example.com", "password": "wrongpass123"})
+        assert r.status_code == 401
+    limited = client.post("/auth/login", json={"email": "nobody@example.com", "password": "wrongpass123"})
+    assert limited.status_code == 429
 
 
 def test_health_public_no_auth(client):

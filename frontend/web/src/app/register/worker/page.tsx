@@ -11,7 +11,6 @@ type WorkerInviteMeta = {
   site_id: number;
   site_name: string;
   director_name: string;
-  director_code: string;
 };
 
 type WorkerInviteRegistrationOut = {
@@ -19,7 +18,6 @@ type WorkerInviteRegistrationOut = {
   already_exists: boolean;
   site_id: number;
   site_name: string;
-  director_code: string;
   phone: string;
 };
 
@@ -33,6 +31,8 @@ function WorkerRegisterPageContent() {
   const [inviteMeta, setInviteMeta] = useState<WorkerInviteMeta | null>(null);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +62,11 @@ function WorkerRegisterPageContent() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    if (password !== passwordConfirm) {
+      setError("הסיסמאות אינן תואמות.");
+      setSubmitting(false);
+      return;
+    }
     try {
       const result = await apiFetch<WorkerInviteRegistrationOut>("/public/sites/invitations/register", {
         method: "POST",
@@ -69,9 +74,10 @@ function WorkerRegisterPageContent() {
           token: inviteToken,
           full_name: fullName,
           phone,
+          password,
         }),
       });
-      const target = `/login/worker?inviteToken=${encodeURIComponent(inviteToken)}&phone=${encodeURIComponent(result.phone)}&returnUrl=${encodeURIComponent("/worker/availability")}`;
+      const target = `/login/worker?phone=${encodeURIComponent(result.phone)}&returnUrl=${encodeURIComponent("/worker/availability")}`;
       router.replace(target);
     } catch (e: any) {
       setError(String(e?.message || "הרשמה נכשלה"));
@@ -104,8 +110,9 @@ function WorkerRegisterPageContent() {
 
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-sm">שם פרטי ושם משפחה</label>
+            <label htmlFor="worker-register-full-name" className="block text-sm">שם פרטי ושם משפחה</label>
             <input
+              id="worker-register-full-name"
               type="text"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -114,8 +121,9 @@ function WorkerRegisterPageContent() {
             />
           </div>
           <div className="space-y-2">
-            <label className="block text-sm">מספר טלפון</label>
+            <label htmlFor="worker-register-phone" className="block text-sm">מספר טלפון</label>
             <input
+              id="worker-register-phone"
               type="tel"
               dir="ltr"
               value={phone}
@@ -124,17 +132,43 @@ function WorkerRegisterPageContent() {
               required
             />
           </div>
+          <div className="space-y-2">
+            <label htmlFor="worker-register-password" className="block text-sm">סיסמה</label>
+            <input
+              id="worker-register-password"
+              type="password"
+              dir="ltr"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              required
+              minLength={8}
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="worker-register-password-confirm" className="block text-sm">אישור סיסמה</label>
+            <input
+              id="worker-register-password-confirm"
+              type="password"
+              dir="ltr"
+              value={passwordConfirm}
+              onChange={(e) => setPasswordConfirm(e.target.value)}
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              required
+              minLength={8}
+            />
+          </div>
           <button
             type="submit"
             disabled={submitting || !inviteToken}
             className="inline-flex w-full items-center justify-center rounded-md bg-zinc-900 px-4 py-2 text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
-            {submitting ? "נרשם..." : "המשך להתחברות"}
+            {submitting ? "מפעיל חשבון..." : "הגדר סיסמה והמשך"}
           </button>
         </form>
 
         <p className="mt-4 text-center text-sm text-zinc-500">
-          כבר רשום?{" "}
+          כבר הופעל לך חשבון?{" "}
           <Link
             href={`/login/worker?inviteToken=${encodeURIComponent(inviteToken)}&returnUrl=${encodeURIComponent("/worker/availability")}`}
             className="underline underline-offset-2"

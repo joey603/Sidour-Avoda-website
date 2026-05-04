@@ -7,7 +7,7 @@ import TopNav from "@/components/top-nav";
 jest.setTimeout(15000);
 
 const replaceMock = jest.fn();
-const clearTokenMock = jest.fn();
+const logoutMock = jest.fn();
 
 let pathnameMock = "/";
 
@@ -27,16 +27,14 @@ jest.mock("next/link", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
-  clearToken: () => clearTokenMock(),
-  getToken: jest.fn(),
-  isTokenExpired: jest.fn(),
+  logout: () => logoutMock(),
 }));
 
 describe("TopNav", () => {
   beforeEach(() => {
     pathnameMock = "/";
     replaceMock.mockReset();
-    clearTokenMock.mockReset();
+    logoutMock.mockReset();
     jest.clearAllMocks();
     window.history.replaceState({}, "", "http://localhost/");
   });
@@ -47,8 +45,6 @@ describe("TopNav", () => {
 
     const auth = require("@/lib/auth");
     auth.fetchMe.mockResolvedValue(null);
-    auth.getToken.mockReturnValue(null);
-    auth.isTokenExpired.mockReturnValue(true);
 
     render(<TopNav />);
 
@@ -63,8 +59,6 @@ describe("TopNav", () => {
 
     const auth = require("@/lib/auth");
     auth.fetchMe.mockResolvedValue({ role: "worker" });
-    auth.getToken.mockReturnValue("token");
-    auth.isTokenExpired.mockReturnValue(false);
 
     render(<TopNav />);
 
@@ -82,8 +76,7 @@ describe("TopNav", () => {
 
     const auth = require("@/lib/auth");
     auth.fetchMe.mockResolvedValue({ role: "worker" });
-    auth.getToken.mockReturnValue("token");
-    auth.isTokenExpired.mockReturnValue(false);
+    logoutMock.mockResolvedValue(undefined);
 
     render(<TopNav />);
 
@@ -91,7 +84,7 @@ describe("TopNav", () => {
     const logoutButtons = await screen.findAllByRole("button", { name: "התנתק" });
     await user.click(logoutButtons[0]);
 
-    expect(clearTokenMock).toHaveBeenCalled();
+    expect(logoutMock).toHaveBeenCalled();
     expect(replaceMock).toHaveBeenCalledWith("/login/worker");
   });
 });

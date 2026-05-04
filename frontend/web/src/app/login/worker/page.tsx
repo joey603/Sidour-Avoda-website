@@ -4,21 +4,20 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, getRoleFromToken, isTokenExpired, setToken, getToken, clearToken } from "@/lib/auth";
+import { fetchMe, logout } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 type WorkerInviteMeta = {
   site_id: number;
   site_name: string;
   director_name: string;
-  director_code: string;
 };
 
 function WorkerLoginInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [code, setCode] = useState("");
   const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -36,23 +35,8 @@ function WorkerLoginInner() {
   }
 
   const returnUrl = searchParams?.get("returnUrl");
-  const decodedRole = getRoleFromToken(getToken());
   const existingTarget = useMemo(() => safeWorkerReturnUrl(returnUrl) || "/worker", [returnUrl]);
-  const [validatedRole, setValidatedRole] = useState<"worker" | "director" | null>(null);
   const didAutoRedirect = useRef(false);
-
-  useEffect(() => {
-    // IMPORTANT: ne pas auto-rediriger depuis la page de login (évite les boucles / clignotements).
-    // Exception: si un directeur arrive ici via /public/workers, on nettoie le token pour permettre la connexion worker.
-    if (decodedRole === "director" && (returnUrl?.includes("/public/workers") || !!inviteToken)) {
-      clearToken();
-      setError(null);
-      return;
-    }
-    if (decodedRole === "director") {
-      setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התחבר עם פרטי עובד.");
-    }
-  }, [decodedRole, inviteToken, returnUrl]);
 
   useEffect(() => {
     if (!prefilledPhone) return;
@@ -70,7 +54,6 @@ function WorkerLoginInner() {
         const data = await apiFetch<WorkerInviteMeta>(`/public/sites/invitations/${encodeURIComponent(inviteToken)}`);
         if (cancelled) return;
         setInviteMeta(data);
-        if (data.director_code) setCode((prev) => prev || data.director_code);
       } catch {
         if (cancelled) return;
         setError("Lien d'invitation invalide ou expiré.");
@@ -84,49 +67,22 @@ function WorkerLoginInner() {
 
   useEffect(() => {
     let cancelled = false;
-    const token = getToken();
-    if (!token) {
-      setValidatedRole(null);
-      return;
-    }
-    if (isTokenExpired(token)) {
-      clearToken();
-      setValidatedRole(null);
-      return;
-    }
     (async () => {
       const me = await fetchMe();
       if (cancelled) return;
-      setValidatedRole(me?.role || null);
+      if (me?.role === "worker" && !didAutoRedirect.current) {
+        didAutoRedirect.current = true;
+        router.replace(existingTarget);
+        return;
+      }
+      if (me?.role === "director") {
+        setError("אתה מחובר כמנהל. כדי להתחבר כעובד, התנתק קודם.");
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (didAutoRedirect.current) return;
-    if (validatedRole !== "worker") return;
-    didAutoRedirect.current = true;
-    (async () => {
-      try {
-        if (inviteToken) {
-          const token = getToken();
-          if (token) {
-            await apiFetch("/public/sites/invitations/claim", {
-              method: "POST",
-              headers: { Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ token: inviteToken }),
-            });
-          }
-        }
-      } catch {
-        // Ignorer pour ne pas bloquer l'accès worker si le claim a déjà été fait.
-      } finally {
-    router.replace(existingTarget);
-      }
-    })();
-  }, [existingTarget, inviteToken, router, validatedRole]);
+  }, [existingTarget, router]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -134,12 +90,11 @@ function WorkerLoginInner() {
     setStatus(null);
     setLoading(true);
     try {
-      const prevToken = getToken();
-      const data = await apiFetchWithRetry<{ access_token: string }>(
+      await apiFetchWithRetry<{ access_token: string }>(
         "/auth/worker-login",
         {
           method: "POST",
-          body: JSON.stringify({ code, phone, invite_token: inviteToken || undefined }),
+          body: JSON.stringify({ phone, password }),
         },
         {
           timeoutMs: 15_000,
@@ -149,13 +104,10 @@ function WorkerLoginInner() {
           },
         },
       );
-      setToken(data.access_token);
-      const role = getRoleFromToken(data.access_token);
-      if (role !== "worker") {
+      const me = await fetchMe();
+      if (me?.role !== "worker") {
+        await logout();
         setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
-        // Restaurer le token précédent (ex: directeur déjà connecté), sinon nettoyer
-        if (prevToken) setToken(prevToken);
-        else clearToken();
         return;
       }
       const target = safeWorkerReturnUrl(searchParams?.get("returnUrl")) || "/worker";
@@ -165,7 +117,7 @@ function WorkerLoginInner() {
       if (msg.toLowerCase().includes("timeout")) {
         setError("השרת לא זמין כרגע. נסו שוב בעוד רגע.");
       } else {
-        setError("שגיאת התחברות. בדקו את הקוד ומספר הטלפון.");
+        setError("שגיאת התחברות. בדקו את מספר הטלפון והסיסמה.");
       }
     } finally {
       setLoading(false);
@@ -186,24 +138,28 @@ function WorkerLoginInner() {
         </div>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
-            <label className="block text-sm">קוד מנהל</label>
+            <label htmlFor="worker-phone" className="block text-sm">מספר טלפון</label>
             <input
-              type="text"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <label className="block text-sm">מספר טלפון</label>
-            <input
+              id="worker-phone"
               dir="ltr"
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               required
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="worker-password" className="block text-sm">סיסמה</label>
+            <input
+              id="worker-password"
+              dir="ltr"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              required
+              minLength={8}
             />
           </div>
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -222,7 +178,7 @@ function WorkerLoginInner() {
                 href={`/register/worker?inviteToken=${encodeURIComponent(inviteToken)}`}
                 className="underline underline-offset-2"
               >
-                הרשמה לעובד
+                הפעלת חשבון והגדרת סיסמה
               </Link>
             </p>
           )}
