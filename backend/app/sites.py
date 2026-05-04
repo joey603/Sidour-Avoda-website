@@ -839,8 +839,20 @@ def _summarize_auto_planning_result(
     }
 
 
+def _safe_site_config(raw_config: object, *, site_id: int | None = None) -> dict:
+    if isinstance(raw_config, dict):
+        return raw_config
+    if raw_config is not None:
+        logger.warning(
+            "[SITE_CONFIG] ignoring invalid config for site=%s type=%s",
+            site_id,
+            type(raw_config).__name__,
+        )
+    return {}
+
+
 def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
-    cfg = dict(site.config or {})
+    cfg = dict(_safe_site_config(getattr(site, "config", None), site_id=getattr(site, "id", None)))
     cfg["autoPlanningLastRun"] = summary
     site.config = cfg
     flag_modified(site, "config")
@@ -1123,6 +1135,7 @@ def _enforce_role_requirements_on_assignments(
 
 
 def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, week_iso: str) -> NextWeekSavedPlanStatus:
+    site_config = _safe_site_config(getattr(site, "config", None), site_id=getattr(site, "id", None))
     assignments = None
     pulls = None
     scope = None
@@ -1142,8 +1155,12 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
             requires_manual_save=False,
         )
 
+    site_for_summary = site
+    if site_config is not getattr(site, "config", None):
+        site_for_summary = deepcopy(site)
+        site_for_summary.config = site_config
     summary = _summarize_auto_planning_result(
-        site,
+        site_for_summary,
         assignments,
         week_iso,
         "saved-next-week",
@@ -3181,7 +3198,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
             name=s.name,
             workers_count=counts.get(s.id, 0),
             pending_workers_count=pending_counts.get(s.id, 0),
-            config=s.config,
+            config=_safe_site_config(s.config, site_id=s.id),
             next_week_saved_plan_status=_build_next_week_saved_plan_status(
                 s,
                 preferred_plan_by_site.get(s.id),
@@ -3204,7 +3221,7 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
         name=site.name,
         workers_count=0,
         pending_workers_count=0,
-        config=site.config,
+        config=_safe_site_config(site.config, site_id=site.id),
         next_week_saved_plan_status=NextWeekSavedPlanStatus(
             exists=False,
             week_iso=_next_week_iso(datetime.now()),
@@ -3324,7 +3341,7 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
         name=site.name,
         workers_count=workers_count,
         pending_workers_count=pending_workers_count,
-        config=site.config,
+        config=_safe_site_config(site.config, site_id=site.id),
         linked_site_ids=linked_by_site.get(int(site.id), []),
         deleted_at=getattr(site, "deleted_at", None),
     )
@@ -3387,7 +3404,7 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
         name=site.name,
         workers_count=workers_count,
         pending_workers_count=pending_workers_count,
-        config=site.config,
+        config=_safe_site_config(site.config, site_id=site.id),
         linked_site_ids=linked_by_site.get(int(site.id), []),
         deleted_at=None,
     )

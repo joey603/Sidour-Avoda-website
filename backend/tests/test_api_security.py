@@ -5,6 +5,7 @@ Tests API / sécurité (auth, rôles, tokens) — sans couvrir la logique planni
 from jose import jwt
 
 from app.database import settings
+from app.models import Site
 
 
 def _auth(token: str):
@@ -61,6 +62,22 @@ def test_director_can_list_own_sites(client, create_director):
     r = client.get("/director/sites/", headers=_auth(tok))
     assert r.status_code == 200, r.text
     assert isinstance(r.json(), list)
+
+
+def test_director_sites_list_tolerates_legacy_invalid_site_config(client, db_session, create_director):
+    director = create_director(email="legacy.config@example.com", full_name="Legacy Config")
+    db_session.add(Site(name="Legacy Site", director_id=director.id, config=["legacy-bad-config"]))
+    db_session.commit()
+    tok = client.post(
+        "/auth/login",
+        json={"email": "legacy.config@example.com", "password": "password123"},
+    ).json()["access_token"]
+    r = client.get("/director/sites/", headers=_auth(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["name"] == "Legacy Site"
+    assert body[0]["config"] == {}
 
 
 def test_auth_login_rejects_unknown_user(client):
