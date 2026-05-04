@@ -66,6 +66,25 @@ def test_login_sets_cookie_and_logout_clears_it(client):
     assert me_after.status_code == 401
 
 
+def test_login_sets_cross_site_cookie_attributes_for_https_origins(client):
+    register(client, email="cookie.cross@example.com")
+    login_resp = client.post(
+        "/auth/login",
+        json={"email": "cookie.cross@example.com", "password": "password123"},
+        headers={
+            "origin": "https://sidour-app.vercel.app",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "api.sidour.example",
+        },
+    )
+    assert login_resp.status_code == 200, login_resp.text
+    set_cookie = (login_resp.headers.get("set-cookie") or "").lower()
+    assert "sidour_access_token=" in set_cookie
+    assert "httponly" in set_cookie
+    assert "samesite=none" in set_cookie
+    assert "secure" in set_cookie
+
+
 def test_public_director_registration_is_blocked(client):
     r = register(client, email="blocked-director@example.com", role="director")
     assert r.status_code == 403

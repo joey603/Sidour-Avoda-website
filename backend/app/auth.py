@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import re
 import secrets
 import time
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import jwt
@@ -34,23 +35,78 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _cookie_kwargs() -> dict:
+def _request_origin(request: Request | None) -> str:
+    if request is None:
+        return ""
+    return str(request.headers.get("origin") or "").strip()
+
+
+def _request_origin_parts(request: Request | None):
+    origin = _request_origin(request)
+    if not origin:
+        return None
+    try:
+        parsed = urlparse(origin)
+    except Exception:
+        return None
+    if not parsed.scheme or not parsed.hostname:
+        return None
+    return parsed
+
+
+def _request_host(request: Request | None) -> str:
+    if request is None:
+        return ""
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").strip()
+    if forwarded_host:
+        return forwarded_host.split(",")[0].strip().split(":")[0].lower()
+    return str(request.url.hostname or "").strip().lower()
+
+
+def _request_is_https(request: Request | None) -> bool:
+    if request is None:
+        return False
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").strip().lower()
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip() == "https"
+    return str(request.url.scheme or "").strip().lower() == "https"
+
+
+def _is_cross_site_request(request: Request | None) -> bool:
+    origin_parts = _request_origin_parts(request)
+    if origin_parts is None:
+        return False
+    request_host = _request_host(request)
+    origin_host = str(origin_parts.hostname or "").strip().lower()
+    return bool(request_host and origin_host and request_host != origin_host)
+
+
+def _cookie_kwargs(request: Request | None = None) -> dict:
     domain = str(settings.auth_cookie_domain or "").strip() or None
     same_site = str(settings.auth_cookie_samesite or "lax").strip().lower() or "lax"
+    secure = bool(settings.auth_cookie_secure)
     if same_site not in {"lax", "strict", "none"}:
         same_site = "lax"
+    # Frontend Vercel + backend sur un autre domaine = cookie cross-site.
+    # Dans ce cas, les navigateurs n'enverront le cookie que si SameSite=None et Secure.
+    origin_parts = _request_origin_parts(request)
+    if _is_cross_site_request(request) and origin_parts is not None and origin_parts.scheme == "https":
+        same_site = "none"
+        secure = True
+    elif _request_is_https(request):
+        secure = True
     return {
         "key": settings.auth_cookie_name,
         "httponly": True,
-        "secure": bool(settings.auth_cookie_secure),
+        "secure": secure,
         "samesite": same_site,
         "domain": domain,
         "path": "/",
     }
 
 
-def set_auth_cookie(response: Response, token: str) -> None:
-    cookie_kwargs = _cookie_kwargs()
+def set_auth_cookie(response: Response, token: str, request: Request | None = None) -> None:
+    cookie_kwargs = _cookie_kwargs(request)
     response.set_cookie(
         value=token,
         max_age=int(settings.access_token_expire_minutes * 60),
@@ -58,8 +114,8 @@ def set_auth_cookie(response: Response, token: str) -> None:
     )
 
 
-def clear_auth_cookie(response: Response) -> None:
-    cookie_kwargs = _cookie_kwargs()
+def clear_auth_cookie(response: Response, request: Request | None = None) -> None:
+    cookie_kwargs = _cookie_kwargs(request)
     response.delete_cookie(**cookie_kwargs)
 
 
@@ -236,9 +292,9 @@ def ensure_worker_site_membership(
     return created, True
 
 
-def _issue_token_for_user(user: User, response: Response) -> Token:
+def _issue_token_for_user(user: User, response: Response, request: Request | None = None) -> Token:
     token = create_access_token({"sub": str(user.id), "role": user.role.value})
-    set_auth_cookie(response, token)
+    set_auth_cookie(response, token, request)
     return Token(access_token=token, token_type="bearer")
 
 
@@ -316,7 +372,7 @@ def login(
 
     if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-    return _issue_token_for_user(user, response)
+    return _issue_token_for_user(user, response, request)
 
 
 @router.post("/worker-login", response_model=Token)
@@ -342,12 +398,12 @@ def worker_login(
     )
     if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
-    return _issue_token_for_user(user, response)
+    return _issue_token_for_user(user, response, request)
 
 
 @router.post("/logout")
-def logout(response: Response):
-    clear_auth_cookie(response)
+def logout(response: Response, request: Request):
+    clear_auth_cookie(response, request)
     return {"ok": True}
 
 
