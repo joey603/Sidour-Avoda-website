@@ -13,6 +13,9 @@ function buildUpstreamHeaders(request: NextRequest): Headers {
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("connection");
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  headers.delete("keep-alive");
   headers.delete("origin");
   headers.delete("referer");
   return headers;
@@ -30,6 +33,11 @@ async function proxyToBackend(request: NextRequest, context: { params: Promise<{
 
   const responseHeaders = new Headers(upstreamResponse.headers);
   responseHeaders.delete("content-length");
+  responseHeaders.delete("connection");
+  responseHeaders.delete("transfer-encoding");
+  responseHeaders.delete("keep-alive");
+  responseHeaders.delete("proxy-connection");
+  responseHeaders.delete("upgrade");
 
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
