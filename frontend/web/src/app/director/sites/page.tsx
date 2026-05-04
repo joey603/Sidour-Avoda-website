@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { AUTO_WEEKLY_WORKER_CHANGES_STORAGE_KEY } from "@/lib/clear-sites-list-planning-for-week";
 import LoadingAnimation from "@/components/loading-animation";
@@ -502,9 +501,6 @@ export default function SitesList() {
 
   useEffect(() => {
     (async () => {
-      const me = await fetchMe();
-      if (!me) return router.replace("/login/director");
-      if (me.role !== "director") return router.replace("/worker");
       try {
         await Promise.all([fetchSites(), fetchAutoPlanningConfig()]);
       } finally {

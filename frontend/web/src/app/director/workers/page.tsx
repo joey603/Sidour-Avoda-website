@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import LoadingAnimation from "@/components/loading-animation";
 
@@ -88,9 +87,6 @@ export default function WorkersList() {
 
   useEffect(() => {
     (async () => {
-      const me = await fetchMe();
-      if (!me) return router.replace("/login/director");
-      if (me.role !== "director") return router.replace("/worker");
       try {
         await Promise.all([fetchWorkers(), fetchSites()]);
       } finally {
