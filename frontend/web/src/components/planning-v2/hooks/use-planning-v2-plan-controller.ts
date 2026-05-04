@@ -24,12 +24,32 @@ const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
 const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 30;
 const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 120;
 const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 28;
+const MULTI_SITE_GENERATION_MAX_NUM_ALTERNATIVES = 320;
+const MULTI_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 35;
+const SINGLE_SITE_GENERATION_MAX_NUM_ALTERNATIVES = 180;
+const SINGLE_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 30;
 
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
   if (autoPullsLimit === "unlimited") return null;
   const n = Number(autoPullsLimit);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function adjustedAppendGenerationBudget(linked: boolean, existingAlternativesCount: number) {
+  const baseNum = linked ? MULTI_SITE_GENERATION_NUM_ALTERNATIVES : SINGLE_SITE_GENERATION_NUM_ALTERNATIVES;
+  const baseTime = linked ? MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS : SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS;
+  const maxNum = linked ? MULTI_SITE_GENERATION_MAX_NUM_ALTERNATIVES : SINGLE_SITE_GENERATION_MAX_NUM_ALTERNATIVES;
+  const maxTime = linked ? MULTI_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS : SINGLE_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS;
+  const existing = Math.max(0, Math.trunc(Number(existingAlternativesCount || 0)));
+  // `עוד` filtre les doublons côté client. On ajoute un buffer proportionnel au stock déjà vu
+  // pour garder un effort de recherche comparable à une génération initiale.
+  const nextNum = Math.min(maxNum, baseNum + existing);
+  const nextTime = Math.min(maxTime, baseTime + Math.ceil(existing / Math.max(1, Math.ceil(baseNum / 4))));
+  return {
+    numAlternatives: nextNum,
+    timeLimitSeconds: nextTime,
+  };
 }
 
 async function readSseStream(
@@ -248,6 +268,13 @@ export function usePlanningV2PlanController({
   }, [siteId, weekIso]);
 
   useEffect(() => {
+    if (linkedSitesLength <= 1 || typeof window === "undefined") return;
+    const onMem = () => setAlternativesUnlockNonce((n) => n + 1);
+    window.addEventListener("linked-plans-memory-updated", onMem as EventListener);
+    return () => window.removeEventListener("linked-plans-memory-updated", onMem as EventListener);
+  }, [linkedSitesLength, weekStart]);
+
+  useEffect(() => {
     setClientStorageReady(true);
   }, []);
 
@@ -418,8 +445,21 @@ export function usePlanningV2PlanController({
     void alternativesUnlockNonce;
     if (generationRunning) return true;
     if (clientStorageReady && readAlternativesUnlockedFromSession(weekIso, siteId)) return true;
+    if (clientStorageReady && linkedSitesLength > 1) {
+      const mem = readLinkedPlansFromMemory(weekStart);
+      const currentPlan = mem?.plansBySite?.[String(siteId)];
+      if (currentPlan) {
+        const hasBase = assignmentsNonEmpty(
+          (currentPlan.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
+        );
+        const hasAlt = Array.isArray(currentPlan.alternatives)
+          && currentPlan.alternatives.some((alt) =>
+            assignmentsNonEmpty((alt as Record<string, Record<string, string[][]>> | null | undefined) ?? null));
+        if (hasBase || hasAlt) return true;
+      }
+    }
     return false;
-  }, [clientStorageReady, weekIso, siteId, generationRunning, alternativesUnlockNonce]);
+  }, [clientStorageReady, weekIso, siteId, generationRunning, alternativesUnlockNonce, linkedSitesLength, weekStart]);
 
   const safeAlternativeIndex = useMemo(() => {
     const len = assignmentVariants.length;
@@ -481,6 +521,7 @@ export function usePlanningV2PlanController({
     generationIdRef.current = null;
     genBusyRef.current = true;
     setGenerationRunning(true);
+    let appendExistingAlternativesCount = 0;
     if (!appendMode) {
       setReplaceGenerationUiClear(true);
       setSelectedAlternativeIndex(0);
@@ -511,6 +552,7 @@ export function usePlanningV2PlanController({
               pulls: (pullVariants[idx + 1] || {}) as PlanningV2PullsMap,
             })),
       );
+      appendExistingAlternativesCount = existingAlternatives.length;
       if (baseAssignments && typeof baseAssignments === "object") {
         draftAssignmentsRef.current = baseAssignments;
         draftPullsRef.current = basePulls;
@@ -570,6 +612,12 @@ export function usePlanningV2PlanController({
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
 
     const linked = linkedSitesLength > 1;
+    const budget = appendMode
+      ? adjustedAppendGenerationBudget(linked, appendExistingAlternativesCount)
+      : {
+          numAlternatives: linked ? MULTI_SITE_GENERATION_NUM_ALTERNATIVES : SINGLE_SITE_GENERATION_NUM_ALTERNATIVES,
+          timeLimitSeconds: linked ? MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS : SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS,
+        };
     const url = linked
       ? `${getApiBaseUrl()}/director/sites/${siteId}/ai-generate-linked/stream`
       : `${getApiBaseUrl()}/director/sites/${siteId}/ai-generate/stream`;
@@ -577,8 +625,8 @@ export function usePlanningV2PlanController({
     const body = linked
       ? {
           week_iso: weekIso,
-          num_alternatives: MULTI_SITE_GENERATION_NUM_ALTERNATIVES,
-          time_limit_seconds: MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS,
+          num_alternatives: budget.numAlternatives,
+          time_limit_seconds: budget.timeLimitSeconds,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
           fixed_assignments: fixedAssignments,
@@ -587,8 +635,8 @@ export function usePlanningV2PlanController({
         }
       : {
           week_iso: weekIso,
-          num_alternatives: SINGLE_SITE_GENERATION_NUM_ALTERNATIVES,
-          time_limit_seconds: SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS,
+          num_alternatives: budget.numAlternatives,
+          time_limit_seconds: budget.timeLimitSeconds,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
           fixed_assignments: fixedAssignments,
