@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
 import TimePicker from "@/components/time-picker";
@@ -10845,7 +10845,7 @@ export default function PlanningPage() {
                       const exceedsPullsLimit = (pulls: any) =>
                         effectivePullsLimit != null && pullsCountOf(pulls) > effectivePullsLimit;
                       if (linkedSites.length > 1) {
-                        const linkedResp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate-linked/stream`, {
+                        const linkedResp = await fetch(`${getApiBaseUrl()}/director/sites/${params.id}/ai-generate-linked/stream`, {
                           method: "POST",
                           headers: {
                             Accept: "text/event-stream",
@@ -11073,7 +11073,7 @@ export default function PlanningPage() {
                         aiControllerRef.current = null;
                         return;
                       }
-                      const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/director/sites/${params.id}/ai-generate/stream`, {
+                      const resp = await fetch(`${getApiBaseUrl()}/director/sites/${params.id}/ai-generate/stream`, {
                         method: "POST",
                         headers: {
                           Accept: "text/event-stream",

@@ -17,10 +17,7 @@ import { getWeekKeyISO } from "../lib/week";
 import { readLinkedPlansFromMemory, saveLinkedPlansToMemory, type LinkedSitePlan } from "../lib/multi-site-linked-memory";
 import { clearSitesListPlanningBeforePlanningCreat } from "@/lib/clear-sites-list-planning-for-week";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-
-function apiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-}
+import { getApiBaseUrl } from "@/lib/api";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
 const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
@@ -540,8 +537,8 @@ export function usePlanningV2PlanController({
 
     const linked = linkedSitesLength > 1;
     const url = linked
-      ? `${apiBaseUrl()}/director/sites/${siteId}/ai-generate-linked/stream`
-      : `${apiBaseUrl()}/director/sites/${siteId}/ai-generate/stream`;
+      ? `${getApiBaseUrl()}/director/sites/${siteId}/ai-generate-linked/stream`
+      : `${getApiBaseUrl()}/director/sites/${siteId}/ai-generate/stream`;
 
     const body = linked
       ? {

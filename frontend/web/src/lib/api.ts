@@ -1,4 +1,22 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const DEV_API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_PROXY_PREFIX = "/api-proxy";
+
+function normalizeBaseUrl(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+export function getApiBaseUrl(): string {
+  // En production, faire transiter l'API par Next/Vercel évite les cookies tiers
+  // bloqués par Safari quand le backend vit sur un autre domaine.
+  if (process.env.NODE_ENV !== "development") {
+    return API_PROXY_PREFIX;
+  }
+  return normalizeBaseUrl(DEV_API_BASE_URL);
+}
+
+export const API_BASE_URL = getApiBaseUrl();
 const TOKEN_KEY = "access_token";
 
 function clearTokenLocal() {
