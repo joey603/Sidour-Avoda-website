@@ -942,7 +942,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   const navigationMemorySnapshot = useMemo(() => {
     if (linkedSites.length <= 1) {
-      return { activeIdx: 0, currentPlanAlternativeCount: 0 };
+      return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
     }
     const mem = readLinkedPlansFromMemory(weekStart);
     const currentPlan = mem?.plansBySite?.[String(siteId)];
@@ -956,6 +956,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     return {
       activeIdx: Math.max(0, Number(mem?.activeAltIndex || 0)),
       currentPlanAlternativeCount: (hasBase ? 1 : 0) + altCount,
+      hasCurrentPlan: !!currentPlan,
     };
   }, [linkedSites.length, linkedPlansMemoryTick, siteId, weekStart]);
 
@@ -973,6 +974,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     return visibleAlternativeIndices[0] ?? 0;
   }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
+
+  const multiSiteNavigationTargetIndex =
+    multiSiteNavigationLoading && linkedSites.length > 1
+      ? navigationMemorySnapshot.activeIdx
+      : effectiveAlternativeIndex;
 
   /** Dernière barre חלופות valide — utilisée pendant יצירה מאפס jusqu’au premier plan SSE. */
   const lastAlternativesBarRef = useRef<PlanningV2AlternativesBarSnapshot | null>(null);
@@ -1044,6 +1050,22 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     plan.selectedAlternativeIndex,
     plan.setSelectedAlternativeIndex,
     summaryFilterState.hasActiveFilters,
+  ]);
+
+  useEffect(() => {
+    if (!multiSiteNavigationLoading) return;
+    if (linkedSites.length <= 1) return;
+    const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
+    if (plan.alternativeCount <= targetIdx) return;
+    if (plan.selectedAlternativeIndex === targetIdx) return;
+    plan.setSelectedAlternativeIndex(targetIdx);
+  }, [
+    multiSiteNavigationLoading,
+    linkedSites.length,
+    navigationMemorySnapshot.activeIdx,
+    plan.alternativeCount,
+    plan.selectedAlternativeIndex,
+    plan.setSelectedAlternativeIndex,
   ]);
 
   useEffect(() => {
@@ -1181,7 +1203,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       if (multiNames.size === 0) return { rows: [], workerCounts: [] };
       const sitePlan = plansBySite[String(sid)] as LinkedSitePlan | undefined;
       if (!sitePlan) return { rows: [], workerCounts: [] };
-      const asg = resolveAssignmentsForAlternative(sitePlan, effectiveAlternativeIndex) || {};
+      const asg = resolveAssignmentsForAlternative(sitePlan, multiSiteNavigationTargetIndex) || {};
       const rows: Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }> = [];
       const workerCountsMap = new Map<string, number>();
       for (const [dayKey, shiftsMap] of Object.entries(asg)) {
@@ -1237,7 +1259,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekStart,
     workers,
     siteId,
-    effectiveAlternativeIndex,
+    multiSiteNavigationTargetIndex,
     plan.alternativeCount,
     linkedPlansMemoryTick,
   ]);
@@ -1351,6 +1373,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   useEffect(() => {
     if (!multiSiteNavigationLoading) return;
     if (siteLoading || workersLoading || weekPlanLoading || linkedSitesLoading) return;
+    if (!navigationMemorySnapshot.hasCurrentPlan) return;
     const needsLinkedRail = hasLinkedSitesRail;
     const railReady = !needsLinkedRail || linkedSitesRailData.length === expectedLinkedRailCount;
     const targetAlternativeCount = navigationMemorySnapshot.currentPlanAlternativeCount;
@@ -1358,8 +1381,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const alternativesReady =
       targetAlternativeCount <= 0
         ? true
-        : alternativesUiEnabled &&
-          plan.alternativeCount >= targetAlternativeCount &&
+        : plan.alternativeCount >= targetAlternativeCount &&
           plan.selectedAlternativeIndex === Math.min(targetAlternativeIndex, Math.max(0, plan.alternativeCount - 1));
     if (!railReady || !alternativesReady) return;
     setMultiSiteNavigationLoading(false);
@@ -1378,7 +1400,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     linkedSitesRailData.length,
     expectedLinkedRailCount,
     navigationMemorySnapshot,
-    alternativesUiEnabled,
     plan.alternativeCount,
     plan.selectedAlternativeIndex,
   ]);
