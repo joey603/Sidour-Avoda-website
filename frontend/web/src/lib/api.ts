@@ -56,35 +56,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
         // ignore
       }
     }
-    // Redirection globale si non autorisé
+    // En cas de 401, laisser les pages / gardes centralisées décider quoi faire.
+    // Cela évite les boucles de navigation quand une page protégée déclenche
+    // plusieurs appels réseau en parallèle pendant que la session se stabilise.
     if (res.status === 401) {
       clearTokenLocal();
-      // IMPORTANT:
-      // - Ne pas rediriger lors des endpoints d'auth (login) : on veut afficher l'erreur sur place.
-      // - Sinon, rediriger vers la page de login adaptée (worker vs director) selon l'URL courante.
-      if (typeof window !== "undefined") {
-        const p = String(path || "");
-        const isAuthEndpoint = p.startsWith("/auth/");
-        const isLoginPage = window.location.pathname.startsWith("/login");
-        if (!isAuthEndpoint && !isLoginPage) {
-          try {
-            const cur = window.location.pathname + window.location.search;
-            const isWorkerArea =
-              window.location.pathname.startsWith("/worker") ||
-              window.location.pathname.startsWith("/login/worker") ||
-              window.location.pathname.startsWith("/register/worker") ||
-              window.location.pathname.startsWith("/invite/worker") ||
-              window.location.pathname.startsWith("/public/workers");
-            const target = isWorkerArea
-              ? `/login/worker?returnUrl=${encodeURIComponent(cur)}`
-              : `/login/director?returnUrl=${encodeURIComponent(cur)}`;
-            window.location.href = target;
-          } catch {
-            // Fallback neutre (évite de basculer à tort vers login directeur)
-            try { window.location.href = "/login"; } catch {}
-          }
-        }
-      }
     }
     const err: any = new Error(message);
     err.status = res.status;
