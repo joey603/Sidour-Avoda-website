@@ -152,7 +152,7 @@ export function PlanningV2ActionBar({
 
   const canSavePlan =
     !readOnly &&
-    assignmentsNonEmpty(effectiveAssignments) &&
+    (assignmentsNonEmpty(effectiveAssignments) || linkedSites.length > 1) &&
     (editingSaved || draftActive || weekPlan?.sourceScope === "auto");
 
   const buildNonEmptyAssignmentsSnapshot = useCallback(
