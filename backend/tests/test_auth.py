@@ -66,6 +66,16 @@ def test_login_sets_cookie_and_logout_clears_it(client):
     assert me_after.status_code == 401
 
 
+def test_cookie_auth_takes_priority_over_stale_bearer_header(client):
+    register(client, email="cookie-priority@example.com")
+    login_resp = login(client, email="cookie-priority@example.com", password="password123")
+    assert login_resp.status_code == 200, login_resp.text
+
+    me = client.get("/me", headers={"Authorization": "Bearer stale.invalid.token"})
+    assert me.status_code == 200, me.text
+    assert me.json()["email"] == "cookie-priority@example.com"
+
+
 def test_login_sets_cross_site_cookie_attributes_for_https_origins(client):
     register(client, email="cookie.cross@example.com")
     login_resp = client.post(

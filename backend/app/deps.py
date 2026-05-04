@@ -15,14 +15,14 @@ def get_db():
 
 
 def _extract_bearer_token(request: Request) -> str | None:
+    cookie_token = str(request.cookies.get(settings.auth_cookie_name) or "").strip()
+    if cookie_token:
+        return cookie_token
     auth_header = str(request.headers.get("authorization") or "").strip()
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
         if token and token.lower() not in {"null", "undefined"}:
             return token
-    cookie_token = str(request.cookies.get(settings.auth_cookie_name) or "").strip()
-    if cookie_token:
-        return cookie_token
     return None
 
 
