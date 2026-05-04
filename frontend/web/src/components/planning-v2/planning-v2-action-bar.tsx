@@ -200,7 +200,7 @@ export function PlanningV2ActionBar({
     hasAlternatives &&
     moreAlternativesAvailable &&
     !generationBlocked &&
-    assignmentsNonEmpty(effectiveAssignments) &&
+    (assignmentsNonEmpty(effectiveAssignments) || linkedSites.length > 1) &&
     typeof onRequestMoreAlternatives === "function";
 
   const handleDelete = useCallback(async () => {
