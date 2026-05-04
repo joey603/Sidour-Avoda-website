@@ -202,6 +202,8 @@ export function usePlanningV2PlanController({
   >(null);
   const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0);
   const [generationRunning, setGenerationRunning] = useState(false);
+  /** Pendant יצירה « replace », pas de brouillon : sans ça les variantes restent celles du weekPlan jusqu’au reload + premier SSE — compteur חלופות figé. */
+  const [replaceGenerationUiClear, setReplaceGenerationUiClear] = useState(false);
   // Par défaut: משיכות ללא (empty string).
   const [autoPullsLimit, setAutoPullsLimit] = useState("");
   const [isManual, setIsManual] = useState(false);
@@ -344,6 +346,9 @@ export function usePlanningV2PlanController({
   }, [weekPlanLoading, weekPlan, weekPlan?.isManual]);
 
   const assignmentVariants = useMemo<Array<Record<string, Record<string, string[][]>>>>(() => {
+    if (replaceGenerationUiClear && generationRunning && !draftAssignments) {
+      return [buildEmptyAssignmentsForSite(site)];
+    }
     if (draftAssignments) {
       const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
       return [draftAssignments, ...normalized.map((x) => x.assignments)];
@@ -359,9 +364,22 @@ export function usePlanningV2PlanController({
       dedupeAlternatives,
     );
     return [...base, ...alts.map((x) => x.assignments)];
-  }, [dedupeAlternatives, draftAssignments, draftAlternatives, weekPlan?.assignments, weekPlan?.alternatives, weekPlan?.alternativePulls]);
+  }, [
+    dedupeAlternatives,
+    draftAssignments,
+    draftAlternatives,
+    generationRunning,
+    replaceGenerationUiClear,
+    weekPlan?.assignments,
+    weekPlan?.alternatives,
+    weekPlan?.alternativePulls,
+    site,
+  ]);
 
   const pullVariants = useMemo<PlanningV2PullsMap[]>(() => {
+    if (replaceGenerationUiClear && generationRunning && !draftAssignments) {
+      return [{}];
+    }
     if (draftAssignments) {
       const basePulls = draftPulls || {};
       const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
@@ -379,9 +397,21 @@ export function usePlanningV2PlanController({
       dedupeAlternatives,
     );
     return [basePulls, ...normalized.map((x) => x.pulls || {})];
-  }, [dedupeAlternatives, draftAssignments, draftPulls, draftAlternatives, weekPlan?.pulls, weekPlan?.alternativePulls]);
+  }, [
+    dedupeAlternatives,
+    draftAssignments,
+    draftPulls,
+    draftAlternatives,
+    generationRunning,
+    replaceGenerationUiClear,
+    weekPlan?.pulls,
+    weekPlan?.alternativePulls,
+  ]);
 
-  const alternativeCount = assignmentVariants.length;
+  const alternativeCount = useMemo(() => {
+    if (replaceGenerationUiClear && generationRunning && !draftAssignments) return 0;
+    return assignmentVariants.length;
+  }, [replaceGenerationUiClear, generationRunning, draftAssignments, assignmentVariants.length]);
 
   /** Débloqué seulement après יצירת תכנון dans cet onglet (session), ou pendant la génération SSE. */
   const alternativesUnlocked = useMemo(() => {
@@ -392,9 +422,10 @@ export function usePlanningV2PlanController({
   }, [clientStorageReady, weekIso, siteId, generationRunning, alternativesUnlockNonce]);
 
   const safeAlternativeIndex = useMemo(() => {
-    if (alternativeCount <= 0) return 0;
-    return Math.min(Math.max(0, selectedAlternativeIndex), alternativeCount - 1);
-  }, [selectedAlternativeIndex, alternativeCount]);
+    const len = assignmentVariants.length;
+    if (len <= 0) return 0;
+    return Math.min(Math.max(0, selectedAlternativeIndex), len - 1);
+  }, [selectedAlternativeIndex, assignmentVariants.length]);
 
   useEffect(() => {
     // Pendant la génération SSE, `alternativeCount` bouge à chaque événement — ne pas resynchroniser
@@ -431,6 +462,7 @@ export function usePlanningV2PlanController({
       alternativesFlushRafRef.current = null;
     }
     setGenerationRunning(false);
+    setReplaceGenerationUiClear(false);
     genBusyRef.current = false;
   }, []);
 
@@ -450,6 +482,7 @@ export function usePlanningV2PlanController({
     genBusyRef.current = true;
     setGenerationRunning(true);
     if (!appendMode) {
+      setReplaceGenerationUiClear(true);
       setSelectedAlternativeIndex(0);
       setMoreAlternativesAvailable(true);
       draftAssignmentsRef.current = null;
@@ -462,6 +495,7 @@ export function usePlanningV2PlanController({
       setDraftPulls(null);
       setDraftAlternatives([]);
     } else {
+      setReplaceGenerationUiClear(false);
       const baseAssignments =
         draftAssignmentsRef.current ??
         weekPlanAssignmentsRef.current ??
@@ -688,6 +722,7 @@ export function usePlanningV2PlanController({
         }
         lastSseEventAt = Date.now();
         if (evt.type === "base" && !appendMode) {
+          setReplaceGenerationUiClear(false);
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
@@ -941,6 +976,7 @@ export function usePlanningV2PlanController({
         toast.message("אין חלופות חדשות נוספות");
       }
       setGenerationRunning(false);
+      setReplaceGenerationUiClear(false);
       genBusyRef.current = false;
       abortRef.current = null;
       generationIdRef.current = null;

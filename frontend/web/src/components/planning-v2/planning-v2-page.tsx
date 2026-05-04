@@ -42,6 +42,14 @@ import {
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
 
+type PlanningV2AlternativesBarSnapshot = {
+  alternativeCount: number;
+  selectedAlternativeIndex: number;
+  selectedAlternativeDisplayIndex: number;
+  alternativesFiltered: boolean;
+  alternativesTotalCount: number;
+};
+
 function normWorkerName(value: string): string {
   return String(value || "")
     .normalize("NFKC")
@@ -150,7 +158,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   useEffect(() => {
     const prev = prevLinkedSitesLengthRef.current;
     if (prev <= 1 && linkedSites.length > 1) {
-      setShowLinkedSitesRail(true);
       queueMicrotask(() => setLinkedPlansMemoryTick((n) => n + 1));
     }
     if (prev > 1 && linkedSites.length <= 1) {
@@ -158,6 +165,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     prevLinkedSitesLengthRef.current = linkedSites.length;
   }, [linkedSites.length]);
+
+  /** Rail mobile « אתרים מקושרים » : fermé par défaut à chaque changement de site / semaine. */
+  useEffect(() => {
+    setShowLinkedSitesRail(false);
+  }, [siteId, weekStart]);
 
   // Fin de « session » onglet : fermeture / navigation pleine page — pas au démontage SPA
   // (changement site/semaine avec `key=` sinon on casse la barre multi-sites + drapeau in-app).
@@ -935,6 +947,64 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     return visibleAlternativeIndices[0] ?? 0;
   }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
+
+  /** Dernière barre חלופות valide — utilisée pendant יצירה מאפס jusqu’au premier plan SSE. */
+  const lastAlternativesBarRef = useRef<PlanningV2AlternativesBarSnapshot | null>(null);
+  const [alternativesBarHold, setAlternativesBarHold] = useState<PlanningV2AlternativesBarSnapshot | null>(null);
+
+  useLayoutEffect(() => {
+    if (!alternativesUiEnabled) return;
+    lastAlternativesBarRef.current = {
+      alternativeCount: visibleAlternativeIndices.length,
+      selectedAlternativeIndex: Math.max(0, selectedVisibleAlternativeIndex),
+      selectedAlternativeDisplayIndex: effectiveAlternativeIndex,
+      alternativesFiltered: summaryFilterState.hasActiveFilters,
+      alternativesTotalCount: plan.alternativeCount,
+    };
+  }, [
+    alternativesUiEnabled,
+    visibleAlternativeIndices,
+    selectedVisibleAlternativeIndex,
+    effectiveAlternativeIndex,
+    summaryFilterState.hasActiveFilters,
+    plan.alternativeCount,
+  ]);
+
+  useEffect(() => {
+    const applyHold = () => {
+      if (!plan.generationRunning) {
+        setAlternativesBarHold(null);
+        return;
+      }
+      if (alternativesUiEnabled) {
+        setAlternativesBarHold(null);
+        return;
+      }
+      // Génération « replace » : le contrôleur met alternativeCount à 0 tout de suite — ne pas
+      // réafficher le snapshot précédent (barre figée sur l’ancien total).
+      if (plan.alternativeCount <= 0) {
+        setAlternativesBarHold(null);
+        return;
+      }
+      const snap = lastAlternativesBarRef.current;
+      if (snap && snap.alternativeCount >= 1) {
+        setAlternativesBarHold({
+          alternativeCount: snap.alternativeCount,
+          selectedAlternativeIndex: snap.selectedAlternativeIndex,
+          selectedAlternativeDisplayIndex: snap.selectedAlternativeDisplayIndex,
+          alternativesFiltered: snap.alternativesFiltered,
+          alternativesTotalCount: snap.alternativesTotalCount,
+        });
+      } else {
+        setAlternativesBarHold(null);
+      }
+    };
+    queueMicrotask(applyHold);
+  }, [plan.generationRunning, plan.alternativeCount, alternativesUiEnabled]);
+
+  const actionBarAlternativesFrozen =
+    plan.generationRunning && !alternativesUiEnabled && alternativesBarHold !== null;
+  const actionBarAltSnap = actionBarAlternativesFrozen ? alternativesBarHold : null;
 
   useEffect(() => {
     if (plan.generationRunning) return;
@@ -1799,14 +1869,23 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           onSavePlan={handleSavePlan}
           onDraftClear={plan.clearDraft}
           draftActive={plan.draftActive}
-          alternativeCount={visibleAlternativeIndices.length}
-          selectedAlternativeIndex={Math.max(0, selectedVisibleAlternativeIndex)}
-          selectedAlternativeDisplayIndex={effectiveAlternativeIndex}
+          alternativeCount={actionBarAltSnap ? actionBarAltSnap.alternativeCount : visibleAlternativeIndices.length}
+          selectedAlternativeIndex={
+            actionBarAltSnap
+              ? actionBarAltSnap.selectedAlternativeIndex
+              : Math.max(0, selectedVisibleAlternativeIndex)
+          }
+          selectedAlternativeDisplayIndex={
+            actionBarAltSnap ? actionBarAltSnap.selectedAlternativeDisplayIndex : effectiveAlternativeIndex
+          }
           onRequestMoreAlternatives={plan.startMoreAlternatives}
           moreAlternativesAvailable={plan.moreAlternativesAvailable}
-          alternativesEnabled={alternativesUiEnabled}
-          alternativesFiltered={summaryFilterState.hasActiveFilters}
-          alternativesTotalCount={plan.alternativeCount}
+          alternativesEnabled={alternativesUiEnabled || actionBarAlternativesFrozen}
+          alternativesFrozen={actionBarAlternativesFrozen}
+          alternativesFiltered={
+            actionBarAltSnap ? actionBarAltSnap.alternativesFiltered : summaryFilterState.hasActiveFilters
+          }
+          alternativesTotalCount={actionBarAltSnap ? actionBarAltSnap.alternativesTotalCount : plan.alternativeCount}
           onSelectedAlternativeChange={(visibleIndex) => {
             const target = visibleAlternativeIndices[visibleIndex];
             if (typeof target !== "number") return;

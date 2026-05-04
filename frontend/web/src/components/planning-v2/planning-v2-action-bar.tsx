@@ -51,6 +51,8 @@ type PlanningV2ActionBarProps = {
   moreAlternativesAvailable?: boolean;
   /** Faux tant qu’aucune יצירת תכנון n’a produit de plan (ou pas d’alternatives côté serveur / brouillon). */
   alternativesEnabled?: boolean;
+  /** Affichage figé (ex. entre יצירה מאפס et le premier événement SSE) : barre visible mais navigation désactivée. */
+  alternativesFrozen?: boolean;
   alternativesFiltered?: boolean;
   alternativesTotalCount?: number;
 };
@@ -87,6 +89,7 @@ export function PlanningV2ActionBar({
   onRequestMoreAlternatives,
   moreAlternativesAvailable = true,
   alternativesEnabled = true,
+  alternativesFrozen = false,
   alternativesFiltered = false,
   alternativesTotalCount,
 }: PlanningV2ActionBarProps) {
@@ -177,7 +180,7 @@ export function PlanningV2ActionBar({
     [],
   );
 
-  const alternativesInteractive = alternativesEnabled;
+  const alternativesInteractive = alternativesEnabled && !alternativesFrozen;
   const hasAlternatives = alternativeCount >= 1;
   const altCurrent = Math.max(0, Math.min(Math.max(0, selectedAlternativeIndex), Math.max(0, alternativeCount - 1)));
   const altTotalCount = Math.max(0, alternativesTotalCount ?? alternativeCount);
@@ -611,12 +614,7 @@ export function PlanningV2ActionBar({
                   }
                 >
                   {generationRunning ? (
-                    <>
-                      <svg className="animate-spin" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                        <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" />
-                      </svg>
-                      יוצר...
-                    </>
+                    <>יוצר...</>
                   ) : (
                     <>
                       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
@@ -721,9 +719,16 @@ export function PlanningV2ActionBar({
               )}
             </div>
 
-            {showAutoManual && hasAlternatives && alternativesInteractive ? (
+            {showAutoManual && hasAlternatives && alternativesEnabled ? (
               <div className="flex w-full justify-center">
-                <div className="inline-flex flex-col gap-1 rounded-md border border-zinc-300 bg-white px-2 py-1 dark:border-zinc-700 dark:bg-zinc-900">
+                <div
+                  className={
+                    "inline-flex flex-col gap-1 rounded-md border px-2 py-1 " +
+                    (alternativesFrozen
+                      ? "border-zinc-200 bg-zinc-50 opacity-90 dark:border-zinc-600 dark:bg-zinc-900/80"
+                      : "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900")
+                  }
+                >
                   <div className="text-center text-[10px] font-medium text-zinc-600 dark:text-zinc-300">חלופות</div>
                   <div className="inline-flex items-center gap-1">
                     {alternativesFiltered ? (
