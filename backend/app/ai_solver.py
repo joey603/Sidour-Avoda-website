@@ -304,6 +304,52 @@ def sanitize_plan(assignments: Dict[str, Dict[str, List[List[str]]]],
                         break
                 per_station[t_idx] = uniq
 
+
+def finalize_candidate_plan(
+    assignments: Dict[str, Dict[str, List[List[str]]]],
+    workers: List[Dict[str, Any]],
+    days: List[DayKey],
+    shifts: List[ShiftName],
+    stations: List[Dict[str, Any]],
+    label: str = "",
+) -> None:
+    """Post-traitement final homogène pour toute variante renvoyée au client.
+    Garantit d'abord max_shifts, puis unicité/capacité par cellule.
+    """
+    enforce_max_shifts_on_plan(assignments, workers, label=label)
+    sanitize_plan(assignments, days, shifts, stations)
+    try:
+        _log = logging.getLogger("ai_solver")
+        name_to_max: Dict[str, int] = {
+            str(w.get("name") or "").strip(): int(w.get("max_shifts") or 5)
+            for w in workers
+            if str(w.get("name") or "").strip()
+        }
+        counts: Dict[str, int] = {}
+        for day_map in assignments.values():
+            if not isinstance(day_map, dict):
+                continue
+            for per_station in day_map.values():
+                if not isinstance(per_station, list):
+                    continue
+                for cell in per_station:
+                    if not isinstance(cell, list):
+                        continue
+                    for nm in cell:
+                        clean = str(nm or "").strip()
+                        if not clean:
+                            continue
+                        counts[clean] = counts.get(clean, 0) + 1
+        over = {
+            nm: {"total": cnt, "max_shifts": name_to_max.get(nm, 5)}
+            for nm, cnt in counts.items()
+            if cnt > name_to_max.get(nm, 5)
+        }
+        if over:
+            _log.warning("[MAX_SHIFTS][%s] workers still over max after finalize: %s", label, over)
+    except Exception:
+        pass
+
 def solve_schedule(
     config: Dict[str, Any],
     workers: List[Dict[str, Any]],
@@ -1016,7 +1062,7 @@ def solve_schedule(
         # Switch main solver reference to new solution for extraction convenience
         solver = solver2
         cand_assign = build_assignments_from_solver()
-        sanitize_plan(cand_assign, days, shifts, stations)
+        finalize_candidate_plan(cand_assign, workers, days, shifts, stations, label="solve_schedule:resolve")
         # Garder uniquement les alternatives avec couverture maximale égale à la base
         if _count_assigned(cand_assign) != base_total_assigned:
             continue
@@ -2231,7 +2277,7 @@ def solve_schedule_stream(
                         if not _respects_availability_all(cand):
                             continue
                         # (debug alternative assignment logging removed)
-                        sanitize_plan(cand, days, shifts, stations)
+                        finalize_candidate_plan(cand, workers, days, shifts, stations, label="solve_schedule_stream:hole")
                         produced += 1
                         yield {"type": "alternative", "index": produced, "source": "HOLE", "assignments": cand}
                         budget -= 1
@@ -2318,7 +2364,7 @@ def solve_schedule_stream(
                         # Skip any alternative that violates worker availability/requests globally
                         if not _respects_availability_all(cand):
                             continue
-                        sanitize_plan(cand, days, shifts, stations)
+                        finalize_candidate_plan(cand, workers, days, shifts, stations, label="solve_schedule_stream:swap")
                         produced += 1
                         yield {"type": "alternative", "index": produced, "source": "SWAP-INTRA", "assignments": cand}
                         budget -= 1
@@ -2417,7 +2463,7 @@ def solve_schedule_stream(
             # Skip any alternative that violates worker availability/requests globally
             if not _respects_availability_all(cand):
                 continue
-            sanitize_plan(cand, days, shifts, stations)
+            finalize_candidate_plan(cand, workers, days, shifts, stations, label="solve_schedule_stream:resolve")
             produced += 1
             yield {"type": "alternative", "index": produced, "source": "RESOLVE", "assignments": cand}
             budget -= 1
@@ -2506,7 +2552,7 @@ def solve_schedule_stream(
                             # Skip any alternative that violates worker availability/requests globally
                             if not _respects_availability_all(cand):
                                 continue
-                            sanitize_plan(cand, days, shifts, stations)
+                            finalize_candidate_plan(cand, workers, days, shifts, stations, label="solve_schedule_stream:bonus")
                             produced += 1
                             yield {"type": "alternative", "index": produced, "source": "BONUS", "assignments": cand}
                             budget -= 1
