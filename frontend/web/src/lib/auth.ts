@@ -15,10 +15,22 @@ export type AuthMe = {
   directorCode?: string | null;
 };
 
+export const AUTH_SESSION_CHANGED_EVENT = "auth-session-changed";
+
+export function notifyAuthSessionChanged() {
+  if (typeof window === "undefined") return;
+  try {
+    window.dispatchEvent(new CustomEvent(AUTH_SESSION_CHANGED_EVENT));
+  } catch {
+    // ignore
+  }
+}
+
 export function setToken(_token: string) {
   if (typeof window === "undefined") return;
   // Compat legacy: on ne persiste plus le JWT côté navigateur.
   localStorage.removeItem(TOKEN_KEY);
+  notifyAuthSessionChanged();
 }
 
 export function getToken(): string | null {
@@ -28,6 +40,7 @@ export function getToken(): string | null {
 export function clearToken() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(TOKEN_KEY);
+  notifyAuthSessionChanged();
 }
 
 function decodeJwtPayload(token: string | null): Record<string, unknown> | null {

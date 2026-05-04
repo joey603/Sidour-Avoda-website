@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, logout } from "@/lib/auth";
+import { fetchMe, logout, notifyAuthSessionChanged } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 function DirectorLoginInner() {
@@ -83,6 +83,7 @@ function DirectorLoginInner() {
         setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
         return;
       }
+      notifyAuthSessionChanged();
       const returnUrl = safeDirectorReturnUrl(searchParams?.get("returnUrl"));
       router.replace(returnUrl || "/director");
     } catch (err: any) {

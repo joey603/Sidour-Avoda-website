@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, apiFetchWithRetry } from "@/lib/api";
-import { fetchMe, logout } from "@/lib/auth";
+import { fetchMe, logout, notifyAuthSessionChanged } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 
 type WorkerInviteMeta = {
@@ -110,6 +110,7 @@ function WorkerLoginInner() {
         setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
         return;
       }
+      notifyAuthSessionChanged();
       const target = safeWorkerReturnUrl(searchParams?.get("returnUrl")) || "/worker";
       router.replace(target);
     } catch (err: any) {

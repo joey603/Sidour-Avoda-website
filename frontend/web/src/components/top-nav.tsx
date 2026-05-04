@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { fetchMe, logout } from "@/lib/auth";
+import { AUTH_SESSION_CHANGED_EVENT, fetchMe, logout } from "@/lib/auth";
 import {
   clearPlanningCreatPlanSessionStorageOnLogout,
   clearPlanningLocalStorageOnLogout,
@@ -36,13 +36,10 @@ export default function TopNav() {
   }, [pathname]);
   const authReturnQuery = useMemo(() => (returnUrl ? `?returnUrl=${encodeURIComponent(returnUrl)}` : ""), [returnUrl]);
 
-  // Charger/rafraîchir le rôle utilisateur à chaque changement de page.
-  // IMPORTANT: on met authChecked=false pendant le fetch pour éviter une redirection "bounce"
-  // (redirige vers /login puis immédiatement vers le menu quand /me revient).
   useEffect(() => {
     let cancelled = false;
-    setAuthChecked(false);
-    (async () => {
+    async function refreshAuthState() {
+      setAuthChecked(false);
       try {
         const me = await fetchMe();
         if (cancelled) return;
@@ -56,11 +53,22 @@ export default function TopNav() {
       } finally {
         if (!cancelled) setAuthChecked(true);
       }
-    })();
+    }
+
+    void refreshAuthState();
+    const onAuthChanged = () => {
+      void refreshAuthState();
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener(AUTH_SESSION_CHANGED_EVENT, onAuthChanged);
+    }
     return () => {
       cancelled = true;
+      if (typeof window !== "undefined") {
+        window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, onAuthChanged);
+      }
     };
-  }, [pathname]);
+  }, []);
 
   // Redirection globale: si pas connecté, renvoyer vers login automatiquement
   useEffect(() => {
