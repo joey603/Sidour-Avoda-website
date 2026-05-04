@@ -24,10 +24,12 @@ function buildUpstreamHeaders(request: NextRequest): Headers {
 async function proxyToBackend(request: NextRequest, context: { params: Promise<{ path?: string[] }> }) {
   const { path = [] } = await context.params;
   const upstreamUrl = `${getBackendOrigin()}/${path.join("/")}${request.nextUrl.search}`;
+  const body =
+    request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer();
   const upstreamResponse = await fetch(upstreamUrl, {
     method: request.method,
     headers: buildUpstreamHeaders(request),
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+    body,
     redirect: "follow",
   });
 
