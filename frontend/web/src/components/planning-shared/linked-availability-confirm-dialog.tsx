@@ -16,7 +16,7 @@ export function LinkedAvailabilityConfirmDialog({
   if (!open || siteNames.length === 0) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[60] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-3 text-sm">
           {`העובד משויך גם לאתרים נוספים: ${siteNames.join(", ")}.`}

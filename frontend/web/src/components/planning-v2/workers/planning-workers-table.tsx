@@ -44,10 +44,10 @@ export function PlanningWorkersTable({
       <table className="w-full table-fixed border-collapse text-[10px] md:text-sm">
         <thead>
           <tr className="border-b dark:border-zinc-800">
-            <th className="w-20 px-1 py-1 text-center text-[10px] md:w-40 md:px-3 md:py-2 md:text-sm">שם</th>
-            <th className="w-12 px-0.5 py-1 text-center text-[10px] md:w-auto md:px-3 md:py-2 md:text-sm">מקס&apos;</th>
-            <th className="w-16 px-0.5 py-1 text-center text-[10px] md:w-auto md:px-3 md:py-2 md:text-sm">תפקידים</th>
-            <th className="w-20 px-0.5 py-1 text-center text-[10px] md:w-auto md:px-3 md:py-2 md:text-sm">זמינות</th>
+            <th className="sticky top-0 z-30 w-20 bg-white px-1 py-1 text-center text-[10px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-40 md:px-3 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">שם</th>
+            <th className="sticky top-0 z-30 w-12 bg-white px-0.5 py-1 text-center text-[10px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-auto md:px-3 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מקס&apos;</th>
+            <th className="sticky top-0 z-30 w-16 bg-white px-0.5 py-1 text-center text-[10px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-auto md:px-3 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">תפקידים</th>
+            <th className="sticky top-0 z-30 w-20 bg-white px-0.5 py-1 text-center text-[10px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-auto md:px-3 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">זמינות</th>
           </tr>
         </thead>
         <tbody>

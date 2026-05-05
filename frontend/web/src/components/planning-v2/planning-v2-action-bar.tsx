@@ -28,6 +28,7 @@ type PlanningV2ActionBarProps = {
   onRequestGenerate: (options?: {
     excludeDays?: string[];
     fixedAssignments?: Record<string, Record<string, string[][]>>;
+    pullsScope?: "current_only" | "all_sites";
   }) => void;
   onStopGeneration: () => void;
   autoPullsLimit: string;
@@ -107,6 +108,10 @@ export function PlanningV2ActionBar({
   const [pendingGenerateOptions, setPendingGenerateOptions] = useState<{
     fixedAssignments?: Record<string, Record<string, string[][]>>;
     skipExistingCheck?: boolean;
+  } | null>(null);
+  const [generatePullScopeDialog, setGeneratePullScopeDialog] = useState<{
+    excludeDays?: string[];
+    fixedAssignments?: Record<string, Record<string, string[][]>>;
   } | null>(null);
   const [multiSitePlanActionDialog, setMultiSitePlanActionDialog] = useState<{
     action: MultiSitePlanAction;
@@ -308,6 +313,28 @@ export function PlanningV2ActionBar({
     [readOnly, linkedSites.length, executeMultiSitePlanAction],
   );
 
+  const dispatchGenerateRequest = useCallback(
+    (options?: {
+      excludeDays?: string[];
+      fixedAssignments?: Record<string, Record<string, string[][]>>;
+      pullsScope?: "current_only" | "all_sites";
+    }) => {
+      if (linkedSites.length > 1 && autoPullsEnabled && !options?.pullsScope) {
+        setGeneratePullScopeDialog({
+          excludeDays: options?.excludeDays,
+          fixedAssignments: options?.fixedAssignments,
+        });
+        return;
+      }
+      onRequestGenerate({
+        excludeDays: options?.excludeDays,
+        fixedAssignments: options?.fixedAssignments,
+        pullsScope: options?.pullsScope,
+      });
+    },
+    [linkedSites.length, autoPullsEnabled, onRequestGenerate],
+  );
+
   const runGenerateWithChecks = useCallback(
     (options?: {
       fixedAssignments?: Record<string, Record<string, string[][]>>;
@@ -336,11 +363,11 @@ export function PlanningV2ActionBar({
         setShowPastDaysDialog(true);
         return;
       }
-      onRequestGenerate({
+      dispatchGenerateRequest({
         fixedAssignments: baseOptions.fixedAssignments,
       });
     },
-    [generationBlocked, effectiveAssignments, onRequestGenerate, weekStart],
+    [generationBlocked, effectiveAssignments, dispatchGenerateRequest, weekStart],
   );
 
   const handleGenerateClick = useCallback(() => {
@@ -351,7 +378,7 @@ export function PlanningV2ActionBar({
   return (
     <>
       {showModeSwitchDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-center text-sm">
               {modeSwitchTarget === "manual"
@@ -405,7 +432,7 @@ export function PlanningV2ActionBar({
       )}
 
       {showDeleteConfirm ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-sm">למחוק את התכנון השמור לשבוע זה?</div>
             <div className="flex items-center justify-center gap-2">
@@ -431,7 +458,7 @@ export function PlanningV2ActionBar({
       ) : null}
 
       {showPastDaysDialog ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-center text-sm">
               {`כבר עברו ${pendingExcludeDays.length} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`}
@@ -449,7 +476,7 @@ export function PlanningV2ActionBar({
                 className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 onClick={() => {
                   setShowPastDaysDialog(false);
-                  onRequestGenerate({
+                  dispatchGenerateRequest({
                     fixedAssignments: pendingGenerateOptions?.fixedAssignments,
                     excludeDays: [],
                   });
@@ -463,7 +490,7 @@ export function PlanningV2ActionBar({
                 className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                 onClick={() => {
                   setShowPastDaysDialog(false);
-                  onRequestGenerate({
+                  dispatchGenerateRequest({
                     fixedAssignments: pendingGenerateOptions?.fixedAssignments,
                     excludeDays: pendingExcludeDays,
                   });
@@ -478,7 +505,7 @@ export function PlanningV2ActionBar({
       ) : null}
 
       {showExistingAssignmentsDialog ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-sm">
               התכנית מכילה שיבוצים קיימים.
@@ -532,7 +559,7 @@ export function PlanningV2ActionBar({
         </div>
       ) : null}
       {multiSitePlanActionDialog ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-right">
               <div className="text-base font-semibold">
@@ -571,6 +598,61 @@ export function PlanningV2ActionBar({
                   const action = multiSitePlanActionDialog.action;
                   setMultiSitePlanActionDialog(null);
                   void executeMultiSitePlanAction(action, true);
+                }}
+              >
+                בכל האתרים המקושרים
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {generatePullScopeDialog ? (
+        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="space-y-2 text-right">
+              <div className="text-base font-semibold">משיכות באתרים מקושרים</div>
+              <div className="text-sm text-zinc-600 dark:text-zinc-300">
+                נמצאה הגדרת משיכות פעילה. האם להחיל את המשיכות עבור {currentSiteLabel} בלבד או עבור כל האתרים
+                המקושרים בזמן יצירת התכנון?
+              </div>
+              {otherSitesLabel ? (
+                <div className="text-xs text-zinc-500 dark:text-zinc-400">האתרים המקושרים: {otherSitesLabel}</div>
+              ) : null}
+            </div>
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => setGeneratePullScopeDialog(null)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                onClick={() => {
+                  const pending = generatePullScopeDialog;
+                  setGeneratePullScopeDialog(null);
+                  onRequestGenerate({
+                    excludeDays: pending.excludeDays,
+                    fixedAssignments: pending.fixedAssignments,
+                    pullsScope: "current_only",
+                  });
+                }}
+              >
+                רק בתכנון הזה
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => {
+                  const pending = generatePullScopeDialog;
+                  setGeneratePullScopeDialog(null);
+                  onRequestGenerate({
+                    excludeDays: pending.excludeDays,
+                    fixedAssignments: pending.fixedAssignments,
+                    pullsScope: "all_sites",
+                  });
                 }}
               >
                 בכל האתרים המקושרים

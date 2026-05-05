@@ -40,7 +40,7 @@ export function FilterWorkersAnswersModal({
 
   return (
 
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+              <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/50">
                 <div className="w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-lg border bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                   <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900">
                     <h3 className="text-lg font-semibold">סינון תשובות לשאלות</h3>

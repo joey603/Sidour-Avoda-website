@@ -775,13 +775,16 @@ export function PlanningV2StationWeekGrid({
               <table className="w-full table-fixed border-collapse text-[8px] md:text-sm">
                 <thead>
                   <tr className="border-b dark:border-zinc-800">
-                    <th className="w-10 px-0 py-0.5 text-right align-bottom md:w-28 md:px-2 md:py-2 text-[8px] md:text-sm">
+                    <th className="sticky top-0 z-30 w-10 bg-white px-0 py-0.5 text-right align-bottom text-[8px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-28 md:px-2 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
                       משמרת
                     </th>
                     {DAY_COLS.map((d, i) => {
                       const date = addDays(weekStart, i);
                       return (
-                        <th key={d.key} className="px-0.5 py-0.5 text-center align-bottom md:px-2 md:py-2">
+                        <th
+                          key={d.key}
+                          className="sticky top-0 z-30 bg-white px-0.5 py-0.5 text-center align-bottom shadow-[0_1px_0_0_rgb(228_228_231)] md:px-2 md:py-2 dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]"
+                        >
                           <div className="flex min-w-0 flex-col items-center leading-tight">
                             <span className="max-w-full truncate whitespace-nowrap text-[5px] text-zinc-500 md:text-xs">
                               {formatHebDate(date)}

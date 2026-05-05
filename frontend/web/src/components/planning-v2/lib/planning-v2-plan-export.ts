@@ -66,6 +66,45 @@ function mergeCellRawWithPulls(
   return baseArr;
 }
 
+function slotTimeMetaFromPulls(
+  pulls: PlanningV2PullsMap | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  slotIdx: number,
+  workerName: string,
+): { label: string; red: boolean } | null {
+  if (!pulls) return null;
+  const slotKey = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
+  const entry = pulls[slotKey] as
+    | {
+        before?: { name?: string; start?: string; end?: string };
+        after?: { name?: string; start?: string; end?: string };
+        guardDisplay?: { start?: string; end?: string };
+      }
+    | undefined;
+  if (!entry) return null;
+
+  const gdStart = String(entry.guardDisplay?.start || "").trim();
+  const gdEnd = String(entry.guardDisplay?.end || "").trim();
+  if (gdStart && gdEnd) return { label: `${gdStart}-${gdEnd}`, red: true };
+
+  const target = String(workerName || "").trim();
+  const bName = String(entry.before?.name || "").trim();
+  const aName = String(entry.after?.name || "").trim();
+  if (target && target === bName) {
+    const s = String(entry.before?.start || "").trim();
+    const e = String(entry.before?.end || "").trim();
+    if (s && e) return { label: `${s}-${e}`, red: true };
+  }
+  if (target && target === aName) {
+    const s = String(entry.after?.start || "").trim();
+    const e = String(entry.after?.end || "").trim();
+    if (s && e) return { label: `${s}-${e}`, red: true };
+  }
+  return null;
+}
+
 /** Pour CSV / Excel — conversion approximative HSL CSS → hex. */
 export function cssColorToHex(input: string): string {
   const t = String(input || "").trim();
@@ -278,8 +317,9 @@ export function buildPlanningGridStyledHtml(params: {
   pulls: PlanningV2PullsMap | null | undefined;
   site: SiteSummary | null;
   nameColorMap: Map<string, { bg: string; border: string; text: string }>;
+  emptyCellsGray?: boolean;
 }): string {
-  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap } = params;
+  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap, emptyCellsGray = false } = params;
   const summary = buildSummaryRows(workers, assignments, pulls);
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
@@ -322,17 +362,27 @@ export function buildPlanningGridStyledHtml(params: {
       return `<td style="padding:6px;border:1px solid #e4e4e7;background:#f4f4f5;font-size:11px;color:#a1a1aa;text-align:center;">—</td>`;
     }
     const merged = mergeCellRawWithPulls(assignments, pulls ?? null, d.key, sn, idx);
-    const names = merged.map((x) => String(x || "").trim()).filter(Boolean);
-    if (names.length === 0) {
-      return `<td style="padding:6px;border:1px solid #e4e4e7;background:#fff;min-width:72px;"></td>`;
-    }
-    const chips = names
-      .map((nm) => {
+    const slotCount = Math.max(required, merged.length, 1);
+    const slots = Array.from({ length: slotCount }, (_, slotIdx) => String(merged[slotIdx] || "").trim());
+    const slotBoxes = slots
+      .map((nm, slotIdx) => {
+        if (!nm) {
+          return `<div style="margin:3px 0;padding:8px 6px;border-radius:10px;border:1px dashed #d4d4d8;background:${
+            emptyCellsGray ? "#e4e4e7" : "#f4f4f5"
+          };color:#a1a1aa;font-size:11px;text-align:center;">—</div>`;
+        }
         const col = workerNameChipColor(nm, nameColorMap);
-        return `<div style="margin:3px 0;"><span style="display:inline-block;max-width:100%;padding:4px 8px;border-radius:9999px;border:1px solid ${escapeHtml(col.border)};background:${escapeHtml(col.bg)};color:${escapeHtml(col.text)};font-size:11px;">${escapeHtml(nm)}</span></div>`;
+        const slotTime = slotTimeMetaFromPulls(pulls ?? null, d.key, sn, idx, slotIdx, nm);
+        const timeHtml = slotTime
+          ? `<div style="margin-top:2px;font-size:10px;font-weight:700;color:${slotTime.red ? "#dc2626" : "#52525b"};">${escapeHtml(slotTime.label)}</div>`
+          : "";
+        return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:1px solid #e4e4e7;background:#fff;text-align:center;">
+  <span style="display:inline-block;max-width:100%;padding:4px 8px;border-radius:9999px;border:1px solid ${escapeHtml(col.border)};background:${escapeHtml(col.bg)};color:${escapeHtml(col.text)};font-size:11px;">${escapeHtml(nm)}</span>
+  ${timeHtml}
+</div>`;
       })
       .join("");
-    return `<td style="padding:6px;border:1px solid #e4e4e7;background:#fff;vertical-align:top;">${chips}</td>`;
+    return `<td style="padding:6px;border:1px solid #e4e4e7;background:#fff;vertical-align:middle;text-align:center;">${slotBoxes}</td>`;
   }).join("")}
 </tr>`;
         })
@@ -341,7 +391,7 @@ export function buildPlanningGridStyledHtml(params: {
 
       return `<section style="margin-bottom:28px;page-break-inside:avoid;">
 <h2 style="font-size:16px;margin:12px 0 8px;border-bottom:2px solid #e4e4e7;padding-bottom:6px;">${escapeHtml(stationName)}</h2>
-<table dir="rtl" style="border-collapse:collapse;width:100%;font-family:system-ui,-apple-system,sans-serif;">
+<table dir="rtl" class="grid-table">
 <thead><tr>
 <th style="padding:8px;border:1px solid #d4d4d8;background:#fafafa;width:7rem;text-align:right;font-size:12px;">משמרת</th>
 ${headerCells}
@@ -358,12 +408,25 @@ ${headerCells}
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${escapeHtml(siteLabel)} — ${escapeHtml(getWeekKeyISO(weekStart))}</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; max-width: 100%; overflow-x: auto; }
+  body { background: #fff; color: #18181b; -webkit-text-size-adjust: 100%; }
+  .page-wrap { padding: 12px; width: 100%; max-width: 100%; margin: 0 auto; }
+  .grid-table { min-width: 720px; width: 100%; border-collapse: collapse; font-family: system-ui, -apple-system, sans-serif; }
+  .summary-table { border-collapse: collapse; width: 100%; max-width: 560px; margin-bottom: 24px; font-size: 13px; }
+  @media (max-width: 640px) {
+    .page-wrap { padding: 8px; }
+    .grid-table { min-width: 640px; }
+  }
+</style>
 </head>
-<body style="margin:16px;background:#fff;color:#18181b;">
+<body>
+<div class="page-wrap">
 <h1 style="font-size:18px;margin:0 0 12px;">${escapeHtml(siteLabel)}</h1>
 <p style="margin:0 0 16px;color:#52525b;font-size:14px;">שבוע מתאריך: ${escapeHtml(getWeekKeyISO(weekStart))}</p>
 <h2 style="font-size:15px;margin:16px 0 8px;">סיכום משמרות לפי עובד</h2>
-<table dir="rtl" style="border-collapse:collapse;width:100%;max-width:560px;margin-bottom:24px;font-size:13px;">
+<table dir="rtl" class="summary-table">
 <thead><tr>
 <th style="padding:8px;border:1px solid #d4d4d8;background:#fafafa;">עובד</th>
 <th style="padding:8px;border:1px solid #d4d4d8;background:#fafafa;">מספר משמרות</th>
@@ -371,6 +434,7 @@ ${headerCells}
 <tbody>${summaryTableRows}</tbody>
 </table>
 ${stationSections}
+</div>
 </body>
 </html>`;
 }

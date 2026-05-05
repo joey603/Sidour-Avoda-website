@@ -699,29 +699,31 @@ export function PlanningV2AssignmentsSummary({
 
   return (
     <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
-      <div className="mb-2 flex items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300 flex-wrap">
-        <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
-        {assignmentCountsByVariant.length > 1 && hasLocalAssignmentCountFilters ? (
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-              {combinedFilteredAlternativeIndices.length}/{assignmentCountsByVariant.length}
-            </span>
-            <button
-              type="button"
-              onClick={handleResetCurrentSiteFilters}
-              className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
-            >
-              איפוס סינון
-            </button>
-          </div>
-        ) : null}
-      </div>
-      <div className="mb-2 flex flex-wrap items-center justify-end gap-6 text-xs md:text-sm">
-        <div>
-          סה&quot;כ נדרש: <span className="font-medium">{totalRequired}</span>
+      <div className="sticky top-0 z-30 -mx-3 -mt-3 mb-2 rounded-t-xl bg-white px-3 pt-3 pb-2 shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-600 dark:text-zinc-300">
+          <div>סיכום שיבוצים לעמדה (כל העמדות)</div>
+          {assignmentCountsByVariant.length > 1 && hasLocalAssignmentCountFilters ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                {combinedFilteredAlternativeIndices.length}/{assignmentCountsByVariant.length}
+              </span>
+              <button
+                type="button"
+                onClick={handleResetCurrentSiteFilters}
+                className="inline-flex items-center rounded-md border border-red-300 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
+              >
+                איפוס סינון
+              </button>
+            </div>
+          ) : null}
         </div>
-        <div>
-          סה&quot;כ שיבוצים: <span className="font-medium">{totalAssigned}</span>
+        <div className="flex flex-wrap items-center justify-end gap-6 text-xs md:text-sm">
+          <div>
+            סה&quot;כ נדרש: <span className="font-medium">{totalRequired}</span>
+          </div>
+          <div>
+            סה&quot;כ שיבוצים: <span className="font-medium">{totalAssigned}</span>
+          </div>
         </div>
       </div>
       {assignmentCountsByVariant.length > 1 && combinedFilteredAlternativeIndices.length === 0 ? (

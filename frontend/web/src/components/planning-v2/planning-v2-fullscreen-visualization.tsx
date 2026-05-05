@@ -52,6 +52,7 @@ export function PlanningV2FullscreenVisualization({
       pulls: pulls ?? null,
       site,
       nameColorMap,
+      emptyCellsGray: true,
     });
   }, [siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap]);
 
@@ -73,7 +74,7 @@ export function PlanningV2FullscreenVisualization({
             title={`תצוגת תכנון — ${siteLabel}`}
             srcDoc={srcDoc}
             sandbox="allow-same-origin"
-            className="block h-[min(75dvh,calc(100dvh-12rem))] w-full border-0 bg-white"
+            className="block h-[calc(100dvh-11.5rem)] w-full max-w-full border-0 bg-white md:h-[min(75dvh,calc(100dvh-12rem))]"
           />
         ) : (
           <div className="flex h-48 items-center justify-center text-sm text-zinc-500 dark:text-zinc-400">

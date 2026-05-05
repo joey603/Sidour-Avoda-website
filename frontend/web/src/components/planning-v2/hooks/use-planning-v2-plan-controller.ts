@@ -447,6 +447,7 @@ export function usePlanningV2PlanController({
   type GenerateOptions = {
     excludeDays?: string[];
     fixedAssignments?: Record<string, Record<string, string[][]>>;
+    pullsScope?: "current_only" | "all_sites";
   };
   const [draftAssignments, setDraftAssignments] = useState<Record<string, Record<string, string[][]>> | null>(
     null,
@@ -938,6 +939,14 @@ export function usePlanningV2PlanController({
 
     const weekly_availability = weeklyAvailabilityMapFromRows(workerRowsForTable);
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
+    const pulls_limits_by_site =
+      linkedSitesLength > 1 && autoPullsEnabled && options?.pullsScope === "current_only"
+        ? Object.fromEntries(
+            weekPurgeSiteIds
+              .filter((id) => Number.isFinite(Number(id)) && Number(id) > 0)
+              .map((id) => [String(id), String(id) === String(siteId) ? pulls_limit : 0]),
+          )
+        : undefined;
 
     const linked = linkedSitesLength > 1;
     const budget = appendMode
@@ -957,6 +966,7 @@ export function usePlanningV2PlanController({
           time_limit_seconds: budget.timeLimitSeconds,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
+          pulls_limits_by_site,
           fixed_assignments: fixedAssignments,
           exclude_days: excludeDays && excludeDays.length ? excludeDays : undefined,
           weekly_availability,
