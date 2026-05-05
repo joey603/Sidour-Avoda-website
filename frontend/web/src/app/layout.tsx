@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import AuthSessionVersionGuard from "@/components/auth-session-version-guard";
 import TopNav from "@/components/top-nav";
@@ -40,6 +41,7 @@ export default function RootLayout({
         <AuthSessionVersionGuard />
         <TopNav />
         {children}
+        <Analytics />
         <Toaster richColors closeButton position="top-center" />
       </body>
     </html>
