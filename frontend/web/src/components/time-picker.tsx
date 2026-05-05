@@ -87,7 +87,7 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
             openPopup();
           }
         }}
-        className={`!text-base md:!text-sm ${className} min-h-10 cursor-pointer touch-manipulation`}
+        className={`${className} min-h-10 cursor-pointer touch-manipulation`}
         dir={dir}
         inputMode="none"
         placeholder="HH:MM"

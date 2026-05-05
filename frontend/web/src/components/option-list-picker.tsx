@@ -89,7 +89,7 @@ export default function OptionListPicker({
             openPopup();
           }
         }}
-        className={`!text-base md:!text-sm ${className} min-h-10 cursor-pointer touch-manipulation`}
+        className={`${className} min-h-10 cursor-pointer touch-manipulation`}
         inputMode="none"
         aria-haspopup="dialog"
         aria-expanded={showPopup}
