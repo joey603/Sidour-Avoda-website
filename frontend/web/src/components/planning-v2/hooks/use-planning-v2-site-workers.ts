@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { resolveMaxShifts } from "@/lib/max-shifts";
 import { toast } from "sonner";
 import type { PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
@@ -19,7 +20,7 @@ function mapApiWorker(w: Record<string, unknown>): PlanningWorker {
   return {
     id: Number(w.id),
     name: String(w.name),
-    maxShifts: Number(w.max_shifts ?? w.maxShifts ?? 0),
+    maxShifts: resolveMaxShifts(w.max_shifts, w.maxShifts),
     roles: Array.isArray(w.roles) ? (w.roles as string[]) : [],
     availability: (w.availability as PlanningWorker["availability"]) || { ...EMPTY_WORKER_AVAILABILITY },
     answers: (w.answers as Record<string, unknown>) || {},

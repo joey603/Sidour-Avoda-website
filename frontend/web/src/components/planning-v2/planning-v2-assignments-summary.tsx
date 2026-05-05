@@ -2,6 +2,7 @@
 
 import { type ReactElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import NumberPicker from "@/components/number-picker";
+import { resolveMaxShifts } from "@/lib/max-shifts";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "./types";
 import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
 import {
@@ -14,9 +15,10 @@ import {
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { getWeekKeyISO } from "./lib/week";
 import {
+  hasSharedAlternativeIndex,
   readLinkedPlansFromMemory,
-  resolveAssignmentsForAlternative,
-  resolvePullsForAlternative,
+  resolveAssignmentsForSharedAlternative,
+  resolvePullsForSharedAlternative,
 } from "./lib/multi-site-linked-memory";
 
 function isRtlName(s: string): boolean {
@@ -150,6 +152,14 @@ type PlanningV2AssignmentsSummaryProps = {
   /** Aligné avec la surbrillance dans גריד שבועי לפי עמדה. */
   highlightedWorkerName?: string | null;
   onHighlightWorkerToggle?: (workerName: string) => void;
+};
+
+type MultiSiteMaxShiftOverage = {
+  alternativeIndex: number;
+  workerName: string;
+  total: number;
+  maxShifts: number;
+  siteBreakdown: Record<string, number>;
 };
 
 export function PlanningV2AssignmentsSummary({
@@ -331,8 +341,13 @@ export function PlanningV2AssignmentsSummary({
   const hasActiveAssignmentCountFilters = activeAssignmentCountFilters.length > 0;
 
   /** Legacy parity: cacher toute alternative qui dépasse max_shifts global multi-site. */
-  const maxShiftsCompatibleIndices = useMemo(() => {
-    if (!assignmentCountsByVariant.length) return [] as number[];
+  const { maxShiftsCompatibleIndices, multiSiteMaxShiftOverages } = useMemo(() => {
+    if (!assignmentCountsByVariant.length) {
+      return {
+        maxShiftsCompatibleIndices: [] as number[],
+        multiSiteMaxShiftOverages: [] as MultiSiteMaxShiftOverage[],
+      };
+    }
     const currentSiteId = String(siteId);
     const linkedMemory = readLinkedPlansFromMemory(weekStart);
     const countsCache = new Map<string, Map<string, number>>();
@@ -345,9 +360,10 @@ export function PlanningV2AssignmentsSummary({
       } else {
         const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
         if (sitePlan) {
+          if (!hasSharedAlternativeIndex(sitePlan, idx)) return null;
           counts = subtractPullExtrasFromWorkerCounts(
-            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
-            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+            countAssignmentsPerWorkerName(resolveAssignmentsForSharedAlternative(sitePlan, idx)),
+            (resolvePullsForSharedAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
           );
         }
       }
@@ -356,30 +372,107 @@ export function PlanningV2AssignmentsSummary({
     };
 
     const compatible: number[] = [];
+    const overages: MultiSiteMaxShiftOverage[] = [];
     assignmentCountsByVariant.forEach((currentSiteCounts, idx) => {
       let ok = true;
       for (const w of workers) {
         if ((w.linkedSiteIds || []).length <= 1) continue;
         const workerName = String(w.name || "").trim();
         if (!workerName) continue;
-        const maxShifts = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
+        const maxShifts = resolveMaxShifts(
+          (w as unknown as { max_shifts?: number }).max_shifts,
+          w.maxShifts,
+        );
         if (!Number.isFinite(maxShifts) || maxShifts <= 0) continue;
-        let total = Number(currentSiteCounts.get(workerName) || 0);
+        const siteBreakdown: Record<string, number> = {
+          [currentSiteId]: Number(currentSiteCounts.get(workerName) || 0),
+        };
+        let total = siteBreakdown[currentSiteId];
         for (const linkedId of w.linkedSiteIds || []) {
           const sid = String(linkedId);
           if (sid === currentSiteId) continue;
+          const linkedPlan = linkedMemory?.plansBySite?.[sid];
+          if (linkedPlan && !hasSharedAlternativeIndex(linkedPlan, idx)) {
+            ok = false;
+            break;
+          }
           const linkedCounts = getCountsForSite(sid, idx);
-          total += Number(linkedCounts?.get(workerName) || 0);
+          const linkedTotal = Number(linkedCounts?.get(workerName) || 0);
+          siteBreakdown[sid] = linkedTotal;
+          total += linkedTotal;
         }
         if (total > Math.trunc(maxShifts)) {
+          overages.push({
+            alternativeIndex: idx,
+            workerName,
+            total,
+            maxShifts: Math.trunc(maxShifts),
+            siteBreakdown,
+          });
           ok = false;
           break;
         }
       }
       if (ok) compatible.push(idx);
     });
-    return compatible;
+    return {
+      maxShiftsCompatibleIndices: compatible,
+      multiSiteMaxShiftOverages: overages,
+    };
   }, [assignmentCountsByVariant, workers, weekStart, siteId]);
+
+  const lastMultiSiteMaxShiftLogKey = useRef<string>("");
+  useEffect(() => {
+    if (multiSiteMaxShiftOverages.length === 0) {
+      lastMultiSiteMaxShiftLogKey.current = "";
+      return;
+    }
+    const logKey = JSON.stringify(
+      multiSiteMaxShiftOverages.map((item) => ({
+        alternativeIndex: item.alternativeIndex,
+        workerName: item.workerName,
+        total: item.total,
+        maxShifts: item.maxShifts,
+        siteBreakdown: item.siteBreakdown,
+      })),
+    );
+    if (logKey === lastMultiSiteMaxShiftLogKey.current) return;
+    lastMultiSiteMaxShiftLogKey.current = logKey;
+    const linkedMemory = readLinkedPlansFromMemory(weekStart);
+    const memoryAltCounts = Object.fromEntries(
+      Object.entries(linkedMemory?.plansBySite || {}).map(([sid, plan]) => [
+        sid,
+        Array.isArray(plan?.alternatives) ? plan.alternatives.length : 0,
+      ]),
+    );
+    const firstOveragesIndexDiagnostics = multiSiteMaxShiftOverages.slice(0, 10).map((item) => ({
+      alternativeIndex: item.alternativeIndex,
+      workerName: item.workerName,
+      missingOnSites: Object.keys(item.siteBreakdown).filter((sid) => {
+        const plan = linkedMemory?.plansBySite?.[sid];
+        return !!plan && !hasSharedAlternativeIndex(plan, item.alternativeIndex);
+      }),
+    }));
+    console.warn("[planning-v2][multi-site][max-shifts][display] alternatives over max_shifts", {
+      siteId: String(siteId),
+      weekIso,
+      generationRunning,
+      selectedAlternativeIndex,
+      assignmentVariantsCount: assignmentCountsByVariant.length,
+      memoryActiveAltIndex: linkedMemory?.activeAltIndex ?? null,
+      memoryAltCounts,
+      firstOveragesIndexDiagnostics,
+      overages: multiSiteMaxShiftOverages,
+    });
+  }, [
+    multiSiteMaxShiftOverages,
+    siteId,
+    weekIso,
+    weekStart,
+    generationRunning,
+    selectedAlternativeIndex,
+    assignmentCountsByVariant.length,
+  ]);
 
   const filteredAlternativeIndices = useMemo(() => {
     if (!assignmentCountsByVariant.length) return [];
@@ -398,9 +491,10 @@ export function PlanningV2AssignmentsSummary({
       } else {
         const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
         if (sitePlan) {
+          if (!hasSharedAlternativeIndex(sitePlan, idx)) return null;
           counts = subtractPullExtrasFromWorkerCounts(
-            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
-            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+            countAssignmentsPerWorkerName(resolveAssignmentsForSharedAlternative(sitePlan, idx)),
+            (resolvePullsForSharedAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
           );
         }
       }
@@ -434,9 +528,10 @@ export function PlanningV2AssignmentsSummary({
       } else {
         const sitePlan = linkedMemory?.plansBySite?.[targetSiteId];
         if (sitePlan) {
+          if (!hasSharedAlternativeIndex(sitePlan, idx)) return null;
           counts = subtractPullExtrasFromWorkerCounts(
-            countAssignmentsPerWorkerName(resolveAssignmentsForAlternative(sitePlan, idx)),
-            (resolvePullsForAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
+            countAssignmentsPerWorkerName(resolveAssignmentsForSharedAlternative(sitePlan, idx)),
+            (resolvePullsForSharedAlternative(sitePlan, idx) || {}) as PlanningV2PullsMap,
           );
         }
       }

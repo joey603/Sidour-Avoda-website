@@ -2,8 +2,8 @@ import { getRequiredFor } from "./station-grid-helpers";
 import type { PlanningV2PullsMap, PlanningWorker } from "../types";
 import {
   readLinkedPlansFromMemory,
-  resolveAssignmentsForAlternative,
-  resolvePullsForAlternative,
+  resolveAssignmentsForSharedAlternative,
+  resolvePullsForSharedAlternative,
 } from "./multi-site-linked-memory";
 
 /** Compte chaque nom de cellule (comme le tableau סיכום du planning). */
@@ -79,8 +79,8 @@ export function workerAdjustedWeeklyTotalAcrossLinkedSites(
     if (sid === String(currentSiteId)) continue;
     const sitePlan = mem?.plansBySite?.[sid];
     if (!sitePlan) continue;
-    const asg = resolveAssignmentsForAlternative(sitePlan, activeIdx);
-    const pls = resolvePullsForAlternative(sitePlan, activeIdx) as PlanningV2PullsMap | undefined;
+    const asg = resolveAssignmentsForSharedAlternative(sitePlan, activeIdx);
+    const pls = resolvePullsForSharedAlternative(sitePlan, activeIdx) as PlanningV2PullsMap | undefined;
     total += countForSite(asg || {}, pls ?? null);
   }
   return total;
@@ -168,20 +168,8 @@ export function buildTotalAssignmentsByIdentity(
         accumulate(currentAssignments, currentPulls ?? null);
         continue;
       }
-      const planAlts = Array.isArray(plan.alternatives) ? plan.alternatives : [];
-      // Si sharedIdx dépasse les alternatives disponibles pour ce site,
-      // utiliser la dernière alternative disponible (pas le plan de base)
-      // pour éviter de mixer des plans de moments différents.
-      let safeIdx: number;
-      if (sharedIdx <= 0) {
-        safeIdx = 0;
-      } else if (sharedIdx - 1 < planAlts.length) {
-        safeIdx = sharedIdx;
-      } else {
-        safeIdx = planAlts.length; // dernière alternative (1-indexed)
-      }
-      const resolvedAsg = resolveAssignmentsForAlternative(plan, safeIdx);
-      const resolvedPulls = resolvePullsForAlternative(plan, safeIdx) as Record<
+      const resolvedAsg = resolveAssignmentsForSharedAlternative(plan, sharedIdx);
+      const resolvedPulls = resolvePullsForSharedAlternative(plan, sharedIdx) as Record<
         string,
         { before?: { name?: string }; after?: { name?: string } }
       > | null;

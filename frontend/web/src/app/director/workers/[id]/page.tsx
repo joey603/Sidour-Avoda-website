@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
+import { resolveMaxShifts } from "@/lib/max-shifts";
 import LoadingAnimation from "@/components/loading-animation";
 import { toast } from "sonner";
 import { getRequiredFor } from "@/components/planning-v2/lib/station-grid-helpers";
@@ -109,7 +110,14 @@ export default function WorkerDetailsPage() {
         }
         // eslint-disable-next-line no-console
         console.log("[WorkerDetails] Found worker:", found, "phone field:", found?.phone);
-        setWorker(found || null);
+        setWorker(
+          found
+            ? {
+                ...found,
+                max_shifts: resolveMaxShifts((found as unknown as { max_shifts?: unknown }).max_shifts),
+              }
+            : null,
+        );
       } catch (e: any) {
         setError("שגיאה בטעינת עובד");
       } finally {
@@ -274,7 +282,7 @@ export default function WorkerDetailsPage() {
     if (!worker) return null;
     return {
       name: String(worker.name || ""),
-      max_shifts: worker.max_shifts,
+      max_shifts: resolveMaxShifts(worker.max_shifts),
       roles: Array.isArray(worker.roles) ? worker.roles : [],
       availability: worker.availability && typeof worker.availability === "object" ? worker.availability : {},
     };
@@ -300,7 +308,7 @@ export default function WorkerDetailsPage() {
         site_id: worker.site_id,
         // IMPORTANT: toujours afficher l'identité depuis la DB (sinon un plan sauvegardé peut réafficher l'ancien nom)
         name: String(worker.name),
-        max_shifts: typeof (snap as any).max_shifts === "number" ? (snap as any).max_shifts : worker.max_shifts,
+        max_shifts: resolveMaxShifts((snap as any).max_shifts, worker.max_shifts),
         roles: snapRolesUsable ? snapRoles : worker.roles,
         availability: snapAvailUsable ? snapAvail : worker.availability,
         phone: worker.phone, // Toujours utiliser le phone du worker actuel, pas celui sauvegardé

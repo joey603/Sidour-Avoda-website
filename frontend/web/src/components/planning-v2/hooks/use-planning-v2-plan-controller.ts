@@ -14,10 +14,17 @@ import {
 } from "../lib/week-plan-persist";
 import { weeklyAvailabilityMapFromRows } from "../lib/weekly-availability-for-ai";
 import { getWeekKeyISO } from "../lib/week";
-import { readLinkedPlansFromMemory, saveLinkedPlansToMemory, type LinkedSitePlan } from "../lib/multi-site-linked-memory";
+import {
+  buildPersistableLinkedPlans,
+  readLinkedPlansFromMemory,
+  saveLinkedPlansToMemory,
+  type LinkedSitePlan,
+} from "../lib/multi-site-linked-memory";
+import { countAssignmentsPerWorkerName, subtractPullExtrasFromWorkerCounts } from "../lib/assignments-summary-math";
 import { clearSitesListPlanningBeforePlanningCreat } from "@/lib/clear-sites-list-planning-for-week";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-import { getApiBaseUrl } from "@/lib/api";
+import { apiFetch, getApiBaseUrl } from "@/lib/api";
+import { resolveMaxShifts } from "@/lib/max-shifts";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
 const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
@@ -137,6 +144,71 @@ function alternativeSnapshot(
   }
 }
 
+function linkedSitePlansSnapshot(
+  plans: Record<string, { assignments?: unknown; pulls?: unknown }> | null | undefined,
+): string {
+  if (!plans || typeof plans !== "object") return "";
+  try {
+    const normalized = Object.fromEntries(
+      Object.entries(plans)
+        .sort(([a], [b]) => String(a).localeCompare(String(b)))
+        .map(([siteKey, payload]) => [
+          siteKey,
+          {
+            assignments:
+              payload && typeof payload === "object" && payload.assignments && typeof payload.assignments === "object"
+                ? payload.assignments
+                : null,
+            pulls:
+              payload && typeof payload === "object" && payload.pulls && typeof payload.pulls === "object"
+                ? payload.pulls
+                : {},
+          },
+        ]),
+    );
+    return JSON.stringify(normalized);
+  } catch {
+    return "";
+  }
+}
+
+function buildSeenLinkedAlternativeSnapshots(
+  plansBySite: Record<string, LinkedSitePlan> | null | undefined,
+): Set<string> {
+  const seen = new Set<string>();
+  if (!plansBySite || typeof plansBySite !== "object") return seen;
+  const maxAlternativeCount = Math.max(
+    0,
+    ...Object.values(plansBySite).map((plan) => (Array.isArray(plan?.alternatives) ? plan.alternatives.length : 0)),
+  );
+  for (let idx = 0; idx <= maxAlternativeCount; idx += 1) {
+    const snapshotPlans: Record<string, { assignments?: unknown; pulls?: unknown }> = {};
+    for (const [siteKey, plan] of Object.entries(plansBySite)) {
+      if (!plan || typeof plan !== "object") continue;
+      if (idx === 0) {
+        snapshotPlans[siteKey] = {
+          assignments: plan.assignments && typeof plan.assignments === "object" ? plan.assignments : null,
+          pulls: plan.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
+        };
+        continue;
+      }
+      const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+      if (idx - 1 >= alternatives.length) continue;
+      snapshotPlans[siteKey] = {
+        assignments: alternatives[idx - 1],
+        pulls:
+          idx - 1 < alternativePulls.length && alternativePulls[idx - 1] && typeof alternativePulls[idx - 1] === "object"
+            ? alternativePulls[idx - 1]
+            : {},
+      };
+    }
+    const snap = linkedSitePlansSnapshot(snapshotPlans);
+    if (snap) seen.add(snap);
+  }
+  return seen;
+}
+
 function uniqueDraftAlternatives(
   value: Array<DraftAlternative | null | undefined>,
 ): DraftAlternative[] {
@@ -170,6 +242,138 @@ function draftAlternativesForMode(
   dedupe: boolean,
 ): DraftAlternative[] {
   return dedupe ? uniqueDraftAlternatives(value) : normalizeDraftAlternatives(value);
+}
+
+function linkedSitePlansRespectMaxShifts(
+  plans: Record<string, { assignments?: unknown; pulls?: unknown }>,
+  workers: PlanningWorker[],
+): boolean {
+  return linkedSitePlansMaxShiftOverages(plans, workers).length === 0;
+}
+
+function linkedSitePlansMaxShiftOverages(
+  plans: Record<string, { assignments?: unknown; pulls?: unknown }>,
+  workers: PlanningWorker[],
+): Array<{
+  workerName: string;
+  total: number;
+  maxShifts: number;
+  siteBreakdown: Record<string, number>;
+}> {
+  const overages: Array<{
+    workerName: string;
+    total: number;
+    maxShifts: number;
+    siteBreakdown: Record<string, number>;
+  }> = [];
+  for (const worker of workers) {
+    if (!Array.isArray(worker.linkedSiteIds) || worker.linkedSiteIds.length <= 1) continue;
+    const workerName = String(worker.name || "").trim();
+    if (!workerName) continue;
+    const maxShifts = resolveMaxShifts(worker.maxShifts);
+    if (!Number.isFinite(maxShifts) || maxShifts <= 0) continue;
+    let total = 0;
+    const siteBreakdown: Record<string, number> = {};
+    for (const linkedSiteId of worker.linkedSiteIds) {
+      const sitePlan = plans[String(linkedSiteId)];
+      if (!sitePlan || !sitePlan.assignments || typeof sitePlan.assignments !== "object") {
+        siteBreakdown[String(linkedSiteId)] = 0;
+        continue;
+      }
+      const counts = subtractPullExtrasFromWorkerCounts(
+        countAssignmentsPerWorkerName(sitePlan.assignments as Record<string, Record<string, string[][]>>),
+        (sitePlan.pulls && typeof sitePlan.pulls === "object" ? sitePlan.pulls : null) as PlanningV2PullsMap | null,
+      );
+      const siteTotal = Number(counts.get(workerName) || 0);
+      siteBreakdown[String(linkedSiteId)] = siteTotal;
+      total += siteTotal;
+    }
+    if (total > Math.trunc(maxShifts)) {
+      overages.push({
+        workerName,
+        total,
+        maxShifts: Math.trunc(maxShifts),
+        siteBreakdown,
+      });
+    }
+  }
+  return overages;
+}
+
+function linkedPlansAltCounts(plansBySite: Record<string, LinkedSitePlan> | null | undefined): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [sid, plan] of Object.entries(plansBySite || {})) {
+    out[String(sid)] = Array.isArray(plan?.alternatives) ? plan.alternatives.length : 0;
+  }
+  return out;
+}
+
+function linkedCandidatePlansAtIndex(
+  plansBySite: Record<string, LinkedSitePlan>,
+  index: number,
+): Record<string, { assignments?: unknown; pulls?: unknown }> {
+  const candidate: Record<string, { assignments?: unknown; pulls?: unknown }> = {};
+  for (const [sid, plan] of Object.entries(plansBySite || {})) {
+    if (index <= 0) {
+      candidate[sid] = {
+        assignments: plan.assignments,
+        pulls: plan.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
+      };
+      continue;
+    }
+    const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+    const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+    candidate[sid] = {
+      assignments: alternatives[index - 1],
+      pulls:
+        alternativePulls[index - 1] && typeof alternativePulls[index - 1] === "object"
+          ? alternativePulls[index - 1]
+          : {},
+    };
+  }
+  return candidate;
+}
+
+function pruneLinkedPlansOverMaxShifts(
+  plansBySite: Record<string, LinkedSitePlan>,
+  workers: PlanningWorker[],
+): { plansBySite: Record<string, LinkedSitePlan>; dropped: Array<{ index: number; overages: ReturnType<typeof linkedSitePlansMaxShiftOverages> }> } {
+  const normalized = buildPersistableLinkedPlans(plansBySite);
+  const siteEntries = Object.entries(normalized);
+  if (siteEntries.length === 0) return { plansBySite: normalized, dropped: [] };
+  const nextPlans = Object.fromEntries(
+    siteEntries.map(([sid, plan]) => [
+      sid,
+      {
+        ...plan,
+        alternatives: [] as Record<string, Record<string, string[][]>>[],
+        alternative_pulls: [] as Record<string, unknown>[],
+      } satisfies LinkedSitePlan,
+    ]),
+  ) as Record<string, LinkedSitePlan>;
+  const altCount = Math.min(
+    ...siteEntries.map(([, plan]) => (Array.isArray(plan.alternatives) ? plan.alternatives.length : 0)),
+  );
+  const dropped: Array<{ index: number; overages: ReturnType<typeof linkedSitePlansMaxShiftOverages> }> = [];
+  for (let index = 1; index <= altCount; index += 1) {
+    const candidate = linkedCandidatePlansAtIndex(normalized, index);
+    const overages = linkedSitePlansMaxShiftOverages(candidate, workers);
+    if (overages.length > 0) {
+      dropped.push({ index, overages });
+      continue;
+    }
+    for (const [sid, plan] of siteEntries) {
+      const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+      nextPlans[sid].alternatives?.push(alternatives[index - 1]);
+      nextPlans[sid].alternative_pulls?.push(
+        (alternativePulls[index - 1] && typeof alternativePulls[index - 1] === "object"
+          ? alternativePulls[index - 1]
+          : {}) as Record<string, unknown>,
+      );
+    }
+  }
+  return { plansBySite: nextPlans, dropped };
 }
 
 const PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX = "planning_v2_alternatives_unlock_";
@@ -268,6 +472,7 @@ export function usePlanningV2PlanController({
   const draftAlternativesRef = useRef<DraftAlternative[]>([]);
   const lastAlternativeSnapshotRef = useRef<string>("");
   const seenAlternativeSnapshotsRef = useRef<Set<string>>(new Set());
+  const seenLinkedAlternativeSnapshotsRef = useRef<Set<string>>(new Set());
   const appendUniqueCountRef = useRef(0);
   const alternativesFlushRafRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
@@ -358,6 +563,7 @@ export function usePlanningV2PlanController({
     setMoreAlternativesAvailable(true);
     planLoadedForManualRef.current = false;
     seenAlternativeSnapshotsRef.current = new Set();
+    seenLinkedAlternativeSnapshotsRef.current = new Set();
     appendUniqueCountRef.current = 0;
     lastAlternativeSnapshotRef.current = "";
   }, [linkedSitesLength, siteId, weekIso, weekStart]);
@@ -372,12 +578,28 @@ export function usePlanningV2PlanController({
       // `setDraftAlternatives` et peut provoquer « Maximum update depth exceeded ».
       if (genBusyRef.current) return;
       const mem = readLinkedPlansFromMemory(weekStart);
-      const plan = mem?.plansBySite?.[String(siteId)];
+      const normalizedPlans = buildPersistableLinkedPlans(mem?.plansBySite);
+      const plan = normalizedPlans[String(siteId)];
       if (!plan) return;
       const activeIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
       const snap = JSON.stringify({ activeIdx, plan });
       if (snap === lastAppliedSnap) return;
       lastAppliedSnap = snap;
+      if (mem?.plansBySite) {
+        const originalRaw = JSON.stringify(mem.plansBySite);
+        const normalizedRaw = JSON.stringify(normalizedPlans);
+        if (originalRaw !== normalizedRaw) {
+          console.warn("[planning-v2][multi-site][memory][normalize]", {
+            siteId: String(siteId),
+            weekIso,
+            activeIdx,
+            beforeAltCounts: linkedPlansAltCounts(mem.plansBySite),
+            afterAltCounts: linkedPlansAltCounts(normalizedPlans),
+            source: "refreshFromMemory",
+          });
+          saveLinkedPlansToMemory(weekStart, normalizedPlans, activeIdx);
+        }
+      }
       const localAssignments =
         draftAssignmentsRef.current ??
         weekPlanAssignmentsRef.current ??
@@ -604,6 +826,7 @@ export function usePlanningV2PlanController({
       draftPullsRef.current = {};
       draftAlternativesRef.current = [];
       seenAlternativeSnapshotsRef.current = new Set();
+      seenLinkedAlternativeSnapshotsRef.current = new Set();
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
       setDraftAssignments(null);
@@ -611,22 +834,49 @@ export function usePlanningV2PlanController({
       setDraftAlternatives([]);
     } else {
       setReplaceGenerationUiClear(false);
+      const normalizedLinkedPlans =
+        linkedSitesLength > 1 ? buildPersistableLinkedPlans(readLinkedPlansFromMemory(weekStart)?.plansBySite) : null;
+      const currentLinkedPlan = normalizedLinkedPlans?.[String(siteId)];
       const baseAssignments =
+        (currentLinkedPlan?.assignments as Record<string, Record<string, string[][]>> | undefined) ??
         draftAssignmentsRef.current ??
         weekPlanAssignmentsRef.current ??
         (assignmentVariants[0] && typeof assignmentVariants[0] === "object" ? assignmentVariants[0] : null);
       const basePulls =
-        draftPullsRef.current ||
+        (((currentLinkedPlan?.pulls as PlanningV2PullsMap | undefined) || undefined) ??
+        draftPullsRef.current) ||
         ((pullVariants[0] && typeof pullVariants[0] === "object" ? pullVariants[0] : {}) as PlanningV2PullsMap);
       const existingAlternatives = normalizeDraftAlternatives(
-        draftAssignmentsRef.current
-          ? draftAlternativesRef.current || []
-          : assignmentVariants.slice(1).map((assignments, idx) => ({
+        currentLinkedPlan
+          ? (Array.isArray(currentLinkedPlan.alternatives) ? currentLinkedPlan.alternatives : []).map((assignments, idx) => ({
               assignments,
-              pulls: (pullVariants[idx + 1] || {}) as PlanningV2PullsMap,
-            })),
+              pulls:
+                ((Array.isArray(currentLinkedPlan.alternative_pulls) ? currentLinkedPlan.alternative_pulls[idx] : {}) ||
+                  {}) as PlanningV2PullsMap,
+            }))
+          : draftAssignmentsRef.current
+            ? draftAlternativesRef.current || []
+            : assignmentVariants.slice(1).map((assignments, idx) => ({
+                assignments,
+                pulls: (pullVariants[idx + 1] || {}) as PlanningV2PullsMap,
+              })),
       );
       appendExistingAlternativesCount = existingAlternatives.length;
+      if (normalizedLinkedPlans && Object.keys(normalizedLinkedPlans).length > 0) {
+        const appendMemoryBefore = readLinkedPlansFromMemory(weekStart);
+        const activeIdx = Math.max(0, Number(appendMemoryBefore?.activeAltIndex || 0));
+        console.warn("[planning-v2][multi-site][append][start]", {
+          siteId: String(siteId),
+          weekIso,
+          activeIdx,
+          localAssignmentVariants: assignmentVariants.length,
+          appendExistingAlternativesCount,
+          memoryAltCountsBefore: linkedPlansAltCounts(appendMemoryBefore?.plansBySite),
+          memoryAltCountsAfterNormalize: linkedPlansAltCounts(normalizedLinkedPlans),
+          currentSiteAltCount: Array.isArray(currentLinkedPlan?.alternatives) ? currentLinkedPlan.alternatives.length : 0,
+        });
+        saveLinkedPlansToMemory(weekStart, normalizedLinkedPlans, activeIdx);
+      }
       if (baseAssignments && typeof baseAssignments === "object") {
         draftAssignmentsRef.current = baseAssignments;
         draftPullsRef.current = basePulls;
@@ -638,6 +888,10 @@ export function usePlanningV2PlanController({
       seenAlternativeSnapshotsRef.current = dedupeAlternatives
         ? buildSeenAlternativeSnapshots(baseAssignments, basePulls, existingAlternatives)
         : new Set();
+      seenLinkedAlternativeSnapshotsRef.current =
+        linkedSitesLength > 1 && dedupeAlternatives
+          ? buildSeenLinkedAlternativeSnapshots(readLinkedPlansFromMemory(weekStart)?.plansBySite || {})
+          : new Set();
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
     }
@@ -740,18 +994,43 @@ export function usePlanningV2PlanController({
     const persistGeneratedAutoDraftToServer = async () => {
       if (linkedSitesLength > 1) {
         const mem = readLinkedPlansFromMemory(weekStart);
-        for (const [sid, pl] of Object.entries(mem?.plansBySite || {})) {
+        let persistablePlans = buildPersistableLinkedPlans(mem?.plansBySite);
+        const currentSiteKey = String(siteId);
+        const currentPersistablePlan = persistablePlans[currentSiteKey];
+        const currentVisibleAssignments =
+          draftAssignmentsRef.current ??
+          weekPlanAssignmentsRef.current ??
+          (assignmentVariants[0] && typeof assignmentVariants[0] === "object" ? assignmentVariants[0] : null);
+        if (
+          currentPersistablePlan &&
+          !assignmentsNonEmpty(currentPersistablePlan.assignments ?? null) &&
+          assignmentsNonEmpty(currentVisibleAssignments ?? null)
+        ) {
+          persistablePlans = {
+            ...persistablePlans,
+            [currentSiteKey]: {
+              ...currentPersistablePlan,
+              assignments: currentVisibleAssignments as Record<string, Record<string, string[][]>>,
+              pulls:
+                (draftPullsRef.current && typeof draftPullsRef.current === "object"
+                  ? draftPullsRef.current
+                  : {}) as Record<string, unknown>,
+            },
+          };
+          console.warn("[planning-v2][multi-site][persist][hydrate-current-site-before-save]", {
+            siteId: String(siteId),
+            weekIso,
+            beforeAltCounts: linkedPlansAltCounts(mem?.plansBySite),
+            afterAltCounts: linkedPlansAltCounts(persistablePlans),
+          });
+        }
+        const persistedSiteIds: string[] = [];
+        for (const [sid, pl] of Object.entries(persistablePlans)) {
           const assignments = pl.assignments;
           if (!assignments || !assignmentsNonEmpty(assignments)) continue;
           const pulls = (pl.pulls && typeof pl.pulls === "object" ? pl.pulls : {}) as Record<string, unknown>;
           const altAsg = Array.isArray(pl.alternatives) ? pl.alternatives : [];
           const altPulls = Array.isArray(pl.alternative_pulls) ? pl.alternative_pulls : [];
-          const uniqueAlts = normalizeDraftAlternatives(
-            altAsg.map((assignmentsItem, idx) => ({
-              assignments: assignmentsItem as Record<string, Record<string, string[][]>>,
-              pulls: (altPulls[idx] && typeof altPulls[idx] === "object" ? altPulls[idx] : {}) as PlanningV2PullsMap,
-            })),
-          );
           const w = String(sid) === String(siteId) ? workersRef.current : [];
           const base = buildWeekPlanDataPayload(
             Number(sid),
@@ -761,11 +1040,46 @@ export function usePlanningV2PlanController({
             buildWorkersSnapshotForSave(w),
             false,
           ) as Record<string, unknown>;
-          if (uniqueAlts.length > 0) {
-            base.alternatives = uniqueAlts.map((x) => x.assignments);
-            base.alternative_pulls = uniqueAlts.map((x) => x.pulls || {});
+          if (altAsg.length > 0) {
+            base.alternatives = altAsg;
+            base.alternative_pulls = altPulls.map((x) => (x && typeof x === "object" ? x : {}));
           }
           await persistAutoWeekPlanDraftToApi(sid, weekStart, base);
+          persistedSiteIds.push(String(sid));
+        }
+        if (persistedSiteIds.length > 0) {
+          try {
+            const refreshedEntries = await Promise.all(
+              persistedSiteIds.map(async (sid) => {
+                const payload = await apiFetch<LinkedSitePlan | null>(
+                  `/director/sites/${sid}/week-plan?week=${encodeURIComponent(weekIso)}&scope=auto`,
+                  {
+                    cache: "no-store" as RequestCache,
+                  },
+                );
+                return [sid, (payload && typeof payload === "object" ? payload : {}) as LinkedSitePlan] as const;
+              }),
+            );
+            const refreshedPlans = Object.fromEntries(refreshedEntries);
+            const nextPlans = buildPersistableLinkedPlans({
+              ...persistablePlans,
+              ...refreshedPlans,
+            });
+            const nextActiveAltIndex = Math.max(0, Number(mem?.activeAltIndex || 0));
+            console.warn("[planning-v2][multi-site][persist][refreshed-auto-plans]", {
+              siteId: String(siteId),
+              weekIso,
+              activeIdx: nextActiveAltIndex,
+              savedSiteIds: persistedSiteIds,
+              beforeAltCounts: linkedPlansAltCounts(persistablePlans),
+              refreshedAltCounts: linkedPlansAltCounts(refreshedPlans),
+              afterAltCounts: linkedPlansAltCounts(nextPlans),
+            });
+            saveLinkedPlansToMemory(weekStart, nextPlans, nextActiveAltIndex);
+            seenLinkedAlternativeSnapshotsRef.current = buildSeenLinkedAlternativeSnapshots(nextPlans);
+          } catch {
+            /* ignore */
+          }
         }
         return;
       }
@@ -908,6 +1222,31 @@ export function usePlanningV2PlanController({
           let altPulls: PlanningV2PullsMap = {};
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            const maxShiftOverages = linkedSitePlansMaxShiftOverages(plans, workersRef.current);
+            if (maxShiftOverages.length > 0) {
+              const existing = readLinkedPlansFromMemory(weekStart);
+              console.warn("[planning-v2][multi-site][append][skip-over-max][base-event]", {
+                siteId: String(siteId),
+                weekIso,
+                eventIndex: evt.index ?? null,
+                appendExistingAlternativesCount,
+                currentDraftAlternatives: draftAlternativesRef.current.length,
+                memoryAltCounts: linkedPlansAltCounts(existing?.plansBySite),
+                overages: maxShiftOverages,
+              });
+              return false;
+            }
+            const linkedSnap = linkedSitePlansSnapshot(plans);
+            if (dedupeAlternatives && linkedSnap && seenLinkedAlternativeSnapshotsRef.current.has(linkedSnap)) {
+              console.warn("[planning-v2][multi-site][append][skip-duplicate][base-event]", {
+                siteId: String(siteId),
+                weekIso,
+                eventIndex: evt.index ?? null,
+                appendExistingAlternativesCount,
+                currentDraftAlternatives: draftAlternativesRef.current.length,
+              });
+              return false;
+            }
             const existing = readLinkedPlansFromMemory(weekStart);
             const merged: Record<string, LinkedSitePlan> = { ...(existing?.plansBySite || {}) };
             let mergedChanged = false;
@@ -927,11 +1266,50 @@ export function usePlanningV2PlanController({
               mergedChanged = true;
             }
             if (mergedChanged) {
-              saveLinkedPlansToMemory(weekStart, merged, Number(existing?.activeAltIndex || 0));
+              const pruned = pruneLinkedPlansOverMaxShifts(merged, workersRef.current);
+              if (pruned.dropped.length > 0) {
+                console.warn("[planning-v2][multi-site][append][prune-memory-over-max][base-event]", {
+                  siteId: String(siteId),
+                  weekIso,
+                  eventIndex: evt.index ?? null,
+                  appendExistingAlternativesCount,
+                  beforeAltCounts: linkedPlansAltCounts(merged),
+                  afterAltCounts: linkedPlansAltCounts(pruned.plansBySite),
+                  dropped: pruned.dropped.slice(-10),
+                });
+              }
+              saveLinkedPlansToMemory(weekStart, pruned.plansBySite, Number(existing?.activeAltIndex || 0));
+              const prunedCurrentPlan = pruned.plansBySite[String(siteId)];
+              if (prunedCurrentPlan) {
+                const beforeCurrentAltCount = Array.isArray(existing?.plansBySite?.[String(siteId)]?.alternatives)
+                  ? existing?.plansBySite?.[String(siteId)]?.alternatives?.length || 0
+                  : 0;
+                const afterCurrentAltCount = Array.isArray(prunedCurrentPlan.alternatives)
+                  ? prunedCurrentPlan.alternatives.length
+                  : 0;
+                draftAlternativesRef.current = normalizeDraftAlternatives(
+                  (Array.isArray(prunedCurrentPlan.alternatives) ? prunedCurrentPlan.alternatives : []).map((assignments, idx) => ({
+                    assignments,
+                    pulls:
+                      ((Array.isArray(prunedCurrentPlan.alternative_pulls) ? prunedCurrentPlan.alternative_pulls[idx] : {}) ||
+                        {}) as PlanningV2PullsMap,
+                  })),
+                );
+                if (afterCurrentAltCount > beforeCurrentAltCount) {
+                  appendUniqueCountRef.current += 1;
+                  if (appendMode) {
+                    setMoreAlternativesAvailable(true);
+                  }
+                }
+                scheduleAlternativesFlush();
+              }
+              if (dedupeAlternatives && linkedSnap) {
+                seenLinkedAlternativeSnapshotsRef.current.add(linkedSnap);
+              }
             }
             const curEvent = plans[String(siteId)];
             if (curEvent?.assignments && typeof curEvent.assignments === "object") {
-              altAssignments = curEvent.assignments as Record<string, Record<string, string[][]>>;
+              altAssignments = appendMode ? null : curEvent.assignments as Record<string, Record<string, string[][]>>;
               altPulls =
                 curEvent.pulls && typeof curEvent.pulls === "object"
                   ? (curEvent.pulls as PlanningV2PullsMap)
@@ -970,6 +1348,33 @@ export function usePlanningV2PlanController({
           let altPulls: PlanningV2PullsMap = {};
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            const maxShiftOverages = appendMode ? linkedSitePlansMaxShiftOverages(plans, workersRef.current) : [];
+            if (maxShiftOverages.length > 0) {
+              const existing = readLinkedPlansFromMemory(weekStart);
+              console.warn("[planning-v2][multi-site][append][skip-over-max][alternative-event]", {
+                siteId: String(siteId),
+                weekIso,
+                eventIndex: evt.index ?? null,
+                altSlot,
+                appendExistingAlternativesCount,
+                currentDraftAlternatives: draftAlternativesRef.current.length,
+                memoryAltCounts: linkedPlansAltCounts(existing?.plansBySite),
+                overages: maxShiftOverages,
+              });
+              return false;
+            }
+            const linkedSnap = linkedSitePlansSnapshot(plans);
+            if (dedupeAlternatives && linkedSnap && seenLinkedAlternativeSnapshotsRef.current.has(linkedSnap)) {
+              console.warn("[planning-v2][multi-site][append][skip-duplicate][alternative-event]", {
+                siteId: String(siteId),
+                weekIso,
+                eventIndex: evt.index ?? null,
+                altSlot,
+                appendExistingAlternativesCount,
+                currentDraftAlternatives: draftAlternativesRef.current.length,
+              });
+              return false;
+            }
             const existing = readLinkedPlansFromMemory(weekStart);
             const merged: Record<string, LinkedSitePlan> = { ...(existing?.plansBySite || {}) };
             let mergedChanged = false;
@@ -1010,11 +1415,51 @@ export function usePlanningV2PlanController({
               }
             }
             if (mergedChanged) {
-              saveLinkedPlansToMemory(weekStart, merged, Number(existing?.activeAltIndex || 0));
+              const pruned = pruneLinkedPlansOverMaxShifts(merged, workersRef.current);
+              if (pruned.dropped.length > 0) {
+                console.warn("[planning-v2][multi-site][append][prune-memory-over-max][alternative-event]", {
+                  siteId: String(siteId),
+                  weekIso,
+                  eventIndex: evt.index ?? null,
+                  altSlot,
+                  appendExistingAlternativesCount,
+                  beforeAltCounts: linkedPlansAltCounts(merged),
+                  afterAltCounts: linkedPlansAltCounts(pruned.plansBySite),
+                  dropped: pruned.dropped.slice(-10),
+                });
+              }
+              saveLinkedPlansToMemory(weekStart, pruned.plansBySite, Number(existing?.activeAltIndex || 0));
+              const prunedCurrentPlan = pruned.plansBySite[String(siteId)];
+              if (prunedCurrentPlan) {
+                const beforeCurrentAltCount = Array.isArray(existing?.plansBySite?.[String(siteId)]?.alternatives)
+                  ? existing?.plansBySite?.[String(siteId)]?.alternatives?.length || 0
+                  : 0;
+                const afterCurrentAltCount = Array.isArray(prunedCurrentPlan.alternatives)
+                  ? prunedCurrentPlan.alternatives.length
+                  : 0;
+                draftAlternativesRef.current = normalizeDraftAlternatives(
+                  (Array.isArray(prunedCurrentPlan.alternatives) ? prunedCurrentPlan.alternatives : []).map((assignments, idx) => ({
+                    assignments,
+                    pulls:
+                      ((Array.isArray(prunedCurrentPlan.alternative_pulls) ? prunedCurrentPlan.alternative_pulls[idx] : {}) ||
+                        {}) as PlanningV2PullsMap,
+                  })),
+                );
+                if (afterCurrentAltCount > beforeCurrentAltCount) {
+                  appendUniqueCountRef.current += 1;
+                  if (appendMode) {
+                    setMoreAlternativesAvailable(true);
+                  }
+                }
+                scheduleAlternativesFlush();
+              }
+              if (dedupeAlternatives && linkedSnap) {
+                seenLinkedAlternativeSnapshotsRef.current.add(linkedSnap);
+              }
             }
             const curEvent = plans[String(siteId)];
             if (curEvent?.assignments && typeof curEvent.assignments === "object") {
-              altAssignments = curEvent.assignments as Record<string, Record<string, string[][]>>;
+              altAssignments = appendMode ? null : curEvent.assignments as Record<string, Record<string, string[][]>>;
               altPulls =
                 curEvent.pulls && typeof curEvent.pulls === "object"
                   ? (curEvent.pulls as PlanningV2PullsMap)
@@ -1097,6 +1542,24 @@ export function usePlanningV2PlanController({
         setMoreAlternativesAvailable(false);
         toast.message("אין חלופות חדשות נוספות");
       }
+      if (sawPlanToPersist) {
+        writeAlternativesUnlockedToSession(weekIso, siteId);
+        setAlternativesUnlockNonce((n) => n + 1);
+        try {
+          await persistGeneratedAutoDraftToServer();
+          await reloadWeekPlan({ silent: true });
+          // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
+          // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
+          draftAssignmentsRef.current = null;
+          draftPullsRef.current = {};
+          draftAlternativesRef.current = [];
+          setDraftAssignments(null);
+          setDraftPulls(null);
+          setDraftAlternatives([]);
+        } catch (err) {
+          console.warn("[planning-v2] persist auto draft after generation:", err);
+        }
+      }
       setGenerationRunning(false);
       setReplaceGenerationUiClear(false);
       if (linkedSitesLength > 1) {
@@ -1105,26 +1568,6 @@ export function usePlanningV2PlanController({
       genBusyRef.current = false;
       abortRef.current = null;
       generationIdRef.current = null;
-      if (sawPlanToPersist) {
-        writeAlternativesUnlockedToSession(weekIso, siteId);
-        setAlternativesUnlockNonce((n) => n + 1);
-        void (async () => {
-          try {
-            await persistGeneratedAutoDraftToServer();
-            await reloadWeekPlan({ silent: true });
-            // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
-            // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
-            draftAssignmentsRef.current = null;
-            draftPullsRef.current = {};
-            draftAlternativesRef.current = [];
-            setDraftAssignments(null);
-            setDraftPulls(null);
-            setDraftAlternatives([]);
-          } catch (err) {
-            console.warn("[planning-v2] persist auto draft after generation:", err);
-          }
-        })();
-      }
     }
   }, [
     dedupeAlternatives,

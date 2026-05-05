@@ -3,8 +3,8 @@ import type { SiteSummary } from "../types";
 import type { PlanningV2PullsMap } from "../types";
 import {
   readLinkedPlansFromMemory,
-  resolveAssignmentsForAlternative,
-  resolvePullsForAlternative,
+  resolveAssignmentsForSharedAlternative,
+  resolvePullsForSharedAlternative,
   type LinkedSitePlan,
 } from "./multi-site-linked-memory";
 
@@ -98,8 +98,8 @@ export function computeLinkedSiteHoleEntries(opts: {
     const memoryPlan = linkedMemory?.plansBySite?.[String(linkedSite.id)] as
       | (LinkedSitePlan & { required_count?: number })
       | undefined;
-    const planAssignments = memoryPlan ? resolveAssignmentsForAlternative(memoryPlan, activeAltIndex) : null;
-    const planPulls = memoryPlan ? resolvePullsForAlternative(memoryPlan, activeAltIndex) : null;
+    const planAssignments = memoryPlan ? resolveAssignmentsForSharedAlternative(memoryPlan, activeAltIndex) : null;
+    const planPulls = memoryPlan ? resolvePullsForSharedAlternative(memoryPlan, activeAltIndex) : null;
     const assigned = planAssignments
       ? countAssignedCellsForLinkedHoles(planAssignments, planPulls)
       : typeof linkedSite.assigned_count === "number"

@@ -1902,6 +1902,50 @@ def _enforce_linked_global_caps_on_site_payloads(
     return normalized_payloads
 
 
+def _count_assignments_in_grid(assignments: dict | None) -> int:
+    total = 0
+    if not isinstance(assignments, dict):
+        return 0
+    for shifts_map in assignments.values():
+        if not isinstance(shifts_map, dict):
+            continue
+        for per_station in shifts_map.values():
+            if not isinstance(per_station, list):
+                continue
+            for cell in per_station:
+                if not isinstance(cell, list):
+                    continue
+                for raw_name in cell:
+                    if str(raw_name or "").strip():
+                        total += 1
+    return total
+
+
+def _refresh_site_plan_assigned_count(site_plan: dict) -> None:
+    if not isinstance(site_plan, dict):
+        return
+    base_total = _count_assignments_in_grid(site_plan.get("assignments"))
+    pulls_total = _pulls_count(site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {})
+    site_plan["assigned_count"] = max(0, base_total - pulls_total)
+
+
+def _enforce_linked_global_caps_on_site_plans(
+    db: Session,
+    linked_site_ids: list[int],
+    week_iso: str,
+    site_plans: dict[str, dict],
+) -> dict[str, dict]:
+    normalized_site_plans = _enforce_linked_global_caps_on_site_payloads(
+        db,
+        linked_site_ids,
+        week_iso,
+        site_plans,
+    )
+    for site_plan in normalized_site_plans.values():
+        _refresh_site_plan_assigned_count(site_plan)
+    return normalized_site_plans
+
+
 def _generate_multi_site_memory_plans(
     db: Session,
     director_id: int,
@@ -1967,6 +2011,12 @@ def _generate_multi_site_memory_plans(
         for site_id in context["connected_site_ids"]
         if site_id in context["sites_by_id"]
     ]
+    filled_base_site_plans = _enforce_linked_global_caps_on_site_plans(
+        db,
+        context["connected_site_ids"],
+        week_iso,
+        filled_base_site_plans,
+    )
     return {
         "root_site_id": root_site_id,
         "linked_sites": linked_sites,
@@ -2352,6 +2402,12 @@ def _run_auto_planning_for_director(
                             pulls_limit=pulls_limit,
                             pulls_limits_by_site=pulls_limits_by_site,
                         )
+                    site_plans = _enforce_linked_global_caps_on_site_plans(
+                        db,
+                        linked_ids,
+                        target_week_iso,
+                        site_plans,
+                    )
                     for linked_sid in linked_ids:
                         linked_site = sites_by_id.get(linked_sid)
                         if not linked_site:
@@ -4115,6 +4171,12 @@ def ai_generate_linked_planning(
             pulls_limit=payload.pulls_limit if payload else None,
             pulls_limits_by_site=pulls_limits_by_site or None,
         )
+        result["site_plans"] = _enforce_linked_global_caps_on_site_plans(
+            db,
+            context["connected_site_ids"],
+            week_iso,
+            result.get("site_plans") or {},
+        )
         pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
         if pulls_limit is not None or pulls_limits_by_site:
             site_plans = result.get("site_plans") or {}
@@ -4223,12 +4285,13 @@ async def ai_generate_linked_planning_stream(
     eff_time, eff_num_alts = _clamp_generation_budget(eff_time, eff_num_alts, linked=True)
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
     eff_pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
+    week_iso = _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now())
 
     context = _build_multi_site_generation_context(
         db,
         user.id,
         site_id,
-        _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now()),
+        week_iso,
         weekly_availability=(payload.weekly_availability or {}) if payload else None,
         exclude_days=payload.exclude_days if payload else None,
         fixed_assignments=payload.fixed_assignments if payload else None,
@@ -4345,6 +4408,12 @@ async def ai_generate_linked_planning_stream(
                                     pulls_limit=eff_pulls_limit,
                                     pulls_limits_by_site=eff_pulls_limits_by_site or None,
                                 )
+                            split_site_plans = _enforce_linked_global_caps_on_site_plans(
+                                db,
+                                context["connected_site_ids"],
+                                week_iso,
+                                split_site_plans,
+                            )
                             if eff_pulls_limit is not None or eff_pulls_limits_by_site:
                                 if not split_site_plans:
                                     continue

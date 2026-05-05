@@ -1,9 +1,10 @@
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import { resolveMaxShifts } from "@/lib/max-shifts";
 import { workerAdjustedWeeklyTotalAcrossLinkedSites } from "./assignments-summary-math";
 import type { ManualDragSource } from "./planning-v2-manual-drop";
 import {
   readLinkedPlansFromMemory,
-  resolveAssignmentsForAlternative,
+  resolveAssignmentsForSharedAlternative,
 } from "./multi-site-linked-memory";
 
 const DAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
@@ -325,7 +326,7 @@ function hasWorkerAssignmentOnOtherLinkedSite(
   for (const linkedSiteId of linkedSiteIds) {
     if (String(linkedSiteId) === String(currentSiteId)) continue;
     const plan = linkedMemory?.plansBySite?.[String(linkedSiteId)];
-    const asg = plan ? resolveAssignmentsForAlternative(plan, activeAltIndex) : null;
+    const asg = plan ? resolveAssignmentsForSharedAlternative(plan, activeAltIndex) : null;
     const shiftsMap = asg?.[dayKey] || {};
     for (const candidateShiftName of Object.keys(shiftsMap)) {
       const matches =
@@ -635,7 +636,10 @@ export function analyzeManualSlotDrop(ctx: {
   }
 
   if (!ctx.flags.forceMaxShifts && w) {
-    const maxShifts = Number((w as unknown as { max_shifts?: number }).max_shifts ?? w.maxShifts ?? 0);
+    const maxShifts = resolveMaxShifts(
+      (w as unknown as { max_shifts?: number }).max_shifts,
+      w.maxShifts,
+    );
     if (Number.isFinite(maxShifts) && maxShifts > 0) {
       const total = workerAdjustedWeeklyTotalAcrossLinkedSites(
         ctx.workers,
@@ -646,6 +650,17 @@ export function analyzeManualSlotDrop(ctx: {
         ctx.pulls ?? null,
       );
       if (total > Math.trunc(maxShifts)) {
+        console.warn("[planning-v2][multi-site][max-shifts][manual-drop] assignment exceeds worker max_shifts", {
+          siteId: String(ctx.siteId),
+          weekIso: ctx.weekStart.toISOString().slice(0, 10),
+          workerName: trimmed,
+          total,
+          maxShifts: Math.trunc(maxShifts),
+          linkedSiteIds: Array.isArray(w.linkedSiteIds) ? w.linkedSiteIds : [],
+          dayKey: ctx.dayKey,
+          shiftName: ctx.shiftName,
+          stationIndex: ctx.stationIndex,
+        });
         return { action: "confirm_max_shifts", maxShifts: Math.trunc(maxShifts), total };
       }
     }
