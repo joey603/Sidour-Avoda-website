@@ -2079,6 +2079,28 @@ export function usePlanningV2PlanController({
     setIsManual(true);
   }, [site]);
 
+  const setIsManualPreservingCurrentGrid = useCallback(
+    (next: boolean) => {
+      if (!next) {
+        setIsManual(false);
+        return;
+      }
+      const assignments = displayAssignments && typeof displayAssignments === "object"
+        ? (JSON.parse(JSON.stringify(displayAssignments)) as Record<string, Record<string, string[][]>>)
+        : buildEmptyAssignmentsForSite(site);
+      const pulls = displayPulls && typeof displayPulls === "object"
+        ? (JSON.parse(JSON.stringify(displayPulls)) as PlanningV2PullsMap)
+        : {};
+      setDraftAssignments(assignments);
+      setDraftPulls(pulls);
+      setDraftAlternatives([]);
+      setDraftFixedAssignmentsSnapshot(null);
+      setSelectedAlternativeIndex(0);
+      setIsManual(true);
+    },
+    [displayAssignments, displayPulls, site],
+  );
+
   const resetManualStation = useCallback(
     (stationIdx: number) => {
       setDraftPulls((prev) => {
@@ -2181,7 +2203,7 @@ export function usePlanningV2PlanController({
     setAutoPullsLimit: setAutoPullsLimitPersisted,
     autoPullsEnabled,
     isManual,
-    setIsManual,
+    setIsManual: setIsManualPreservingCurrentGrid,
     selectedAlternativeIndex: safeAlternativeIndex,
     setSelectedAlternativeIndex: setSelectedAlternativeIndexSynced,
     alternativeCount,
