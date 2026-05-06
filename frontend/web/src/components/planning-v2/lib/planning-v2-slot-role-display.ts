@@ -173,7 +173,6 @@ export function alignNamesToRoleSlots(
         .filter(Boolean),
     ),
   );
-  const roleRank = new Map<string, number>(roleOrder.map((roleName, idx) => [roleName, idx]));
   const inferRole = (entry: (typeof entries)[number]): string | null => {
     if (entry.resolvedRole) return entry.resolvedRole;
     for (const roleName of roleOrder) {
@@ -182,18 +181,31 @@ export function alignNamesToRoleSlots(
     return null;
   };
 
-  const sorted = [...entries].sort((a, b) => {
-    const roleA = inferRole(a);
-    const roleB = inferRole(b);
-    const rankA = roleA && roleRank.has(roleA) ? (roleRank.get(roleA) as number) : Number.MAX_SAFE_INTEGER;
-    const rankB = roleB && roleRank.has(roleB) ? (roleRank.get(roleB) as number) : Number.MAX_SAFE_INTEGER;
-    if (rankA !== rankB) return rankA - rankB;
-    return a.originalIndex - b.originalIndex;
-  });
-
   const out = Array.from({ length: targetLen }, () => "");
-  for (let idx = 0; idx < sorted.length; idx++) {
-    out[idx] = sorted[idx].name;
+  const leftovers: typeof entries = [];
+
+  for (const entry of entries) {
+    const role = inferRole(entry);
+    const targetIndex = role
+      ? roleHints.findIndex(
+          (hint, idx) => !out[idx] && String(hint || "").trim() === role,
+        )
+      : -1;
+    if (targetIndex >= 0) {
+      out[targetIndex] = entry.name;
+    } else {
+      leftovers.push(entry);
+    }
+  }
+
+  for (const entry of leftovers) {
+    if (!out[entry.originalIndex]) {
+      out[entry.originalIndex] = entry.name;
+      continue;
+    }
+    const nextEmpty = out.findIndex((name) => !String(name || "").trim());
+    if (nextEmpty >= 0) out[nextEmpty] = entry.name;
+    else out.push(entry.name);
   }
   return out;
 }
