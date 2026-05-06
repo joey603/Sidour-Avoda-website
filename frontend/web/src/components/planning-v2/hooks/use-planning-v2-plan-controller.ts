@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
-import { DAY_COLS, getRequiredFor, isDayActive, buildEmptyAssignmentsForSite, shiftNamesFromSite } from "../lib/station-grid-helpers";
-import { roleRequirementsForStation } from "../lib/planning-v2-manual-full-drop";
+import { buildEmptyAssignmentsForSite, shiftNamesFromSite } from "../lib/station-grid-helpers";
 import type { V2WeekPlanData } from "./use-planning-v2-week-plan";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import {
@@ -171,162 +170,6 @@ function linkedSitePlansSnapshot(
   } catch {
     return "";
   }
-}
-
-function normalizeRoleSlotDebugValue(value: unknown): string {
-  return String(value || "")
-    .normalize("NFKC")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-function buildRoleSlotDebugRows(args: {
-  site: SiteSummary | null;
-  assignments: Record<string, Record<string, string[][]>> | null | undefined;
-  workers: PlanningWorker[];
-}) {
-  const stations = (Array.isArray(args.site?.config?.stations) ? args.site?.config?.stations : []) as any[];
-  const shiftNames = shiftNamesFromSite(args.site);
-  const rows: Array<{
-    visualOrder: number;
-    cellKey: string;
-    dayKey: string;
-    dayLabel: string;
-    shiftName: string;
-    stationIndex: number;
-    stationName: string;
-    slotIndex: number;
-    expectedRole: string;
-    assignedName: string;
-    workerRoles: string[];
-    workerMatchesExpectedRole: boolean | null;
-    rawCell: string[];
-  }> = [];
-  let visualOrder = 0;
-  stations.forEach((station, stationIndex) => {
-    shiftNames.forEach((shiftName) => {
-      DAY_COLS.forEach((day) => {
-        const required = getRequiredFor(station, shiftName, day.key);
-        if (!isDayActive(station, day.key) || required <= 0) return;
-        const roleReq = roleRequirementsForStation(station, shiftName, day.key);
-        const expectedRoles = Object.entries(roleReq).flatMap(([roleName, count]) =>
-          Array.from({ length: Math.max(0, Number(count || 0)) }, () => String(roleName)),
-        );
-        if (expectedRoles.length === 0) return;
-        const rawCell = Array.isArray(args.assignments?.[day.key]?.[shiftName]?.[stationIndex])
-          ? (args.assignments?.[day.key]?.[shiftName]?.[stationIndex] || []).map((name) => String(name || ""))
-          : [];
-        expectedRoles.forEach((expectedRole, slotIndex) => {
-          const assignedName = String(rawCell[slotIndex] || "").trim();
-          const worker = args.workers.find((w) => String(w.name || "").trim() === assignedName);
-          const workerRoles = Array.isArray(worker?.roles) ? worker.roles.map((role) => String(role || "")) : [];
-          const expectedRoleNorm = normalizeRoleSlotDebugValue(expectedRole);
-          const workerMatchesExpectedRole = assignedName
-            ? workerRoles.some((role) => normalizeRoleSlotDebugValue(role) === expectedRoleNorm)
-            : null;
-          rows.push({
-            visualOrder,
-            cellKey: `${day.key}|${shiftName}|${stationIndex}|${slotIndex}`,
-            dayKey: day.key,
-            dayLabel: day.label,
-            shiftName,
-            stationIndex,
-            stationName: String(station?.name || `עמדה ${stationIndex + 1}`),
-            slotIndex,
-            expectedRole,
-            assignedName,
-            workerRoles,
-            workerMatchesExpectedRole,
-            rawCell,
-          });
-          visualOrder += 1;
-        });
-      });
-    });
-  });
-  return rows;
-}
-
-function logPlanningV2RoleSlotOrder(args: {
-  label: string;
-  siteId: string | number;
-  weekIso: string;
-  mode: "replace" | "append";
-  linked: boolean;
-  site: SiteSummary | null;
-  assignments: Record<string, Record<string, string[][]>> | null | undefined;
-  workers: PlanningWorker[];
-  source: string;
-  eventIndex?: unknown;
-}) {
-  if (typeof console === "undefined") return;
-  const rows = buildRoleSlotDebugRows({
-    site: args.site,
-    assignments: args.assignments,
-    workers: args.workers,
-  });
-  const emptyRows = rows.filter((row) => !row.assignedName);
-  const filledRows = rows.filter((row) => !!row.assignedName);
-  const mismatchedRows = rows.filter(
-    (row) => row.assignedName && row.workerMatchesExpectedRole === false,
-  );
-  const toCompactRow = (row: (typeof rows)[number]) => ({
-    order: row.visualOrder,
-    cellKey: row.cellKey,
-    day: row.dayKey,
-    shift: row.shiftName,
-    stationIndex: row.stationIndex,
-    station: row.stationName,
-    slotIndex: row.slotIndex,
-    expectedRole: row.expectedRole,
-    assignedName: row.assignedName || "(empty)",
-    workerRoles: [...row.workerRoles],
-    matchesExpected: row.workerMatchesExpectedRole,
-    rawCell: [...row.rawCell],
-  });
-  const tableRows = rows.map((row) => ({
-    order: row.visualOrder,
-    cellKey: row.cellKey,
-    day: row.dayKey,
-    shift: row.shiftName,
-    stationIndex: row.stationIndex,
-    station: row.stationName,
-    slotIndex: row.slotIndex,
-    expectedRole: row.expectedRole,
-    assignedName: row.assignedName || "(empty)",
-    workerRoles: row.workerRoles.join(", "),
-    matchesExpected: row.workerMatchesExpectedRole,
-    rawCell: JSON.stringify(row.rawCell),
-  }));
-  const snapshot = {
-    label: args.label,
-    context: {
-      siteId: String(args.siteId),
-      weekIso: args.weekIso,
-      mode: args.mode,
-      linked: args.linked,
-      source: args.source,
-      eventIndex: args.eventIndex ?? null,
-      roleSlotsCount: rows.length,
-      emptyRoleSlotsCount: emptyRows.length,
-      filledRoleSlotsCount: filledRows.length,
-      mismatchedRoleSlotsCount: mismatchedRows.length,
-    },
-    emptyRoleSlotsInOrder: emptyRows.map(toCompactRow),
-    filledRoleSlotsInOrder: filledRows.map(toCompactRow),
-    mismatchedRoleSlotsInOrder: mismatchedRows.map(toCompactRow),
-    allRoleSlotsInOrder: rows.map(toCompactRow),
-  };
-  console.groupCollapsed(`[planning-v2][role-slots][${args.label}]`);
-  console.log("context", snapshot.context);
-  console.log("emptyRoleSlotsInOrder", snapshot.emptyRoleSlotsInOrder);
-  console.log("filledRoleSlotsInOrder", snapshot.filledRoleSlotsInOrder);
-  console.log("mismatchedRoleSlotsInOrder", snapshot.mismatchedRoleSlotsInOrder);
-  console.table(tableRows);
-  console.log("roleSlotsFullRows", snapshot.allRoleSlotsInOrder);
-  console.log("copyPasteRoleSlotDebug", JSON.stringify(snapshot));
-  console.groupEnd();
 }
 
 function buildSeenLinkedAlternativeSnapshots(
@@ -1139,18 +982,6 @@ export function usePlanningV2PlanController({
           weekly_availability,
         };
 
-    logPlanningV2RoleSlotOrder({
-      label: "before-generate",
-      siteId,
-      weekIso,
-      mode,
-      linked,
-      site,
-      assignments: fixedAssignments ?? null,
-      workers: workersRef.current,
-      source: fixedAssignments ? "fixed_assignments" : "empty_before_generation",
-    });
-
     let idleWatch: number | null = null;
     let noResultWatch: number | null = null;
     let idleAutoClosed = false;
@@ -1367,18 +1198,6 @@ export function usePlanningV2PlanController({
               const nextAsg = cur.assignments as Record<string, Record<string, string[][]>>;
               const nextPulls =
                 cur.pulls && typeof cur.pulls === "object" ? (cur.pulls as PlanningV2PullsMap) : {};
-              logPlanningV2RoleSlotOrder({
-                label: "after-base-event",
-                siteId,
-                weekIso,
-                mode,
-                linked,
-                site,
-                assignments: nextAsg,
-                workers: workersRef.current,
-                source: "linked_base_event_current_site",
-                eventIndex: evt.index,
-              });
               draftAssignmentsRef.current = nextAsg;
               draftPullsRef.current = nextPulls;
               draftAlternativesRef.current = [];
@@ -1393,18 +1212,6 @@ export function usePlanningV2PlanController({
           } else if (!linked && evt.assignments && typeof evt.assignments === "object") {
             const nextAsg = evt.assignments as Record<string, Record<string, string[][]>>;
             const nextPulls = evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {};
-            logPlanningV2RoleSlotOrder({
-              label: "after-base-event",
-              siteId,
-              weekIso,
-              mode,
-              linked,
-              site,
-              assignments: nextAsg,
-              workers: workersRef.current,
-              source: "single_site_base_event",
-              eventIndex: evt.index,
-            });
             draftAssignmentsRef.current = nextAsg;
             draftPullsRef.current = nextPulls;
             draftAlternativesRef.current = [];
