@@ -420,49 +420,53 @@ def update_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    user = db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+
     full_name = _WHITESPACE_RE.sub(" ", str(payload.full_name or "").strip())
     if not full_name:
         raise HTTPException(status_code=400, detail="Nom requis")
 
-    current_user.full_name = full_name
+    user.full_name = full_name
 
-    if current_user.role == UserRole.director:
+    if user.role == UserRole.director:
         email = str(payload.email or "").strip().lower() or None
         if email:
             existing = (
                 db.query(User)
-                .filter(func.lower(User.email) == email, User.id != current_user.id)
+                .filter(func.lower(User.email) == email, User.id != user.id)
                 .first()
             )
             if existing:
                 raise HTTPException(status_code=400, detail="Email déjà enregistré")
-        current_user.email = email
+        user.email = email
     else:
-        phone = _normalize_phone(payload.phone)
+        phone = _normalize_phone(payload.phone) if payload.phone is not None else _normalize_phone(user.phone)
         if not phone:
             raise HTTPException(status_code=400, detail="Téléphone requis")
         existing = (
             db.query(User)
-            .filter(User.phone == phone, User.id != current_user.id)
+            .filter(User.phone == phone, User.id != user.id)
             .first()
         )
         if existing:
             raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
-        current_user.phone = phone
-        linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == current_user.id).all()
+        user.phone = phone
+        linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == user.id).all()
         for row in linked_rows:
             row.name = full_name
             row.phone = phone
 
     db.commit()
-    db.refresh(current_user)
+    db.refresh(user)
     return UserOut(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name,
-        role=current_user.role.value,
-        phone=current_user.phone,
-        director_code=getattr(current_user, "director_code", None),
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        phone=user.phone,
+        director_code=getattr(user, "director_code", None),
     )
 
 
@@ -472,9 +476,12 @@ def change_password(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not pwd_context.verify(payload.current_password, current_user.hashed_password):
+    user = db.get(User, current_user.id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Utilisateur introuvable")
+    if not pwd_context.verify(payload.current_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
-    current_user.hashed_password = pwd_context.hash(payload.new_password)
+    user.hashed_password = pwd_context.hash(payload.new_password)
     db.commit()
     return {"ok": True}
 
