@@ -668,12 +668,31 @@ export default function PlanningPage() {
     after: { name: string; start: string; end: string };
     roleName?: string | null; // si roles: les 2 travailleurs doivent partager ce rôle
   };
+  const normPullWorkerName = (value: unknown) =>
+    String(value || "")
+      .normalize("NFKC")
+      .trim()
+      .replace(/\s+/g, " ");
+  const isSelfPullEntry = (entry: PullEntry | null | undefined): boolean => {
+    const beforeName = normPullWorkerName(entry?.before?.name);
+    const afterName = normPullWorkerName(entry?.after?.name);
+    return !!beforeName && beforeName === afterName;
+  };
+  const sanitizePullsMap = (pulls: Record<string, PullEntry> | null | undefined): Record<string, PullEntry> => {
+    const out: Record<string, PullEntry> = {};
+    Object.entries(pulls || {}).forEach(([key, entry]) => {
+      if (!entry || typeof entry !== "object") return;
+      if (isSelfPullEntry(entry as PullEntry)) return;
+      out[key] = entry as PullEntry;
+    });
+    return out;
+  };
   const [pullsByHoleKey, setPullsByHoleKey] = useState<Record<string, PullEntry>>({});
   const displayedPullsByHoleKey = useMemo(
-    () => (
+    () => sanitizePullsMap(
       isSavedMode && !editingSaved && savedWeekPlan?.pulls && typeof savedWeekPlan.pulls === "object"
         ? (savedWeekPlan.pulls as Record<string, PullEntry>)
-        : pullsByHoleKey
+        : pullsByHoleKey,
     ),
     [isSavedMode, editingSaved, savedWeekPlan, pullsByHoleKey],
   );
@@ -2716,6 +2735,7 @@ export default function PlanningPage() {
     if (typeof window === "undefined") return;
     try {
       const existing = readLinkedPlansFromMemory(start);
+      const replaceCandidatesFromIncoming = source === "sse-base";
       const existingCountsBySite = summarizeLinkedMemoryCandidates(existing);
       const existingMaxCandidateCount = Math.max(0, ...Object.values(existingCountsBySite));
       const mergedPlansBySite = Object.fromEntries(
@@ -2736,8 +2756,12 @@ export default function PlanningPage() {
               ...(incomingPlan || existingPlan),
               assignments: incomingPlan?.assignments || existingPlan?.assignments,
               pulls: incomingPlan?.pulls || existingPlan?.pulls || {},
-              alternatives: incomingAlternatives.length >= existingAlternatives.length ? incomingAlternatives : existingAlternatives,
-              alternative_pulls: incomingAlternativePulls.length >= existingAlternativePulls.length ? incomingAlternativePulls : existingAlternativePulls,
+              alternatives: replaceCandidatesFromIncoming && incomingPlan
+                ? incomingAlternatives
+                : (incomingAlternatives.length >= existingAlternatives.length ? incomingAlternatives : existingAlternatives),
+              alternative_pulls: replaceCandidatesFromIncoming && incomingPlan
+                ? incomingAlternativePulls
+                : (incomingAlternativePulls.length >= existingAlternativePulls.length ? incomingAlternativePulls : existingAlternativePulls),
             },
           ];
         }),
@@ -4726,7 +4750,7 @@ export default function PlanningPage() {
       week: { startISO: isoPlanKey(start), endISO: isoPlanKey(end), label: `${formatHebDate(start)} — ${formatHebDate(end)}` },
       isManual: isManualPlan,
       assignments,
-      pulls,
+      pulls: sanitizePullsMap(pulls),
       workers: workersSnapshot,
     };
   }
@@ -10842,8 +10866,40 @@ export default function PlanningPage() {
                       const effectivePullsLimit: number | undefined =
                         typeof currentSitePullsValue === "number" ? currentSitePullsValue : undefined;
                       const pullsCountOf = (pulls: any) => (pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0);
-                      const exceedsPullsLimit = (pulls: any) =>
-                        effectivePullsLimit != null && pullsCountOf(pulls) > effectivePullsLimit;
+                      const doesNotMatchRequestedPullsCount = (pulls: any) =>
+                        effectivePullsLimit != null && pullsCountOf(pulls) !== effectivePullsLimit;
+                      const warnPullsCandidateReceived = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
+                        if (effectivePullsLimit == null) return;
+                        const receivedPulls = pullsCountOf(pulls);
+                        console.warn("[PLANNING][PULLS_FILTER] candidat reçu côté frontend", {
+                          scope,
+                          itemType,
+                          requestedPulls: effectivePullsLimit,
+                          receivedPulls,
+                          willReject: receivedPulls !== effectivePullsLimit,
+                          rejectReason: receivedPulls < effectivePullsLimit ? "too_few_pulls" : (receivedPulls > effectivePullsLimit ? "too_many_pulls" : null),
+                          siteId: currentSiteIdRef.current,
+                          eventIndex: details?.index,
+                          source: details?.source,
+                          generationId: details?.generation_id,
+                        });
+                      };
+                      const warnTooFewPulls = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
+                        if (effectivePullsLimit == null) return;
+                        const receivedPulls = pullsCountOf(pulls);
+                        if (receivedPulls >= effectivePullsLimit) return;
+                        // Log volontairement bruyant pour diagnostiquer les alternatives rejetées côté client.
+                        console.warn("[PLANNING][PULLS_FILTER] alternative/base rejetée: pas assez de משיכות", {
+                          scope,
+                          itemType,
+                          requestedPulls: effectivePullsLimit,
+                          receivedPulls,
+                          siteId: currentSiteIdRef.current,
+                          eventIndex: details?.index,
+                          source: details?.source,
+                          generationId: details?.generation_id,
+                        });
+                      };
                       if (linkedSites.length > 1) {
                         const linkedResp = await fetch(`${getApiBaseUrl()}/director/sites/${params.id}/ai-generate-linked/stream`, {
                           method: "POST",
@@ -10887,7 +10943,9 @@ export default function PlanningPage() {
                               }
                               if (evt?.type === "base" && evt?.site_plans && typeof evt.site_plans === "object") {
                                 const current = evt.site_plans[currentSiteIdRef.current];
-                                if (exceedsPullsLimit(current?.pulls)) {
+                                warnPullsCandidateReceived("linked", "base", current?.pulls, evt);
+                                if (doesNotMatchRequestedPullsCount(current?.pulls)) {
+                                  warnTooFewPulls("linked", "base", current?.pulls, evt);
                                   continue;
                                 }
                                 const existingMemory = readLinkedPlansFromMemory(weekStart);
@@ -10901,12 +10959,8 @@ export default function PlanningPage() {
                                         ...incomingPlan,
                                         assignments: incomingPlan.assignments,
                                         pulls: incomingPlan.pulls || {},
-                                        alternatives: Array.isArray(prevPlan?.alternatives)
-                                          ? prevPlan.alternatives
-                                          : (Array.isArray(incomingPlan.alternatives) ? incomingPlan.alternatives : []),
-                                        alternative_pulls: Array.isArray(prevPlan?.alternative_pulls)
-                                          ? prevPlan.alternative_pulls
-                                          : (Array.isArray(incomingPlan.alternative_pulls) ? incomingPlan.alternative_pulls : []),
+                                        alternatives: Array.isArray(incomingPlan.alternatives) ? incomingPlan.alternatives : [],
+                                        alternative_pulls: Array.isArray(incomingPlan.alternative_pulls) ? incomingPlan.alternative_pulls : [],
                                       },
                                     ];
                                   }),
@@ -10922,7 +10976,9 @@ export default function PlanningPage() {
                               } else if (evt?.type === "alternative" && evt?.site_plans && typeof evt.site_plans === "object") {
                                 armIdle();
                                 const currentIncomingPlan = (evt.site_plans as Record<string, LinkedSitePlan>)[currentSiteIdRef.current];
-                                if (exceedsPullsLimit(currentIncomingPlan?.pulls)) {
+                                warnPullsCandidateReceived("linked", "alternative", currentIncomingPlan?.pulls, evt);
+                                if (doesNotMatchRequestedPullsCount(currentIncomingPlan?.pulls)) {
+                                  warnTooFewPulls("linked", "alternative", currentIncomingPlan?.pulls, evt);
                                   continue;
                                 }
                                 const existingMemory = readLinkedPlansFromMemory(weekStart);
@@ -11110,7 +11166,9 @@ export default function PlanningPage() {
                             const jsonStr = frame.replace(/^data:\s*/, "");
                             const evt = JSON.parse(jsonStr);
                             if (evt?.type === "base") {
-                              if (exceedsPullsLimit(evt?.pulls)) {
+                              warnPullsCandidateReceived("single", "base", evt?.pulls, evt);
+                              if (doesNotMatchRequestedPullsCount(evt?.pulls)) {
+                                warnTooFewPulls("single", "base", evt?.pulls, evt);
                                 continue;
                               }
                               setPullsByHoleKey(evt.pulls || {});
@@ -11131,7 +11189,9 @@ export default function PlanningPage() {
                               armIdle();
                             } else if (evt?.type === "alternative") {
                               armIdle();
-                              if (exceedsPullsLimit(evt?.pulls)) {
+                              warnPullsCandidateReceived("single", "alternative", evt?.pulls, evt);
+                              if (doesNotMatchRequestedPullsCount(evt?.pulls)) {
+                                warnTooFewPulls("single", "alternative", evt?.pulls, evt);
                                 continue;
                               }
                               setAiPlan((prev) => {
@@ -12130,23 +12190,31 @@ export default function PlanningPage() {
             <div className="space-y-3">
               <div className="rounded-md border p-3 dark:border-zinc-700">
                 <div className="mb-2 text-sm font-medium">{pullsEditor.beforeName}</div>
-                {(pullsEditor.beforeOptions || []).length > 1 && (
-                  <div className="mb-3">
-                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (לפני)</div>
-                    <select
-                      value={pullsEditor.beforeName}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeName: e.target.value } : p))}
-                      size={Math.min(4, Math.max(2, (pullsEditor.beforeOptions || []).length))}
-                      className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
-                    >
-                      {(pullsEditor.beforeOptions || []).map((nm) => (
-                        <option key={nm} value={nm}>
-                          {nm}
-                        </option>
-                      ))}
-                    </select>
-      </div>
-        )}
+                {(() => {
+                  const beforeOptions = (pullsEditor.beforeOptions || []).filter(
+                    (nm) => normPullWorkerName(nm) !== normPullWorkerName(pullsEditor.afterName),
+                  );
+                  return beforeOptions.length > 1 ? (
+                    <div className="mb-3">
+                      <div className="mb-1 text-xs text-zinc-500">בחר עובד (לפני)</div>
+                      <select
+                        value={beforeOptions.includes(pullsEditor.beforeName) ? pullsEditor.beforeName : (beforeOptions[0] || "")}
+                        onChange={(e) => {
+                          const nextBefore = e.target.value;
+                          setPullsEditor((p) => (p ? { ...p, beforeName: nextBefore } : p));
+                        }}
+                        size={Math.min(4, Math.max(2, beforeOptions.length))}
+                        className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
+                      >
+                        {beforeOptions.map((nm) => (
+                          <option key={nm} value={nm}>
+                            {nm}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null;
+                })()}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-xs text-zinc-500">
                     התחלה
@@ -12171,23 +12239,31 @@ export default function PlanningPage() {
 
               <div className="rounded-md border p-3 dark:border-zinc-700">
                 <div className="mb-2 text-sm font-medium">{pullsEditor.afterName}</div>
-                {(pullsEditor.afterOptions || []).length > 1 && (
-                  <div className="mb-3">
-                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (אחרי)</div>
-                    <select
-                      value={pullsEditor.afterName}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterName: e.target.value } : p))}
-                      size={Math.min(4, Math.max(2, (pullsEditor.afterOptions || []).length))}
-                      className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
-                    >
-                      {(pullsEditor.afterOptions || []).map((nm) => (
-                        <option key={nm} value={nm}>
-                          {nm}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                {(() => {
+                  const afterOptions = (pullsEditor.afterOptions || []).filter(
+                    (nm) => normPullWorkerName(nm) !== normPullWorkerName(pullsEditor.beforeName),
+                  );
+                  return afterOptions.length > 1 ? (
+                    <div className="mb-3">
+                      <div className="mb-1 text-xs text-zinc-500">בחר עובד (אחרי)</div>
+                      <select
+                        value={afterOptions.includes(pullsEditor.afterName) ? pullsEditor.afterName : (afterOptions[0] || "")}
+                        onChange={(e) => {
+                          const nextAfter = e.target.value;
+                          setPullsEditor((p) => (p ? { ...p, afterName: nextAfter } : p));
+                        }}
+                        size={Math.min(4, Math.max(2, afterOptions.length))}
+                        className="w-full rounded-md border px-2 py-1 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900 overflow-y-auto"
+                      >
+                        {afterOptions.map((nm) => (
+                          <option key={nm} value={nm}>
+                            {nm}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null;
+                })()}
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-xs text-zinc-500">
                     התחלה
@@ -12325,7 +12401,7 @@ export default function PlanningPage() {
                   }
                   // Appliquer l'assignation: on AJOUTE une paire (avant+après) sans écraser le reste,
                   // pour permettre plusieurs משיכות dans une même case (si slots vides disponibles).
-                  if ((p.beforeName || "").trim() === (p.afterName || "").trim()) {
+                  if (normPullWorkerName(p.beforeName) === normPullWorkerName(p.afterName)) {
                     toast.error("שעות לא תקינות", { description: "בחר שני עובדים שונים" });
                     return;
                   }

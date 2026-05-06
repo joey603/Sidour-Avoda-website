@@ -1006,9 +1006,39 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
             return (day_idx + 1, 0)
         return (day_idx, shift_idx + 1)
 
-    def _has_same_worker_around_middle(day_idx: int, shift_idx: int, station_idx: int) -> bool:
-        if not _is_noon_shift_name(shifts[shift_idx]):
+    def guard_occurrence_used_by_pull(day_idx: int, shift_idx: int, station_idx: int, worker_name: str) -> bool:
+        worker_norm = _norm_name_local(worker_name)
+        if not worker_norm:
             return False
+        for pull_key, entry in pulls.items():
+            parts = str(pull_key or "").split("|")
+            if len(parts) < 4:
+                continue
+            pull_day_key = parts[0]
+            pull_shift_name = parts[1]
+            try:
+                pull_station_idx = int(parts[2])
+            except Exception:
+                continue
+            if pull_station_idx != station_idx:
+                continue
+            try:
+                pull_day_idx = days.index(pull_day_key)
+                pull_shift_idx = shifts.index(pull_shift_name)
+            except ValueError:
+                continue
+            pull_prev = prev_of(pull_day_idx, pull_shift_idx)
+            pull_next = next_of(pull_day_idx, pull_shift_idx)
+            entry_map = entry if isinstance(entry, dict) else {}
+            before_name = _norm_name_local(((entry_map.get("before") or {}) if isinstance(entry_map.get("before"), dict) else {}).get("name"))
+            after_name = _norm_name_local(((entry_map.get("after") or {}) if isinstance(entry_map.get("after"), dict) else {}).get("name"))
+            if before_name == worker_norm and pull_prev == (day_idx, shift_idx):
+                return True
+            if after_name == worker_norm and pull_next == (day_idx, shift_idx):
+                return True
+        return False
+
+    def _has_same_worker_around_middle(day_idx: int, shift_idx: int, station_idx: int) -> bool:
         prev_coord = prev_of(day_idx, shift_idx)
         next_coord = next_of(day_idx, shift_idx)
         if not prev_coord or not next_coord:
@@ -1017,7 +1047,7 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
         next_names = set(get_cell_names(days[next_coord[0]], shifts[next_coord[1]], station_idx))
         return bool(prev_names.intersection(next_names))
 
-    target_cells: list[tuple[tuple[int, str], int, int, str]] = []
+    target_cells: list[tuple[int, tuple[int, str], int, int, str]] = []
     for station_idx, station in enumerate(stations):
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}
@@ -1031,11 +1061,12 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
                 pull_priority = _pull_target_shift_priority(shift_name)
                 if _has_same_worker_around_middle(day_idx, shift_idx, station_idx):
                     pull_priority = (-1, pull_priority[1])
-                target_cells.append((pull_priority, station_idx, day_idx, shift_name))
+                crosses_day_boundary = int(prev_coord[0] != day_idx or next_coord[0] != day_idx)
+                target_cells.append((crosses_day_boundary, pull_priority, station_idx, day_idx, shift_name))
 
-    target_cells.sort(key=lambda item: (item[0], item[2], item[1]))
+    target_cells.sort(key=lambda item: (item[0], item[1], item[3], item[2]))
 
-    for _, station_idx, day_idx, shift_name in target_cells:
+    for _, _, station_idx, day_idx, shift_name in target_cells:
         if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
             break
         station = stations[station_idx]
@@ -1070,8 +1101,18 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
             pulled_before_prev = pulled_names_for(days[prev_prev[0]], shifts[prev_prev[1]]) if prev_prev else set()
             pulled_after_next = pulled_names_for(days[next_next[0]], shifts[next_next[1]]) if next_next else set()
 
-            before_candidates = [nm for nm in prev_names if nm not in used_in_cell and nm not in pulled_before_prev]
-            after_candidates = [nm for nm in next_names if nm not in used_in_cell and nm not in pulled_after_next]
+            before_candidates = [
+                nm for nm in prev_names
+                if nm not in used_in_cell
+                and nm not in pulled_before_prev
+                and not guard_occurrence_used_by_pull(prev_coord[0], prev_coord[1], station_idx, nm)
+            ]
+            after_candidates = [
+                nm for nm in next_names
+                if nm not in used_in_cell
+                and nm not in pulled_after_next
+                and not guard_occurrence_used_by_pull(next_coord[0], next_coord[1], station_idx, nm)
+            ]
             both_sides = {nm for nm in before_candidates if nm in set(after_candidates)}
             before_candidates = [nm for nm in before_candidates if nm not in both_sides]
             after_candidates = [nm for nm in after_candidates if nm not in both_sides]
@@ -1127,7 +1168,7 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
             set_cell_names(day_key, shift_name, station_idx, next_names)
 
     payload["assignments"] = assignments
-    payload["pulls"] = pulls
+    payload["pulls"] = _sanitize_pulls_map(pulls)
     return payload
 
 
@@ -2209,19 +2250,39 @@ def _enforce_role_requirements_on_site_plans(
 
 
 def _pulls_count(pulls: dict | None) -> int:
-    return len(pulls or {}) if isinstance(pulls, dict) else 0
+    return len(_sanitize_pulls_map(pulls))
+
+
+def _pull_entry_is_self_pull(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    before = entry.get("before") if isinstance(entry.get("before"), dict) else {}
+    after = entry.get("after") if isinstance(entry.get("after"), dict) else {}
+    before_name = _norm_name_local(before.get("name") if isinstance(before, dict) else None)
+    after_name = _norm_name_local(after.get("name") if isinstance(after, dict) else None)
+    return bool(before_name and before_name == after_name)
+
+
+def _sanitize_pulls_map(pulls: dict | None) -> dict:
+    if not isinstance(pulls, dict):
+        return {}
+    return {
+        str(key): entry
+        for key, entry in pulls.items()
+        if isinstance(entry, dict) and not _pull_entry_is_self_pull(entry)
+    }
 
 
 def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None) -> bool:
     if pulls_limit is None:
         return True
-    return _pulls_count(pulls) <= int(pulls_limit)
+    return _pulls_count(pulls) == int(pulls_limit)
 
 
 def _planning_limit_error_detail(pulls_limit: int) -> str:
     if int(pulls_limit) == 1:
-        return "לא נמצא תכנון עם עד משיכה אחת"
-    return f"לא נמצא תכנון עם עד {int(pulls_limit)} משיכות"
+        return "לא נמצא תכנון עם משיכה אחת"
+    return f"לא נמצא תכנון עם {int(pulls_limit)} משיכות"
 
 
 def _effective_auto_pulls_limit_for_site(

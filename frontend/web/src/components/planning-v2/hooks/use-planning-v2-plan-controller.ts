@@ -43,6 +43,31 @@ function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): n
   return Number.isFinite(n) ? n : undefined;
 }
 
+function pullsCount(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  return Object.keys(value as Record<string, unknown>).length;
+}
+
+function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null): boolean {
+  if (requestedCount == null) return true;
+  return pullsCount(pulls) === requestedCount;
+}
+
+function linkedPlansMatchRequestedPulls(
+  plans: Record<string, { pulls?: unknown }> | null | undefined,
+  siteId: string,
+  requestedCount: number | null,
+  pullsScope?: "current_only" | "all_sites",
+): boolean {
+  if (requestedCount == null) return true;
+  if (!plans || typeof plans !== "object") return false;
+  if (pullsScope === "current_only") {
+    return pullsMatchRequestedCount(plans[String(siteId)]?.pulls, requestedCount);
+  }
+  const entries = Object.values(plans);
+  return entries.length > 0 && entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount));
+}
+
 function adjustedAppendGenerationBudget(linked: boolean, existingAlternativesCount: number) {
   const baseNum = linked ? MULTI_SITE_GENERATION_NUM_ALTERNATIVES : SINGLE_SITE_GENERATION_NUM_ALTERNATIVES;
   const baseTime = linked ? MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS : SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS;
@@ -939,6 +964,7 @@ export function usePlanningV2PlanController({
 
     const weekly_availability = weeklyAvailabilityMapFromRows(workerRowsForTable);
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
+    const requestedPullsCount = typeof pulls_limit === "number" ? pulls_limit : null;
     const pulls_limits_by_site =
       linkedSitesLength > 1 && autoPullsEnabled && options?.pullsScope === "current_only"
         ? Object.fromEntries(
@@ -1168,6 +1194,14 @@ export function usePlanningV2PlanController({
         }
         lastSseEventAt = Date.now();
         if (evt.type === "base" && !appendMode) {
+          if (linked && evt.site_plans && typeof evt.site_plans === "object") {
+            const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+              return false;
+            }
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            return false;
+          }
           setReplaceGenerationUiClear(false);
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
@@ -1226,6 +1260,14 @@ export function usePlanningV2PlanController({
           return false;
         }
         if (evt.type === "base" && appendMode) {
+          if (linked && evt.site_plans && typeof evt.site_plans === "object") {
+            const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+              return false;
+            }
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            return false;
+          }
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
           let altAssignments: Record<string, Record<string, string[][]>> | null = null;
@@ -1351,6 +1393,14 @@ export function usePlanningV2PlanController({
           return false;
         }
         if (evt.type === "alternative") {
+          if (linked && evt.site_plans && typeof evt.site_plans === "object") {
+            const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+              return false;
+            }
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            return false;
+          }
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
           const altSlot = Math.max(0, Math.trunc(Number(evt.index || 0)) - 1);

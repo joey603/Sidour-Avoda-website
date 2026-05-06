@@ -59,7 +59,9 @@ function normWorkerName(value: string): string {
 }
 
 function planningV2PullEntryIsReal(e: PlanningV2PullEntry | undefined): boolean {
-  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
+  const beforeName = normWorkerName(String(e?.before?.name || ""));
+  const afterName = normWorkerName(String(e?.after?.name || ""));
+  return !!beforeName && !!afterName && beforeName !== afterName;
 }
 
 function truncateMobile6(value: unknown): string {
@@ -587,6 +589,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       const beforeName = String(entry?.before?.name || "").trim();
       const afterName = String(entry?.after?.name || "").trim();
       if (!beforeName || !afterName) return false;
+      if (normWorkerName(beforeName) === normWorkerName(afterName)) {
+        toast.error("לא ניתן ליצור משיכות", { description: "בחר שני עובדים שונים" });
+        return false;
+      }
 
       const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
       const oldEntry = nextPulls[key];
