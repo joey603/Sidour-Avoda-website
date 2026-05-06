@@ -110,7 +110,7 @@ type PlanControllerArgs = {
   weekPlanLoading: boolean;
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
-  reloadWeekPlan: (opts?: { silent?: boolean }) => void | Promise<void>;
+  reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
   linkedSitesLength: number;
   /** Sites du groupe (courant + liés) pour purger les טיוטות auto issues d’une ריצה depuis la liste sites. */
   weekPurgeSiteIds: number[];
@@ -1557,7 +1557,7 @@ export function usePlanningV2PlanController({
         setAlternativesUnlockNonce((n) => n + 1);
         try {
           await persistGeneratedAutoDraftToServer();
-          await reloadWeekPlan({ silent: true });
+          await reloadWeekPlan({ silent: true, preferredScope: "auto" });
           // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
           // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
           draftAssignmentsRef.current = null;

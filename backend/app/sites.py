@@ -501,12 +501,16 @@ def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> A
     )
 
 
-def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, list[str]], list[int]]:
+_WEEK_DAY_KEYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+
+def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, list[str]], list[int], bool]:
     """Extrait {jour: [משמרות]} et indices עמדה depuis l’override hebdo (_stations)."""
     if not isinstance(ovr, dict):
-        return {}, []
+        return {}, [], False
     avail: dict[str, list[str]] = {}
     station_allow: list[int] = []
+    has_station_override = "_stations" in ovr or "_station_indices" in ovr
     for day_key, shifts_list in ovr.items():
         sk = str(day_key or "")
         if sk in ("_stations", "_station_indices"):
@@ -520,10 +524,9 @@ def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, lis
         if sk.startswith("_"):
             continue
         if isinstance(shifts_list, list):
-            valid_shifts = [s for s in shifts_list if s]
-            if valid_shifts:
-                avail[sk] = valid_shifts
-    return avail, station_allow
+            # Une liste vide est significative: indisponible ce jour précis.
+            avail[sk] = [s for s in shifts_list if s]
+    return avail, station_allow, has_station_override
 
 
 def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, dict[str, list[str]]] | None) -> list[dict]:
@@ -531,13 +534,31 @@ def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, di
     workers: list[dict] = []
     for r in rows:
         ovr = overrides.get(r.name)
-        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
+        week_avail, week_station_allow, has_week_station_override = _weekly_override_avail_and_stations(
+            ovr if isinstance(ovr, dict) else None,
+        )
+        base_availability = getattr(r, "availability", None) or {}
+        merged_availability: dict[str, list[str]] = {}
+        for day_key in _WEEK_DAY_KEYS:
+            if day_key in week_avail:
+                merged_availability[day_key] = list(week_avail.get(day_key) or [])
+            else:
+                base_day = base_availability.get(day_key) if isinstance(base_availability, dict) else None
+                merged_availability[day_key] = list(base_day) if isinstance(base_day, list) else []
+
+        station_allow = week_station_allow
+        if not has_week_station_override and isinstance(base_availability, dict):
+            station_allow = [
+                int(x)
+                for x in (base_availability.get("_stations") or base_availability.get("_station_indices") or [])
+                if isinstance(x, int) or str(x).lstrip("-").isdigit()
+            ]
         wd: dict = {
             "id": r.id,
             "name": r.name,
             "max_shifts": r.max_shifts,
             "roles": r.roles or [],
-            "availability": avail,
+            "availability": merged_availability,
         }
         if station_allow:
             wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
@@ -856,6 +877,42 @@ def _store_site_auto_planning_status(site: Site, summary: dict) -> None:
     cfg["autoPlanningLastRun"] = summary
     site.config = cfg
     flag_modified(site, "config")
+
+
+def _mark_auto_planning_week_handled_if_due(
+    db: Session,
+    director_id: int,
+    week_iso: str,
+    source: str,
+) -> None:
+    """Empêche un tick hebdo en retard d'écraser une génération plus récente.
+
+    Si le créneau hebdomadaire prévu pour cette même semaine est déjà passé,
+    une génération manuelle/page planning devient le dernier résultat à garder.
+    Si le créneau est encore futur, on ne bloque pas le tick: il pourra gagner
+    plus tard puisqu'il sera réellement le dernier.
+    """
+    row = (
+        db.query(DirectorAutoPlanningConfig)
+        .filter(DirectorAutoPlanningConfig.director_id == director_id)
+        .first()
+    )
+    if not row or not bool(getattr(row, "enabled", False)):
+        return
+    now = datetime.now()
+    next_run_at = _next_effective_run_time(now, row)
+    target_week_iso = _next_week_iso(next_run_at)
+    if target_week_iso != week_iso or now < next_run_at:
+        return
+    row.last_run_week_iso = week_iso
+    row.last_run_at = _now_ms()
+    logger.info(
+        "[AUTO-PLANNING] marked week handled by newer manual planning director_id=%s week_iso=%s source=%s next_run_at=%s",
+        director_id,
+        week_iso,
+        source,
+        next_run_at.isoformat(),
+    )
 
 
 def _clear_auto_planning_cache_for_director(
@@ -1178,6 +1235,23 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
     )
 
 
+def _is_empty_auto_week_plan(site: Site | None, row: SiteWeekPlan | None, week_iso: str) -> bool:
+    if site is None or row is None or str(getattr(row, "scope", "") or "") != "auto":
+        return False
+    data = row.data if isinstance(row.data, dict) else {}
+    assignments = data.get("assignments") if isinstance(data, dict) else None
+    if not isinstance(assignments, dict):
+        return False
+    summary = _summarize_auto_planning_result(
+        site,
+        assignments,
+        week_iso,
+        "saved-auto-check",
+        pulls=data.get("pulls") if isinstance(data.get("pulls"), dict) else None,
+    )
+    return int(summary.get("required_count") or 0) > 0 and int(summary.get("assigned_count") or 0) <= 0
+
+
 def _week_plan_rank(row: SiteWeekPlan) -> int:
     data = row.data if isinstance(row.data, dict) else {}
     has_assignments = isinstance(data.get("assignments"), dict)
@@ -1197,13 +1271,29 @@ def _week_plan_rank(row: SiteWeekPlan) -> int:
 
 def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
     best_row: SiteWeekPlan | None = None
-    best_rank = -1
+    best_key: tuple[int, int] = (-1, -1)
     for row in site_rows:
-        rank = _week_plan_rank(row)
-        if rank > best_rank:
-            best_rank = rank
+        key = (int(getattr(row, "updated_at", 0) or 0), _week_plan_rank(row))
+        if key > best_key:
+            best_key = key
             best_row = row
     return best_row
+
+
+def _week_plan_debug_meta(row: SiteWeekPlan | None) -> dict | None:
+    if row is None:
+        return None
+    data = row.data if isinstance(row.data, dict) else {}
+    assignments = data.get("assignments") if isinstance(data, dict) else None
+    pulls = data.get("pulls") if isinstance(data, dict) else None
+    return {
+        "scope": str(getattr(row, "scope", "") or ""),
+        "updated_at": int(getattr(row, "updated_at", 0) or 0),
+        "rank": _week_plan_rank(row),
+        "has_assignments": isinstance(assignments, dict),
+        "alternatives_count": len(data.get("alternatives") or []) if isinstance(data.get("alternatives"), list) else 0,
+        "pulls_count": len(pulls) if isinstance(pulls, dict) else 0,
+    }
 
 
 def _worker_identity_key(row: SiteWorker) -> str:
@@ -2216,6 +2306,21 @@ def _generate_director_week_plan_payload(
     start_dt = datetime.fromisoformat(week_iso)
     end_dt = start_dt + timedelta(days=6)
 
+    def _count_assignments(assignments_value: dict | None) -> int:
+        total = 0
+        if not isinstance(assignments_value, dict):
+            return total
+        for shifts_map in assignments_value.values():
+            if not isinstance(shifts_map, dict):
+                continue
+            for per_station in shifts_map.values():
+                if not isinstance(per_station, list):
+                    continue
+                for cell in per_station:
+                    if isinstance(cell, list):
+                        total += len([nm for nm in cell if str(nm or "").strip()])
+        return total
+
     def make_payload(assignments_value: dict) -> dict:
         return {
             "siteId": int(site.id),
@@ -2230,10 +2335,43 @@ def _generate_director_week_plan_payload(
             "workers": _build_worker_snapshots(rows),
         }
 
-    if not workers:
-        from .ai_solver import build_capacities_from_config
+    from .ai_solver import build_capacities_from_config
 
-        days, shifts, stations = build_capacities_from_config(site.config or {})
+    days, shifts, stations = build_capacities_from_config(site.config or {})
+    required_total = sum(
+        int(((st.get("capacity") or {}).get(day_key, {}) or {}).get(shift_name, 0) or 0)
+        for st in stations
+        for day_key in days
+        for shift_name in shifts
+    )
+    available_pairs = sum(
+        len(shifts_list or [])
+        for worker in workers
+        for shifts_list in ((worker.get("availability") or {}).values())
+        if isinstance(shifts_list, list)
+    )
+    workers_with_availability = sum(
+        1
+        for worker in workers
+        if any(isinstance(v, list) and len(v) > 0 for v in (worker.get("availability") or {}).values())
+    )
+    logger.info(
+        "[AUTO-PLANNING] build solver input site_id=%s site_name=%s week=%s visible_workers=%s solver_workers=%s weekly_override_workers=%s workers_with_availability=%s available_pairs=%s required=%s days=%s shifts=%s stations=%s",
+        site.id,
+        site.name,
+        week_iso,
+        len(rows),
+        len(workers),
+        len(weekly_overrides) if isinstance(weekly_overrides, dict) else 0,
+        workers_with_availability,
+        available_pairs,
+        required_total,
+        len(days),
+        len(shifts),
+        len(stations),
+    )
+
+    if not workers:
         assignments = {day: {sh: [[] for _ in stations] for sh in shifts} for day in days}
         payload = make_payload(assignments)
         if auto_pulls_enabled:
@@ -2251,19 +2389,38 @@ def _generate_director_week_plan_payload(
         fixed_assignments=None,
         exclude_days=None,
     )
+    raw_assignments = result.get("assignments") if isinstance(result.get("assignments"), dict) else {}
+    logger.info(
+        "[AUTO-PLANNING] solver result site_id=%s site_name=%s week=%s status=%s raw_assigned=%s required=%s alternatives=%s",
+        site.id,
+        site.name,
+        week_iso,
+        result.get("status"),
+        _count_assignments(raw_assignments),
+        required_total,
+        len(result.get("alternatives") or []),
+    )
 
     if not auto_pulls_enabled:
         cleaned_base_assignments = _enforce_role_requirements_on_assignments(
             site.config or {},
-            result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+            raw_assignments,
             rows,
+        )
+        logger.info(
+            "[AUTO-PLANNING] cleaned solver result site_id=%s site_name=%s week=%s cleaned_assigned=%s required=%s",
+            site.id,
+            site.name,
+            week_iso,
+            _count_assignments(cleaned_base_assignments),
+            required_total,
         )
         return make_payload(cleaned_base_assignments)
 
     candidate_assignments: list[dict] = [
         _enforce_role_requirements_on_assignments(
             site.config or {},
-            result.get("assignments") if isinstance(result.get("assignments"), dict) else {},
+            raw_assignments,
             rows,
         )
     ]
@@ -2356,6 +2513,54 @@ def _run_auto_planning_for_director(
             target_week_iso,
             source,
             pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
+        )
+        assigned_count = int(summary.get("assigned_count") or 0)
+        required_count = int(summary.get("required_count") or 0)
+        if required_count > 0 and assigned_count <= 0:
+            detail = f"auto planning produced empty plan for site {site.name} ({assigned_count}/{required_count})"
+            logger.warning(
+                "[AUTO-PLANNING] refusing empty generated plan director_id=%s site_id=%s site_name=%s target_week=%s source=%s required=%s assigned=%s",
+                director_id,
+                site.id,
+                site.name,
+                target_week_iso,
+                source,
+                required_count,
+                assigned_count,
+            )
+            stale_auto_rows = (
+                db.query(SiteWeekPlan)
+                .filter(SiteWeekPlan.site_id == int(site.id))
+                .filter(SiteWeekPlan.week_iso == target_week_iso)
+                .filter(SiteWeekPlan.scope == "auto")
+                .all()
+            )
+            for stale_row in stale_auto_rows:
+                db.delete(stale_row)
+            _store_site_auto_planning_status(
+                site,
+                _summarize_auto_planning_result(
+                    site,
+                    None,
+                    target_week_iso,
+                    source,
+                    detail,
+                    pulls=payload.get("pulls") if isinstance(payload.get("pulls"), dict) else None,
+                ),
+            )
+            errors.append(f"{site.name}: {detail}")
+            return
+        logger.info(
+            "[AUTO-PLANNING] persist generated plan director_id=%s site_id=%s site_name=%s target_week=%s source=%s assigned=%s required=%s pulls=%s complete=%s",
+            director_id,
+            site.id,
+            site.name,
+            target_week_iso,
+            source,
+            assigned_count,
+            required_count,
+            len(payload.get("pulls") or {}) if isinstance(payload.get("pulls"), dict) else 0,
+            bool(summary.get("complete")),
         )
         # ידני : toujours טיוטת `auto` (visible dans le planning) — pas de promotion director/shared sans choix explicite.
         save_mode = str(auto_save_mode or "manual").strip()
@@ -2687,9 +2892,9 @@ def test_auto_planning_now(
         pulls_limit=gpl,
         pulls_limits_by_site=by_site,
     )
-    # Un test manuel ne doit jamais bloquer l'exécution planifiée du créneau hebdo.
-    row.last_run_week_iso = None
-    row.last_run_at = None
+    # Si le créneau hebdo est déjà passé pour cette semaine, la ריצה ידני devient
+    # le dernier résultat à garder et ne doit pas être écrasée par un tick en retard.
+    _mark_auto_planning_week_handled_if_due(db, int(user.id), target_week_iso, "manual-test")
     row.last_error = "\n".join(errors)[:1000] if errors else None
     db.commit()
     db.refresh(row)
@@ -2772,6 +2977,13 @@ def get_week_plan(
         .filter(SiteWeekPlan.scope == sc)
         .first()
     )
+    if sc == "auto" and _is_empty_auto_week_plan(db.get(Site, site_id), row, wk):
+        logger.warning(
+            "[AUTO-PLANNING] hiding empty auto week plan site_id=%s week_iso=%s",
+            site_id,
+            wk,
+        )
+        return None
     return row.data if row else None
 
 
@@ -2844,6 +3056,8 @@ def put_week_plan(
         )
         if auto_row:
             db.delete(auto_row)
+    if sc == "auto":
+        _mark_auto_planning_week_handled_if_due(db, int(user.id), wk, "planning-page")
     db.commit()
     return row.data or None
 
@@ -3243,10 +3457,35 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
         .all()
     )
     preferred_plan_by_site: dict[int, SiteWeekPlan] = {}
+    sites_by_id_for_plans = {int(s.id): s for s in sites}
     for row in plan_rows:
+        row_site = sites_by_id_for_plans.get(int(row.site_id))
+        if row_site is not None and _is_empty_auto_week_plan(row_site, row, next_week_iso):
+            logger.warning(
+                "[AUTO-PLANNING][LIST] ignoring empty auto week plan director_id=%s site_id=%s week_iso=%s",
+                user.id,
+                row.site_id,
+                next_week_iso,
+            )
+            continue
         existing = preferred_plan_by_site.get(row.site_id)
-        if existing is None or _week_plan_rank(row) > _week_plan_rank(existing):
+        if existing is None or _preferred_week_plan([existing, row]) is row:
             preferred_plan_by_site[row.site_id] = row
+    if plan_rows:
+        candidates_by_site: dict[int, list[dict]] = {}
+        for row in plan_rows:
+            candidates_by_site.setdefault(int(row.site_id), []).append(_week_plan_debug_meta(row) or {})
+        selected_by_site = {
+            int(site_id): _week_plan_debug_meta(row)
+            for site_id, row in preferred_plan_by_site.items()
+        }
+        logger.info(
+            "[AUTO-PLANNING][LIST] preferred next-week plans director_id=%s week_iso=%s candidates=%s selected=%s",
+            user.id,
+            next_week_iso,
+            candidates_by_site,
+            selected_by_site,
+        )
     linked_by_site = _linked_site_cluster_map_for_director(db, user.id, next_week_iso)
     return [
         SiteOut(
@@ -3391,6 +3630,16 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
         raise HTTPException(status_code=404, detail="Site introuvable")
     workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
     pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
+    next_week_iso = _next_week_iso(datetime.now())
+    plan_rows = (
+        db.query(SiteWeekPlan)
+        .filter(SiteWeekPlan.site_id == site.id)
+        .filter(SiteWeekPlan.week_iso == next_week_iso)
+        .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
+        .all()
+    )
+    plan_rows = [row for row in plan_rows if not _is_empty_auto_week_plan(site, row, next_week_iso)]
+    preferred_row = _preferred_week_plan(plan_rows)
     linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
     return SiteOut(
         id=site.id,
@@ -3398,6 +3647,7 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
         workers_count=workers_count,
         pending_workers_count=pending_workers_count,
         config=_safe_site_config(site.config, site_id=site.id),
+        next_week_saved_plan_status=_build_next_week_saved_plan_status(site, preferred_row, next_week_iso),
         linked_site_ids=linked_by_site.get(int(site.id), []),
         deleted_at=getattr(site, "deleted_at", None),
     )
@@ -4557,22 +4807,7 @@ def ai_generate_planning(
     ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
-    workers = []
-    for r in rows:
-        # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
-        # Ignorer la disponibilité de base des workers
-        ovr = overrides.get(r.name)
-        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
-        wd: dict = {
-            "id": r.id,
-            "name": r.name,
-            "max_shifts": r.max_shifts,
-            "roles": r.roles or [],
-            "availability": avail,
-        }
-        if station_allow:
-            wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
-        workers.append(wd)
+    workers = _build_solver_workers(rows, overrides)
     logger.info(f"[AI-GEN] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
     for w in workers:
         avail_count = sum(len(shifts) for shifts in w['availability'].values())
@@ -4742,22 +4977,7 @@ async def ai_generate_stream(
     ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
-    workers = []
-    for r in rows:
-        # Utiliser UNIQUEMENT les disponibilités de la semaine (weekly_availability)
-        # Ignorer la disponibilité de base des workers
-        ovr = overrides.get(r.name)
-        avail, station_allow = _weekly_override_avail_and_stations(ovr if isinstance(ovr, dict) else None)
-        wd: dict = {
-            "id": r.id,
-            "name": r.name,
-            "max_shifts": r.max_shifts,
-            "roles": r.roles or [],
-            "availability": avail,
-        }
-        if station_allow:
-            wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
-        workers.append(wd)
+    workers = _build_solver_workers(rows, overrides)
     logger.info("[SSE] loaded workers=%d for site=%s", len(workers), site_id)
     workers_without_availability = [
         str(w.get("name") or "")

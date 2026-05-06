@@ -86,6 +86,12 @@ export function usePlanningV2SiteWorkers(siteId: string) {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
       const { deleted_at: deletedAtRaw, ...rest } = raw;
+      console.warn("[planning-v2][site][load]", {
+        siteId,
+        siteName: rest.name,
+        linkedSiteIds: (rest as { linked_site_ids?: number[] }).linked_site_ids || [],
+        nextWeekStatus: rest.next_week_saved_plan_status || null,
+      });
       setSite({ ...rest, deletedAt: deletedAtRaw ?? null });
     } catch {
       setSite(null);

@@ -120,6 +120,11 @@ export default function NumberPicker({
         disabled={disabled}
         aria-label={inputAriaLabel}
         title={title}
+        onPointerDown={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          handleOpen();
+        }}
         onClick={() => {
           if (disabled) return;
           handleOpen();

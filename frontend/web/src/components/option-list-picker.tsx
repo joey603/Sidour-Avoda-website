@@ -78,6 +78,11 @@ export default function OptionListPicker({
         value={displayLabel}
         readOnly
         disabled={disabled}
+        onPointerDown={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          openPopup();
+        }}
         onClick={() => {
           if (disabled) return;
           openPopup();

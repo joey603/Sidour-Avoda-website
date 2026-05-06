@@ -13,6 +13,7 @@ const SESSION_PREFIXES = [
   "multi_site_site_cache_",
   "multi_site_workers_cache_",
   "multi_site_linked_sites_cache_",
+  "planning_v2_page_generated_auto_draft_",
 ] as const;
 
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";

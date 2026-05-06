@@ -24,6 +24,16 @@ export type SiteSummary = {
   id: number;
   name: string;
   config?: Record<string, unknown>;
+  next_week_saved_plan_status?: {
+    exists?: boolean;
+    week_iso?: string | null;
+    complete?: boolean | null;
+    assigned_count?: number;
+    required_count?: number;
+    pulls_count?: number;
+    scope?: "auto" | "director" | "shared" | null;
+    requires_manual_save?: boolean;
+  } | null;
   /** epoch ms — site בגל לסוג soft-delete */
   deletedAt?: number | null;
 };

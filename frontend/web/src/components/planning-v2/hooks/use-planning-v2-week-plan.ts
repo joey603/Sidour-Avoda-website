@@ -48,11 +48,15 @@ function normalizePlan(raw: Record<string, unknown> | null | undefined): V2WeekP
 }
 
 /** Charge le תכנון שמור (director → shared → auto), comme `fetchExistingSavedPlanForSite` sur le planning. */
-export function usePlanningV2WeekPlan(siteId: string, weekStart: Date) {
+export function usePlanningV2WeekPlan(
+  siteId: string,
+  weekStart: Date,
+  preferredScope?: "director" | "shared" | "auto" | null,
+) {
   const [plan, setPlan] = useState<V2WeekPlanData>(null);
   const [loading, setLoading] = useState(true);
 
-  const reload = useCallback(async (opts?: { silent?: boolean }) => {
+  const reload = useCallback(async (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => {
     const silent = opts?.silent === true;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) {
@@ -63,33 +67,59 @@ export function usePlanningV2WeekPlan(siteId: string, weekStart: Date) {
     const isoWeek = getWeekKeyISO(weekStart);
     if (!silent) setLoading(true);
     try {
-      const [fromDirector, fromShared, fromAuto] = await Promise.all([
-        fetchWeekPlanScope(siteId, isoWeek, "director"),
-        fetchWeekPlanScope(siteId, isoWeek, "shared"),
-        fetchWeekPlanScope(siteId, isoWeek, "auto"),
-      ]);
-      const d = normalizePlan(fromDirector as Record<string, unknown>);
-      if (d) {
-        setPlan({ ...d, sourceScope: "director" });
-        return;
+      const effectivePreferredScope = opts?.preferredScope ?? preferredScope;
+      const orderedScopes = (
+        effectivePreferredScope && ["director", "shared", "auto"].includes(effectivePreferredScope)
+          ? [effectivePreferredScope, ...(["director", "shared", "auto"] as const).filter((scope) => scope !== effectivePreferredScope)]
+          : (["director", "shared", "auto"] as const)
+      ) as Array<"director" | "shared" | "auto">;
+      const entries = await Promise.all(
+        orderedScopes.map(async (scope) => [scope, await fetchWeekPlanScope(siteId, isoWeek, scope)] as const),
+      );
+      console.warn("[planning-v2][week-plan][load-scopes]", {
+        siteId,
+        isoWeek,
+        preferredScope: effectivePreferredScope || null,
+        orderedScopes,
+        results: entries.map(([scope, raw]) => ({
+          scope,
+          hasPlan: !!(raw && typeof raw === "object" && raw.assignments),
+          alternativesCount:
+            raw && typeof raw === "object" && Array.isArray(raw.alternatives) ? raw.alternatives.length : 0,
+          pullsCount:
+            raw && typeof raw === "object" && raw.pulls && typeof raw.pulls === "object"
+              ? Object.keys(raw.pulls).length
+              : 0,
+        })),
+      });
+      for (const [scope, raw] of entries) {
+        const normalized = normalizePlan(raw as Record<string, unknown>);
+        if (normalized) {
+          console.warn("[planning-v2][week-plan][selected-scope]", {
+            siteId,
+            isoWeek,
+            preferredScope: effectivePreferredScope || null,
+            selectedScope: scope,
+            alternativesCount: normalized.alternatives?.length || 0,
+            pullsCount: normalized.pulls ? Object.keys(normalized.pulls).length : 0,
+          });
+          setPlan({ ...normalized, sourceScope: scope });
+          return;
+        }
       }
-      const s = normalizePlan(fromShared as Record<string, unknown>);
-      if (s) {
-        setPlan({ ...s, sourceScope: "shared" });
-        return;
-      }
-      const a = normalizePlan(fromAuto as Record<string, unknown>);
-      if (a) {
-        setPlan({ ...a, sourceScope: "auto" });
-        return;
-      }
+      console.warn("[planning-v2][week-plan][selected-scope]", {
+        siteId,
+        isoWeek,
+        preferredScope: effectivePreferredScope || null,
+        selectedScope: null,
+      });
       setPlan(null);
     } catch {
       setPlan(null);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [siteId, weekStart]);
+  }, [siteId, weekStart, preferredScope]);
 
   useEffect(() => {
     void reload();

@@ -76,6 +76,11 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
         value={value || ""}
         readOnly
         disabled={disabled}
+        onPointerDown={(e) => {
+          if (disabled) return;
+          e.preventDefault();
+          openPopup();
+        }}
         onClick={() => {
           if (disabled) return;
           openPopup();

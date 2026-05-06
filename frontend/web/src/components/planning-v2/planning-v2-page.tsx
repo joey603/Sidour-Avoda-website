@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
 import LoadingAnimation from "@/components/loading-animation";
 import { PlanningV2Header } from "./planning-v2-header";
 import { PlanningV2LayoutShell } from "./planning-v2-layout-shell";
@@ -83,7 +84,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workerRowsForTable,
   } = usePlanningV2SiteWorkers(siteId);
 
-  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(siteId, weekStart);
+  const preferredWeekPlanScope = useMemo(
+    () => site?.next_week_saved_plan_status?.scope ?? null,
+    [site?.next_week_saved_plan_status?.scope],
+  );
+  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(
+    siteId,
+    weekStart,
+    preferredWeekPlanScope,
+  );
   const { linkedSites, linkedSitesLoading, reloadLinkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const weekPurgeSiteIds = useMemo(() => {
     const s = new Set<number>();
@@ -1067,6 +1076,77 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     plan.selectedAlternativeIndex,
     plan.setSelectedAlternativeIndex,
   ]);
+
+  useEffect(() => {
+    if (linkedSites.length <= 1) return;
+    if (plan.generationRunning) return;
+    if (weekPlan?.sourceScope !== "auto") return;
+    const isoWeek = getWeekKeyISO(weekStart);
+    let cancelled = false;
+
+    const syncLinkedAutoPlansFromDb = async () => {
+      const targetSiteIds = Array.from(
+        new Set(
+          linkedSites
+            .map((ls) => Number(ls.id))
+            .filter((id) => Number.isFinite(id) && id > 0),
+        ),
+      );
+      if (targetSiteIds.length <= 1) return;
+
+      const entries = await Promise.all(
+        targetSiteIds.map(async (id) => {
+          try {
+            const raw = await apiFetch<Record<string, unknown> | null>(
+              `/director/sites/${id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`,
+              {
+                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                cache: "no-store" as RequestCache,
+              },
+            );
+            if (!raw || typeof raw !== "object" || !raw.assignments || typeof raw.assignments !== "object") {
+              return [String(id), null] as const;
+            }
+            return [
+              String(id),
+              {
+                assignments: raw.assignments as Record<string, Record<string, string[][]>>,
+                pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : {},
+                alternatives: Array.isArray(raw.alternatives)
+                  ? (raw.alternatives as Record<string, Record<string, string[][]>>[])
+                  : [],
+                alternative_pulls: Array.isArray(raw.alternative_pulls)
+                  ? (raw.alternative_pulls as Record<string, unknown>[])
+                  : [],
+              } satisfies LinkedSitePlan,
+            ] as const;
+          } catch {
+            return [String(id), null] as const;
+          }
+        }),
+      );
+
+      if (cancelled) return;
+      const plansBySite = Object.fromEntries(entries.filter(([, planValue]) => !!planValue)) as Record<string, LinkedSitePlan>;
+      if (Object.keys(plansBySite).length <= 1) return;
+
+      const mem = readLinkedPlansFromMemory(weekStart);
+      const activeAltIndex = Math.max(0, Number(mem?.activeAltIndex || 0));
+      console.warn("[planning-v2][multi-site][auto-run][sync-memory-from-db]", {
+        isoWeek,
+        currentSiteId: siteId,
+        targetSiteIds,
+        syncedSiteIds: Object.keys(plansBySite),
+        activeAltIndex,
+      });
+      saveLinkedPlansToMemory(weekStart, plansBySite, activeAltIndex);
+    };
+
+    void syncLinkedAutoPlansFromDb();
+    return () => {
+      cancelled = true;
+    };
+  }, [linkedSites, plan.generationRunning, siteId, weekPlan?.sourceScope, weekStart]);
 
   useEffect(() => {
     // En multi-site, `alternativesUiEnabled` peut passer brièvement à false pendant une

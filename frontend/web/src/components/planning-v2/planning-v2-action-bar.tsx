@@ -22,7 +22,7 @@ type PlanningV2ActionBarProps = {
   onEditingSavedChange: (v: boolean) => void;
   /** ביטול מצב עריכה — ניקוי טיוטה והצגת התכנון השמור (לפני סגירת ה־UI). */
   onCancelSavedEdit?: () => void | Promise<void>;
-  reloadWeekPlan: (opts?: { silent?: boolean }) => void | Promise<void>;
+  reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
   generationRunning: boolean;
   generationStoppable?: boolean;
   onRequestGenerate: (options?: {
