@@ -1314,7 +1314,7 @@ def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
     best_row: SiteWeekPlan | None = None
     best_key: tuple[int, int] = (-1, -1)
     for row in site_rows:
-        key = (int(getattr(row, "updated_at", 0) or 0), _week_plan_rank(row))
+        key = (_week_plan_rank(row), int(getattr(row, "updated_at", 0) or 0))
         if key > best_key:
             best_key = key
             best_row = row
@@ -3932,29 +3932,43 @@ def list_workers(
     return result
 
 
+def _normalize_worker_phone_for_password(phone: str | None) -> str:
+    return "".join(ch for ch in str(phone or "") if ch.isdigit()).strip()
+
+
 @router.post("/{site_id}/create-worker-user", response_model=UserOut, status_code=201)
 def create_worker_user(site_id: int, payload: CreateWorkerUserRequest, db: Session = Depends(get_db), user: User = Depends(require_role("director"))):
     """Créer un utilisateur worker avec nom et téléphone depuis le directeur"""
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    
-    # Vérifier si le téléphone existe déjà
-    existing_phone = db.query(User).filter(User.phone == payload.phone).first()
+    phone = _normalize_worker_phone_for_password(payload.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Numéro de téléphone requis")
+
+    existing_phone = db.query(User).filter(User.phone == phone).first()
     if existing_phone:
-        logger.warning(f"[create-worker-user] Phone {payload.phone} already exists for user '{existing_phone.full_name}' (id={existing_phone.id})")
-        raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
-    
-    # Générer un mot de passe aléatoire (ce compte n'est pas censé se connecter par password)
-    default_password = secrets.token_urlsafe(24)
+        if existing_phone.role != UserRole.worker:
+            raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+        existing_phone.full_name = payload.name
+        existing_phone.hashed_password = pwd_context.hash(phone)
+        db.commit()
+        db.refresh(existing_phone)
+        return UserOut(
+            id=existing_phone.id,
+            email=existing_phone.email,
+            full_name=existing_phone.full_name,
+            role=existing_phone.role.value,
+            phone=existing_phone.phone,
+        )
     
     # Créer l'utilisateur worker
     worker_user = User(
         email=None,
         full_name=payload.name,
-        hashed_password=pwd_context.hash(default_password),
+        hashed_password=pwd_context.hash(phone),
         role=UserRole.worker,
-        phone=payload.phone,
+        phone=phone,
     )
     db.add(worker_user)
     db.commit()
@@ -4059,16 +4073,17 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                     target_week_iso,
                 )
         
+        normalized_payload_phone = _normalize_worker_phone_for_password(payload.phone)
+
         # Chercher le User correspondant par nom ET téléphone (si disponible)
         user_worker = None
-        if payload.phone:
+        if normalized_payload_phone:
             # Chercher d'abord par téléphone (plus fiable)
-            user_worker = db.query(User).filter(
-                User.role == UserRole.worker,
-                User.phone == payload.phone
-            ).first()
-            if user_worker:
-                logger.info(f"[create-worker] Found User by phone '{payload.phone}': '{user_worker.full_name}' (id={user_worker.id})")
+            existing_user_by_phone = db.query(User).filter(User.phone == normalized_payload_phone).first()
+            if existing_user_by_phone:
+                if existing_user_by_phone.role != UserRole.worker:
+                    raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+                user_worker = existing_user_by_phone
         
         # Si pas trouvé par téléphone, chercher par nom
         if not user_worker:
@@ -4080,6 +4095,22 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             )
             if user_worker:
                 logger.info(f"[create-worker] Found User by name '{payload.name}' (id={user_worker.id})")
+
+        if normalized_payload_phone:
+            if not user_worker:
+                user_worker = User(
+                    email=None,
+                    full_name=payload.name,
+                    hashed_password=pwd_context.hash(normalized_payload_phone),
+                    role=UserRole.worker,
+                    phone=normalized_payload_phone,
+                )
+                db.add(user_worker)
+                db.flush()
+            else:
+                user_worker.full_name = payload.name
+                user_worker.phone = normalized_payload_phone
+                user_worker.hashed_password = pwd_context.hash(normalized_payload_phone)
         
         # Vérifier si un worker avec ce nom existe déjà
         existing = (
@@ -4105,7 +4136,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             if payload.answers is not None and len(payload.answers) > 0:
                 existing.answers = payload.answers
             if payload.phone:
-                existing.phone = payload.phone
+                existing.phone = normalized_payload_phone
             # Lier au User si pas déjà lié et qu'on a trouvé un User
             if user_worker and not existing.user_id:
                 existing.user_id = user_worker.id
@@ -4130,7 +4161,7 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
         w = SiteWorker(
             site_id=site_id, 
             name=payload.name, 
-            phone=payload.phone,
+            phone=normalized_payload_phone or None,
             max_shifts=payload.max_shifts, 
             roles=payload.roles or [], 
             availability=payload.availability or {},
@@ -4158,6 +4189,57 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
     except Exception as e:
         logger.error(f"[create-worker] Unexpected error creating worker '{payload.name}' for site {site_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erreur lors de la création du travailleur: {str(e)}")
+
+
+@router.post("/{site_id}/workers/{worker_id}/reset-password-to-phone")
+def reset_worker_password_to_phone(
+    site_id: int,
+    worker_id: int,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    site = db.get(Site, site_id)
+    if not site or site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Site introuvable")
+    worker: SiteWorker | None = db.get(SiteWorker, worker_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+    worker_site = db.get(Site, worker.site_id)
+    if not worker_site or worker_site.director_id != user.id:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+
+    phone = _normalize_worker_phone_for_password(getattr(worker, "phone", None))
+    user_worker: User | None = db.get(User, worker.user_id) if getattr(worker, "user_id", None) else None
+    if user_worker and user_worker.phone:
+        phone = _normalize_worker_phone_for_password(user_worker.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Ce travailleur n'a pas de numéro de téléphone")
+
+    if user_worker is None:
+        existing = db.query(User).filter(User.phone == phone).first()
+        if existing and existing.role != UserRole.worker:
+            raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+        user_worker = existing
+
+    if user_worker is None:
+        user_worker = User(
+            email=None,
+            full_name=worker.name,
+            hashed_password=pwd_context.hash(phone),
+            role=UserRole.worker,
+            phone=phone,
+        )
+        db.add(user_worker)
+        db.flush()
+    else:
+        user_worker.full_name = worker.name
+        user_worker.phone = phone
+        user_worker.hashed_password = pwd_context.hash(phone)
+
+    worker.user_id = user_worker.id
+    worker.phone = phone
+    db.commit()
+    return {"ok": True}
 
 
 @router.put("/{site_id}/workers/{worker_id}", response_model=WorkerOut)
@@ -4202,7 +4284,7 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
 
     # Mettre à jour le téléphone si fourni (et propager au User worker pour que la connexion change aussi)
     if payload.phone is not None:
-        new_phone = (payload.phone or "").strip() or None
+        new_phone = _normalize_worker_phone_for_password(payload.phone) or None
 
         # Si on ne change pas réellement de téléphone, ne pas lever d'erreur
         if new_phone and user_worker and user_worker.phone == new_phone:
@@ -4218,11 +4300,10 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
 
         # Si aucun user worker n'existe et qu'on a un phone, en créer un (pour permettre login worker)
         if not user_worker and new_phone:
-            default_password = secrets.token_urlsafe(24)
             user_worker = User(
                 email=None,
                 full_name=payload.name,
-                hashed_password=pwd_context.hash(default_password),
+                hashed_password=pwd_context.hash(new_phone),
                 role=UserRole.worker,
                 phone=new_phone,
             )
@@ -4234,6 +4315,7 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
             user_worker.full_name = payload.name
             if new_phone is not None:
                 user_worker.phone = new_phone
+                user_worker.hashed_password = pwd_context.hash(new_phone)
             w.user_id = user_worker.id
         # Mettre à jour aussi la colonne phone du SiteWorker (fallback / lien)
         w.phone = new_phone

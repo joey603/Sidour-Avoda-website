@@ -11,6 +11,7 @@ export type AuthMe = {
   email: string | null;
   role: Role;
   full_name: string;
+  phone?: string | null;
   director_code?: string | null;
   directorCode?: string | null;
 };
@@ -84,15 +85,15 @@ export async function fetchMe(): Promise<AuthMe | null> {
       "/me",
       {
         cache: "no-store",
-      } as any,
+      } as RequestInit,
       {
         // Render free wake: /me peut échouer 30-60s après login
         timeoutMs: 12_000,
         maxTotalMs: 60_000,
       },
     );
-  } catch (e: any) {
-    const msg = String(e?.message || "");
+  } catch (e: unknown) {
+    const msg = String((e as Error)?.message || "");
     if (msg.includes("401")) {
       // token invalide/expiré → forcer reconnexion
       clearToken();

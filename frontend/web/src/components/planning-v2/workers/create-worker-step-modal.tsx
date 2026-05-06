@@ -75,6 +75,9 @@ export function CreateWorkerStepModal({
             {!!phone && digits.length !== 10 ? (
               <div className="mt-1 text-xs text-red-600">מספר טלפון חייב להכיל בדיוק 10 ספרות</div>
             ) : null}
+            <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
+              סיסמת הכניסה הראשונית של העובד תהיה מספר הטלפון שלו.
+            </div>
           </div>
         </div>
         <div className="mt-4">

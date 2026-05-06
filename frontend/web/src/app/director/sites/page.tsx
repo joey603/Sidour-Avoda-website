@@ -459,36 +459,6 @@ export default function SitesList() {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store",
       });
-      console.warn("[auto-planning][sites-list][fetch]", {
-        sites: list.map((site) => ({
-          siteId: site.id,
-          siteName: site.name,
-          linkedSiteIds: site.linked_site_ids || [],
-          status: site.next_week_saved_plan_status
-            ? {
-                exists: !!site.next_week_saved_plan_status.exists,
-                weekIso: site.next_week_saved_plan_status.week_iso || null,
-                scope: site.next_week_saved_plan_status.scope || null,
-                requiresManualSave: !!site.next_week_saved_plan_status.requires_manual_save,
-                complete: site.next_week_saved_plan_status.complete ?? null,
-                assignedCount: site.next_week_saved_plan_status.assigned_count ?? null,
-                requiredCount: site.next_week_saved_plan_status.required_count ?? null,
-                pullsCount: site.next_week_saved_plan_status.pulls_count ?? null,
-              }
-            : null,
-          lastRun: site.config?.autoPlanningLastRun
-            ? {
-                weekIso: site.config.autoPlanningLastRun.week_iso || null,
-                source: site.config.autoPlanningLastRun.source || null,
-                complete: site.config.autoPlanningLastRun.complete ?? null,
-                assignedCount: site.config.autoPlanningLastRun.assigned_count ?? null,
-                requiredCount: site.config.autoPlanningLastRun.required_count ?? null,
-                error: site.config.autoPlanningLastRun.error ?? null,
-                ranAt: site.config.autoPlanningLastRun.ran_at ?? null,
-              }
-            : null,
-        })),
-      });
       setSites(list);
     } catch {
       setError("שגיאה בטעינת אתרים");
@@ -753,7 +723,6 @@ export default function SitesList() {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
-      console.warn("[auto-planning][sites-list][manual-run][result]", result);
       setAutoPlanningConfig(result.config);
       clearAutoWeeklyWorkerChangesForWeek(result.target_week_iso);
       clearAllPlanningSessionCaches();
@@ -763,14 +732,6 @@ export default function SitesList() {
         result.target_week_iso,
         clearedSiteIds,
       );
-      console.warn("[auto-planning][sites-list][manual-run][cache-clear]", {
-        targetWeekIso: result.target_week_iso,
-        siteIds: clearedSiteIds,
-        generatedSites: result.generated_sites,
-        ok: result.ok,
-        autoSaveMode: result.config?.auto_save_mode || null,
-        errors: Array.isArray(result.errors) ? result.errors : [],
-      });
       await fetchSites();
       // À la fin de la ריצה, fermer la popup pour laisser l'utilisateur voir directement la liste.
       setAutoPlanningModalOpen(false);
@@ -1043,37 +1004,6 @@ export default function SitesList() {
     if (!st) return false;
     return hasSavedWeekPlanForWeek(site);
   }
-
-  useEffect(() => {
-    if (!sites.length) return;
-    const lines = sites.map((site) => {
-      const st = getSiteAutoPlanningStatus(site);
-      const preserved = preservedWeekPlanStats[site.id];
-      const display = getWeekPlanStatusDisplay(site, preserved);
-      return [
-        `site=${site.id}`,
-        `name="${site.name}"`,
-        `linked=[${(site.linked_site_ids || []).join(",")}]`,
-        `status.scope=${st?.scope ?? "null"}`,
-        `status.exists=${st?.exists ? "true" : "false"}`,
-        `status.manual=${st?.requires_manual_save ? "true" : "false"}`,
-        `status.complete=${st?.complete ?? "null"}`,
-        `status.assigned=${st?.assigned_count ?? "null"}`,
-        `status.required=${st?.required_count ?? "null"}`,
-        `status.pulls=${st?.pulls_count ?? "null"}`,
-        `lastRun.source=${site.config?.autoPlanningLastRun?.source ?? "null"}`,
-        `lastRun.complete=${site.config?.autoPlanningLastRun?.complete ?? "null"}`,
-        `lastRun.assigned=${site.config?.autoPlanningLastRun?.assigned_count ?? "null"}`,
-        `lastRun.required=${site.config?.autoPlanningLastRun?.required_count ?? "null"}`,
-        `rowVisible=${shouldShowWeekPlanningStatusRow(site) ? "true" : "false"}`,
-        `display.assigned=${display.assigned}`,
-        `display.required=${display.required}`,
-        `display.pulls=${display.pulls}`,
-        `display.complete=${display.complete ? "true" : "false"}`,
-      ].join(" | ");
-    });
-    console.warn("[auto-planning][sites-list][display-lines]\n" + lines.join("\n"));
-  }, [sites, preservedWeekPlanStats, showAutoPlanningSiteStatuses]);
 
   return (
     <div className="min-h-screen p-6">

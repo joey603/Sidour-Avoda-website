@@ -29,6 +29,18 @@ async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "direc
   }
 }
 
+function buildWeekPlanScopePriority(
+  preferredScope?: "director" | "shared" | "auto" | null,
+): Array<"director" | "shared" | "auto"> {
+  const savedScopes = ["director", "shared"] as const;
+  if (preferredScope === "director" || preferredScope === "shared") {
+    return [preferredScope, ...savedScopes.filter((scope) => scope !== preferredScope), "auto"];
+  }
+  // `auto` est seulement une טיוטה. Même si le statut la signale comme préférée,
+  // un plan sauvegardé director/shared doit toujours gagner.
+  return ["director", "shared", "auto"];
+}
+
 function normalizePlan(raw: Record<string, unknown> | null | undefined): V2WeekPlanData {
   if (!raw || typeof raw !== "object" || !raw.assignments) return null;
   return {
@@ -68,51 +80,17 @@ export function usePlanningV2WeekPlan(
     if (!silent) setLoading(true);
     try {
       const effectivePreferredScope = opts?.preferredScope ?? preferredScope;
-      const orderedScopes = (
-        effectivePreferredScope && ["director", "shared", "auto"].includes(effectivePreferredScope)
-          ? [effectivePreferredScope, ...(["director", "shared", "auto"] as const).filter((scope) => scope !== effectivePreferredScope)]
-          : (["director", "shared", "auto"] as const)
-      ) as Array<"director" | "shared" | "auto">;
+      const orderedScopes = buildWeekPlanScopePriority(effectivePreferredScope);
       const entries = await Promise.all(
         orderedScopes.map(async (scope) => [scope, await fetchWeekPlanScope(siteId, isoWeek, scope)] as const),
       );
-      console.warn("[planning-v2][week-plan][load-scopes]", {
-        siteId,
-        isoWeek,
-        preferredScope: effectivePreferredScope || null,
-        orderedScopes,
-        results: entries.map(([scope, raw]) => ({
-          scope,
-          hasPlan: !!(raw && typeof raw === "object" && raw.assignments),
-          alternativesCount:
-            raw && typeof raw === "object" && Array.isArray(raw.alternatives) ? raw.alternatives.length : 0,
-          pullsCount:
-            raw && typeof raw === "object" && raw.pulls && typeof raw.pulls === "object"
-              ? Object.keys(raw.pulls).length
-              : 0,
-        })),
-      });
       for (const [scope, raw] of entries) {
         const normalized = normalizePlan(raw as Record<string, unknown>);
         if (normalized) {
-          console.warn("[planning-v2][week-plan][selected-scope]", {
-            siteId,
-            isoWeek,
-            preferredScope: effectivePreferredScope || null,
-            selectedScope: scope,
-            alternativesCount: normalized.alternatives?.length || 0,
-            pullsCount: normalized.pulls ? Object.keys(normalized.pulls).length : 0,
-          });
           setPlan({ ...normalized, sourceScope: scope });
           return;
         }
       }
-      console.warn("[planning-v2][week-plan][selected-scope]", {
-        siteId,
-        isoWeek,
-        preferredScope: effectivePreferredScope || null,
-        selectedScope: null,
-      });
       setPlan(null);
     } catch {
       setPlan(null);

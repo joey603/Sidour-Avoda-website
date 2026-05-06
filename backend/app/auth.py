@@ -7,11 +7,13 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jose import jwt
 from passlib.context import CryptContext
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from . import pwned_passwords
 from .database import SessionLocal, settings
+from .deps import get_current_user
 from .models import Site, SiteWorker, User, UserRole, WorkerInviteToken
 from .rate_limit import enforce_rate_limit
 from .schemas import LoginRequest, Token, UserCreate, UserOut, WorkerLoginRequest
@@ -21,6 +23,17 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 WORKER_INVITE_TOKEN_TYPE = "worker_invite"
 _WHITESPACE_RE = re.compile(r"\s+")
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = Field(min_length=8, max_length=72)
 
 
 def get_db():
@@ -399,6 +412,71 @@ def worker_login(
     if not user or not pwd_context.verify(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Identifiants invalides")
     return _issue_token_for_user(user, response, request)
+
+
+@router.patch("/profile", response_model=UserOut)
+def update_profile(
+    payload: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    full_name = _WHITESPACE_RE.sub(" ", str(payload.full_name or "").strip())
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Nom requis")
+
+    current_user.full_name = full_name
+
+    if current_user.role == UserRole.director:
+        email = str(payload.email or "").strip().lower() or None
+        if email:
+            existing = (
+                db.query(User)
+                .filter(func.lower(User.email) == email, User.id != current_user.id)
+                .first()
+            )
+            if existing:
+                raise HTTPException(status_code=400, detail="Email déjà enregistré")
+        current_user.email = email
+    else:
+        phone = _normalize_phone(payload.phone)
+        if not phone:
+            raise HTTPException(status_code=400, detail="Téléphone requis")
+        existing = (
+            db.query(User)
+            .filter(User.phone == phone, User.id != current_user.id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail="Numéro de téléphone déjà enregistré")
+        current_user.phone = phone
+        linked_rows = db.query(SiteWorker).filter(SiteWorker.user_id == current_user.id).all()
+        for row in linked_rows:
+            row.name = full_name
+            row.phone = phone
+
+    db.commit()
+    db.refresh(current_user)
+    return UserOut(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=current_user.role.value,
+        phone=current_user.phone,
+        director_code=getattr(current_user, "director_code", None),
+    )
+
+
+@router.post("/change-password")
+def change_password(
+    payload: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not pwd_context.verify(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Mot de passe actuel incorrect")
+    current_user.hashed_password = pwd_context.hash(payload.new_password)
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/logout")

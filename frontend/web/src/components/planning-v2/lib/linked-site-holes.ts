@@ -88,8 +88,9 @@ export function computeLinkedSiteHoleEntries(opts: {
   currentPulls: PlanningV2PullsMap | null | undefined;
   /** Index חלופה absolu (0 = base), aligné sur `activeAltIndex` en session. */
   alternativeIndex: number;
+  ignoreLinkedMemory?: boolean;
 }): LinkedSiteHoleEntry[] {
-  const linkedMemory = readLinkedPlansFromMemory(opts.weekStart);
+  const linkedMemory = opts.ignoreLinkedMemory ? null : readLinkedPlansFromMemory(opts.weekStart);
   const activeAltIndex = Number(linkedMemory?.activeAltIndex ?? opts.alternativeIndex ?? 0);
   const currentAssigned = countAssignedCellsForLinkedHoles(opts.currentAssignments, opts.currentPulls || {});
   const currentRequired = countRequiredSlotsFromSiteConfig(opts.currentSite);

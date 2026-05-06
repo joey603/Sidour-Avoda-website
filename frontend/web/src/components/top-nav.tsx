@@ -86,14 +86,12 @@ export default function TopNav() {
       ? `/login/worker?returnUrl=${encodeURIComponent(cur)}`
       : `/login/director?returnUrl=${encodeURIComponent(cur)}`;
     router.replace(target);
-  }, [authChecked, isAuthPage, pathname, router, userRole]);
+  }, [authChecked, isAuthPage, isProtectedPage, pathname, router, userRole]);
 
   const baseBtn =
     "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm transition-colors border";
   const baseBtnMobile =
     "inline-flex items-center justify-center rounded-md px-4 py-3 text-base transition-colors border w-full";
-  const activeClasses =
-    "bg-zinc-900 text-white border-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 dark:border-zinc-100";
   const inactiveClasses =
     "bg-white text-zinc-800 border-zinc-300 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-200 dark:border-zinc-700 dark:hover:bg-zinc-800";
 
@@ -356,6 +354,14 @@ export default function TopNav() {
             <div className="hidden md:flex items-center gap-2">
               {renderNavButtons()}
           {userRole && (
+            <>
+            <Link
+              href="/settings"
+              onClick={handleLinkClick}
+              className={`${baseBtn} ${pathname === "/settings" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+            >
+              הגדרות
+            </Link>
             <button
               type="button"
               onClick={async () => {
@@ -372,6 +378,7 @@ export default function TopNav() {
               </svg>
               התנתק
             </button>
+            </>
           )}
             </div>
         </div>
@@ -420,6 +427,14 @@ export default function TopNav() {
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {renderNavButtonsMobile()}
             {userRole && (
+              <>
+              <Link
+                href="/settings"
+                onClick={handleLinkClick}
+                className={`${baseBtnMobile} ${pathname === "/settings" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+              >
+                הגדרות
+              </Link>
               <button
                 type="button"
                 onClick={async () => {
@@ -437,6 +452,7 @@ export default function TopNav() {
                 </svg>
                 התנתק
               </button>
+              </>
             )}
           </div>
         </div>

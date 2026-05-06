@@ -34,6 +34,7 @@ import { getRequiredFor } from "./lib/station-grid-helpers";
 import { getWeekKeyISO } from "./lib/week";
 import { computeLinkedSiteHoleEntries } from "./lib/linked-site-holes";
 import {
+  clearLinkedPlansFromMemory,
   readLinkedPlansFromMemory,
   resolveAssignmentsForAlternative,
   resolvePullsForAlternative,
@@ -108,6 +109,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, [siteId, linkedSites]);
   const router = useRouter();
   const [editingSaved, setEditingSaved] = useState(false);
+  const [editingSavedGenerationStarted, setEditingSavedGenerationStarted] = useState(false);
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
   const [shiftHoursModeStationIdx, setShiftHoursModeStationIdx] = useState<number | null>(null);
   const [manualConfirm, setManualConfirm] = useState<{
@@ -150,9 +152,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workers,
     workerRowsForTable,
     reloadWeekPlan,
+    editingSaved,
     linkedSitesLength: linkedSites.length,
     weekPurgeSiteIds,
   });
+
+  const hasOfficialSavedWeekPlan =
+    assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
+    (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
+  const protectOfficialSavedPlan = hasOfficialSavedWeekPlan && !editingSaved;
+
+  useEffect(() => {
+    if (!editingSaved) {
+      setEditingSavedGenerationStarted(false);
+    }
+  }, [editingSaved]);
 
   /** חלופות : piloté par l’état des variantes, pas par le contenu affiché momentanément dans la grille. */
   const alternativesUiEnabled = useMemo(
@@ -309,8 +323,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         currentAssignments: plan.displayAssignments,
         currentPulls: plan.displayPulls ?? null,
         alternativeIndex: plan.selectedAlternativeIndex,
+        ignoreLinkedMemory: protectOfficialSavedPlan,
       }),
     [
+      hasOfficialSavedWeekPlan,
+      protectOfficialSavedPlan,
       linkedSites,
       weekStart,
       siteId,
@@ -956,7 +973,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, [summaryFilterState, plan.alternativeCount, alternativesUiEnabled]);
 
   const navigationMemorySnapshot = useMemo(() => {
-    if (linkedSites.length <= 1) {
+    if (linkedSites.length <= 1 || protectOfficialSavedPlan) {
       return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
     }
     const mem = readLinkedPlansFromMemory(weekStart);
@@ -973,7 +990,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       currentPlanAlternativeCount: (hasBase ? 1 : 0) + altCount,
       hasCurrentPlan: !!currentPlan,
     };
-  }, [linkedSites.length, linkedPlansMemoryTick, siteId, weekStart]);
+  }, [protectOfficialSavedPlan, linkedSites.length, linkedPlansMemoryTick, siteId, weekStart]);
 
   const selectedVisibleAlternativeIndex = useMemo(() => {
     return visibleAlternativeIndices.indexOf(plan.selectedAlternativeIndex);
@@ -1068,6 +1085,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   ]);
 
   useEffect(() => {
+    if (protectOfficialSavedPlan) return;
     if (!multiSiteNavigationLoading) return;
     if (linkedSites.length <= 1) return;
     const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
@@ -1075,6 +1093,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (plan.selectedAlternativeIndex === targetIdx) return;
     plan.setSelectedAlternativeIndex(targetIdx);
   }, [
+    protectOfficialSavedPlan,
     multiSiteNavigationLoading,
     linkedSites.length,
     navigationMemorySnapshot.activeIdx,
@@ -1168,6 +1187,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   useEffect(() => {
     if (linkedSites.length <= 1) return;
     if (plan.generationRunning) return;
+    if (protectOfficialSavedPlan) {
+      if (lastCurrentSiteMemorySyncRef.current !== "official-saved-memory-cleared") {
+        lastCurrentSiteMemorySyncRef.current = "official-saved-memory-cleared";
+        clearLinkedPlansFromMemory(weekStart);
+      }
+      return;
+    }
     const mem = readLinkedPlansFromMemory(weekStart);
     if (!mem?.plansBySite || Object.keys(mem.plansBySite).length === 0) return;
     const memoryActiveIdx = Math.max(0, Number(mem.activeAltIndex || 0));
@@ -1276,7 +1302,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         .filter(Boolean),
     );
 
-    const mem = readLinkedPlansFromMemory(weekStart);
+    const mem = protectOfficialSavedPlan ? null : readLinkedPlansFromMemory(weekStart);
     const plansBySite =
       mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
 
@@ -1341,6 +1367,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       return a.siteName.localeCompare(b.siteName, "he");
     });
   }, [
+    protectOfficialSavedPlan,
     linkedSites,
     weekStart,
     workers,
@@ -2031,7 +2058,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           reloadWeekPlan={reloadWeekPlan}
           generationRunning={plan.generationRunning}
           generationStoppable={plan.generationStoppable}
-          onRequestGenerate={plan.startGeneration}
+          onRequestGenerate={(options) => {
+            if (editingSaved) {
+              setEditingSavedGenerationStarted(true);
+            }
+            void plan.startGeneration(options);
+          }}
           onStopGeneration={plan.stopGeneration}
           autoPullsLimit={plan.autoPullsLimit}
           onAutoPullsLimitChange={plan.setAutoPullsLimit}
@@ -2059,7 +2091,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           selectedAlternativeDisplayIndex={
             actionBarAltSnap ? actionBarAltSnap.selectedAlternativeDisplayIndex : effectiveAlternativeIndex
           }
-          onRequestMoreAlternatives={plan.startMoreAlternatives}
+          onRequestMoreAlternatives={
+            editingSaved && !editingSavedGenerationStarted
+              ? undefined
+              : plan.startMoreAlternatives
+          }
           moreAlternativesAvailable={plan.moreAlternativesAvailable}
           alternativesEnabled={alternativesUiEnabled || actionBarAlternativesFrozen || actionBarAlternativesResetPending}
           alternativesFrozen={actionBarAlternativesFrozen}

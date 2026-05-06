@@ -267,6 +267,7 @@ def create_app() -> FastAPI:
             "email": user.email,
             "role": user.role.value,
             "full_name": user.full_name,
+            "phone": user.phone,
             "director_code": getattr(user, "director_code", None),
         }
 

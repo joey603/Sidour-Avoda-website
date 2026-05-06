@@ -72,6 +72,7 @@ export default function WorkerDetailsPage() {
   const [editPhone, setEditPhone] = useState("");
   const [savingIdentity, setSavingIdentity] = useState(false);
   const [deletingWorker, setDeletingWorker] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
   const normalizePhoneDigits = (value: string | null | undefined) => String(value || "").replace(/\D/g, "");
 
   function addDays(d: Date, days: number): Date {
@@ -759,7 +760,42 @@ export default function WorkerDetailsPage() {
                 </div>
               )}
               <div className="border-t border-zinc-200/90 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-950/30">
-                <button
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!worker || isEditingIdentity || resettingPassword || !normalizePhoneDigits(worker?.phone)}
+                    onClick={async () => {
+                      if (!worker) return;
+                      const phone = normalizePhoneDigits(worker.phone);
+                      if (!phone) {
+                        toast.error("לעובד אין מספר טלפון");
+                        return;
+                      }
+                      const confirmed = window.confirm(
+                        `לאפס את הסיסמה של ${worker.name} למספר הטלפון ${phone}?`,
+                      );
+                      if (!confirmed) return;
+                      setResettingPassword(true);
+                      try {
+                        await apiFetch(`/director/sites/${worker.site_id}/workers/${worker.id}/reset-password-to-phone`, {
+                          method: "POST",
+                          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
+                        });
+                        toast.success("הסיסמה אופסה למספר הטלפון");
+                      } catch (e: unknown) {
+                        toast.error("איפוס הסיסמה נכשל", { description: String((e as Error)?.message || "נסה שוב מאוחר יותר.") });
+                      } finally {
+                        setResettingPassword(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-800 shadow-sm hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200 dark:hover:bg-red-950/70"
+                  >
+                    {resettingPassword ? (
+                      <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent dark:border-red-300" />
+                    ) : null}
+                    איפוס סיסמה
+                  </button>
+                  <button
                   type="button"
                   disabled={!worker || isEditingIdentity || deletingWorker}
                   onClick={async () => {
@@ -793,6 +829,7 @@ export default function WorkerDetailsPage() {
                   )}
                   מחק עובד
                 </button>
+                </div>
               </div>
             </section>
 

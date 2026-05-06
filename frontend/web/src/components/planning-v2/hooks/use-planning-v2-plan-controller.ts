@@ -16,6 +16,7 @@ import { weeklyAvailabilityMapFromRows } from "../lib/weekly-availability-for-ai
 import { getWeekKeyISO } from "../lib/week";
 import {
   buildPersistableLinkedPlans,
+  clearLinkedPlansFromMemory,
   readLinkedPlansFromMemory,
   saveLinkedPlansToMemory,
   type LinkedSitePlan,
@@ -82,51 +83,7 @@ function logPlanningV2PullCandidate(params: {
   pulls?: unknown;
   plans?: Record<string, { pulls?: unknown }> | null;
 }) {
-  const base = {
-    itemType: params.itemType,
-    mode: params.appendMode ? "append" : "replace",
-    linked: params.linked,
-    siteId: String(params.siteId),
-    weekIso: params.weekIso,
-    eventIndex: params.eventIndex ?? null,
-    generationId: params.generationId ?? null,
-    requestedPulls: params.requestedCount,
-    pullsScope: params.pullsScope || null,
-  };
-  if (params.linked) {
-    const plans = params.plans || {};
-    const pullsBySite = Object.fromEntries(
-      Object.entries(plans).map(([linkedSiteId, plan]) => [linkedSiteId, pullsCount(plan?.pulls)]),
-    );
-    const currentSitePulls = pullsBySite[String(params.siteId)] ?? 0;
-    const totalPulls = Object.values(pullsBySite).reduce((sum, count) => sum + Number(count || 0), 0);
-    const message =
-      totalPulls > 0
-        ? "[planning-v2][משיכות][candidate-with-pulls]"
-        : "[planning-v2][משיכות][candidate-without-pulls]";
-    console.warn(message, {
-      ...base,
-      currentSitePulls,
-      totalPulls,
-      pullsBySite,
-      willRejectForRequestedPulls:
-        params.requestedCount != null &&
-        !linkedPlansMatchRequestedPulls(plans, params.siteId, params.requestedCount, params.pullsScope),
-    });
-    return;
-  }
-  const currentSitePulls = pullsCount(params.pulls);
-  const message =
-    currentSitePulls > 0
-      ? "[planning-v2][משיכות][candidate-with-pulls]"
-      : "[planning-v2][משיכות][candidate-without-pulls]";
-  console.warn(message, {
-    ...base,
-    currentSitePulls,
-    totalPulls: currentSitePulls,
-    willRejectForRequestedPulls:
-      params.requestedCount != null && !pullsMatchRequestedCount(params.pulls, params.requestedCount),
-  });
+  void params;
 }
 
 function adjustedAppendGenerationBudget(linked: boolean, existingAlternativesCount: number) {
@@ -197,6 +154,8 @@ type PlanControllerArgs = {
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
   reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  /** Mode ערוך sur un plan director/shared : garder le brouillon généré visible jusqu'à sauvegarde. */
+  editingSaved?: boolean;
   linkedSitesLength: number;
   /** Sites du groupe (courant + liés) pour purger les טיוטות auto issues d’une ריצה depuis la liste sites. */
   weekPurgeSiteIds: number[];
@@ -565,6 +524,7 @@ export function usePlanningV2PlanController({
   workers,
   workerRowsForTable,
   reloadWeekPlan,
+  editingSaved = false,
   linkedSitesLength,
   weekPurgeSiteIds,
 }: PlanControllerArgs) {
@@ -673,6 +633,10 @@ export function usePlanningV2PlanController({
   }, [autoPullsStorageKey]);
 
   const autoPullsEnabled = autoPullsLimit !== "";
+  const hasOfficialSavedWeekPlan =
+    assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
+    (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
+  const protectOfficialSavedPlan = hasOfficialSavedWeekPlan && !editingSaved;
 
   /** סנכרון isManual מהשרת פעם אחת אחרי טעינת weekPlan לשבוע (לא בכל refetch — שומר על ידני / אפס גריד). */
   const planLoadedForManualRef = useRef(false);
@@ -682,7 +646,7 @@ export function usePlanningV2PlanController({
     setDraftPulls(null);
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
-    const preservedAltIndex = linkedSitesLength > 1
+    const preservedAltIndex = linkedSitesLength > 1 && !protectOfficialSavedPlan
       ? Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0))
       : 0;
     setSelectedAlternativeIndex(preservedAltIndex);
@@ -693,7 +657,20 @@ export function usePlanningV2PlanController({
     bestGeneratedHoleScoreRef.current = null;
     appendUniqueCountRef.current = 0;
     lastAlternativeSnapshotRef.current = "";
-  }, [linkedSitesLength, siteId, weekIso, weekStart]);
+  }, [linkedSitesLength, protectOfficialSavedPlan, siteId, weekIso, weekStart]);
+
+  useEffect(() => {
+    if (!protectOfficialSavedPlan) return;
+    if (genBusyRef.current) return;
+    setDraftAssignments(null);
+    setDraftPulls(null);
+    setDraftAlternatives([]);
+    setDraftFixedAssignmentsSnapshot(null);
+    setSelectedAlternativeIndex(0);
+    if (linkedSitesLength > 1) {
+      clearLinkedPlansFromMemory(weekStart);
+    }
+  }, [linkedSitesLength, protectOfficialSavedPlan, weekPlan?.assignments, weekPlan?.sourceScope, weekStart]);
 
   // Multi-sites: כשעוברים בין אתרים, לשמור אלטרנטיבה פעילה זהה לכל האתרים דרך sessionStorage.
   useEffect(() => {
@@ -704,6 +681,10 @@ export function usePlanningV2PlanController({
       // la mémoire ici : sinon `linked-plans-memory-updated` (microtâche) rivalise avec
       // `setDraftAlternatives` et peut provoquer « Maximum update depth exceeded ».
       if (genBusyRef.current) return;
+      if (protectOfficialSavedPlan) {
+        setSelectedAlternativeIndex(0);
+        return;
+      }
       const mem = readLinkedPlansFromMemory(weekStart);
       const normalizedPlans = buildPersistableLinkedPlans(mem?.plansBySite);
       const plan = normalizedPlans[String(siteId)];
@@ -716,14 +697,6 @@ export function usePlanningV2PlanController({
         const originalRaw = JSON.stringify(mem.plansBySite);
         const normalizedRaw = JSON.stringify(normalizedPlans);
         if (originalRaw !== normalizedRaw) {
-          console.warn("[planning-v2][multi-site][memory][normalize]", {
-            siteId: String(siteId),
-            weekIso,
-            activeIdx,
-            beforeAltCounts: linkedPlansAltCounts(mem.plansBySite),
-            afterAltCounts: linkedPlansAltCounts(normalizedPlans),
-            source: "refreshFromMemory",
-          });
           saveLinkedPlansToMemory(weekStart, normalizedPlans, activeIdx);
         }
       }
@@ -779,7 +752,7 @@ export function usePlanningV2PlanController({
     const onMem = () => refreshFromMemory();
     window.addEventListener("linked-plans-memory-updated", onMem as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", onMem as EventListener);
-  }, [linkedSitesLength, siteId, weekStart, generationRunning]);
+  }, [protectOfficialSavedPlan, linkedSitesLength, siteId, weekStart, generationRunning]);
 
   useEffect(() => {
     if (weekPlanLoading) return;
@@ -993,16 +966,6 @@ export function usePlanningV2PlanController({
       if (normalizedLinkedPlans && Object.keys(normalizedLinkedPlans).length > 0) {
         const appendMemoryBefore = readLinkedPlansFromMemory(weekStart);
         const activeIdx = Math.max(0, Number(appendMemoryBefore?.activeAltIndex || 0));
-        console.warn("[planning-v2][multi-site][append][start]", {
-          siteId: String(siteId),
-          weekIso,
-          activeIdx,
-          localAssignmentVariants: assignmentVariants.length,
-          appendExistingAlternativesCount,
-          memoryAltCountsBefore: linkedPlansAltCounts(appendMemoryBefore?.plansBySite),
-          memoryAltCountsAfterNormalize: linkedPlansAltCounts(normalizedLinkedPlans),
-          currentSiteAltCount: Array.isArray(currentLinkedPlan?.alternatives) ? currentLinkedPlan.alternatives.length : 0,
-        });
         saveLinkedPlansToMemory(weekStart, normalizedLinkedPlans, activeIdx);
       }
       if (baseAssignments && typeof baseAssignments === "object") {
@@ -1139,14 +1102,6 @@ export function usePlanningV2PlanController({
         return score.holes < bestScore.holes || (score.holes === bestScore.holes && score.pulls <= bestScore.pulls);
       });
       if (draftAlternativesRef.current.length !== before) {
-        console.warn("[planning-v2][holes][prune-worse-alternatives]", {
-          siteId: String(siteId),
-          weekIso,
-          bestHoles: bestScore.holes,
-          bestPulls: bestScore.pulls,
-          before,
-          after: draftAlternativesRef.current.length,
-        });
         scheduleAlternativesFlush();
       }
     };
@@ -1159,22 +1114,11 @@ export function usePlanningV2PlanController({
     ): boolean => {
       if (!autoPullsEnabled) return false;
       const best = bestGeneratedHoleScoreRef.current;
-      const baseLog = {
-        siteId: String(siteId),
-        weekIso,
-        itemType,
-        mode: appendMode ? "append" : "replace",
-        eventIndex: eventIndex ?? null,
-        generationId: generationId ?? null,
-        requestedPulls: requestedPullsCount,
-        holes: score.holes,
-        pulls: score.pulls,
-        assigned: score.assigned,
-        required: score.required,
-        bestHoles: best?.holes ?? null,
-        bestPulls: best?.pulls ?? null,
-        bestAssigned: best?.assigned ?? null,
-      };
+      void itemType;
+      void eventIndex;
+      void generationId;
+      void appendMode;
+      void requestedPullsCount;
       if (
         !best ||
         score.holes < best.holes ||
@@ -1182,15 +1126,12 @@ export function usePlanningV2PlanController({
         (score.holes === best.holes && score.pulls === best.pulls && score.assigned > best.assigned)
       ) {
         bestGeneratedHoleScoreRef.current = score;
-        console.warn("[planning-v2][holes][candidate-best-so-far]", baseLog);
         pruneDraftAlternativesByBestHoles(score);
         return false;
       }
       if (score.holes > best.holes || (score.holes === best.holes && score.pulls > best.pulls)) {
-        console.warn("[planning-v2][holes][reject-worse-candidate]", baseLog);
         return true;
       }
-      console.warn("[planning-v2][holes][candidate-same-best-holes]", baseLog);
       return false;
     };
 
@@ -1960,15 +1901,17 @@ export function usePlanningV2PlanController({
         setAlternativesUnlockNonce((n) => n + 1);
         try {
           await persistGeneratedAutoDraftToServer();
-          await reloadWeekPlan({ silent: true, preferredScope: "auto" });
-          // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
-          // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
-          draftAssignmentsRef.current = null;
-          draftPullsRef.current = {};
-          draftAlternativesRef.current = [];
-          setDraftAssignments(null);
-          setDraftPulls(null);
-          setDraftAlternatives([]);
+          if (!(editingSaved && hasOfficialSavedWeekPlan)) {
+            await reloadWeekPlan({ silent: true, preferredScope: "auto" });
+            // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
+            // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
+            draftAssignmentsRef.current = null;
+            draftPullsRef.current = {};
+            draftAlternativesRef.current = [];
+            setDraftAssignments(null);
+            setDraftPulls(null);
+            setDraftAlternatives([]);
+          }
         } catch (err) {
           console.warn("[planning-v2] persist auto draft after generation:", err);
         }
@@ -1994,6 +1937,8 @@ export function usePlanningV2PlanController({
     autoPullsLimit,
     linkedSitesLength,
     reloadWeekPlan,
+    editingSaved,
+    hasOfficialSavedWeekPlan,
     site,
     weekPurgeSiteIds,
     alternativesFlushRafRef,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
@@ -34,6 +34,11 @@ interface GroupedWorker {
   entries: Worker[];
 }
 
+type ApiErrorLike = {
+  status?: number;
+  message?: string;
+};
+
 const SITE_BADGE_COLORS = [
   "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-300",
   "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
@@ -65,10 +70,10 @@ export default function WorkersList() {
     try {
       const list = await apiFetch<Worker[]>("/director/sites/all-workers", {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        cache: "no-store" as any,
+        cache: "no-store" as RequestCache,
       });
       setWorkers(list || []);
-    } catch (e: any) {
+    } catch {
       setError("שגיאה בטעינת עובדים");
     }
   }
@@ -77,10 +82,10 @@ export default function WorkersList() {
     try {
       const list = await apiFetch<Site[]>("/director/sites/", {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        cache: "no-store" as any,
+        cache: "no-store" as RequestCache,
       });
       setSites(list || []);
-    } catch (e: any) {
+    } catch {
       // Ignorer l'erreur pour les sites car on peut afficher les travailleurs sans
     }
   }
@@ -95,15 +100,15 @@ export default function WorkersList() {
     })();
   }, [router]);
 
-  const getSiteName = (siteId: number): string => {
+  const getSiteName = useCallback((siteId: number): string => {
     const site = sites.find((s) => s.id === siteId);
     return site?.name || `אתר #${siteId}`;
-  };
-  const getSiteLabelForEntry = (entry: Worker): string => {
+  }, [sites]);
+  const getSiteLabelForEntry = useCallback((entry: Worker): string => {
     const fromApi = String(entry.site_name || "").trim();
     if (fromApi) return fromApi;
     return getSiteName(entry.site_id);
-  };
+  }, [getSiteName]);
   const getSiteBadgeClassName = (siteId: number): string => {
     const normalizedId = Math.abs(Number(siteId) || 0);
     return SITE_BADGE_COLORS[normalizedId % SITE_BADGE_COLORS.length];
@@ -143,7 +148,7 @@ export default function WorkersList() {
         return getSiteLabelForEntry(a).localeCompare(getSiteLabelForEntry(b), "he");
       }),
     }));
-  }, [workers, sites]);
+  }, [getSiteLabelForEntry, workers]);
 
   const filteredWorkers = useMemo(() => {
     const q = (query || "").trim().toLowerCase();
@@ -154,10 +159,9 @@ export default function WorkersList() {
       const siteNames = worker.entries.map((entry) => String(getSiteLabelForEntry(entry)).toLowerCase());
       return name.includes(q) || phone.includes(q) || siteNames.some((siteName) => siteName.includes(q));
     });
-  }, [groupedWorkers, query, sites]);
+  }, [getSiteLabelForEntry, groupedWorkers, query]);
 
   async function handleAddWorker() {
-    console.log("[handleAddWorker] Function called with:", { selectedSiteId, name: newWorkerName, phone: newWorkerPhone });
     if (!selectedSiteId || !newWorkerName.trim() || !normalizedNewWorkerPhone) {
       toast.error("נא למלא את כל השדות");
       return;
@@ -168,10 +172,8 @@ export default function WorkersList() {
     }
     setAddingWorker(true);
     let userCreated = false;
-    let userErrorOccurred = false;
     try {
       // Créer d'abord le User worker
-      console.log("[handleAddWorker] About to create User worker:", { name: newWorkerName.trim(), phone: normalizedNewWorkerPhone, siteId: selectedSiteId });
       try {
       await apiFetch(`/director/sites/${selectedSiteId}/create-worker-user`, {
         method: "POST",
@@ -182,11 +184,10 @@ export default function WorkersList() {
         }),
       });
         userCreated = true;
-      } catch (userError: any) {
-        userErrorOccurred = true;
-        const errorStatus = userError?.status || 0;
-        const errorMsg = String(userError?.message || "").toLowerCase();
-        console.log("[handleAddWorker] User creation error - status:", errorStatus, "message:", userError?.message, "errorMsg:", errorMsg);
+      } catch (userError: unknown) {
+        const err = userError as ApiErrorLike;
+        const errorStatus = err?.status || 0;
+        const errorMsg = String(err?.message || "").toLowerCase();
         
         // Si le User existe déjà (téléphone déjà utilisé - erreur 400), continuer quand même pour créer le SiteWorker
         const isPhoneAlreadyUsed = errorStatus === 400 || 
@@ -198,23 +199,17 @@ export default function WorkersList() {
           errorMsg.includes("already") ||
           errorMsg.includes("400");
         
-        console.log("[handleAddWorker] isPhoneAlreadyUsed:", isPhoneAlreadyUsed, "errorStatus === 400:", errorStatus === 400);
-        
         if (isPhoneAlreadyUsed) {
-          console.warn("[handleAddWorker] User already exists (status:", errorStatus, "message:", userError?.message, "), continuing to create SiteWorker");
           // Ne pas afficher d'erreur, on va quand même créer le SiteWorker
         } else {
           // Pour les autres erreurs, re-lancer
-          console.error("[handleAddWorker] Error creating User (status:", errorStatus, "):", userError);
           throw userError;
         }
       }
       
       // Ensuite créer le SiteWorker (même si le User existe déjà)
-      console.log("[handleAddWorker] After User creation attempt - userCreated:", userCreated, "userErrorOccurred:", userErrorOccurred);
-      console.log("[handleAddWorker] Creating SiteWorker for:", newWorkerName.trim(), "site:", selectedSiteId);
       try {
-        const siteWorkerResult = await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
+        await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
@@ -225,32 +220,29 @@ export default function WorkersList() {
           availability: {},
         }),
       });
-        console.log("[handleAddWorker] SiteWorker created successfully:", siteWorkerResult);
-      
         toast.success(userCreated ? "העובד נוסף בהצלחה" : "העובד נוסף לאתר (משתמש קיים כבר)");
       setIsAddModalOpen(false);
       setNewWorkerName("");
       setNewWorkerPhone("");
       setSelectedSiteId(null);
       await fetchWorkers();
-      } catch (siteWorkerError: any) {
-        console.error("[handleAddWorker] Error creating SiteWorker (status:", siteWorkerError?.status, "):", siteWorkerError);
+      } catch (siteWorkerError: unknown) {
+        const err = siteWorkerError as ApiErrorLike;
         // Si le User a été créé mais pas le SiteWorker, c'est un problème
         if (userCreated) {
-          toast.error("שגיאה בהוספת עובד לאתר", { 
-            description: `המשתמש נוצר אבל העובד לא נוסף לאתר: ${siteWorkerError?.message || "נסה שוב מאוחר יותר"}` 
+          toast.error("שגיאה בהוספת עובד לאתר", {
+            description: `המשתמש נוצר אבל העובד לא נוסף לאתר: ${err?.message || "נסה שוב מאוחר יותר"}`
           });
         } else {
           // Si le User n'a pas été créé (existe déjà), on affiche l'erreur du SiteWorker
           // mais on ne re-lance pas l'erreur pour éviter le catch général
-          toast.error("שגיאה בהוספת עובד לאתר", { 
-            description: `${siteWorkerError?.message || "נסה שוב מאוחר יותר"}` 
+          toast.error("שגיאה בהוספת עובד לאתר", {
+            description: `${err?.message || "נסה שוב מאוחר יותר"}`
           });
         }
       }
-    } catch (e: any) {
-      console.error("[handleAddWorker] Unexpected error:", e);
-      const errorMsg = String(e?.message || "");
+    } catch (e: unknown) {
+      const errorMsg = String((e as ApiErrorLike)?.message || "");
       toast.error("שגיאה בהוספת עובד", { 
         description: errorMsg || "נסה שוב מאוחר יותר." 
       });
@@ -569,6 +561,9 @@ export default function WorkersList() {
                 {!!newWorkerPhone && !isNewWorkerPhoneValid && (
                   <div className="mt-1 text-xs text-red-600">מספר טלפון חייב להכיל בדיוק 10 ספרות</div>
                 )}
+                <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
+                  סיסמת הכניסה הראשונית של העובד תהיה מספר הטלפון שלו.
+                </div>
               </div>
             </div>
             <div className="mt-6 flex items-center justify-end gap-2">
