@@ -20,6 +20,7 @@ import {
   saveLinkedPlansToMemory,
   type LinkedSitePlan,
 } from "../lib/multi-site-linked-memory";
+import { countAssignedCellsForLinkedHoles, countRequiredSlotsFromSiteConfig } from "../lib/linked-site-holes";
 import { countAssignmentsPerWorkerName, subtractPullExtrasFromWorkerCounts } from "../lib/assignments-summary-math";
 import { clearSitesListPlanningBeforePlanningCreat } from "@/lib/clear-sites-list-planning-for-week";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
@@ -50,7 +51,7 @@ function pullsCount(value: unknown): number {
 
 function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null): boolean {
   if (requestedCount == null) return true;
-  return pullsCount(pulls) === requestedCount;
+  return pullsCount(pulls) <= requestedCount;
 }
 
 function linkedPlansMatchRequestedPulls(
@@ -66,6 +67,66 @@ function linkedPlansMatchRequestedPulls(
   }
   const entries = Object.values(plans);
   return entries.length > 0 && entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount));
+}
+
+function logPlanningV2PullCandidate(params: {
+  itemType: "base" | "alternative";
+  appendMode: boolean;
+  linked: boolean;
+  siteId: string;
+  weekIso: string;
+  eventIndex: unknown;
+  generationId: unknown;
+  requestedCount: number | null;
+  pullsScope?: "current_only" | "all_sites";
+  pulls?: unknown;
+  plans?: Record<string, { pulls?: unknown }> | null;
+}) {
+  const base = {
+    itemType: params.itemType,
+    mode: params.appendMode ? "append" : "replace",
+    linked: params.linked,
+    siteId: String(params.siteId),
+    weekIso: params.weekIso,
+    eventIndex: params.eventIndex ?? null,
+    generationId: params.generationId ?? null,
+    requestedPulls: params.requestedCount,
+    pullsScope: params.pullsScope || null,
+  };
+  if (params.linked) {
+    const plans = params.plans || {};
+    const pullsBySite = Object.fromEntries(
+      Object.entries(plans).map(([linkedSiteId, plan]) => [linkedSiteId, pullsCount(plan?.pulls)]),
+    );
+    const currentSitePulls = pullsBySite[String(params.siteId)] ?? 0;
+    const totalPulls = Object.values(pullsBySite).reduce((sum, count) => sum + Number(count || 0), 0);
+    const message =
+      totalPulls > 0
+        ? "[planning-v2][משיכות][candidate-with-pulls]"
+        : "[planning-v2][משיכות][candidate-without-pulls]";
+    console.warn(message, {
+      ...base,
+      currentSitePulls,
+      totalPulls,
+      pullsBySite,
+      willRejectForRequestedPulls:
+        params.requestedCount != null &&
+        !linkedPlansMatchRequestedPulls(plans, params.siteId, params.requestedCount, params.pullsScope),
+    });
+    return;
+  }
+  const currentSitePulls = pullsCount(params.pulls);
+  const message =
+    currentSitePulls > 0
+      ? "[planning-v2][משיכות][candidate-with-pulls]"
+      : "[planning-v2][משיכות][candidate-without-pulls]";
+  console.warn(message, {
+    ...base,
+    currentSitePulls,
+    totalPulls: currentSitePulls,
+    willRejectForRequestedPulls:
+      params.requestedCount != null && !pullsMatchRequestedCount(params.pulls, params.requestedCount),
+  });
 }
 
 function adjustedAppendGenerationBudget(linked: boolean, existingAlternativesCount: number) {
@@ -142,6 +203,44 @@ type PlanControllerArgs = {
 };
 
 type DraftAlternative = { assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap };
+type HoleScore = { holes: number; assigned: number; required: number; pulls: number };
+
+function singlePlanHoleScore(
+  site: SiteSummary | null,
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  pulls: PlanningV2PullsMap | null | undefined,
+): HoleScore {
+  const required = countRequiredSlotsFromSiteConfig(site);
+  const assigned = countAssignedCellsForLinkedHoles(assignments, pulls || {});
+  return { assigned, required, holes: Math.max(0, required - assigned), pulls: pullsCount(pulls) };
+}
+
+function linkedPlansHoleScore(
+  plans: Record<string, { assignments?: unknown; pulls?: unknown; required_count?: unknown }> | null | undefined,
+  currentSiteId: string,
+  currentSite: SiteSummary | null,
+): HoleScore {
+  let assigned = 0;
+  let required = 0;
+  let totalPulls = 0;
+  for (const [siteKey, plan] of Object.entries(plans || {})) {
+    const assignments = plan?.assignments && typeof plan.assignments === "object"
+      ? (plan.assignments as Record<string, Record<string, string[][]>>)
+      : null;
+    const pulls = plan?.pulls && typeof plan.pulls === "object"
+      ? (plan.pulls as PlanningV2PullsMap)
+      : {};
+    totalPulls += pullsCount(pulls);
+    assigned += countAssignedCellsForLinkedHoles(assignments, pulls);
+    const rawRequired = Number(plan?.required_count);
+    required += Number.isFinite(rawRequired) && rawRequired > 0
+      ? rawRequired
+      : String(siteKey) === String(currentSiteId)
+        ? countRequiredSlotsFromSiteConfig(currentSite)
+        : 0;
+  }
+  return { assigned, required, holes: Math.max(0, required - assigned), pulls: totalPulls };
+}
 
 function normalizeDraftAlternatives(
   value: Array<DraftAlternative | null | undefined>,
@@ -499,6 +598,7 @@ export function usePlanningV2PlanController({
   const lastAlternativeSnapshotRef = useRef<string>("");
   const seenAlternativeSnapshotsRef = useRef<Set<string>>(new Set());
   const seenLinkedAlternativeSnapshotsRef = useRef<Set<string>>(new Set());
+  const bestGeneratedHoleScoreRef = useRef<HoleScore | null>(null);
   const appendUniqueCountRef = useRef(0);
   const alternativesFlushRafRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
@@ -590,6 +690,7 @@ export function usePlanningV2PlanController({
     planLoadedForManualRef.current = false;
     seenAlternativeSnapshotsRef.current = new Set();
     seenLinkedAlternativeSnapshotsRef.current = new Set();
+    bestGeneratedHoleScoreRef.current = null;
     appendUniqueCountRef.current = 0;
     lastAlternativeSnapshotRef.current = "";
   }, [linkedSitesLength, siteId, weekIso, weekStart]);
@@ -853,6 +954,7 @@ export function usePlanningV2PlanController({
       draftAlternativesRef.current = [];
       seenAlternativeSnapshotsRef.current = new Set();
       seenLinkedAlternativeSnapshotsRef.current = new Set();
+      bestGeneratedHoleScoreRef.current = null;
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
       setDraftAssignments(null);
@@ -918,6 +1020,9 @@ export function usePlanningV2PlanController({
         linkedSitesLength > 1 && dedupeAlternatives
           ? buildSeenLinkedAlternativeSnapshots(readLinkedPlansFromMemory(weekStart)?.plansBySite || {})
           : new Set();
+      bestGeneratedHoleScoreRef.current = baseAssignments
+        ? singlePlanHoleScore(site, baseAssignments, basePulls)
+        : null;
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
     }
@@ -1025,6 +1130,68 @@ export function usePlanningV2PlanController({
           return [...next];
         });
       });
+    };
+
+    const pruneDraftAlternativesByBestHoles = (bestScore: HoleScore) => {
+      const before = draftAlternativesRef.current.length;
+      draftAlternativesRef.current = normalizeDraftAlternatives(draftAlternativesRef.current || []).filter((alt) => {
+        const score = singlePlanHoleScore(site, alt.assignments, alt.pulls);
+        return score.holes < bestScore.holes || (score.holes === bestScore.holes && score.pulls <= bestScore.pulls);
+      });
+      if (draftAlternativesRef.current.length !== before) {
+        console.warn("[planning-v2][holes][prune-worse-alternatives]", {
+          siteId: String(siteId),
+          weekIso,
+          bestHoles: bestScore.holes,
+          bestPulls: bestScore.pulls,
+          before,
+          after: draftAlternativesRef.current.length,
+        });
+        scheduleAlternativesFlush();
+      }
+    };
+
+    const shouldRejectForHoleScore = (
+      score: HoleScore,
+      itemType: "base" | "alternative",
+      eventIndex: unknown,
+      generationId: unknown,
+    ): boolean => {
+      if (!autoPullsEnabled) return false;
+      const best = bestGeneratedHoleScoreRef.current;
+      const baseLog = {
+        siteId: String(siteId),
+        weekIso,
+        itemType,
+        mode: appendMode ? "append" : "replace",
+        eventIndex: eventIndex ?? null,
+        generationId: generationId ?? null,
+        requestedPulls: requestedPullsCount,
+        holes: score.holes,
+        pulls: score.pulls,
+        assigned: score.assigned,
+        required: score.required,
+        bestHoles: best?.holes ?? null,
+        bestPulls: best?.pulls ?? null,
+        bestAssigned: best?.assigned ?? null,
+      };
+      if (
+        !best ||
+        score.holes < best.holes ||
+        (score.holes === best.holes && score.pulls < best.pulls) ||
+        (score.holes === best.holes && score.pulls === best.pulls && score.assigned > best.assigned)
+      ) {
+        bestGeneratedHoleScoreRef.current = score;
+        console.warn("[planning-v2][holes][candidate-best-so-far]", baseLog);
+        pruneDraftAlternativesByBestHoles(score);
+        return false;
+      }
+      if (score.holes > best.holes || (score.holes === best.holes && score.pulls > best.pulls)) {
+        console.warn("[planning-v2][holes][reject-worse-candidate]", baseLog);
+        return true;
+      }
+      console.warn("[planning-v2][holes][candidate-same-best-holes]", baseLog);
+      return false;
     };
 
     const persistGeneratedAutoDraftToServer = async () => {
@@ -1196,11 +1363,62 @@ export function usePlanningV2PlanController({
         if (evt.type === "base" && !appendMode) {
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              plans,
+            });
             if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
+            const holeScore = linkedPlansHoleScore(plans, siteId, site);
+            if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
+              return false;
+            }
           } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
             return false;
+          } else if (!linked) {
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
+          }
+          if (!linked && evt.assignments && typeof evt.assignments === "object") {
+            const holeScore = singlePlanHoleScore(
+              site,
+              evt.assignments as Record<string, Record<string, string[][]>>,
+              evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
+            );
+            if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
+              return false;
+            }
           }
           setReplaceGenerationUiClear(false);
           sawGeneratedPlan = true;
@@ -1262,11 +1480,62 @@ export function usePlanningV2PlanController({
         if (evt.type === "base" && appendMode) {
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              plans,
+            });
             if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
+            const holeScore = linkedPlansHoleScore(plans, siteId, site);
+            if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
+              return false;
+            }
           } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
             return false;
+          } else if (!linked) {
+            logPlanningV2PullCandidate({
+              itemType: "base",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
+          }
+          if (!linked && evt.assignments && typeof evt.assignments === "object") {
+            const holeScore = singlePlanHoleScore(
+              site,
+              evt.assignments as Record<string, Record<string, string[][]>>,
+              evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
+            );
+            if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
+              return false;
+            }
           }
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
@@ -1395,11 +1664,62 @@ export function usePlanningV2PlanController({
         if (evt.type === "alternative") {
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
+            logPlanningV2PullCandidate({
+              itemType: "alternative",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              plans,
+            });
             if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
+            const holeScore = linkedPlansHoleScore(plans, siteId, site);
+            if (shouldRejectForHoleScore(holeScore, "alternative", evt.index, evt.generation_id)) {
+              return false;
+            }
           } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+            logPlanningV2PullCandidate({
+              itemType: "alternative",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
             return false;
+          } else if (!linked) {
+            logPlanningV2PullCandidate({
+              itemType: "alternative",
+              appendMode,
+              linked,
+              siteId,
+              weekIso,
+              eventIndex: evt.index,
+              generationId: evt.generation_id,
+              requestedCount: requestedPullsCount,
+              pullsScope: options?.pullsScope,
+              pulls: evt.pulls,
+            });
+          }
+          if (!linked && evt.assignments && typeof evt.assignments === "object") {
+            const holeScore = singlePlanHoleScore(
+              site,
+              evt.assignments as Record<string, Record<string, string[][]>>,
+              evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
+            );
+            if (shouldRejectForHoleScore(holeScore, "alternative", evt.index, evt.generation_id)) {
+              return false;
+            }
           }
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
@@ -1558,6 +1878,39 @@ export function usePlanningV2PlanController({
           stopped = true;
           return true;
         }
+        if (evt.type === "pulls_debug") {
+          const linkedDebug = evt.linked === true;
+          const pullsSummary = evt.pulls_summary && typeof evt.pulls_summary === "object"
+            ? (evt.pulls_summary as Record<string, { pulls?: unknown; matches?: unknown }>)
+            : {};
+          const pullsBySite = Object.fromEntries(
+            Object.entries(pullsSummary).map(([sid, summary]) => [sid, Number(summary?.pulls || 0)]),
+          );
+          const totalPulls = linkedDebug
+            ? Object.values(pullsBySite).reduce((sum, count) => sum + Number(count || 0), 0)
+            : Number(evt.received_pulls || 0);
+          console.warn(
+            totalPulls > 0
+              ? "[planning-v2][משיכות][server-rejected-with-pulls]"
+              : "[planning-v2][משיכות][server-rejected-without-pulls]",
+            {
+              itemType: evt.item_type || null,
+              eventIndex: evt.item_index ?? null,
+              generationId: evt.generation_id ?? null,
+              reason: evt.reason || null,
+              linked: linkedDebug,
+              siteId: String(siteId),
+              weekIso,
+              requestedPulls: evt.requested_pulls ?? null,
+              receivedPulls: linkedDebug ? undefined : Number(evt.received_pulls || 0),
+              totalPulls,
+              pullsBySite: linkedDebug ? pullsBySite : undefined,
+              pullsSummary: linkedDebug ? pullsSummary : undefined,
+              accepted: evt.accepted === true,
+            },
+          );
+          return false;
+        }
         if (evt.type === "done") {
           toast.success("התכנון הושלם");
           stopped = true;
@@ -1641,6 +1994,7 @@ export function usePlanningV2PlanController({
     autoPullsLimit,
     linkedSitesLength,
     reloadWeekPlan,
+    site,
     weekPurgeSiteIds,
     alternativesFlushRafRef,
   ]);

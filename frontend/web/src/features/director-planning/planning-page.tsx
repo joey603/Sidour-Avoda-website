@@ -10866,8 +10866,8 @@ export default function PlanningPage() {
                       const effectivePullsLimit: number | undefined =
                         typeof currentSitePullsValue === "number" ? currentSitePullsValue : undefined;
                       const pullsCountOf = (pulls: any) => (pulls && typeof pulls === "object" ? Object.keys(pulls).length : 0);
-                      const doesNotMatchRequestedPullsCount = (pulls: any) =>
-                        effectivePullsLimit != null && pullsCountOf(pulls) !== effectivePullsLimit;
+                      const exceedsRequestedPullsCount = (pulls: any) =>
+                        effectivePullsLimit != null && pullsCountOf(pulls) > effectivePullsLimit;
                       const warnPullsCandidateReceived = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
                         if (effectivePullsLimit == null) return;
                         const receivedPulls = pullsCountOf(pulls);
@@ -10876,20 +10876,20 @@ export default function PlanningPage() {
                           itemType,
                           requestedPulls: effectivePullsLimit,
                           receivedPulls,
-                          willReject: receivedPulls !== effectivePullsLimit,
-                          rejectReason: receivedPulls < effectivePullsLimit ? "too_few_pulls" : (receivedPulls > effectivePullsLimit ? "too_many_pulls" : null),
+                          willReject: receivedPulls > effectivePullsLimit,
+                          rejectReason: receivedPulls > effectivePullsLimit ? "too_many_pulls" : null,
                           siteId: currentSiteIdRef.current,
                           eventIndex: details?.index,
                           source: details?.source,
                           generationId: details?.generation_id,
                         });
                       };
-                      const warnTooFewPulls = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
+                      const warnTooManyPulls = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
                         if (effectivePullsLimit == null) return;
                         const receivedPulls = pullsCountOf(pulls);
-                        if (receivedPulls >= effectivePullsLimit) return;
+                        if (receivedPulls <= effectivePullsLimit) return;
                         // Log volontairement bruyant pour diagnostiquer les alternatives rejetées côté client.
-                        console.warn("[PLANNING][PULLS_FILTER] alternative/base rejetée: pas assez de משיכות", {
+                        console.warn("[PLANNING][PULLS_FILTER] alternative/base rejetée: trop de משיכות", {
                           scope,
                           itemType,
                           requestedPulls: effectivePullsLimit,
@@ -10944,8 +10944,8 @@ export default function PlanningPage() {
                               if (evt?.type === "base" && evt?.site_plans && typeof evt.site_plans === "object") {
                                 const current = evt.site_plans[currentSiteIdRef.current];
                                 warnPullsCandidateReceived("linked", "base", current?.pulls, evt);
-                                if (doesNotMatchRequestedPullsCount(current?.pulls)) {
-                                  warnTooFewPulls("linked", "base", current?.pulls, evt);
+                                if (exceedsRequestedPullsCount(current?.pulls)) {
+                                  warnTooManyPulls("linked", "base", current?.pulls, evt);
                                   continue;
                                 }
                                 const existingMemory = readLinkedPlansFromMemory(weekStart);
@@ -10977,8 +10977,8 @@ export default function PlanningPage() {
                                 armIdle();
                                 const currentIncomingPlan = (evt.site_plans as Record<string, LinkedSitePlan>)[currentSiteIdRef.current];
                                 warnPullsCandidateReceived("linked", "alternative", currentIncomingPlan?.pulls, evt);
-                                if (doesNotMatchRequestedPullsCount(currentIncomingPlan?.pulls)) {
-                                  warnTooFewPulls("linked", "alternative", currentIncomingPlan?.pulls, evt);
+                                if (exceedsRequestedPullsCount(currentIncomingPlan?.pulls)) {
+                                  warnTooManyPulls("linked", "alternative", currentIncomingPlan?.pulls, evt);
                                   continue;
                                 }
                                 const existingMemory = readLinkedPlansFromMemory(weekStart);
@@ -11167,8 +11167,8 @@ export default function PlanningPage() {
                             const evt = JSON.parse(jsonStr);
                             if (evt?.type === "base") {
                               warnPullsCandidateReceived("single", "base", evt?.pulls, evt);
-                              if (doesNotMatchRequestedPullsCount(evt?.pulls)) {
-                                warnTooFewPulls("single", "base", evt?.pulls, evt);
+                              if (exceedsRequestedPullsCount(evt?.pulls)) {
+                                warnTooManyPulls("single", "base", evt?.pulls, evt);
                                 continue;
                               }
                               setPullsByHoleKey(evt.pulls || {});
@@ -11190,8 +11190,8 @@ export default function PlanningPage() {
                             } else if (evt?.type === "alternative") {
                               armIdle();
                               warnPullsCandidateReceived("single", "alternative", evt?.pulls, evt);
-                              if (doesNotMatchRequestedPullsCount(evt?.pulls)) {
-                                warnTooFewPulls("single", "alternative", evt?.pulls, evt);
+                              if (exceedsRequestedPullsCount(evt?.pulls)) {
+                                warnTooManyPulls("single", "alternative", evt?.pulls, evt);
                                 continue;
                               }
                               setAiPlan((prev) => {

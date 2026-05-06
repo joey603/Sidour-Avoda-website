@@ -1940,6 +1940,42 @@ def _set_payload_variant_assignments(payload: dict, variant_index: int, assignme
     alternatives[variant_index] = assignments
 
 
+def _payload_variant_pulls(payload: dict, variant_index: int) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    if variant_index < 0:
+        src = payload.get("pulls")
+    else:
+        alternative_pulls = payload.get("alternative_pulls")
+        src = alternative_pulls[variant_index] if isinstance(alternative_pulls, list) and variant_index < len(alternative_pulls) else None
+    return src if isinstance(src, dict) else {}
+
+
+def _pull_extra_names_by_cell(pulls: dict | None) -> dict[tuple[str, str, int], set[str]]:
+    extras: dict[tuple[str, str, int], set[str]] = {}
+    for key, entry in _sanitize_pulls_map(pulls).items():
+        parts = str(key or "").split("|")
+        if len(parts) < 3:
+            continue
+        day_key = str(parts[0] or "")
+        shift_name = str(parts[1] or "")
+        try:
+            station_idx = int(parts[2])
+        except Exception:
+            continue
+        names = extras.setdefault((day_key, shift_name, station_idx), set())
+        entry_map = entry if isinstance(entry, dict) else {}
+        before = entry_map.get("before") if isinstance(entry_map.get("before"), dict) else {}
+        after = entry_map.get("after") if isinstance(entry_map.get("after"), dict) else {}
+        before_name = _norm_name_local(before.get("name") if isinstance(before, dict) else None)
+        after_name = _norm_name_local(after.get("name") if isinstance(after, dict) else None)
+        if before_name:
+            names.add(before_name)
+        if after_name:
+            names.add(after_name)
+    return extras
+
+
 def _enforce_linked_global_caps_on_site_payloads(
     db: Session,
     linked_site_ids: list[int],
@@ -1994,6 +2030,7 @@ def _enforce_linked_global_caps_on_site_payloads(
                 continue
             site_id_int = int(site_id_str)
             assignments = _payload_variant_assignments(payload, variant_index)
+            pull_extras_by_cell = _pull_extra_names_by_cell(_payload_variant_pulls(payload, variant_index))
             name_to_key = name_to_key_by_site.get(site_id_int, {})
             for day_key, shifts_map in assignments.items():
                 if not isinstance(shifts_map, dict):
@@ -2001,13 +2038,17 @@ def _enforce_linked_global_caps_on_site_payloads(
                 for shift_name, per_station in shifts_map.items():
                     if not isinstance(per_station, list):
                         continue
-                    for cell in per_station:
+                    for station_idx, cell in enumerate(per_station):
                         if not isinstance(cell, list):
                             continue
+                        pull_extra_names = pull_extras_by_cell.get((str(day_key), str(shift_name), station_idx), set())
                         kept: list[str] = []
                         for raw_name in cell:
                             normalized_name = _norm_name_local(raw_name)
                             if not normalized_name:
+                                continue
+                            if normalized_name in pull_extra_names:
+                                kept.append(str(raw_name).strip())
                                 continue
                             worker_key = name_to_key.get(normalized_name)
                             max_allowed = max_by_worker_key.get(worker_key) if worker_key else None
@@ -2276,13 +2317,13 @@ def _sanitize_pulls_map(pulls: dict | None) -> dict:
 def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None) -> bool:
     if pulls_limit is None:
         return True
-    return _pulls_count(pulls) == int(pulls_limit)
+    return _pulls_count(pulls) <= int(pulls_limit)
 
 
 def _planning_limit_error_detail(pulls_limit: int) -> str:
     if int(pulls_limit) == 1:
-        return "לא נמצא תכנון עם משיכה אחת"
-    return f"לא נמצא תכנון עם {int(pulls_limit)} משיכות"
+        return "לא נמצא תכנון עם עד משיכה אחת"
+    return f"לא נמצא תכנון עם עד {int(pulls_limit)} משיכות"
 
 
 def _effective_auto_pulls_limit_for_site(
@@ -2660,6 +2701,12 @@ def _run_auto_planning_for_director(
                     site_plans = generated.get("site_plans") if isinstance(generated, dict) else {}
                     if not isinstance(site_plans, dict):
                         site_plans = {}
+                    site_plans = _enforce_linked_global_caps_on_site_plans(
+                        db,
+                        linked_ids,
+                        target_week_iso,
+                        site_plans,
+                    )
                     if auto_pulls_enabled:
                         site_plans = _apply_auto_pulls_to_site_plans(
                             db,
@@ -2668,12 +2715,12 @@ def _run_auto_planning_for_director(
                             pulls_limit=pulls_limit,
                             pulls_limits_by_site=pulls_limits_by_site,
                         )
-                    site_plans = _enforce_linked_global_caps_on_site_plans(
-                        db,
-                        linked_ids,
-                        target_week_iso,
-                        site_plans,
-                    )
+                        site_plans = _enforce_linked_global_caps_on_site_plans(
+                            db,
+                            linked_ids,
+                            target_week_iso,
+                            site_plans,
+                        )
                     for linked_sid in linked_ids:
                         linked_site = sites_by_id.get(linked_sid)
                         if not linked_site:
@@ -4475,6 +4522,12 @@ def ai_generate_linked_planning(
             exclude_days=payload.exclude_days if payload else None,
             fixed_assignments=payload.fixed_assignments if payload else None,
         )
+        result["site_plans"] = _enforce_linked_global_caps_on_site_plans(
+            db,
+            context["connected_site_ids"],
+            week_iso,
+            result.get("site_plans") or {},
+        )
         result["site_plans"] = _apply_auto_pulls_to_site_plans(
             db,
             context["sites_by_id"],
@@ -4597,6 +4650,20 @@ async def ai_generate_linked_planning_stream(
     eff_pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
     eff_pulls_limits_by_site = _normalize_pulls_limits_by_site(payload.pulls_limits_by_site if payload else None)
     week_iso = _validate_week_iso(payload.week_iso) if payload and payload.week_iso else _next_week_iso(datetime.now())
+    logger.warning(
+        "[PULLS][LINKED_STREAM][REQUEST] site_id=%s week=%s auto_pulls=%s pulls_limit=%s pulls_limits_by_site=%s "
+        "num_alternatives=%s time_limit=%s fixed=%s exclude_days=%s weekly_availability_workers=%s",
+        site_id,
+        week_iso,
+        bool(payload.auto_pulls_enabled if payload else False),
+        eff_pulls_limit,
+        eff_pulls_limits_by_site or None,
+        eff_num_alts,
+        eff_time,
+        bool(payload.fixed_assignments if payload else None),
+        payload.exclude_days if payload else None,
+        len(payload.weekly_availability or {}) if payload else 0,
+    )
 
     context = _build_multi_site_generation_context(
         db,
@@ -4614,6 +4681,14 @@ async def ai_generate_linked_planning_stream(
         if linked_site_id in context["sites_by_id"]
     ]
     generation_id = _new_generation_id()
+    logger.warning(
+        "[PULLS][LINKED_STREAM][CONTEXT] generation=%s site_id=%s linked_site_ids=%s combined_workers=%s combined_stations=%s",
+        generation_id,
+        site_id,
+        context["connected_site_ids"],
+        len(context.get("combined_workers") or []),
+        len((context.get("combined_config") or {}).get("stations") or []),
+    )
 
     slot_token = await asyncio.to_thread(
         _acquire_generation_slot,
@@ -4631,6 +4706,7 @@ async def ai_generate_linked_planning_stream(
         import threading, queue, json, asyncio as _asyncio, time as _time
         q: "queue.Queue[dict | None]" = queue.Queue(maxsize=256)
         released = False
+        stop_event = threading.Event()
 
         def _release_slot_once() -> None:
             nonlocal released
@@ -4642,6 +4718,7 @@ async def ai_generate_linked_planning_stream(
         def _producer():
             matched_candidates = 0
             dropped_alternatives = 0
+            rejected_candidates = 0
             kept_alternative_signatures: set[str] = set()
             target_kept_alternatives = max(1, int(eff_num_alts))
             kept_alternatives_count = 0
@@ -4667,12 +4744,40 @@ async def ai_generate_linked_planning_stream(
                     return
                 q.put(payload)
 
+            def _pulls_debug_summary(site_plans_value: dict[str, dict] | None) -> dict[str, dict]:
+                summary: dict[str, dict] = {}
+                for site_key, site_plan in (site_plans_value or {}).items():
+                    try:
+                        current_site_id = int(site_key)
+                    except Exception:
+                        current_site_id = 0
+                    pulls_value = site_plan.get("pulls") if isinstance(site_plan, dict) else {}
+                    summary[str(site_key)] = {
+                        "pulls": _pulls_count(pulls_value if isinstance(pulls_value, dict) else {}),
+                        "matches": _site_pulls_limit_matches(
+                            current_site_id,
+                            pulls_value if isinstance(pulls_value, dict) else {},
+                            default_pulls_limit=eff_pulls_limit,
+                            pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                        ),
+                    }
+                return summary
+
             try:
                 deadline_monotonic = _time.monotonic() + max(1, int(eff_time))
                 attempts = 0
                 base_sent = False
+                logger.warning(
+                    "[PULLS][LINKED_STREAM][PRODUCER_START] generation=%s target_alternatives=%s search_num_alts=%s",
+                    generation_id,
+                    target_kept_alternatives,
+                    search_num_alts,
+                )
 
                 while kept_alternatives_count < target_kept_alternatives:
+                    if stop_event.is_set():
+                        logger.warning("[PULLS][LINKED_STREAM][CLIENT_STOP] generation=%s attempt=%s", generation_id, attempts)
+                        break
                     remaining_seconds = deadline_monotonic - _time.monotonic()
                     if remaining_seconds <= 0:
                         break
@@ -4698,6 +4803,9 @@ async def ai_generate_linked_planning_stream(
                         random_seed=attempt_random_seed,
                     )
                     for item in gen:
+                        if stop_event.is_set():
+                            logger.warning("[PULLS][LINKED_STREAM][CLIENT_STOP] generation=%s attempt=%s", generation_id, attempts)
+                            break
                         item_type = item.get("type")
                         if item_type in {"base", "alternative"}:
                             split_site_plans = _split_multi_site_assignments(
@@ -4711,6 +4819,12 @@ async def ai_generate_linked_planning_stream(
                                 context["sites_by_id"],
                                 split_site_plans,
                             )
+                            split_site_plans = _enforce_linked_global_caps_on_site_plans(
+                                db,
+                                context["connected_site_ids"],
+                                week_iso,
+                                split_site_plans,
+                            )
                             if payload and payload.auto_pulls_enabled:
                                 split_site_plans = _apply_auto_pulls_to_site_plans(
                                     db,
@@ -4719,14 +4833,34 @@ async def ai_generate_linked_planning_stream(
                                     pulls_limit=eff_pulls_limit,
                                     pulls_limits_by_site=eff_pulls_limits_by_site or None,
                                 )
-                            split_site_plans = _enforce_linked_global_caps_on_site_plans(
-                                db,
-                                context["connected_site_ids"],
-                                week_iso,
-                                split_site_plans,
-                            )
+                                split_site_plans = _enforce_linked_global_caps_on_site_plans(
+                                    db,
+                                    context["connected_site_ids"],
+                                    week_iso,
+                                    split_site_plans,
+                                )
+                            pulls_summary = _pulls_debug_summary(split_site_plans)
                             if eff_pulls_limit is not None or eff_pulls_limits_by_site:
                                 if not split_site_plans:
+                                    rejected_candidates += 1
+                                    _enqueue({
+                                        "type": "pulls_debug",
+                                        "item_type": item_type,
+                                        "item_index": item.get("index"),
+                                        "accepted": False,
+                                        "reason": "empty_site_plans",
+                                        "linked": True,
+                                        "requested_pulls": eff_pulls_limit,
+                                        "pulls_limits_by_site": eff_pulls_limits_by_site or None,
+                                        "pulls_summary": {},
+                                    }, drop_if_full=True)
+                                    logger.warning(
+                                        "[PULLS][LINKED_STREAM][REJECT_EMPTY] generation=%s attempt=%s type=%s item_index=%s",
+                                        generation_id,
+                                        attempts,
+                                        item_type,
+                                        item.get("index"),
+                                    )
                                     continue
                                 plans = list(split_site_plans.items())
                                 if not plans or not all(
@@ -4738,8 +4872,51 @@ async def ai_generate_linked_planning_stream(
                                     )
                                     for site_key, site_plan in plans
                                 ):
+                                    rejected_candidates += 1
+                                    _enqueue({
+                                        "type": "pulls_debug",
+                                        "item_type": item_type,
+                                        "item_index": item.get("index"),
+                                        "accepted": False,
+                                        "reason": "pulls_count_mismatch",
+                                        "linked": True,
+                                        "requested_pulls": eff_pulls_limit,
+                                        "pulls_limits_by_site": eff_pulls_limits_by_site or None,
+                                        "pulls_summary": pulls_summary,
+                                    }, drop_if_full=True)
+                                    logger.warning(
+                                        "[PULLS][LINKED_STREAM][REJECT_PULL_COUNT] generation=%s attempt=%s type=%s item_index=%s "
+                                        "requested=%s by_site=%s summary=%s",
+                                        generation_id,
+                                        attempts,
+                                        item_type,
+                                        item.get("index"),
+                                        eff_pulls_limit,
+                                        eff_pulls_limits_by_site or None,
+                                        pulls_summary,
+                                    )
                                     continue
                                 matched_candidates += 1
+                                logger.warning(
+                                    "[PULLS][LINKED_STREAM][ACCEPT_PULL_COUNT] generation=%s attempt=%s type=%s item_index=%s "
+                                    "matched=%s kept=%s summary=%s",
+                                    generation_id,
+                                    attempts,
+                                    item_type,
+                                    item.get("index"),
+                                    matched_candidates,
+                                    kept_alternatives_count,
+                                    pulls_summary,
+                                )
+                            elif payload and payload.auto_pulls_enabled:
+                                logger.warning(
+                                    "[PULLS][LINKED_STREAM][CANDIDATE_UNLIMITED] generation=%s attempt=%s type=%s item_index=%s summary=%s",
+                                    generation_id,
+                                    attempts,
+                                    item_type,
+                                    item.get("index"),
+                                    pulls_summary,
+                                )
 
                             if item_type == "base":
                                 _log_linked_generation_worker_totals(
@@ -4795,10 +4972,20 @@ async def ai_generate_linked_planning_stream(
                         enriched["linked_sites"] = linked_sites
                         _enqueue(enriched, drop_if_full=item_type == "alternative")
 
+                    if stop_event.is_set():
+                        break
                     if kept_alternatives_count >= target_kept_alternatives:
                         break
 
-                if (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
+                if not stop_event.is_set() and (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
+                    logger.warning(
+                        "[PULLS][LINKED_STREAM][NO_MATCH] generation=%s rejected=%s kept=%s requested=%s by_site=%s",
+                        generation_id,
+                        rejected_candidates,
+                        kept_alternatives_count,
+                        eff_pulls_limit,
+                        eff_pulls_limits_by_site or None,
+                    )
                     _enqueue({
                         "type": "status",
                         "status": "ERROR",
@@ -4808,10 +4995,20 @@ async def ai_generate_linked_planning_stream(
                         ),
                         "linked_sites": linked_sites,
                     })
-                _enqueue({"type": "done", "linked_sites": linked_sites})
+                if not stop_event.is_set():
+                    _enqueue({"type": "done", "linked_sites": linked_sites})
             except Exception as e:
+                logger.exception("[PULLS][LINKED_STREAM][ERROR] generation=%s error=%s", generation_id, e)
                 _enqueue({"type": "status", "status": "ERROR", "detail": str(e), "linked_sites": linked_sites})
             finally:
+                logger.warning(
+                    "[PULLS][LINKED_STREAM][DONE] generation=%s matched=%s rejected=%s kept=%s dropped_queue=%s",
+                    generation_id,
+                    matched_candidates,
+                    rejected_candidates,
+                    kept_alternatives_count,
+                    dropped_alternatives,
+                )
                 if dropped_alternatives > 0:
                     _enqueue({
                         "type": "status",
@@ -4835,6 +5032,7 @@ async def ai_generate_linked_planning_stream(
                 finally:
                     await asyncio.sleep(0)
         finally:
+            stop_event.set()
             _release_slot_once()
 
     headers = {
@@ -5087,6 +5285,7 @@ async def ai_generate_stream(
         def _producer():
             matched_candidates = 0
             dropped_alternatives = 0
+            rejected_candidates = 0
             kept_alternative_signatures: set[str] = set()
             target_kept_alternatives = max(1, int(eff_num_alts))
             kept_alternatives_count = 0
@@ -5116,6 +5315,16 @@ async def ai_generate_stream(
                 deadline_monotonic = _time.monotonic() + max(1, int(eff_time))
                 attempts = 0
                 base_sent = False
+                logger.warning(
+                    "[PULLS][SINGLE_STREAM][PRODUCER_START] generation=%s site=%s target_alternatives=%s "
+                    "search_num_alts=%s requested=%s auto_pulls=%s",
+                    generation_id,
+                    site_id,
+                    target_kept_alternatives,
+                    search_num_alts,
+                    eff_pulls_limit,
+                    bool(payload.auto_pulls_enabled),
+                )
 
                 while kept_alternatives_count < target_kept_alternatives:
                     remaining_seconds = deadline_monotonic - _time.monotonic()
@@ -5154,15 +5363,55 @@ async def ai_generate_stream(
                                 {"assignments": deepcopy(cleaned_assignments), "pulls": {}},
                                 pulls_limit=eff_pulls_limit,
                             )
+                            transformed_pulls = transformed.get("pulls") if isinstance(transformed.get("pulls"), dict) else {}
+                            transformed_pulls_count = _pulls_count(transformed_pulls)
                             if eff_pulls_limit is not None and not _matches_pulls_limit(
-                                transformed.get("pulls"),
+                                transformed_pulls,
                                 eff_pulls_limit,
                             ):
+                                rejected_candidates += 1
+                                _enqueue({
+                                    "type": "pulls_debug",
+                                    "item_type": item.get("type"),
+                                    "item_index": item.get("index"),
+                                    "accepted": False,
+                                    "reason": "pulls_count_mismatch",
+                                    "linked": False,
+                                    "site_id": site_id,
+                                    "requested_pulls": eff_pulls_limit,
+                                    "received_pulls": transformed_pulls_count,
+                                }, drop_if_full=True)
+                                logger.warning(
+                                    "[PULLS][SINGLE_STREAM][REJECT_PULL_COUNT] generation=%s site=%s attempt=%s "
+                                    "type=%s item_index=%s requested=%s received=%s rejected=%s kept=%s",
+                                    generation_id,
+                                    site_id,
+                                    attempts,
+                                    item.get("type"),
+                                    item.get("index"),
+                                    eff_pulls_limit,
+                                    transformed_pulls_count,
+                                    rejected_candidates,
+                                    kept_alternatives_count,
+                                )
                                 continue
                             enriched = dict(item)
                             enriched["assignments"] = transformed.get("assignments") or {}
-                            enriched["pulls"] = transformed.get("pulls") or {}
+                            enriched["pulls"] = transformed_pulls
                             matched_candidates += 1
+                            logger.warning(
+                                "[PULLS][SINGLE_STREAM][ACCEPT_PULL_COUNT] generation=%s site=%s attempt=%s "
+                                "type=%s item_index=%s requested=%s received=%s matched=%s kept=%s",
+                                generation_id,
+                                site_id,
+                                attempts,
+                                item.get("type"),
+                                item.get("index"),
+                                eff_pulls_limit,
+                                transformed_pulls_count,
+                                matched_candidates,
+                                kept_alternatives_count,
+                            )
                             _log_single_site_generation_worker_totals(
                                 generation_id=generation_id,
                                 site_id=int(site_id),
@@ -5265,7 +5514,12 @@ async def ai_generate_stream(
                     elif item.get("type") == "done":
                         logger.info("[SSE] push done generation=%s", item.get("generation_id"))
                     elif item.get("type") == "status":
-                        logger.warning("[SSE] generation=%s status=%s", item.get("generation_id"), item.get("status"))
+                        logger.warning(
+                            "[SSE] generation=%s status=%s detail=%s",
+                            item.get("generation_id"),
+                            item.get("status"),
+                            item.get("detail"),
+                        )
                     chunk = f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
                     yield chunk
                 finally:
