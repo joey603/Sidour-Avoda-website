@@ -38,6 +38,8 @@ type PlanningV2ActionBarProps = {
   onIsManualChange: (v: boolean) => void;
   /** מעבר לידני + איפוס גריד מקומי (ללא טעינה מחדש מהשרת). */
   onEnterManualWithGridReset?: () => void;
+  /** מעבר לאוטומטי + איפוס גריד מקומי (ללא טעינה מחדש מהשרת). */
+  onEnterAutoWithGridReset?: () => void;
   onSavePlan: (publishToWorkers: boolean) => void | Promise<void>;
   onDraftClear?: () => void;
   /** טיוטת IA ללא שמירה — מאפשר שמור בלי מצב ערוך */
@@ -82,6 +84,7 @@ export function PlanningV2ActionBar({
   isManual,
   onIsManualChange,
   onEnterManualWithGridReset,
+  onEnterAutoWithGridReset,
   onSavePlan,
   onDraftClear,
   draftActive,
@@ -413,10 +416,9 @@ export function PlanningV2ActionBar({
                 className="rounded-md bg-[#00A8E0] px-3 py-1 text-sm text-white hover:bg-[#0092c6]"
                 onClick={() => {
                   if (modeSwitchTarget === "auto") {
-                    onIsManualChange(false);
+                    onEnterAutoWithGridReset?.();
                     setShowModeSwitchDialog(false);
                     setModeSwitchTarget(null);
-                    void reloadWeekPlan();
                   } else if (modeSwitchTarget === "manual") {
                     onEnterManualWithGridReset?.();
                     setShowModeSwitchDialog(false);

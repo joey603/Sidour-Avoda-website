@@ -2029,12 +2029,29 @@ export function usePlanningV2PlanController({
   }, [reloadWeekPlan]);
 
   const enterManualWithGridReset = useCallback(() => {
-    setDraftAssignments(buildEmptyAssignmentsForSite(site));
+    const emptyAssignments = buildEmptyAssignmentsForSite(site);
+    draftAssignmentsRef.current = emptyAssignments;
+    draftPullsRef.current = {};
+    draftAlternativesRef.current = [];
+    setDraftAssignments(emptyAssignments);
     setDraftPulls({});
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
     setSelectedAlternativeIndex(0);
     setIsManual(true);
+  }, [site]);
+
+  const enterAutoWithGridReset = useCallback(() => {
+    const emptyAssignments = buildEmptyAssignmentsForSite(site);
+    draftAssignmentsRef.current = emptyAssignments;
+    draftPullsRef.current = {};
+    draftAlternativesRef.current = [];
+    setDraftAssignments(emptyAssignments);
+    setDraftPulls({});
+    setDraftAlternatives([]);
+    setDraftFixedAssignmentsSnapshot(null);
+    setSelectedAlternativeIndex(0);
+    setIsManual(false);
   }, [site]);
 
   const setIsManualPreservingCurrentGrid = useCallback(
@@ -2172,6 +2189,7 @@ export function usePlanningV2PlanController({
     clearDraft,
     cancelSavedEditing,
     enterManualWithGridReset,
+    enterAutoWithGridReset,
     resetManualStation,
     getLatestAssignmentBase,
     commitDraftAssignments,

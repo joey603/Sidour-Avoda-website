@@ -2106,6 +2106,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             }
           }}
           onEnterManualWithGridReset={plan.enterManualWithGridReset}
+          onEnterAutoWithGridReset={() => {
+            plan.enterAutoWithGridReset();
+            setPullsModeStationIdx(null);
+            setShiftHoursModeStationIdx(null);
+          }}
           onSavePlan={handleSavePlan}
           onDraftClear={plan.clearDraft}
           draftActive={plan.draftActive}
