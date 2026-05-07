@@ -465,6 +465,8 @@ function pruneLinkedPlansOverMaxShifts(
 
 const PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX = "planning_v2_alternatives_unlock_";
 const PLANNING_V2_LINKED_GENERATION_PREFIX = "planning_v2_linked_generation_";
+const PLANNING_V2_LINKED_GENERATION_STOP_PREFIX = "planning_v2_linked_generation_stop_";
+const PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX = "planning_v2_linked_generation_stop_visible_";
 
 function alternativesUnlockSessionKey(weekIso: string, siteId: string) {
   return `${PLANNING_V2_ALTERNATIVES_UNLOCK_PREFIX}${weekIso}_${siteId}`;
@@ -492,12 +494,73 @@ function linkedGenerationSessionKey(weekIso: string) {
   return `${PLANNING_V2_LINKED_GENERATION_PREFIX}${weekIso}`;
 }
 
+function linkedGenerationStopSessionKey(weekIso: string) {
+  return `${PLANNING_V2_LINKED_GENERATION_STOP_PREFIX}${weekIso}`;
+}
+
+function linkedGenerationStopVisibleCountSessionKey(weekIso: string) {
+  return `${PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX}${weekIso}`;
+}
+
 function readLinkedGenerationRunningFromSession(weekIso: string): boolean {
   if (typeof window === "undefined") return false;
   try {
     return sessionStorage.getItem(linkedGenerationSessionKey(weekIso)) === "1";
   } catch {
     return false;
+  }
+}
+
+function readLinkedGenerationStopRequestFromSession(weekIso: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(linkedGenerationStopSessionKey(weekIso)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readLinkedGenerationStopVisibleCountFromSession(weekIso: string): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(linkedGenerationStopVisibleCountSessionKey(weekIso));
+    const value = raw == null ? NaN : Number(raw);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.max(1, Math.trunc(value));
+  } catch {
+    return null;
+  }
+}
+
+function writeLinkedGenerationStopVisibleCountToSession(weekIso: string, visibleCount: number | null) {
+  if (typeof window === "undefined") return;
+  try {
+    const key = linkedGenerationStopVisibleCountSessionKey(weekIso);
+    if (visibleCount == null || !Number.isFinite(visibleCount) || visibleCount <= 0) {
+      sessionStorage.removeItem(key);
+    } else {
+      sessionStorage.setItem(key, String(Math.max(1, Math.trunc(visibleCount))));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function writeLinkedGenerationStopRequestToSession(weekIso: string, stopRequested: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    const key = linkedGenerationStopSessionKey(weekIso);
+    if (stopRequested) sessionStorage.setItem(key, "1");
+    else sessionStorage.removeItem(key);
+    queueMicrotask(() => {
+      try {
+        window.dispatchEvent(new CustomEvent("planning-v2-linked-generation-stop-updated", { detail: { key, stopRequested } }));
+      } catch {
+        /* ignore */
+      }
+    });
+  } catch {
+    /* ignore */
   }
 }
 
@@ -593,6 +656,37 @@ export function usePlanningV2PlanController({
   const [moreAlternativesAvailable, setMoreAlternativesAvailable] = useState(true);
   const dedupeAlternatives = linkedSitesLength <= 1;
 
+  const pruneLinkedPlansMemoryAfterStop = useCallback(
+    (visibleAlternativeCount: number) => {
+      if (linkedSitesLength <= 1) return;
+      const mem = readLinkedPlansFromMemory(weekStart);
+      if (!mem?.plansBySite || typeof mem.plansBySite !== "object") return;
+      const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
+      const maxStoredAlternatives = maxVisibleIndex;
+      const nextPlans: Record<string, LinkedSitePlan> = {};
+      let changed = false;
+      for (const [sid, plan] of Object.entries(mem.plansBySite)) {
+        if (!plan || typeof plan !== "object") continue;
+        const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+        const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+        const nextAlternatives = alternatives.slice(0, maxStoredAlternatives);
+        const nextAlternativePulls = alternativePulls.slice(0, maxStoredAlternatives);
+        nextPlans[sid] = {
+          ...plan,
+          alternatives: nextAlternatives,
+          alternative_pulls: nextAlternativePulls,
+        };
+        if (nextAlternatives.length !== alternatives.length || nextAlternativePulls.length !== alternativePulls.length) {
+          changed = true;
+        }
+      }
+      const nextActiveIndex = Math.min(Math.max(0, Number(mem.activeAltIndex || 0)), maxVisibleIndex);
+      if (!changed && nextActiveIndex === Math.max(0, Number(mem.activeAltIndex || 0))) return;
+      saveLinkedPlansToMemory(weekStart, nextPlans, nextActiveIndex);
+    },
+    [linkedSitesLength, weekStart],
+  );
+
   useEffect(() => {
     setAlternativesUnlockNonce((n) => n + 1);
   }, [siteId, weekIso]);
@@ -621,7 +715,7 @@ export function usePlanningV2PlanController({
   }, [linkedSitesLength, weekIso]);
 
   const generationRunning = localGenerationRunning || sharedLinkedGenerationRunning;
-  const generationStoppable = localGenerationRunning && abortRef.current !== null;
+  const generationStoppable = (localGenerationRunning && abortRef.current !== null) || (linkedSitesLength > 1 && sharedLinkedGenerationRunning);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -696,13 +790,18 @@ export function usePlanningV2PlanController({
       const plan = normalizedPlans[String(siteId)];
       if (!plan) return;
       const activeIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
-      const snap = JSON.stringify({ activeIdx, plan });
+      const stopLimit =
+        stopVisibleAlternativeCountRef.current ??
+        (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
+      const maxVisibleIndex = stopLimit == null ? null : Math.max(0, stopLimit - 1);
+      const appliedActiveIdx = maxVisibleIndex == null ? activeIdx : Math.min(activeIdx, maxVisibleIndex);
+      const snap = JSON.stringify({ activeIdx: appliedActiveIdx, plan, stopLimit });
       if (snap === lastAppliedSnap) return;
       lastAppliedSnap = snap;
       if (mem?.plansBySite) {
         const originalRaw = JSON.stringify(mem.plansBySite);
         const normalizedRaw = JSON.stringify(normalizedPlans);
-        if (originalRaw !== normalizedRaw) {
+        if (stopLimit == null && originalRaw !== normalizedRaw) {
           saveLinkedPlansToMemory(weekStart, normalizedPlans, activeIdx);
         }
       }
@@ -724,14 +823,16 @@ export function usePlanningV2PlanController({
         (plan.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
       );
       const memoryAlternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+      const visibleMemoryAlternatives =
+        stopLimit == null ? memoryAlternatives : memoryAlternatives.slice(0, Math.max(0, stopLimit - 1));
       const memoryAlternativeCount =
         (memoryHasBase ? 1 : 0) +
-        memoryAlternatives.filter((asg) =>
+        visibleMemoryAlternatives.filter((asg) =>
           assignmentsNonEmpty((asg as Record<string, Record<string, string[][]>> | null | undefined) ?? null)).length;
       const shouldHydrateFromMemory =
         !hasAuthoritativeLocalPlan ||
         memoryAlternativeCount > localAlternativeCount ||
-        activeIdx >= Math.max(1, localAlternativeCount);
+        appliedActiveIdx >= Math.max(1, localAlternativeCount);
       // En multi-site, la mémoire session sert à partager l’index d’alternative et les autres sites.
       // Si la mémoire est plus riche (plus d’alternatives, ou index actif hors portée locale),
       // il faut quand même la réhydrater pour préserver exactement la même חלופה après navigation.
@@ -741,8 +842,11 @@ export function usePlanningV2PlanController({
           setDraftAssignments(baseAssignments);
         }
         setDraftPulls((plan.pulls as PlanningV2PullsMap) || {});
-        const altsAssignments = Array.isArray(plan.alternatives) ? plan.alternatives : [];
-        const altsPulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+        const altsAssignmentsRaw = Array.isArray(plan.alternatives) ? plan.alternatives : [];
+        const altsPullsRaw = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
+        const maxAltCount = stopLimit == null ? altsAssignmentsRaw.length : Math.max(0, stopLimit - 1);
+        const altsAssignments = altsAssignmentsRaw.slice(0, maxAltCount);
+        const altsPulls = altsPullsRaw.slice(0, maxAltCount);
         const alts = altsAssignments.flatMap((asg, idx) => {
           if (!asg || typeof asg !== "object") return [];
           return [{
@@ -752,13 +856,22 @@ export function usePlanningV2PlanController({
         });
         setDraftAlternatives(alts);
       }
-      setSelectedAlternativeIndex(activeIdx);
+      setSelectedAlternativeIndex(appliedActiveIdx);
     };
     refreshFromMemory();
     const onMem = () => refreshFromMemory();
     window.addEventListener("linked-plans-memory-updated", onMem as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", onMem as EventListener);
-  }, [protectOfficialSavedPlan, linkedSitesLength, siteId, weekStart, generationRunning]);
+  }, [
+    dedupeAlternatives,
+    generationRunning,
+    linkedSitesLength,
+    protectOfficialSavedPlan,
+    siteId,
+    weekIso,
+    weekPlan?.alternatives,
+    weekStart,
+  ]);
 
   useEffect(() => {
     if (weekPlanLoading) return;
@@ -774,7 +887,11 @@ export function usePlanningV2PlanController({
     }
     if (draftAssignments) {
       const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
-      return [draftAssignments, ...normalized.map((x) => x.assignments)];
+      const stopLimit =
+        stopVisibleAlternativeCountRef.current ??
+        (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
+      const visibleAlternatives = stopLimit == null ? normalized : normalized.slice(0, Math.max(0, stopLimit - 1));
+      return [draftAssignments, ...visibleAlternatives.map((x) => x.assignments)];
     }
     const base = weekPlan?.assignments ? [weekPlan.assignments] : [];
     const altsAssignments = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
@@ -786,13 +903,19 @@ export function usePlanningV2PlanController({
       })),
       dedupeAlternatives,
     );
-    return [...base, ...alts.map((x) => x.assignments)];
+    const stopLimit =
+      stopVisibleAlternativeCountRef.current ??
+      (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
+    const visibleAlternatives = stopLimit == null ? alts : alts.slice(0, Math.max(0, stopLimit - 1));
+    return [...base, ...visibleAlternatives.map((x) => x.assignments)];
   }, [
     dedupeAlternatives,
     draftAssignments,
     draftAlternatives,
     generationRunning,
+    linkedSitesLength,
     replaceGenerationUiClear,
+    weekIso,
     weekPlan?.assignments,
     weekPlan?.alternatives,
     weekPlan?.alternativePulls,
@@ -806,7 +929,11 @@ export function usePlanningV2PlanController({
     if (draftAssignments) {
       const basePulls = draftPulls || {};
       const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
-      return [basePulls, ...normalized.map((x) => x.pulls || {})];
+      const stopLimit =
+        stopVisibleAlternativeCountRef.current ??
+        (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
+      const visibleAlternatives = stopLimit == null ? normalized : normalized.slice(0, Math.max(0, stopLimit - 1));
+      return [basePulls, ...visibleAlternatives.map((x) => x.pulls || {})];
     }
     const basePulls =
       weekPlan?.pulls && typeof weekPlan.pulls === "object" ? (weekPlan.pulls as PlanningV2PullsMap) : {};
@@ -819,14 +946,21 @@ export function usePlanningV2PlanController({
       })),
       dedupeAlternatives,
     );
-    return [basePulls, ...normalized.map((x) => x.pulls || {})];
+    const stopLimit =
+      stopVisibleAlternativeCountRef.current ??
+      (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
+    const visibleAlternatives = stopLimit == null ? normalized : normalized.slice(0, Math.max(0, stopLimit - 1));
+    return [basePulls, ...visibleAlternatives.map((x) => x.pulls || {})];
   }, [
     dedupeAlternatives,
     draftAssignments,
     draftPulls,
     draftAlternatives,
     generationRunning,
+    linkedSitesLength,
     replaceGenerationUiClear,
+    weekIso,
+    weekPlan?.alternatives,
     weekPlan?.pulls,
     weekPlan?.alternativePulls,
   ]);
@@ -884,8 +1018,15 @@ export function usePlanningV2PlanController({
 
   const stopGeneration = useCallback(() => {
     userStoppedGenerationRef.current = true;
+    if (linkedSitesLength > 1 && !readLinkedGenerationStopRequestFromSession(weekIso)) {
+      writeLinkedGenerationStopRequestToSession(weekIso, true);
+    }
     const visibleCountAtStop = Math.max(0, assignmentVariants.length);
     stopVisibleAlternativeCountRef.current = visibleCountAtStop;
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
+    }
+    pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
     try {
       abortRef.current?.abort();
     } catch {
@@ -916,8 +1057,21 @@ export function usePlanningV2PlanController({
     if (linkedSitesLength > 1) {
       writeLinkedGenerationRunningToSession(weekIso, false);
     }
+    setSharedLinkedGenerationRunning(false);
     genBusyRef.current = false;
-  }, [assignmentVariants.length, dedupeAlternatives, linkedSitesLength, weekIso]);
+  }, [assignmentVariants.length, dedupeAlternatives, linkedSitesLength, pruneLinkedPlansMemoryAfterStop, weekIso]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (linkedSitesLength <= 1 || !localGenerationRunning) return;
+    const onStopRequest = () => {
+      if (!readLinkedGenerationStopRequestFromSession(weekIso)) return;
+      stopGeneration();
+    };
+    window.addEventListener("planning-v2-linked-generation-stop-updated", onStopRequest as EventListener);
+    return () =>
+      window.removeEventListener("planning-v2-linked-generation-stop-updated", onStopRequest as EventListener);
+  }, [linkedSitesLength, localGenerationRunning, stopGeneration, weekIso]);
 
   const runGeneration = useCallback(async (options?: GenerateOptions, mode: "replace" | "append" = "replace") => {
     const id = Number(siteId);
@@ -933,8 +1087,15 @@ export function usePlanningV2PlanController({
     abortRef.current = controller;
     generationIdRef.current = null;
     genBusyRef.current = true;
+    const resumeFromStoppedVisibleCount =
+      appendMode
+        ? (stopVisibleAlternativeCountRef.current ??
+          (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null))
+        : null;
     userStoppedGenerationRef.current = false;
-    stopVisibleAlternativeCountRef.current = null;
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationStopRequestToSession(weekIso, false);
+    }
     const purgeIds =
       !appendMode
         ? weekPurgeSiteIds.length > 0
@@ -945,6 +1106,10 @@ export function usePlanningV2PlanController({
         : [];
     let appendExistingAlternativesCount = 0;
     if (!appendMode) {
+      stopVisibleAlternativeCountRef.current = null;
+      if (linkedSitesLength > 1) {
+        writeLinkedGenerationStopVisibleCountToSession(weekIso, null);
+      }
       // Nettoyage client immédiat avant tout await: évite l'affichage furtif des anciennes alternatives.
       clearAllPlanningSessionCaches();
       if (purgeIds.length > 0) {
@@ -979,6 +1144,10 @@ export function usePlanningV2PlanController({
     } else {
       setGenerationRunning(true);
       setReplaceGenerationUiClear(false);
+      if (resumeFromStoppedVisibleCount != null) {
+        stopVisibleAlternativeCountRef.current = resumeFromStoppedVisibleCount;
+        pruneLinkedPlansMemoryAfterStop(resumeFromStoppedVisibleCount);
+      }
       const normalizedLinkedPlans =
         linkedSitesLength > 1 ? buildPersistableLinkedPlans(readLinkedPlansFromMemory(weekStart)?.plansBySite) : null;
       const currentLinkedPlan = normalizedLinkedPlans?.[String(siteId)];
@@ -991,7 +1160,7 @@ export function usePlanningV2PlanController({
         (((currentLinkedPlan?.pulls as PlanningV2PullsMap | undefined) || undefined) ??
         draftPullsRef.current) ||
         ((pullVariants[0] && typeof pullVariants[0] === "object" ? pullVariants[0] : {}) as PlanningV2PullsMap);
-      const existingAlternatives = normalizeDraftAlternatives(
+      const existingAlternativesAll = normalizeDraftAlternatives(
         currentLinkedPlan
           ? (Array.isArray(currentLinkedPlan.alternatives) ? currentLinkedPlan.alternatives : []).map((assignments, idx) => ({
               assignments,
@@ -1006,11 +1175,17 @@ export function usePlanningV2PlanController({
                 pulls: (pullVariants[idx + 1] || {}) as PlanningV2PullsMap,
               })),
       );
+      const existingAlternatives =
+        resumeFromStoppedVisibleCount == null
+          ? existingAlternativesAll
+          : existingAlternativesAll.slice(0, Math.max(0, resumeFromStoppedVisibleCount - 1));
       appendExistingAlternativesCount = existingAlternatives.length;
       if (normalizedLinkedPlans && Object.keys(normalizedLinkedPlans).length > 0) {
         const appendMemoryBefore = readLinkedPlansFromMemory(weekStart);
         const activeIdx = Math.max(0, Number(appendMemoryBefore?.activeAltIndex || 0));
-        saveLinkedPlansToMemory(weekStart, normalizedLinkedPlans, activeIdx);
+        const nextActiveIdx =
+          resumeFromStoppedVisibleCount == null ? activeIdx : Math.min(activeIdx, Math.max(0, resumeFromStoppedVisibleCount - 1));
+        saveLinkedPlansToMemory(weekStart, normalizedLinkedPlans, nextActiveIdx);
       }
       if (baseAssignments && typeof baseAssignments === "object") {
         draftAssignmentsRef.current = baseAssignments;
@@ -1019,6 +1194,10 @@ export function usePlanningV2PlanController({
         setDraftAssignments(baseAssignments);
         setDraftPulls(basePulls);
         setDraftAlternatives(draftAlternativesForMode(existingAlternatives, dedupeAlternatives));
+      }
+      stopVisibleAlternativeCountRef.current = null;
+      if (linkedSitesLength > 1) {
+        writeLinkedGenerationStopVisibleCountToSession(weekIso, null);
       }
       seenAlternativeSnapshotsRef.current = dedupeAlternatives
         ? buildSeenAlternativeSnapshots(baseAssignments, basePulls, existingAlternatives)
@@ -1109,10 +1288,23 @@ export function usePlanningV2PlanController({
 
     let idleWatch: number | null = null;
     let noResultWatch: number | null = null;
+    let stopRequestWatch: number | null = null;
     let idleAutoClosed = false;
     let noResultAutoClosed = false;
     let sawPlanToPersist = false;
     let sawGeneratedPlan = false;
+    let generationVisualFinished = false;
+    const finishGenerationVisualState = () => {
+      if (generationVisualFinished) return;
+      generationVisualFinished = true;
+      setGenerationRunning(false);
+      setReplaceGenerationUiClear(false);
+      abortRef.current = null;
+      if (linkedSitesLength > 1) {
+        writeLinkedGenerationRunningToSession(weekIso, false);
+      }
+      setSharedLinkedGenerationRunning(false);
+    };
     const scheduleAlternativesFlush = () => {
       if (alternativesFlushRafRef.current != null) return;
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
@@ -1299,6 +1491,23 @@ export function usePlanningV2PlanController({
         throw new Error(`HTTP ${resp.status}`);
       }
       let stopped = false;
+      if (linkedSitesLength > 1) {
+        stopRequestWatch = window.setInterval(() => {
+          if (stopped) return;
+          if (!readLinkedGenerationStopRequestFromSession(weekIso)) return;
+          userStoppedGenerationRef.current = true;
+          const visibleCountAtStop = Math.max(0, assignmentVariants.length);
+          stopVisibleAlternativeCountRef.current = visibleCountAtStop;
+          writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
+          pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
+          stopped = true;
+          try {
+            controller.abort();
+          } catch {
+            /* ignore */
+          }
+        }, 300);
+      }
       // Filet de sécurité: si aucune proposition n'arrive, ne pas laisser יוצר tourner indéfiniment.
       noResultWatch = window.setTimeout(() => {
         if (stopped || sawGeneratedPlan) return;
@@ -1326,7 +1535,25 @@ export function usePlanningV2PlanController({
         }
       }, 1000);
       await readSseStream(resp.body.getReader(), (evt) => {
-        if (stopped || userStoppedGenerationRef.current) {
+        if (
+          stopped ||
+          userStoppedGenerationRef.current ||
+          (linkedSitesLength > 1 && readLinkedGenerationStopRequestFromSession(weekIso))
+        ) {
+          if (linkedSitesLength > 1 && readLinkedGenerationStopRequestFromSession(weekIso)) {
+            userStoppedGenerationRef.current = true;
+            if (stopVisibleAlternativeCountRef.current == null) {
+              const visibleCountAtStop = Math.max(0, assignmentVariants.length);
+              stopVisibleAlternativeCountRef.current = visibleCountAtStop;
+              writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
+              pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
+            }
+            try {
+              controller.abort();
+            } catch {
+              /* ignore */
+            }
+          }
           stopped = true;
           return true;
         }
@@ -1856,6 +2083,7 @@ export function usePlanningV2PlanController({
           return false;
         }
         if (evt.type === "status" && evt.status === "ERROR") {
+          finishGenerationVisualState();
           toast.error("יצירת תכנון נכשלה", { description: String(evt.detail || "") });
           stopped = true;
           return true;
@@ -1894,6 +2122,7 @@ export function usePlanningV2PlanController({
           return false;
         }
         if (evt.type === "done") {
+          finishGenerationVisualState();
           toast.success("התכנון הושלם");
           stopped = true;
           return true;
@@ -1903,13 +2132,16 @@ export function usePlanningV2PlanController({
     } catch (e: unknown) {
       if ((e as Error)?.name === "AbortError") {
         if (idleAutoClosed) {
+          finishGenerationVisualState();
           toast.success("התכנון הושלם");
         } else if (noResultAutoClosed) {
+          finishGenerationVisualState();
           toast.error("יצירת תכנון נכשלה", { description: "לא התקבלו תוצאות מהשרת." });
         } else {
           toast.message("יצירת התכנון הופסקה");
         }
       } else {
+        finishGenerationVisualState();
         toast.error("יצירת תכנון נכשלה", { description: String((e as Error)?.message || "") });
       }
     } finally {
@@ -1918,6 +2150,9 @@ export function usePlanningV2PlanController({
       }
       if (noResultWatch) {
         window.clearTimeout(noResultWatch);
+      }
+      if (stopRequestWatch) {
+        window.clearInterval(stopRequestWatch);
       }
       if (alternativesFlushRafRef.current != null) {
         try {
@@ -1973,13 +2208,13 @@ export function usePlanningV2PlanController({
       setReplaceGenerationUiClear(false);
       if (linkedSitesLength > 1) {
         writeLinkedGenerationRunningToSession(weekIso, false);
+        writeLinkedGenerationStopRequestToSession(weekIso, false);
       }
       genBusyRef.current = false;
       abortRef.current = null;
       generationIdRef.current = null;
       if (stoppedByUser) {
         userStoppedGenerationRef.current = false;
-        stopVisibleAlternativeCountRef.current = null;
       }
     }
   }, [
@@ -1998,6 +2233,7 @@ export function usePlanningV2PlanController({
     hasOfficialSavedWeekPlan,
     site,
     weekPurgeSiteIds,
+    pruneLinkedPlansMemoryAfterStop,
     alternativesFlushRafRef,
   ]);
 

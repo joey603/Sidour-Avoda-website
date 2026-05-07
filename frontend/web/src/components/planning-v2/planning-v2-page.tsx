@@ -43,6 +43,19 @@ import {
 } from "./lib/multi-site-linked-memory";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
+const PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX = "planning_v2_linked_generation_stop_visible_";
+
+function readLinkedGenerationStopVisibleCountFromSession(weekIso: string): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(`${PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX}${weekIso}`);
+    const value = raw == null ? NaN : Number(raw);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return Math.max(1, Math.trunc(value));
+  } catch {
+    return null;
+  }
+}
 
 type PlanningV2AlternativesBarSnapshot = {
   alternativeCount: number;
@@ -1014,9 +1027,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       ? currentPlan.alternatives.filter((alt) =>
           assignmentsNonEmpty((alt as Record<string, Record<string, string[][]>> | null | undefined) ?? null)).length
       : 0;
+    const stopVisibleCount = readLinkedGenerationStopVisibleCountFromSession(getWeekKeyISO(weekStart));
+    const visibleAlternativeCount = stopVisibleCount == null ? (hasBase ? 1 : 0) + altCount : stopVisibleCount;
+    const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
     return {
-      activeIdx: Math.max(0, Number(mem?.activeAltIndex || 0)),
-      currentPlanAlternativeCount: (hasBase ? 1 : 0) + altCount,
+      activeIdx: Math.min(Math.max(0, Number(mem?.activeAltIndex || 0)), maxVisibleIndex),
+      currentPlanAlternativeCount: visibleAlternativeCount,
       hasCurrentPlan: !!currentPlan,
     };
   }, [protectOfficialSavedPlan, linkedSites.length, linkedPlansMemoryTick, siteId, weekStart]);
@@ -1186,14 +1202,20 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
       const mem = readLinkedPlansFromMemory(weekStart);
       const activeAltIndex = Math.max(0, Number(mem?.activeAltIndex || 0));
-      console.warn("[planning-v2][multi-site][auto-run][sync-memory-from-db]", {
-        isoWeek,
-        currentSiteId: siteId,
-        targetSiteIds,
-        syncedSiteIds: Object.keys(plansBySite),
-        activeAltIndex,
-      });
-      saveLinkedPlansToMemory(weekStart, plansBySite, activeAltIndex);
+      const memoryPlans = mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
+      const mergedPlans: Record<string, LinkedSitePlan> = { ...plansBySite };
+      for (const [sid, memoryPlan] of Object.entries(memoryPlans)) {
+        if (!memoryPlan || typeof memoryPlan !== "object") continue;
+        const dbPlan = plansBySite[sid];
+        const memoryAltCount = Array.isArray(memoryPlan.alternatives) ? memoryPlan.alternatives.length : 0;
+        const dbAltCount = Array.isArray(dbPlan?.alternatives) ? dbPlan.alternatives.length : 0;
+        // `עוד` enrichit d'abord sessionStorage. Ne pas écraser ces alternatives par une
+        // réponse DB auto plus ancienne quand on navigue vers un autre site lié.
+        if (memoryAltCount > dbAltCount || (activeAltIndex > dbAltCount && memoryAltCount >= activeAltIndex)) {
+          mergedPlans[sid] = memoryPlan as LinkedSitePlan;
+        }
+      }
+      saveLinkedPlansToMemory(weekStart, mergedPlans, activeAltIndex);
     };
 
     void syncLinkedAutoPlansFromDb();
@@ -1515,7 +1537,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   useEffect(() => {
     if (!multiSiteNavigationLoading) return;
     if (siteLoading || workersLoading || weekPlanLoading || linkedSitesLoading) return;
-    if (!navigationMemorySnapshot.hasCurrentPlan) return;
+    if (!navigationMemorySnapshot.hasCurrentPlan) {
+      setMultiSiteNavigationLoading(false);
+      try {
+        sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     const needsLinkedRail = hasLinkedSitesRail;
     const railReady = !needsLinkedRail || linkedSitesRailData.length === expectedLinkedRailCount;
     const targetAlternativeCount = navigationMemorySnapshot.currentPlanAlternativeCount;
