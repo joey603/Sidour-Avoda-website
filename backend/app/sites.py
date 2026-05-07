@@ -2314,10 +2314,32 @@ def _sanitize_pulls_map(pulls: dict | None) -> dict:
     }
 
 
-def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None) -> bool:
+def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None, require_pull: bool = False) -> bool:
+    count = _pulls_count(pulls)
+    if require_pull and count <= 0:
+        return False
     if pulls_limit is None:
         return True
-    return _pulls_count(pulls) <= int(pulls_limit)
+    return count <= int(pulls_limit)
+
+
+def _site_plans_have_required_pulls(
+    site_plans: dict[str, dict] | None,
+    pulls_limits_by_site: dict[int, int | None] | None = None,
+) -> bool:
+    if not isinstance(site_plans, dict) or not site_plans:
+        return False
+    total = 0
+    for site_key, site_plan in site_plans.items():
+        try:
+            current_site_id = int(site_key)
+        except Exception:
+            current_site_id = 0
+        if pulls_limits_by_site is not None and current_site_id not in pulls_limits_by_site:
+            continue
+        pulls_value = site_plan.get("pulls") if isinstance(site_plan, dict) else {}
+        total += _pulls_count(pulls_value if isinstance(pulls_value, dict) else {})
+    return total > 0
 
 
 def _planning_limit_error_detail(pulls_limit: int) -> str:
@@ -2539,6 +2561,8 @@ def _generate_director_week_plan_payload(
     for idx, candidate in enumerate(candidate_assignments):
         candidate_payload = make_payload(candidate)
         candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload, pulls_limit=pulls_limit)
+        if _pulls_count(candidate_payload.get("pulls") if isinstance(candidate_payload.get("pulls"), dict) else {}) <= 0:
+            continue
         candidate_key = _single_site_candidate_sort_key(
             site,
             candidate_payload.get("assignments") if isinstance(candidate_payload.get("assignments"), dict) else {},
@@ -4624,12 +4648,13 @@ def ai_generate_linked_planning(
             result.get("site_plans") or {},
         )
         pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
-        if pulls_limit is not None or pulls_limits_by_site:
+        if payload.auto_pulls_enabled:
             site_plans = result.get("site_plans") or {}
             candidate_count = 1 + max((len(site_plan.get("alternatives") or []) for site_plan in site_plans.values()), default=0)
             accepted_indices: list[int] = []
             for candidate_idx in range(candidate_count):
                 matches_all_sites = True
+                candidate_total_pulls = 0
                 for site_key, site_plan in site_plans.items():
                     current_site_id = int(site_key)
                     if candidate_idx == 0:
@@ -4637,6 +4662,8 @@ def ai_generate_linked_planning(
                     else:
                         alt_pulls_list = site_plan.get("alternative_pulls") or []
                         candidate_pulls = (alt_pulls_list[candidate_idx - 1] or {}) if candidate_idx - 1 < len(alt_pulls_list) else None
+                    if pulls_limits_by_site is None or current_site_id in pulls_limits_by_site:
+                        candidate_total_pulls += _pulls_count(candidate_pulls if isinstance(candidate_pulls, dict) else {})
                     if not _site_pulls_limit_matches(
                         current_site_id,
                         candidate_pulls if isinstance(candidate_pulls, dict) else {},
@@ -4645,7 +4672,7 @@ def ai_generate_linked_planning(
                     ):
                         matches_all_sites = False
                         break
-                if matches_all_sites:
+                if matches_all_sites and candidate_total_pulls > 0:
                     accepted_indices.append(candidate_idx)
             if not accepted_indices:
                 raise HTTPException(
@@ -4922,7 +4949,7 @@ async def ai_generate_linked_planning_stream(
                                     split_site_plans,
                                 )
                             pulls_summary = _pulls_debug_summary(split_site_plans)
-                            if eff_pulls_limit is not None or eff_pulls_limits_by_site:
+                            if payload and payload.auto_pulls_enabled:
                                 if not split_site_plans:
                                     rejected_candidates += 1
                                     _enqueue({
@@ -4945,7 +4972,7 @@ async def ai_generate_linked_planning_stream(
                                     )
                                     continue
                                 plans = list(split_site_plans.items())
-                                if not plans or not all(
+                                pulls_limit_matches = bool(plans) and all(
                                     _site_pulls_limit_matches(
                                         int(site_key),
                                         site_plan.get("pulls") if isinstance(site_plan.get("pulls"), dict) else {},
@@ -4953,14 +4980,19 @@ async def ai_generate_linked_planning_stream(
                                         pulls_limits_by_site=eff_pulls_limits_by_site or None,
                                     )
                                     for site_key, site_plan in plans
-                                ):
+                                )
+                                has_required_pull = _site_plans_have_required_pulls(
+                                    split_site_plans,
+                                    pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                                )
+                                if not pulls_limit_matches or not has_required_pull:
                                     rejected_candidates += 1
                                     _enqueue({
                                         "type": "pulls_debug",
                                         "item_type": item_type,
                                         "item_index": item.get("index"),
                                         "accepted": False,
-                                        "reason": "pulls_count_mismatch",
+                                        "reason": "no_pulls" if pulls_limit_matches else "pulls_count_mismatch",
                                         "linked": True,
                                         "requested_pulls": eff_pulls_limit,
                                         "pulls_limits_by_site": eff_pulls_limits_by_site or None,
@@ -5059,7 +5091,7 @@ async def ai_generate_linked_planning_stream(
                     if kept_alternatives_count >= target_kept_alternatives:
                         break
 
-                if not stop_event.is_set() and (eff_pulls_limit is not None or eff_pulls_limits_by_site) and matched_candidates == 0:
+                if not stop_event.is_set() and payload and payload.auto_pulls_enabled and matched_candidates == 0:
                     logger.warning(
                         "[PULLS][LINKED_STREAM][NO_MATCH] generation=%s rejected=%s kept=%s requested=%s by_site=%s",
                         generation_id,
@@ -5209,7 +5241,7 @@ def ai_generate_planning(
         candidate_pairs: list[tuple[dict, dict]] = []
         base_assignments = base_payload.get("assignments") or {}
         base_pulls = base_payload.get("pulls") or {}
-        if _matches_pulls_limit(base_pulls, payload.pulls_limit):
+        if _matches_pulls_limit(base_pulls, payload.pulls_limit, require_pull=True):
             candidate_pairs.append((base_assignments, base_pulls))
         for alt in (result.get("alternatives") or []):
             if not isinstance(alt, dict):
@@ -5223,10 +5255,10 @@ def ai_generate_planning(
             )
             current_alt_assignments = alt_payload.get("assignments") or {}
             current_alt_pulls = alt_payload.get("pulls") or {}
-            if _matches_pulls_limit(current_alt_pulls, payload.pulls_limit):
+            if _matches_pulls_limit(current_alt_pulls, payload.pulls_limit, require_pull=True):
                 candidate_pairs.append((current_alt_assignments, current_alt_pulls))
-        if payload.pulls_limit is not None and not candidate_pairs:
-            raise HTTPException(status_code=422, detail=_planning_limit_error_detail(payload.pulls_limit))
+        if not candidate_pairs:
+            raise HTTPException(status_code=422, detail=_planning_limit_error_detail_for_request(pulls_limit=payload.pulls_limit))
         if candidate_pairs:
             candidate_pairs.sort(
                 key=lambda pair: _single_site_candidate_sort_key(site, pair[0], week_for_rows, pair[1]),
@@ -5447,9 +5479,10 @@ async def ai_generate_stream(
                             )
                             transformed_pulls = transformed.get("pulls") if isinstance(transformed.get("pulls"), dict) else {}
                             transformed_pulls_count = _pulls_count(transformed_pulls)
-                            if eff_pulls_limit is not None and not _matches_pulls_limit(
+                            if not _matches_pulls_limit(
                                 transformed_pulls,
                                 eff_pulls_limit,
+                                require_pull=True,
                             ):
                                 rejected_candidates += 1
                                 _enqueue({
@@ -5556,9 +5589,9 @@ async def ai_generate_stream(
                             _enqueue(next_alternative, drop_if_full=False)
                             continue
                         if item_type == "done":
-                            if payload.auto_pulls_enabled and eff_pulls_limit is not None and matched_candidates == 0:
+                            if payload.auto_pulls_enabled and matched_candidates == 0:
                                 _enqueue(
-                                    {"type": "status", "status": "ERROR", "detail": _planning_limit_error_detail(eff_pulls_limit)}
+                                    {"type": "status", "status": "ERROR", "detail": _planning_limit_error_detail_for_request(pulls_limit=eff_pulls_limit)}
                                 )
                             continue
                         _enqueue(enriched, drop_if_full=False)

@@ -54,9 +54,11 @@ function pullsCount(value: unknown): number {
   return Object.keys(value as Record<string, unknown>).length;
 }
 
-function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null): boolean {
+function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null, requirePull = false): boolean {
+  const count = pullsCount(pulls);
+  if (requirePull && count <= 0) return false;
   if (requestedCount == null) return true;
-  return pullsCount(pulls) <= requestedCount;
+  return count <= requestedCount;
 }
 
 function linkedPlansMatchRequestedPulls(
@@ -64,14 +66,18 @@ function linkedPlansMatchRequestedPulls(
   siteId: string,
   requestedCount: number | null,
   pullsScope?: "current_only" | "all_sites",
+  requirePull = false,
 ): boolean {
-  if (requestedCount == null) return true;
   if (!plans || typeof plans !== "object") return false;
   if (pullsScope === "current_only") {
-    return pullsMatchRequestedCount(plans[String(siteId)]?.pulls, requestedCount);
+    return pullsMatchRequestedCount(plans[String(siteId)]?.pulls, requestedCount, requirePull);
   }
   const entries = Object.values(plans);
-  return entries.length > 0 && entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount));
+  return (
+    entries.length > 0 &&
+    entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount)) &&
+    (!requirePull || entries.some((plan) => pullsCount(plan?.pulls) > 0))
+  );
 }
 
 function logPlanningV2PullCandidate(params: {
@@ -1243,6 +1249,7 @@ export function usePlanningV2PlanController({
     const weekly_availability = weeklyAvailabilityMapFromRows(workerRowsForTable);
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
     const requestedPullsCount = typeof pulls_limit === "number" ? pulls_limit : null;
+    const requireGeneratedPull = autoPullsEnabled;
     const pulls_limits_by_site =
       linkedSitesLength > 1 && autoPullsEnabled && options?.pullsScope === "current_only"
         ? Object.fromEntries(
@@ -1584,14 +1591,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
             logPlanningV2PullCandidate({
               itemType: "base",
               appendMode,
@@ -1701,14 +1708,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
             logPlanningV2PullCandidate({
               itemType: "base",
               appendMode,
@@ -1885,14 +1892,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "alternative", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
             logPlanningV2PullCandidate({
               itemType: "alternative",
               appendMode,
