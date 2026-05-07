@@ -155,7 +155,7 @@ export function PlanningV2ActionBar({
   }, [linkedSites, siteId]);
 
   /** Comme planning : יצירת תכנון bloquée si génération, plan serveur sans édition, ou mode ידני */
-  const generationBlocked = readOnly || generationRunning || (isSavedMode && !editingSaved) || isManual;
+  const generationBlocked = readOnly || generationRunning || (isSavedMode && !editingSaved) || (isManual && !editingSaved);
   const showAutoManual = !isSavedMode || editingSaved;
 
   const canSavePlan =

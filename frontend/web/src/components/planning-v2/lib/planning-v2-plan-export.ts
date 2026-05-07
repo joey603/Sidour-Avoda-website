@@ -7,6 +7,8 @@ import { addDays, formatHebDate, getWeekKeyISO } from "./week";
 import {
   DAY_COLS,
   getRequiredFor,
+  hoursFromConfig,
+  hoursOf,
   isDayActive,
   isShiftEnabledForStation,
   shiftNamesFromSite,
@@ -73,34 +75,63 @@ function slotTimeMetaFromPulls(
   stationIdx: number,
   slotIdx: number,
   workerName: string,
-): { label: string; red: boolean } | null {
+): { label: string; red: boolean; roleName?: string } | null {
   if (!pulls) return null;
   const slotKey = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
   const entry = pulls[slotKey] as
     | {
+        roleName?: string;
         before?: { name?: string; start?: string; end?: string };
         after?: { name?: string; start?: string; end?: string };
         guardDisplay?: { start?: string; end?: string };
       }
     | undefined;
-  if (!entry) return null;
-
-  const gdStart = String(entry.guardDisplay?.start || "").trim();
-  const gdEnd = String(entry.guardDisplay?.end || "").trim();
-  if (gdStart && gdEnd) return { label: `${gdStart}-${gdEnd}`, red: true };
-
   const target = String(workerName || "").trim();
-  const bName = String(entry.before?.name || "").trim();
-  const aName = String(entry.after?.name || "").trim();
-  if (target && target === bName) {
-    const s = String(entry.before?.start || "").trim();
-    const e = String(entry.before?.end || "").trim();
-    if (s && e) return { label: `${s}-${e}`, red: true };
-  }
-  if (target && target === aName) {
-    const s = String(entry.after?.start || "").trim();
-    const e = String(entry.after?.end || "").trim();
-    if (s && e) return { label: `${s}-${e}`, red: true };
+
+  const toMeta = (
+    candidate: {
+      roleName?: string;
+      before?: { name?: string; start?: string; end?: string };
+      after?: { name?: string; start?: string; end?: string };
+      guardDisplay?: { start?: string; end?: string };
+    } | null | undefined,
+  ): { label: string; red: boolean; roleName?: string } | null => {
+    if (!candidate) return null;
+    const roleName = String(candidate.roleName || "").trim();
+    const gdStart = String(candidate.guardDisplay?.start || "").trim();
+    const gdEnd = String(candidate.guardDisplay?.end || "").trim();
+    if (gdStart && gdEnd) return { label: `${gdStart}-${gdEnd}`, red: true, roleName: roleName || undefined };
+
+    const bName = String(candidate.before?.name || "").trim();
+    const aName = String(candidate.after?.name || "").trim();
+    if (target && target === bName) {
+      const s = String(candidate.before?.start || "").trim();
+      const e = String(candidate.before?.end || "").trim();
+      if (s && e) return { label: `${s}-${e}`, red: true, roleName: roleName || undefined };
+    }
+    if (target && target === aName) {
+      const s = String(candidate.after?.start || "").trim();
+      const e = String(candidate.after?.end || "").trim();
+      if (s && e) return { label: `${s}-${e}`, red: true, roleName: roleName || undefined };
+    }
+    return null;
+  };
+
+  const exactMeta = toMeta(entry);
+  if (exactMeta) return exactMeta;
+
+  // Fallback: quand l'ordre des slots a bougé (merge pulls + noms),
+  // rechercher dans toute la cellule la משיכה correspondant au nom.
+  const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
+  for (const [k, raw] of Object.entries(pulls)) {
+    if (!String(k).startsWith(cellPrefix)) continue;
+    const meta = toMeta(raw as {
+      roleName?: string;
+      before?: { name?: string; start?: string; end?: string };
+      after?: { name?: string; start?: string; end?: string };
+      guardDisplay?: { start?: string; end?: string };
+    });
+    if (meta) return meta;
   }
   return null;
 }
@@ -350,9 +381,14 @@ export function buildPlanningGridStyledHtml(params: {
       const bodyRows = shiftNamesAll
         .map((sn) => {
           if (!isShiftEnabledForStation(st, sn)) return "";
+          const shiftHours = hoursFromConfig(st, sn) || hoursOf(sn);
+          const shiftHoursHtml = shiftHours
+            ? `<div style="margin-top:2px;font-size:10px;color:#71717a;">${escapeHtml(shiftHours)}</div>`
+            : "";
           return `<tr>
   <td style="padding:8px;border:1px solid #e4e4e7;background:#fafafa;font-size:12px;vertical-align:top;">
     <div style="font-weight:600;">${escapeHtml(sn)}</div>
+    ${shiftHoursHtml}
   </td>
   ${DAY_COLS.map((d) => {
     const required = getRequiredFor(st as object, sn, d.key);
@@ -373,11 +409,15 @@ export function buildPlanningGridStyledHtml(params: {
         }
         const col = workerNameChipColor(nm, nameColorMap);
         const slotTime = slotTimeMetaFromPulls(pulls ?? null, d.key, sn, idx, slotIdx, nm);
+        const roleHtml = slotTime?.roleName
+          ? `<div style="margin-top:2px;font-size:10px;font-weight:600;color:#334155;">${escapeHtml(slotTime.roleName)}</div>`
+          : "";
         const timeHtml = slotTime
           ? `<div style="margin-top:2px;font-size:10px;font-weight:700;color:${slotTime.red ? "#dc2626" : "#52525b"};">${escapeHtml(slotTime.label)}</div>`
           : "";
         return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:1px solid #e4e4e7;background:#fff;text-align:center;">
   <span style="display:inline-block;max-width:100%;padding:4px 8px;border-radius:9999px;border:1px solid ${escapeHtml(col.border)};background:${escapeHtml(col.bg)};color:${escapeHtml(col.text)};font-size:11px;">${escapeHtml(nm)}</span>
+  ${roleHtml}
   ${timeHtml}
 </div>`;
       })

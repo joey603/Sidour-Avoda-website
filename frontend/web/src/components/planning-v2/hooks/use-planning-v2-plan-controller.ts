@@ -1141,6 +1141,7 @@ export function usePlanningV2PlanController({
       flushSync(() => {
         setGenerationRunning(true);
         setReplaceGenerationUiClear(true);
+        setIsManual(false);
         setSelectedAlternativeIndex(0);
         setMoreAlternativesAvailable(true);
         setDraftAssignments(null);
