@@ -31,12 +31,6 @@ export function clearPlanningV2MultiSiteFilterKeysForWeek(weekIso: string): void
         /* ignore */
       }
     });
-    if (removed.length > 0) {
-      console.debug("[planning-v2][cache][generate] removed multisite filter keys:", {
-        weekIso: wk,
-        keys: removed,
-      });
-    }
   } catch {
     /* ignore */
   }
@@ -86,13 +80,6 @@ export function clearWeeklyPlanLocalStorageKeysForWeekAndSites(weekIso: string, 
         }
       });
     });
-    if (removedKeys.length > 0) {
-      console.debug("[planning-v2][cache][generate] removed weekly plan localStorage keys:", {
-        weekIso: wk,
-        siteIds: normalizedIds,
-        keys: removedKeys,
-      });
-    }
   } catch {
     /* ignore */
   }
@@ -123,16 +110,20 @@ export async function deleteAutoScopeWeekPlansForSites(weekIso: string, siteIds:
 }
 
 /** Nettoie ce qu’une ריצה depuis la liste sites a laissé pour cette semaine / ces sites. */
+export function clearSitesListPlanningClientCachesBeforePlanningCreat(
+  weekIso: string,
+  siteIds: number[],
+): void {
+  clearAutoWeeklyWorkerChangesLocalStorageForWeek(weekIso);
+  clearPlanningV2MultiSiteFilterKeysForWeek(weekIso);
+  clearWeeklyPlanLocalStorageKeysForWeekAndSites(weekIso, siteIds);
+}
+
+/** Nettoie ce qu’une ריצה depuis la liste sites a laissé pour cette semaine / ces sites. */
 export async function clearSitesListPlanningBeforePlanningCreat(
   weekIso: string,
   siteIds: number[],
 ): Promise<void> {
-  console.debug("[planning-v2][cache][generate] clear before create plan:", {
-    weekIso,
-    siteIds: normalizeSiteIds(siteIds),
-  });
-  clearAutoWeeklyWorkerChangesLocalStorageForWeek(weekIso);
-  clearPlanningV2MultiSiteFilterKeysForWeek(weekIso);
-  clearWeeklyPlanLocalStorageKeysForWeekAndSites(weekIso, siteIds);
+  clearSitesListPlanningClientCachesBeforePlanningCreat(weekIso, siteIds);
   await deleteAutoScopeWeekPlansForSites(weekIso, siteIds);
 }

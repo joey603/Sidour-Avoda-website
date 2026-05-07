@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
 import { buildEmptyAssignmentsForSite, shiftNamesFromSite } from "../lib/station-grid-helpers";
@@ -23,7 +24,10 @@ import {
 } from "../lib/multi-site-linked-memory";
 import { countAssignedCellsForLinkedHoles, countRequiredSlotsFromSiteConfig } from "../lib/linked-site-holes";
 import { countAssignmentsPerWorkerName, subtractPullExtrasFromWorkerCounts } from "../lib/assignments-summary-math";
-import { clearSitesListPlanningBeforePlanningCreat } from "@/lib/clear-sites-list-planning-for-week";
+import {
+  clearSitesListPlanningBeforePlanningCreat,
+  clearSitesListPlanningClientCachesBeforePlanningCreat,
+} from "@/lib/clear-sites-list-planning-for-week";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { resolveMaxShifts } from "@/lib/max-shifts";
@@ -913,15 +917,30 @@ export function usePlanningV2PlanController({
     abortRef.current = controller;
     generationIdRef.current = null;
     genBusyRef.current = true;
-    setGenerationRunning(true);
-    if (linkedSitesLength > 1) {
-      writeLinkedGenerationRunningToSession(weekIso, true);
-    }
+    const purgeIds =
+      !appendMode
+        ? weekPurgeSiteIds.length > 0
+          ? weekPurgeSiteIds
+          : Number.isFinite(Number(siteId)) && Number(siteId) > 0
+            ? [Number(siteId)]
+            : []
+        : [];
     let appendExistingAlternativesCount = 0;
     if (!appendMode) {
-      setReplaceGenerationUiClear(true);
-      setSelectedAlternativeIndex(0);
-      setMoreAlternativesAvailable(true);
+      // Nettoyage client immédiat avant tout await: évite l'affichage furtif des anciennes alternatives.
+      clearAllPlanningSessionCaches();
+      if (purgeIds.length > 0) {
+        clearSitesListPlanningClientCachesBeforePlanningCreat(weekIso, purgeIds);
+        try {
+          window.dispatchEvent(
+            new CustomEvent("planning-v2-assignment-filters-reset", {
+              detail: { weekIso },
+            }),
+          );
+        } catch {
+          /* ignore */
+        }
+      }
       draftAssignmentsRef.current = null;
       draftPullsRef.current = {};
       draftAlternativesRef.current = [];
@@ -930,10 +949,17 @@ export function usePlanningV2PlanController({
       bestGeneratedHoleScoreRef.current = null;
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
-      setDraftAssignments(null);
-      setDraftPulls(null);
-      setDraftAlternatives([]);
+      flushSync(() => {
+        setGenerationRunning(true);
+        setReplaceGenerationUiClear(true);
+        setSelectedAlternativeIndex(0);
+        setMoreAlternativesAvailable(true);
+        setDraftAssignments(null);
+        setDraftPulls(null);
+        setDraftAlternatives([]);
+      });
     } else {
+      setGenerationRunning(true);
       setReplaceGenerationUiClear(false);
       const normalizedLinkedPlans =
         linkedSitesLength > 1 ? buildPersistableLinkedPlans(readLinkedPlansFromMemory(weekStart)?.plansBySite) : null;
@@ -989,6 +1015,9 @@ export function usePlanningV2PlanController({
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
     }
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationRunningToSession(weekIso, true);
+    }
     if (alternativesFlushRafRef.current != null) {
       try {
         window.cancelAnimationFrame(alternativesFlushRafRef.current);
@@ -999,25 +1028,9 @@ export function usePlanningV2PlanController({
     }
     // Session « mémoire » multi-sites (clés multi_site_*) : efface tout état client lié à une ריצה / navigation précédente.
     if (!appendMode) {
-      clearAllPlanningSessionCaches();
-      const purgeIds =
-        weekPurgeSiteIds.length > 0
-          ? weekPurgeSiteIds
-          : Number.isFinite(Number(siteId)) && Number(siteId) > 0
-            ? [Number(siteId)]
-            : [];
       if (purgeIds.length > 0) {
         try {
           await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
-          try {
-            window.dispatchEvent(
-              new CustomEvent("planning-v2-assignment-filters-reset", {
-                detail: { weekIso },
-              }),
-            );
-          } catch {
-            /* ignore */
-          }
           await reloadWeekPlan();
         } catch {
           /* ignore */

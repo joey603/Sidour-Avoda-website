@@ -65,6 +65,25 @@ function planningV2PullEntryIsReal(e: PlanningV2PullEntry | undefined): boolean 
   return !!beforeName && !!afterName && beforeName !== afterName;
 }
 
+function removeGuardDisplayForSlot(
+  pulls: PlanningV2PullsMap | null | undefined,
+  key: string,
+): { pulls: PlanningV2PullsMap; changed: boolean } {
+  const next = JSON.parse(JSON.stringify((pulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
+  const existing = next[key];
+  if (!existing?.guardDisplay) {
+    return { pulls: next, changed: false };
+  }
+  const nextEntry: PlanningV2PullEntry = { ...existing };
+  delete nextEntry.guardDisplay;
+  if (planningV2PullEntryIsReal(nextEntry)) {
+    next[key] = nextEntry;
+  } else {
+    delete next[key];
+  }
+  return { pulls: next, changed: true };
+}
+
 function truncateMobile6(value: unknown): string {
   const s = String(value ?? "");
   const chars = Array.from(s);
@@ -499,6 +518,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               Number(src.stationIndex) === Number(p.stationIndex) &&
               Number(src.slotIndex) === Number(p.slotIndex);
             if (!sameCell) {
+              const sourcePullKey = `${src.dayKey}|${src.shiftName}|${src.stationIndex}|${src.slotIndex}`;
               const srcRow = nextAssignments?.[src.dayKey]?.[src.shiftName]?.[src.stationIndex];
               if (Array.isArray(srcRow)) {
                 const srcNext = JSON.parse(JSON.stringify(nextAssignments)) as Record<
@@ -512,6 +532,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                 if (!srcNext[src.dayKey][src.shiftName]) srcNext[src.dayKey][src.shiftName] = [];
                 srcNext[src.dayKey][src.shiftName][src.stationIndex] = arr;
                 nextAssignments = srcNext;
+              }
+              const cleanedPulls = removeGuardDisplayForSlot(plan.displayPulls ?? null, sourcePullKey);
+              if (cleanedPulls.changed) {
+                plan.commitDraftPulls(cleanedPulls.pulls);
               }
             }
           }
@@ -591,6 +615,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       if (!next[src.dayKey][src.shiftName]) next[src.dayKey][src.shiftName] = [];
       next[src.dayKey][src.shiftName][src.stationIndex] = srcArr;
       plan.commitDraftAssignments(next);
+      const sourcePullKey = `${src.dayKey}|${src.shiftName}|${src.stationIndex}|${src.slotIndex}`;
+      const cleanedPulls = removeGuardDisplayForSlot(plan.displayPulls ?? null, sourcePullKey);
+      if (cleanedPulls.changed) {
+        plan.commitDraftPulls(cleanedPulls.pulls);
+      }
     },
     [plan],
   );
