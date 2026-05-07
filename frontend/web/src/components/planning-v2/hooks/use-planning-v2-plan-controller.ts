@@ -556,6 +556,8 @@ export function usePlanningV2PlanController({
   const abortRef = useRef<AbortController | null>(null);
   const generationIdRef = useRef<string | null>(null);
   const genBusyRef = useRef(false);
+  const userStoppedGenerationRef = useRef(false);
+  const stopVisibleAlternativeCountRef = useRef<number | null>(null);
   const draftAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const draftPullsRef = useRef<PlanningV2PullsMap>({});
   const draftAlternativesRef = useRef<DraftAlternative[]>([]);
@@ -881,6 +883,9 @@ export function usePlanningV2PlanController({
   }, [pullVariants, safeAlternativeIndex]);
 
   const stopGeneration = useCallback(() => {
+    userStoppedGenerationRef.current = true;
+    const visibleCountAtStop = Math.max(0, assignmentVariants.length);
+    stopVisibleAlternativeCountRef.current = visibleCountAtStop;
     try {
       abortRef.current?.abort();
     } catch {
@@ -895,13 +900,24 @@ export function usePlanningV2PlanController({
       }
       alternativesFlushRafRef.current = null;
     }
+    const maxDraftAlternatives = draftAssignmentsRef.current
+      ? Math.max(0, visibleCountAtStop - 1)
+      : visibleCountAtStop;
+    const flushedAlternatives = draftAlternativesForMode(
+      draftAlternativesRef.current || [],
+      dedupeAlternatives,
+    ).slice(0, maxDraftAlternatives);
+    draftAlternativesRef.current = flushedAlternatives;
+    setDraftAlternatives([...flushedAlternatives]);
+    const maxIndex = draftAssignmentsRef.current ? flushedAlternatives.length : Math.max(0, visibleCountAtStop - 1);
+    setSelectedAlternativeIndex((prev) => Math.min(Math.max(0, prev), Math.max(0, maxIndex)));
     setGenerationRunning(false);
     setReplaceGenerationUiClear(false);
     if (linkedSitesLength > 1) {
       writeLinkedGenerationRunningToSession(weekIso, false);
     }
     genBusyRef.current = false;
-  }, [linkedSitesLength, weekIso]);
+  }, [assignmentVariants.length, dedupeAlternatives, linkedSitesLength, weekIso]);
 
   const runGeneration = useCallback(async (options?: GenerateOptions, mode: "replace" | "append" = "replace") => {
     const id = Number(siteId);
@@ -917,6 +933,8 @@ export function usePlanningV2PlanController({
     abortRef.current = controller;
     generationIdRef.current = null;
     genBusyRef.current = true;
+    userStoppedGenerationRef.current = false;
+    stopVisibleAlternativeCountRef.current = null;
     const purgeIds =
       !appendMode
         ? weekPurgeSiteIds.length > 0
@@ -1100,7 +1118,14 @@ export function usePlanningV2PlanController({
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
         alternativesFlushRafRef.current = null;
         setDraftAlternatives((prev) => {
-          const next = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+          const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+          const stopLimit = stopVisibleAlternativeCountRef.current;
+          const maxDraftAlternatives =
+            stopLimit == null ? normalized.length : draftAssignmentsRef.current ? Math.max(0, stopLimit - 1) : stopLimit;
+          const next = normalized.slice(0, maxDraftAlternatives);
+          if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
+            draftAlternativesRef.current = next;
+          }
           // Évite les renders inutiles quand rien n'a changé.
           if (prev.length === next.length) return prev;
           return [...next];
@@ -1301,7 +1326,10 @@ export function usePlanningV2PlanController({
         }
       }, 1000);
       await readSseStream(resp.body.getReader(), (evt) => {
-        if (stopped) return true;
+        if (stopped || userStoppedGenerationRef.current) {
+          stopped = true;
+          return true;
+        }
         const evtGenerationId =
           typeof evt.generation_id === "string" && String(evt.generation_id).trim()
             ? String(evt.generation_id).trim()
@@ -1899,7 +1927,18 @@ export function usePlanningV2PlanController({
         }
         alternativesFlushRafRef.current = null;
         // Après annulation du RAF, synchroniser pour que React reflète toutes les alternatives reçues.
-        const nextAlternatives = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+        const normalizedAlternatives = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+        const stopLimit = stopVisibleAlternativeCountRef.current;
+        const maxDraftAlternatives =
+          stopLimit == null
+            ? normalizedAlternatives.length
+            : draftAssignmentsRef.current
+              ? Math.max(0, stopLimit - 1)
+              : stopLimit;
+        const nextAlternatives = normalizedAlternatives.slice(0, maxDraftAlternatives);
+        if (stopLimit != null) {
+          draftAlternativesRef.current = nextAlternatives;
+        }
         setDraftAlternatives([...nextAlternatives]);
       }
       // Ne pas utiliser num_alternatives du premier flux pour couper « עוד » : la génération n’est pas
@@ -1909,7 +1948,8 @@ export function usePlanningV2PlanController({
         setMoreAlternativesAvailable(false);
         toast.message("אין חלופות חדשות נוספות");
       }
-      if (sawPlanToPersist) {
+      const stoppedByUser = userStoppedGenerationRef.current && controller.signal.aborted;
+      if (sawPlanToPersist && !stoppedByUser) {
         writeAlternativesUnlockedToSession(weekIso, siteId);
         setAlternativesUnlockNonce((n) => n + 1);
         try {
@@ -1937,6 +1977,10 @@ export function usePlanningV2PlanController({
       genBusyRef.current = false;
       abortRef.current = null;
       generationIdRef.current = null;
+      if (stoppedByUser) {
+        userStoppedGenerationRef.current = false;
+        stopVisibleAlternativeCountRef.current = null;
+      }
     }
   }, [
     dedupeAlternatives,
