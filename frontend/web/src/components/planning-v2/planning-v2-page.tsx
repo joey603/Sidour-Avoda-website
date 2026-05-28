@@ -546,10 +546,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                 srcNext[src.dayKey][src.shiftName][src.stationIndex] = arr;
                 nextAssignments = srcNext;
               }
-              const cleanedPulls = removeGuardDisplayForSlot(plan.displayPulls ?? null, sourcePullKey);
-              if (cleanedPulls.changed) {
-                plan.commitDraftPulls(cleanedPulls.pulls);
-              }
             }
           }
           plan.commitDraftAssignments(nextAssignments);
@@ -628,11 +624,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       if (!next[src.dayKey][src.shiftName]) next[src.dayKey][src.shiftName] = [];
       next[src.dayKey][src.shiftName][src.stationIndex] = srcArr;
       plan.commitDraftAssignments(next);
-      const sourcePullKey = `${src.dayKey}|${src.shiftName}|${src.stationIndex}|${src.slotIndex}`;
-      const cleanedPulls = removeGuardDisplayForSlot(plan.displayPulls ?? null, sourcePullKey);
-      if (cleanedPulls.changed) {
-        plan.commitDraftPulls(cleanedPulls.pulls);
-      }
     },
     [plan],
   );
@@ -885,6 +876,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       };
 
       const applyCurrentOnly = () => {
+        // Sans draft actif (plan sauvegardé affiché), on doit activer le brouillon
+        // pour que pullVariants utilise draftPulls et que les horaires restent visibles + sauvegardables.
+        if (!plan.draftActive) {
+          plan.commitDraftAssignments(plan.getLatestAssignmentBase());
+        }
         plan.commitDraftPulls(nextPulls);
       };
 
@@ -951,6 +947,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       }
 
       const applyCurrentOnly = () => {
+        // Sans draft actif (plan sauvegardé affiché), on doit activer le brouillon
+        // pour que pullVariants utilise draftPulls et que la suppression reste visible + sauvegardable.
+        if (!plan.draftActive) {
+          plan.commitDraftAssignments(plan.getLatestAssignmentBase());
+        }
         plan.commitDraftPulls(nextPulls);
       };
 

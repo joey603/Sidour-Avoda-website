@@ -13,6 +13,7 @@ import {
   isShiftEnabledForStation,
   shiftNamesFromSite,
 } from "./station-grid-helpers";
+import { slotTimeMetaFromPulls } from "./planning-v2-pull-slot-display";
 import { workerNameChipColor } from "./worker-name-chip-color";
 
 function normName(s: string): string {
@@ -66,74 +67,6 @@ function mergeCellRawWithPulls(
     /* ignore */
   }
   return baseArr;
-}
-
-function slotTimeMetaFromPulls(
-  pulls: PlanningV2PullsMap | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  slotIdx: number,
-  workerName: string,
-): { label: string; red: boolean; roleName?: string } | null {
-  if (!pulls) return null;
-  const slotKey = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
-  const entry = pulls[slotKey] as
-    | {
-        roleName?: string;
-        before?: { name?: string; start?: string; end?: string };
-        after?: { name?: string; start?: string; end?: string };
-        guardDisplay?: { start?: string; end?: string };
-      }
-    | undefined;
-  const target = String(workerName || "").trim();
-
-  const toMeta = (
-    candidate: {
-      roleName?: string;
-      before?: { name?: string; start?: string; end?: string };
-      after?: { name?: string; start?: string; end?: string };
-      guardDisplay?: { start?: string; end?: string };
-    } | null | undefined,
-  ): { label: string; red: boolean; roleName?: string } | null => {
-    if (!candidate) return null;
-    const roleName = String(candidate.roleName || "").trim();
-    const gdStart = String(candidate.guardDisplay?.start || "").trim();
-    const gdEnd = String(candidate.guardDisplay?.end || "").trim();
-    if (gdStart && gdEnd) return { label: `${gdStart}-${gdEnd}`, red: true, roleName: roleName || undefined };
-
-    const bName = String(candidate.before?.name || "").trim();
-    const aName = String(candidate.after?.name || "").trim();
-    if (target && target === bName) {
-      const s = String(candidate.before?.start || "").trim();
-      const e = String(candidate.before?.end || "").trim();
-      if (s && e) return { label: `${s}-${e}`, red: true, roleName: roleName || undefined };
-    }
-    if (target && target === aName) {
-      const s = String(candidate.after?.start || "").trim();
-      const e = String(candidate.after?.end || "").trim();
-      if (s && e) return { label: `${s}-${e}`, red: true, roleName: roleName || undefined };
-    }
-    return null;
-  };
-
-  const exactMeta = toMeta(entry);
-  if (exactMeta) return exactMeta;
-
-  // Fallback: quand l'ordre des slots a bougé (merge pulls + noms),
-  // rechercher dans toute la cellule la משיכה correspondant au nom.
-  const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  for (const [k, raw] of Object.entries(pulls)) {
-    if (!String(k).startsWith(cellPrefix)) continue;
-    const meta = toMeta(raw as {
-      roleName?: string;
-      before?: { name?: string; start?: string; end?: string };
-      after?: { name?: string; start?: string; end?: string };
-      guardDisplay?: { start?: string; end?: string };
-    });
-    if (meta) return meta;
-  }
-  return null;
 }
 
 /** Pour CSV / Excel — conversion approximative HSL CSS → hex. */

@@ -933,7 +933,13 @@ export function usePlanningV2PlanController({
       return [{}];
     }
     if (draftAssignments) {
-      const basePulls = draftPulls || {};
+      // draftPulls null = aucune édition explicite des pulls dans ce brouillon.
+      // On tombe sur weekPlan.pulls pour que les pulls du plan sauvegardé restent visibles
+      // après un drag-drop manuel qui appelle commitDraftAssignments sans toucher draftPulls.
+      const savedPulls = weekPlan?.pulls && typeof weekPlan.pulls === "object"
+        ? (weekPlan.pulls as PlanningV2PullsMap)
+        : {};
+      const basePulls = draftPulls !== null ? draftPulls : savedPulls;
       const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
       const stopLimit =
         stopVisibleAlternativeCountRef.current ??
