@@ -1,9 +1,13 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import os
 from threading import Event, Thread
 
-from .database import Base, engine, SessionLocal
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
+
+from .database import SessionLocal
 from .auth import router as auth_router
 from .sites import router as sites_router, process_auto_planning_tick
 from .public_workers import router as public_workers_router
@@ -12,11 +16,17 @@ from .rate_limit import reset_rate_limits
 
 logger = logging.getLogger(__name__)
 
+_ALEMBIC_INI = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
+
+
+def _run_migrations() -> None:
+    cfg = AlembicConfig(_ALEMBIC_INI)
+    alembic_command.upgrade(cfg, "head")
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Scheduler API")
     reset_rate_limits()
-
 
     # CORS (adapt front URL au besoin)
     app.add_middleware(
@@ -39,216 +49,11 @@ def create_app() -> FastAPI:
         max_age=600,
     )
 
-    # DB
-    Base.metadata.create_all(bind=engine)
-    # simple migration for SQLite: ensure 'config' column exists on sites
+    # Run Alembic migrations on startup (idempotent — no-op if already at head)
     try:
-        with engine.begin() as conn:  # Utiliser begin() pour une transaction automatique
-            dialect_name = engine.dialect.name
-            if dialect_name == "sqlite":
-                # Migration pour la colonne 'config' sur sites
-                cols = conn.exec_driver_sql("PRAGMA table_info(sites)").fetchall()
-                col_names = {c[1] for c in cols}
-                if "config" not in col_names:
-                    conn.exec_driver_sql("ALTER TABLE sites ADD COLUMN config JSON")
-                if "deleted_at" not in col_names:
-                    conn.exec_driver_sql("ALTER TABLE sites ADD COLUMN deleted_at BIGINT")
-                
-                # Migration pour la table users: ajouter phone et rendre email nullable
-                # Vérifier si la table users existe
-                try:
-                    user_cols = conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
-                except Exception:
-                    # La table n'existe pas encore, elle sera créée par Base.metadata.create_all
-                    user_cols = []
-                
-                if user_cols:
-                    user_col_names = {c[1] for c in user_cols}
-                    email_col = next((c for c in user_cols if c[1] == "email"), None)
-                    # Dans PRAGMA table_info, l'index 3 indique si NOT NULL (0 = NOT NULL, 1 = NULL)
-                    email_is_not_null = email_col is not None and email_col[3] == 0
-                    phone_exists = "phone" in user_col_names
-                    
-                    logger.info(f"Migration users: email_is_not_null={email_is_not_null}, phone_exists={phone_exists}, email_col={email_col}")
-                    
-                    # Toujours recréer la table si email est NOT NULL ou si phone n'existe pas
-                    # Cela garantit que la structure est correcte
-                    if not phone_exists or email_is_not_null:
-                        logger.info("Recréation de la table users avec email nullable et phone")
-                        # Recréer la table avec email nullable et phone
-                        conn.exec_driver_sql("""
-                            CREATE TABLE users_new (
-                                id INTEGER PRIMARY KEY,
-                                email VARCHAR(255),
-                                full_name VARCHAR(255) NOT NULL,
-                                hashed_password VARCHAR(255) NOT NULL,
-                                role VARCHAR(20) NOT NULL,
-                                phone VARCHAR(20),
-                                director_code VARCHAR(32)
-                            )
-                        """)
-                        # Copier les données existantes
-                        if phone_exists:
-                            conn.exec_driver_sql("""
-                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone, director_code)
-                                SELECT id, email, full_name, hashed_password, role, phone, NULL FROM users
-                            """)
-                        else:
-                            conn.exec_driver_sql("""
-                                INSERT INTO users_new (id, email, full_name, hashed_password, role, phone, director_code)
-                                SELECT id, email, full_name, hashed_password, role, NULL, NULL FROM users
-                            """)
-                        # Supprimer les anciens index avant de supprimer la table
-                        try:
-                            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_users_email")
-                        except Exception:
-                            pass
-                        try:
-                            conn.exec_driver_sql("DROP INDEX IF EXISTS ix_users_phone")
-                        except Exception:
-                            pass
-                        conn.exec_driver_sql("DROP TABLE users")
-                        conn.exec_driver_sql("ALTER TABLE users_new RENAME TO users")
-                        # Recréer les index
-                        try:
-                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)")
-                        except Exception:
-                            pass
-                        try:
-                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone)")
-                        except Exception:
-                            pass
-                        try:
-                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_director_code ON users(director_code)")
-                        except Exception:
-                            pass
-                        logger.info("Table users recréée avec succès")
-                    elif not phone_exists:
-                        # Si seulement phone manque et email est déjà nullable, on peut juste l'ajouter
-                        logger.info("Ajout de la colonne phone à la table users")
-                        conn.exec_driver_sql("ALTER TABLE users ADD COLUMN phone VARCHAR(20)")
-                        try:
-                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users(phone)")
-                        except Exception:
-                            pass
-
-                    # Ajout du champ director_code si absent (sans recréer toute la table)
-                    user_cols = conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
-                    user_col_names = {c[1] for c in user_cols}
-                    if "director_code" not in user_col_names:
-                        logger.info("Ajout de la colonne director_code à la table users")
-                        conn.exec_driver_sql("ALTER TABLE users ADD COLUMN director_code VARCHAR(32)")
-                        try:
-                            conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_director_code ON users(director_code)")
-                        except Exception:
-                            pass
-
-                # Migration pour la table site_workers: ajouter user_id
-                try:
-                    site_worker_cols = conn.exec_driver_sql("PRAGMA table_info(site_workers)").fetchall()
-                    site_worker_col_names = {c[1] for c in site_worker_cols}
-                    if "user_id" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne user_id à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN user_id INTEGER")
-                        try:
-                            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_site_workers_user_id ON site_workers(user_id)")
-                        except Exception:
-                            pass
-                    if "phone" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne phone à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN phone VARCHAR(20)")
-                        try:
-                            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_site_workers_phone ON site_workers(phone)")
-                        except Exception:
-                            pass
-                    if "answers" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne answers à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN answers JSON")
-                    if "pending_approval" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne pending_approval à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN pending_approval BOOLEAN NOT NULL DEFAULT 0")
-                    if "created_at" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne created_at à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN created_at BIGINT NOT NULL DEFAULT 0")
-                    if "removed_from_week_iso" not in site_worker_col_names:
-                        logger.info("Ajout de la colonne removed_from_week_iso à la table site_workers")
-                        conn.exec_driver_sql("ALTER TABLE site_workers ADD COLUMN removed_from_week_iso VARCHAR(10)")
-                except Exception as e:
-                    # La table n'existe peut-être pas encore
-                    logger.info(f"Table site_workers pas encore créée ou erreur: {e}")
-
-                # Migration pour director_auto_planning_configs: ajouter auto_pulls_enabled / auto_save_mode
-                try:
-                    auto_cols = conn.exec_driver_sql("PRAGMA table_info(director_auto_planning_configs)").fetchall()
-                    auto_col_names = {c[1] for c in auto_cols}
-                    if auto_cols and "auto_pulls_enabled" not in auto_col_names:
-                        logger.info("Ajout de la colonne auto_pulls_enabled à director_auto_planning_configs")
-                        conn.exec_driver_sql(
-                            "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_pulls_enabled BOOLEAN NOT NULL DEFAULT 0"
-                        )
-                    if auto_cols and "auto_save_mode" not in auto_col_names:
-                        logger.info("Ajout de la colonne auto_save_mode à director_auto_planning_configs")
-                        conn.exec_driver_sql(
-                            "ALTER TABLE director_auto_planning_configs ADD COLUMN auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
-                        )
-                    if auto_cols and "pulls_limit" not in auto_col_names:
-                        logger.info("Ajout de la colonne pulls_limit à director_auto_planning_configs")
-                        conn.exec_driver_sql("ALTER TABLE director_auto_planning_configs ADD COLUMN pulls_limit INTEGER")
-                    if auto_cols and "pulls_limits_by_site" not in auto_col_names:
-                        logger.info("Ajout de la colonne pulls_limits_by_site à director_auto_planning_configs")
-                        conn.exec_driver_sql(
-                            "ALTER TABLE director_auto_planning_configs ADD COLUMN pulls_limits_by_site TEXT"
-                        )
-                except Exception as e:
-                    logger.info(f"Table director_auto_planning_configs pas encore créée ou erreur: {e}")
-            elif dialect_name == "postgresql":
-                try:
-                    logger.info("Vérification des colonnes auto_pulls_enabled / auto_save_mode sur director_auto_planning_configs")
-                    conn.exec_driver_sql(
-                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_pulls_enabled BOOLEAN NOT NULL DEFAULT FALSE"
-                    )
-                    conn.exec_driver_sql(
-                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS auto_save_mode VARCHAR(16) NOT NULL DEFAULT 'manual'"
-                    )
-                    conn.exec_driver_sql(
-                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS pulls_limit INTEGER"
-                    )
-                    conn.exec_driver_sql(
-                        "ALTER TABLE director_auto_planning_configs ADD COLUMN IF NOT EXISTS pulls_limits_by_site JSONB"
-                    )
-                except Exception as e:
-                    logger.info(f"Migration Postgres director_auto_planning_configs ignorée ou impossible: {e}")
-                try:
-                    logger.info("Vérification de la colonne pending_approval sur site_workers")
-                    conn.exec_driver_sql(
-                        "ALTER TABLE site_workers ADD COLUMN IF NOT EXISTS pending_approval BOOLEAN NOT NULL DEFAULT FALSE"
-                    )
-                except Exception as e:
-                    logger.info(f"Migration Postgres site_workers.pending_approval ignorée ou impossible: {e}")
-                try:
-                    logger.info("Vérification de la colonne created_at sur site_workers")
-                    conn.exec_driver_sql(
-                        "ALTER TABLE site_workers ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0"
-                    )
-                except Exception as e:
-                    logger.info(f"Migration Postgres site_workers.created_at ignorée ou impossible: {e}")
-                try:
-                    logger.info("Vérification de la colonne removed_from_week_iso sur site_workers")
-                    conn.exec_driver_sql(
-                        "ALTER TABLE site_workers ADD COLUMN IF NOT EXISTS removed_from_week_iso VARCHAR(10)"
-                    )
-                except Exception as e:
-                    logger.info(f"Migration Postgres site_workers.removed_from_week_iso ignorée ou impossible: {e}")
-                try:
-                    logger.info("Vérification de la colonne deleted_at sur sites")
-                    conn.exec_driver_sql(
-                        "ALTER TABLE sites ADD COLUMN IF NOT EXISTS deleted_at BIGINT"
-                    )
-                except Exception as e:
-                    logger.info(f"Migration Postgres sites.deleted_at ignorée ou impossible: {e}")
+        _run_migrations()
     except Exception:
-        # Safe to ignore in dev if another process handles migration
-        pass
+        logger.exception("Alembic migration failed at startup")
 
     @app.get("/health")
     def health():

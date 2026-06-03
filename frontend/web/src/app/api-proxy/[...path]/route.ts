@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+/** יצירת תכנון (SSE) peut durer ~30s côté solveur — éviter la coupure Vercel à 10s (Hobby). */
+export const maxDuration = 60;
 
 function getBackendOrigin(): string {
   return String(process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
@@ -40,6 +42,14 @@ async function proxyToBackend(request: NextRequest, context: { params: Promise<{
   responseHeaders.delete("keep-alive");
   responseHeaders.delete("proxy-connection");
   responseHeaders.delete("upgrade");
+
+  const contentType = String(upstreamResponse.headers.get("content-type") || "").toLowerCase();
+  const isEventStream = contentType.includes("text/event-stream");
+  if (isEventStream) {
+    responseHeaders.set("Cache-Control", "no-cache, no-transform");
+    responseHeaders.set("Connection", "keep-alive");
+    responseHeaders.set("X-Accel-Buffering", "no");
+  }
 
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,

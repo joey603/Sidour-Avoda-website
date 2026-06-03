@@ -195,6 +195,13 @@ def _new_generation_id() -> str:
     return secrets.token_hex(8)
 
 
+def _generation_request_wait_timeout_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("PLANNING_REQUEST_WAIT_TIMEOUT_SECONDS", "3") or "3"))
+    except Exception:
+        return 3.0
+
+
 def _generation_busy_detail(director_id: int | None = None) -> str:
     with _GENERATION_STATE_LOCK:
         active = list(_ACTIVE_GENERATIONS.values())
@@ -4604,7 +4611,7 @@ def ai_generate_linked_planning(
         director_id=int(user.id),
         site_id=int(site_id),
         linked=True,
-        wait_timeout_seconds=None,
+        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
     ):
         result = _generate_multi_site_memory_plans(
             db,
@@ -4806,7 +4813,7 @@ async def ai_generate_linked_planning_stream(
         site_id=int(site_id),
         linked=True,
         generation_id=generation_id,
-        wait_timeout_seconds=None,
+        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
     )
     if slot_token is None:
         raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
@@ -5203,7 +5210,7 @@ def ai_generate_planning(
         director_id=int(user.id),
         site_id=int(site_id),
         linked=False,
-        wait_timeout_seconds=None,
+        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
     ):
         result = solve_schedule(
             site.config or {},
@@ -5378,7 +5385,7 @@ async def ai_generate_stream(
         site_id=int(site_id),
         linked=False,
         generation_id=generation_id,
-        wait_timeout_seconds=None,
+        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
     )
     if slot_token is None:
         raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))

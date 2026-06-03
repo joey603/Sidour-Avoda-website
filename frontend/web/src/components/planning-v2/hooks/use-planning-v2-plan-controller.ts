@@ -1302,9 +1302,11 @@ export function usePlanningV2PlanController({
 
     let idleWatch: number | null = null;
     let noResultWatch: number | null = null;
+    let streamHardTimeoutWatch: number | null = null;
     let stopRequestWatch: number | null = null;
     let idleAutoClosed = false;
     let noResultAutoClosed = false;
+    let streamHardTimeoutClosed = false;
     let sawPlanToPersist = false;
     let sawGeneratedPlan = false;
     let generationVisualFinished = false;

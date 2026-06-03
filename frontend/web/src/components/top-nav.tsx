@@ -93,7 +93,7 @@ export default function TopNav() {
   const baseBtnMobile =
     "inline-flex items-center justify-center rounded-md px-4 py-3 text-base transition-colors border w-full";
   const inactiveClasses =
-    "bg-white text-zinc-800 border-zinc-300 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-200 dark:border-zinc-700 dark:hover:bg-zinc-800";
+    "bg-white text-zinc-800 border-zinc-300 hover:bg-zinc-50 hover:text-zinc-900";
 
   const handleLinkClick = () => {
     setMobileMenuOpen(false);
@@ -208,7 +208,7 @@ export default function TopNav() {
       <Link
         href="/"
         onClick={handleLinkClick}
-        className={`${baseBtnMobile} ${pathname === "/" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+        className={`${baseBtnMobile} ${pathname === "/" ? "liquid-glass-btn text-white" : inactiveClasses}`}
         aria-label="בית"
       >
         בית
@@ -315,7 +315,7 @@ export default function TopNav() {
                 <Link
                   href="/"
         onClick={handleLinkClick}
-                  className={`${baseBtn} ${pathname === "/" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                  className={`${baseBtn} ${pathname === "/" ? "liquid-glass-btn text-white" : inactiveClasses}`}
                   aria-label="בית"
                 >
                   בית
@@ -325,14 +325,17 @@ export default function TopNav() {
 
   return (
     <>
-      <div id="app-top-nav" className="w-full border-b bg-white/80 backdrop-blur dark:bg-zinc-900/80">
+      <div
+        id="app-top-nav"
+        className="w-full border-b border-zinc-200 bg-white"
+      >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 py-3 pr-3 pl-0">
           <div className="flex items-center gap-2">
             {/* Bouton hamburger (mobile uniquement) */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden inline-flex items-center justify-center rounded-md p-2 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+              className="md:hidden inline-flex items-center justify-center rounded-md p-2 text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900"
               aria-label="תפריט"
               aria-expanded={mobileMenuOpen}
             >
@@ -384,7 +387,13 @@ export default function TopNav() {
         </div>
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2" aria-label="G1 home">
-            <img src="/g1-logo.png" alt="G1" width={48} height={48} style={{ display: "block" }} />
+            <img
+              src="/g1-logo.png"
+              alt="G1"
+              width={48}
+              height={48}
+              style={{ display: "block" }}
+            />
           </Link>
         </div>
       </div>

@@ -10,6 +10,10 @@ frontend/web/.vercel/
 frontend/web/.env.local
 frontend/web/.env
 backend/.env
+
+# Migration Neon — secrets et dumps (voir neon-migrate/.gitignore)
+neon-migrate/local.env
+neon-migrate/*.dump
 **/.DS_Store
 **/.pytest_cache/
 **/coverage/

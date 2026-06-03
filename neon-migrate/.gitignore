@@ -1,0 +1,6 @@
+# Ne jamais versionner les secrets ni les dumps
+local.env
+*.dump
+*.sql
+migrate-env.local.sh
+.pgpass
