@@ -8,13 +8,12 @@ import LoadingAnimation from "@/components/loading-animation";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
 import { SplineScene } from "@/components/ui/splite";
 import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
-import { TextRotate } from "@/components/ui/text-rotate";
-import type { TextRotateRef } from "@/components/ui/text-rotate";
 import {
   useScroll,
   useTransform,
   useMotionValueEvent,
   motion,
+  type MotionValue,
 } from "framer-motion";
 
 /* ─── Scroll-reveal hook ─────────────────────────────────────────── */
@@ -145,7 +144,102 @@ export default function Home() {
   return <LandingPage />;
 }
 
-/* ─── Hero + transition sortie vidéo ────────────────────────────── */
+/* ─── Features (scroll cinématique unifié) ───────────────────────── */
+
+type FeatureItem = {
+  title: string;
+  desc: string;
+  media: string;
+  mediaType: "image" | "video";
+};
+
+const FEATURE_ITEMS: FeatureItem[] = [
+  {
+    title: "ניהול רב-אתרי",
+    desc: "נהל מספר אתרים ותחנות ממקום אחד עם מבט מלא על כל הצוותים",
+    media: "/rav-atariim-sites-list.png",
+    mediaType: "image",
+  },
+  {
+    title: "תפקידים ושיבוצים",
+    desc: "הגדר תפקידים לכל עובד, צפה בזמינות ושבץ אוטומטית לפי תפקיד בכל משמרת",
+    media: "/tafkidim-planning.png",
+    mediaType: "image",
+  },
+  {
+    title: "תפריט עובד",
+    desc: "ממשק פשוט לעובדים — זמינות שבועית, היסטוריה ועדכונים בזמן אמת",
+    media: "/worker-availability-menu.png",
+    mediaType: "image",
+  },
+];
+
+const FEATURES_SCROLL_START = 0.38;
+
+function featureSegmentBounds(index: number, total: number) {
+  const span = (1 - FEATURES_SCROLL_START) / total;
+  const start = FEATURES_SCROLL_START + index * span;
+  const end = start + span;
+  const entrance = span * 0.38;
+  const exit = index < total - 1 ? span * 0.18 : 0;
+  return { start, end, entrance, exit };
+}
+
+function FeatureSlidePanel({
+  item,
+  scrollYProgress,
+  index,
+  total,
+}: {
+  item: FeatureItem;
+  scrollYProgress: MotionValue<number>;
+  index: number;
+  total: number;
+}) {
+  const { start, end, entrance, exit } = featureSegmentBounds(index, total);
+  const enterEnd = start + entrance;
+  const exitStart = end - exit;
+
+  const opacity = useTransform(
+    scrollYProgress,
+    exit > 0 ? [start, enterEnd, exitStart, end] : [start, enterEnd, 1, 1],
+    exit > 0 ? [0, 1, 1, 0] : [0, 1, 1, 1],
+  );
+  const textX = useTransform(scrollYProgress, [start, enterEnd], [140, 0]);
+  const imageX = useTransform(scrollYProgress, [start, enterEnd], [-140, 0]);
+  const descOp = useTransform(scrollYProgress, [start + entrance * 0.45, enterEnd], [0, 1]);
+
+  return (
+    <motion.div
+      className="pointer-events-none absolute inset-0 flex items-center bg-white"
+      style={{ opacity }}
+      dir="rtl"
+    >
+      <div className="flex h-full w-full items-center pt-[var(--app-top-nav-height)]">
+        <motion.div className="flex w-1/2 flex-col items-end px-8 md:px-16" style={{ x: textX }}>
+          <h2 className="text-3xl font-bold text-zinc-900 md:text-4xl lg:text-5xl">{item.title}</h2>
+          <motion.p
+            className="mt-2 max-w-md text-right text-sm text-zinc-500 md:text-base"
+            style={{ opacity: descOp }}
+          >
+            {item.desc}
+          </motion.p>
+        </motion.div>
+        <motion.div className="flex h-full w-1/2 items-center px-6 py-16" style={{ x: imageX }}>
+          <div className="flex h-[65vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-sm">
+            {item.mediaType === "video" ? (
+              <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
+            ) : (
+              <img src={item.media} alt={item.title} className="h-full w-full object-contain object-top bg-white" />
+            )}
+          </div>
+        </motion.div>
+      </div>
+    </motion.div>
+  );
+}
+
+/* ─── Hero + features — scroll sticky unifié ───────────────────── */
 function HeroScrollSection({
   titleComponent,
   videoSrc,
@@ -188,14 +282,13 @@ function HeroScrollSection({
 
   const { scrollYProgress } = useScroll({ target: outerRef });
 
-  // ── Phase 1 : rotation entrée (0–18%) ──────────────────────────
-  const rotateX  = useTransform(scrollYProgress, [0, 0.18], [35, 0]);
-  const scaleIn  = useTransform(scrollYProgress, [0, 0.18], isMobile ? [0.92, 1] : [1.08, 1]);
+  // ── Phase 1 : rotation entrée ───────────────────────────────────
+  const rotateX  = useTransform(scrollYProgress, [0, 0.07], [35, 0]);
+  const scaleIn  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [0.92, 1] : [1.08, 1]);
 
-
-  // ── Phase 2 : lecture vidéo (18–72%) ───────────────────────────
-  const VIDEO_START = 0.15;
-  const VIDEO_END   = 0.38;
+  // ── Phase 2 : lecture vidéo ─────────────────────────────────────
+  const VIDEO_START = 0.05;
+  const VIDEO_END   = 0.14;
   useMotionValueEvent(scrollYProgress, "change", (latest) => {
     const video = videoRef.current;
     if (!video || !video.duration || isNaN(video.duration)) return;
@@ -208,29 +301,26 @@ function HeroScrollSection({
     // après VIDEO_END : vidéo reste à la dernière frame
   });
 
-  // ── Phase 3 : sortie (72–96%) — carte tourne sur elle-même + recule ─
-  // Tourne jusqu'à 360° (droit), puis continue de reculer jusqu'à disparition
-  const cardExitScale = useTransform(scrollYProgress, [0.42, 0.58], [1, 0]);
-  const cardOpacity   = useTransform(scrollYProgress, [0.48, 0.58], [1, 0]);
+  // ── Phase 3 : sortie carte ────────────────────────────────────────
+  const cardExitScale = useTransform(scrollYProgress, [0.16, 0.24], [1, 0]);
+  const cardOpacity   = useTransform(scrollYProgress, [0.20, 0.24], [1, 0]);
 
   // ── ScrollGooeyText ─────────────────────────────────────────────
-  // Gooey : apparaît à 0.58, disparaît rapidement à 0.72–0.75
-  const gooeyOp       = useTransform(scrollYProgress, [0.58, 0.62, 0.72, 0.75], [0, 1, 1, 0]);
-  const gooeyProgress = useTransform(scrollYProgress, [0.60, 0.72], [0, 1]);
-  const nextSectionOp = useTransform(scrollYProgress, [0.73, 0.77], [0, 1]);
+  const gooeyOp       = useTransform(scrollYProgress, [0.24, 0.27, 0.35, 0.38], [0, 1, 1, 0]);
+  const gooeyProgress = useTransform(scrollYProgress, [0.25, 0.36], [0, 1]);
 
   return (
     <div
       ref={outerRef}
       style={{
-        height: "2000vh",
+        height: "950vh",
         background: "#ffffff",
       }}
     >
       {/* Fond blanc — sans blobs */}
 
-      {/* Titre en flux normal */}
-      <div className="relative z-10 flex flex-col items-center gap-2 px-6 py-8 text-center">
+      {/* Titre en flux normal — espace sous la navbar */}
+      <div className="relative z-10 flex flex-col items-center gap-2 px-6 pb-8 pt-10 text-center md:pt-14">
         {titleComponent}
       </div>
 
@@ -290,116 +380,18 @@ function HeroScrollSection({
           />
         </motion.div>
 
-        {/* Fondu blanc — masque la transition entre le hero et la section suivante */}
-        <motion.div
-          className="pointer-events-none absolute inset-0 bg-white"
-          style={{ opacity: nextSectionOp as unknown as number }}
-        />
-      </div>
-    </div>
-  );
-}
-
-
-/* ─── Section features TextRotate — scroll sticky ───────────────── */
-
-type FeatureItem = {
-  title: string;
-  desc: string;
-  media: string;
-  mediaType: "image" | "video";
-};
-
-const FEATURE_ITEMS: FeatureItem[] = [
-  {
-    title: "ניהול רב-אתרי",
-    desc: "נהל מספר אתרים ותחנות ממקום אחד עם מבט מלא על כל הצוותים",
-    media: "/rav-atariim-sites-list.png",
-    mediaType: "image",
-  },
-  {
-    title: "תפקידים ושיבוצים",
-    desc: "הגדר תפקידים לכל עובד, צפה בזמינות ושבץ אוטומטית לפי תפקיד בכל משמרת",
-    media: "/tafkidim-planning.png",
-    mediaType: "image",
-  },
-  {
-    title: "תפריט עובד",
-    desc: "ממשק פשוט לעובדים — זמינות שבועית, היסטוריה ועדכונים בזמן אמת",
-    media: "/worker-availability-menu.png",
-    mediaType: "image",
-  },
-];
-
-function FeaturesScrollSection() {
-  const outerRef = useRef<HTMLDivElement>(null);
-  const textRotateRef = useRef<TextRotateRef>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const { scrollYProgress } = useScroll({ target: outerRef });
-
-  // Change d'item en fonction du scroll
-  useMotionValueEvent(scrollYProgress, "change", (latest) => {
-    const n = FEATURE_ITEMS.length;
-    const idx = Math.min(Math.floor(latest * n), n - 1);
-    if (idx !== activeIndex) {
-      setActiveIndex(idx);
-      textRotateRef.current?.jumpTo(idx);
-    }
-  });
-
-  return (
-    <div ref={outerRef} style={{ height: `${FEATURE_ITEMS.length * 120}vh` }} dir="rtl">
-      <div
-        className="sticky top-0 h-screen overflow-hidden bg-white flex items-center"
-        style={{ paddingTop: "var(--app-top-nav-height)" }}
-      >
-        {/* Gauche — titre + sous-titre */}
-        <div className="w-1/2 px-8 md:px-16 flex flex-col items-end">
-          <TextRotate
-            ref={textRotateRef}
-            texts={FEATURE_ITEMS.map((f) => f.title)}
-            mainClassName="text-3xl md:text-4xl lg:text-5xl font-bold text-zinc-900 justify-end flex"
-            splitLevelClassName="overflow-hidden pb-1"
-            staggerFrom="first"
-            animatePresenceMode="wait"
-            loop={false}
-            auto={false}
-            staggerDuration={0.025}
-            initial={{ opacity: 1, y: 0 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -30 }}
-            transition={{ type: "spring", duration: 0.4, bounce: 0 }}
+        {/* Features — enchaînement fluide après les stats */}
+        {FEATURE_ITEMS.map((item, index) => (
+          <FeatureSlidePanel
+            key={item.title}
+            item={item}
+            scrollYProgress={scrollYProgress}
+            index={index}
+            total={FEATURE_ITEMS.length}
           />
-          <p className="mt-2 text-zinc-500 text-sm md:text-base text-right transition-all duration-300">
-            {FEATURE_ITEMS[activeIndex].desc}
-          </p>
-        </div>
-
-        {/* Droite — image/vidéo */}
-        <div className="w-1/2 px-6 py-16 h-full flex items-center">
-          <FeatureMedia item={FEATURE_ITEMS[activeIndex]} />
-        </div>
+        ))}
       </div>
     </div>
-  );
-}
-
-function FeatureMedia({ item }: { item: FeatureItem }) {
-  return (
-    <motion.div
-      key={item.title}
-      initial={{ opacity: 0, x: 40 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -40 }}
-      transition={{ type: "spring", duration: 0.5, bounce: 0 }}
-      className="w-full h-[65vh] rounded-2xl overflow-hidden border border-zinc-200 bg-zinc-50 flex items-center justify-center"
-    >
-      {item.mediaType === "video" ? (
-        <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
-      ) : (
-        <img src={item.media} alt={item.title} className="h-full w-full object-contain object-top bg-white" />
-      )}
-    </motion.div>
   );
 }
 
@@ -547,10 +539,6 @@ function LandingPage() {
         />
 
       </section>
-
-
-      {/* ══ FEATURES — TextRotate + médias ═══════════════════════════ */}
-      <FeaturesScrollSection />
 
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
