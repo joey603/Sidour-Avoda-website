@@ -208,7 +208,7 @@ export default function TopNav() {
       <Link
         href="/"
         onClick={handleLinkClick}
-        className={`${baseBtnMobile} ${pathname === "/" ? "liquid-glass-btn text-white" : inactiveClasses}`}
+        className={`${baseBtnMobile} ${pathname === "/" ? "liquid-glass-btn text-zinc-900" : inactiveClasses}`}
         aria-label="בית"
       >
         בית
@@ -315,7 +315,7 @@ export default function TopNav() {
                 <Link
                   href="/"
         onClick={handleLinkClick}
-                  className={`${baseBtn} ${pathname === "/" ? "liquid-glass-btn text-white" : inactiveClasses}`}
+                  className={`${baseBtn} ${pathname === "/" ? "liquid-glass-btn text-zinc-900" : inactiveClasses}`}
                   aria-label="בית"
                 >
                   בית

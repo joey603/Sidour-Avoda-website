@@ -6,10 +6,10 @@ import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
-import { Glow } from "@/components/ui/glow";
-import { TextExpandSection } from "@/components/ui/scroll-expansion-hero";
 import { SplineScene } from "@/components/ui/splite";
-import { Spotlight } from "@/components/ui/spotlight";
+import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
+import { TextRotate } from "@/components/ui/text-rotate";
+import type { TextRotateRef } from "@/components/ui/text-rotate";
 import {
   useScroll,
   useTransform,
@@ -37,48 +37,6 @@ function useReveal(delay = 0) {
     return () => ob.disconnect();
   }, [delay]);
   return { ref, visible };
-}
-
-/* ─── Animated number ticker (21st.dev style) ───────────────────── */
-function NumberTicker({
-  value,
-  suffix = "",
-}: {
-  value: number;
-  suffix?: string;
-}) {
-  const [display, setDisplay] = useState(0);
-  const elRef = useRef<HTMLSpanElement>(null);
-  const fired = useRef(false);
-  useEffect(() => {
-    const el = elRef.current;
-    if (!el) return;
-    const ob = new IntersectionObserver(
-      ([e]) => {
-        if (e.isIntersecting && !fired.current) {
-          fired.current = true;
-          const start = performance.now();
-          const dur = 2000;
-          const tick = (now: number) => {
-            const t = Math.min((now - start) / dur, 1);
-            const eased = 1 - (1 - t) ** 3;
-            setDisplay(Math.round(eased * value));
-            if (t < 1) requestAnimationFrame(tick);
-          };
-          requestAnimationFrame(tick);
-        }
-      },
-      { threshold: 0.5 },
-    );
-    ob.observe(el);
-    return () => ob.disconnect();
-  }, [value]);
-  return (
-    <span ref={elRef}>
-      {display}
-      {suffix ? (suffix.startsWith(" ") ? suffix : ` ${suffix}`) : null}
-    </span>
-  );
 }
 
 /* ─── Feature card data ──────────────────────────────────────────── */
@@ -145,64 +103,6 @@ const FEATURES = [
   },
 ] as const;
 
-type FeatureColor = (typeof FEATURES)[number]["color"];
-
-const COLOR_STYLES: Record<
-  FeatureColor,
-  { border: string; icon: string; glow: string }
-> = {
-  blue: {
-    border: "border-[#00A8E0]/20",
-    icon: "bg-[#00A8E0]/10 text-[#00A8E0]",
-    glow: "rgba(0,168,224,0.08)",
-  },
-  indigo: {
-    border: "border-indigo-200 dark:border-indigo-800",
-    icon: "bg-indigo-100 text-indigo-600 dark:bg-indigo-900/60 dark:text-indigo-400",
-    glow: "rgba(99,102,241,0.08)",
-  },
-  green: {
-    border: "border-emerald-200 dark:border-emerald-800",
-    icon: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/60 dark:text-emerald-400",
-    glow: "rgba(16,185,129,0.08)",
-  },
-  amber: {
-    border: "border-amber-200 dark:border-amber-800",
-    icon: "bg-amber-100 text-amber-600 dark:bg-amber-900/60 dark:text-amber-400",
-    glow: "rgba(245,158,11,0.08)",
-  },
-  purple: {
-    border: "border-purple-200 dark:border-purple-800",
-    icon: "bg-purple-100 text-purple-600 dark:bg-purple-900/60 dark:text-purple-400",
-    glow: "rgba(147,51,234,0.08)",
-  },
-  rose: {
-    border: "border-rose-200 dark:border-rose-800",
-    icon: "bg-rose-100 text-rose-600 dark:bg-rose-900/60 dark:text-rose-400",
-    glow: "rgba(244,63,94,0.08)",
-  },
-};
-
-const STEPS = [
-  {
-    num: "01",
-    emoji: "👤",
-    title: "הרשמת מנהל",
-    desc: "צור חשבון מנהל, הוסף את האתרים, התחנות וקבוצות המשמרות שלך",
-  },
-  {
-    num: "02",
-    emoji: "👥",
-    title: "רישום עובדים",
-    desc: "העובדים נרשמים עם קוד האתר ומסמנים את הזמינות השבועית שלהם",
-  },
-  {
-    num: "03",
-    emoji: "✨",
-    title: "AI מייצר את הסידור",
-    desc: 'לחץ "יצור תוכנית" וה-AI יבנה את שיבוץ המשמרות האופטימלי תוך שניות',
-  },
-];
 
 /* ─── Root page — auth-gate then landing ────────────────────────── */
 export default function Home() {
@@ -264,9 +164,26 @@ function HeroScrollSection({
     return () => window.removeEventListener("resize", check);
   }, []);
 
+  // Force le chargement complet de la vidéo dès le montage
   useEffect(() => {
     const video = videoRef.current;
-    if (video) video.currentTime = 0;
+    if (!video) return;
+
+    const init = () => { video.currentTime = 0; };
+
+    // Déclenche le chargement si pas encore commencé
+    if (video.readyState === 0) video.load();
+    else init();
+
+    video.addEventListener("loadedmetadata", init);
+    video.addEventListener("loadeddata", init);
+    video.addEventListener("canplaythrough", init);
+
+    return () => {
+      video.removeEventListener("loadedmetadata", init);
+      video.removeEventListener("loadeddata", init);
+      video.removeEventListener("canplaythrough", init);
+    };
   }, []);
 
   const { scrollYProgress } = useScroll({ target: outerRef });
@@ -274,11 +191,11 @@ function HeroScrollSection({
   // ── Phase 1 : rotation entrée (0–18%) ──────────────────────────
   const rotateX  = useTransform(scrollYProgress, [0, 0.18], [35, 0]);
   const scaleIn  = useTransform(scrollYProgress, [0, 0.18], isMobile ? [0.92, 1] : [1.08, 1]);
-  const translate = useTransform(scrollYProgress, [0, 0.18], [0, -50]);
+
 
   // ── Phase 2 : lecture vidéo (18–72%) ───────────────────────────
-  const VIDEO_START = 0.18;
-  const VIDEO_END   = 0.72;
+  const VIDEO_START = 0.15;
+  const VIDEO_END   = 0.38;
   useMotionValueEvent(scrollYProgress, "change", (latest) => {
     const video = videoRef.current;
     if (!video || !video.duration || isNaN(video.duration)) return;
@@ -293,24 +210,20 @@ function HeroScrollSection({
 
   // ── Phase 3 : sortie (72–96%) — carte tourne sur elle-même + recule ─
   // Tourne jusqu'à 360° (droit), puis continue de reculer jusqu'à disparition
-  const cardExitScale = useTransform(scrollYProgress, [0.72, 0.93], [1, 0]);
-  const cardOpacity   = useTransform(scrollYProgress, [0.80, 0.93], [1, 0]);
+  const cardExitScale = useTransform(scrollYProgress, [0.42, 0.58], [1, 0]);
+  const cardOpacity   = useTransform(scrollYProgress, [0.48, 0.58], [1, 0]);
 
-  // ── Stats : entrent en alternance pendant la sortie de la carte ──
-  const s1X  = useTransform(scrollYProgress, [0.73, 0.91], ["90vw",  "18vw"]);
-  const s1Op = useTransform(scrollYProgress, [0.73, 0.89], [0, 1]);
-  const s2X  = useTransform(scrollYProgress, [0.77, 0.94], ["-90vw", "-32vw"]);
-  const s2Op = useTransform(scrollYProgress, [0.77, 0.92], [0, 1]);
-  const s3X  = useTransform(scrollYProgress, [0.81, 0.97], ["90vw",  "18vw"]);
-  const s3Op = useTransform(scrollYProgress, [0.81, 0.96], [0, 1]);
-  const borderCol  = useTransform(s3Op, [0, 1], ["rgba(0,0,0,0)", "rgba(0,0,0,0.08)"]);
-  const statsExitOp = useTransform(scrollYProgress, [0.96, 1.0], [1, 0]);
+  // ── ScrollGooeyText ─────────────────────────────────────────────
+  // Gooey : apparaît à 0.58, disparaît rapidement à 0.72–0.75
+  const gooeyOp       = useTransform(scrollYProgress, [0.58, 0.62, 0.72, 0.75], [0, 1, 1, 0]);
+  const gooeyProgress = useTransform(scrollYProgress, [0.60, 0.72], [0, 1]);
+  const nextSectionOp = useTransform(scrollYProgress, [0.73, 0.77], [0, 1]);
 
   return (
     <div
       ref={outerRef}
       style={{
-        height: "950vh",
+        height: "2000vh",
         background: "#ffffff",
       }}
     >
@@ -345,164 +258,227 @@ function HeroScrollSection({
               muted
               playsInline
               preload="auto"
+              // Réinitialise currentTime dès que la vidéo est prête
               onLoadedMetadata={(e) => { e.currentTarget.currentTime = 0; }}
               onLoadedData={(e) => { e.currentTarget.currentTime = 0; }}
               onCanPlay={(e) => { e.currentTarget.currentTime = 0; }}
+              onCanPlayThrough={(e) => { e.currentTarget.currentTime = 0; }}
+              // Retry si erreur de chargement
+              onError={(e) => {
+                const v = e.currentTarget;
+                setTimeout(() => { v.load(); }, 1000);
+              }}
             >
               <source src={videoSrc} type="video/mp4" />
+              <source src={videoSrc} type="video/quicktime" />
             </video>
           </div>
         </motion.div>
 
-        {/* Stats qui entrent en alternance gauche/droite */}
-        {/* Wrapper : fondu de sortie groupé après apparition du 3ème */}
-        <motion.div style={{ opacity: statsExitOp }} className="pointer-events-none absolute inset-0">
-          {[
-            { xMv: s1X, opMv: s1Op, value: "100%",         label: "אוטומציה בתכנון", desc: "ה-AI מטפל בכל השיבוצים",       num: "01", top: "22%" },
-            { xMv: s2X, opMv: s2Op, value: "30שנ׳",        label: "זמן יצירת סידור", desc: "מהיר פי 100 מתכנון ידני",      num: "02", top: "45%" },
-            { xMv: s3X, opMv: s3Op, value: "0 קונפליקטים", label: "שגיאות שיבוץ",   desc: "אלגוריתם אופטימיזציה מדויק",  num: "03", top: "68%" },
-          ].map((s) => (
-            <motion.div
-              key={s.num}
-              dir="rtl"
-              style={{
-                x: s.xMv,
-                opacity: s.opMv,
-                position: "absolute",
-                top: s.top,
-                left: "50%",
-                translateX: "-50%",
-                borderBottomColor: borderCol,
-                borderBottomWidth: "1px",
-                borderBottomStyle: "solid",
-              }}
-              className="flex w-[min(90vw,36rem)] items-baseline justify-between gap-4 py-4"
-            >
-              <div
-                className="text-4xl font-black tabular-nums md:text-5xl flex-shrink-0"
-                style={{
-                  background: "linear-gradient(135deg, #00A8E0, #7dd3fc)",
-                  WebkitBackgroundClip: "text",
-                  WebkitTextFillColor: "transparent",
-                  backgroundClip: "text",
-                }}
-              >
-                {s.value}
-              </div>
-              <div className="flex-1 text-right">
-                <div className="text-base font-semibold text-zinc-900">{s.label}</div>
-                <div className="mt-0.5 text-xs text-zinc-400">{s.desc}</div>
-              </div>
-              <span className="text-xs font-mono text-zinc-300 flex-shrink-0">{s.num}</span>
-            </motion.div>
-          ))}
+        {/* GooeyText — morphe entre les 3 stats pendant la sortie de la carte */}
+        <motion.div
+          style={{ opacity: gooeyOp as unknown as number }}
+          className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3"
+        >
+          <ScrollGooeyText
+            texts={["100%", "30שנ׳", "0 קונפליקטים"]}
+            labels={["אוטומציה בתכנון", "זמן יצירת סידור", "שגיאות שיבוץ"]}
+            scrollProgress={gooeyProgress}
+            className="w-full"
+            textClassName="text-7xl font-black md:text-8xl gooey-gradient"
+            labelClassName="text-xl font-semibold text-zinc-600"
+          />
         </motion.div>
+
+        {/* Fondu blanc — masque la transition entre le hero et la section suivante */}
+        <motion.div
+          className="pointer-events-none absolute inset-0 bg-white"
+          style={{ opacity: nextSectionOp as unknown as number }}
+        />
       </div>
     </div>
   );
 }
 
 
-/* ─── Features + robot Spline qui regarde les features ──────────── */
-function FeaturesWithRobot() {
-  const splineContainerRef = useRef<HTMLDivElement>(null);
+/* ─── Section features TextRotate — scroll sticky ───────────────── */
 
-  // Spline écoute mousemove + pointermove sur document — on dispatch aux coords réelles de la feature
-  const dispatchAt = (x: number, y: number) => {
-    const opts = { clientX: x, clientY: y, bubbles: true, cancelable: true };
-    document.dispatchEvent(new MouseEvent("mousemove", opts));
-    document.dispatchEvent(new PointerEvent("pointermove", opts));
-  };
+type FeatureItem = {
+  title: string;
+  desc: string;
+  media: string;
+  mediaType: "image" | "video";
+};
 
-  const lookCenter = () => {
-    const container = splineContainerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    dispatchAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  };
+const FEATURE_ITEMS: FeatureItem[] = [
+  {
+    title: "ניהול רב-אתרי",
+    desc: "נהל מספר אתרים ותחנות ממקום אחד עם מבט מלא על כל הצוותים",
+    media: "/rav-atariim-sites-list.png",
+    mediaType: "image",
+  },
+  {
+    title: "תפקידים ושיבוצים",
+    desc: "הגדר תפקידים לכל עובד, צפה בזמינות ושבץ אוטומטית לפי תפקיד בכל משמרת",
+    media: "/tafkidim-planning.png",
+    mediaType: "image",
+  },
+  {
+    title: "תפריט עובד",
+    desc: "ממשק פשוט לעובדים — זמינות שבועית, היסטוריה ועדכונים בזמן אמת",
+    media: "/worker-availability-menu.png",
+    mediaType: "image",
+  },
+];
+
+function FeaturesScrollSection() {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const textRotateRef = useRef<TextRotateRef>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const { scrollYProgress } = useScroll({ target: outerRef });
+
+  // Change d'item en fonction du scroll
+  useMotionValueEvent(scrollYProgress, "change", (latest) => {
+    const n = FEATURE_ITEMS.length;
+    const idx = Math.min(Math.floor(latest * n), n - 1);
+    if (idx !== activeIndex) {
+      setActiveIndex(idx);
+      textRotateRef.current?.jumpTo(idx);
+    }
+  });
 
   return (
-    <section className="relative overflow-hidden bg-white py-20 px-6">
-      <div className="relative z-10 mx-auto max-w-6xl">
-        <motion.div
-          className="mb-16 text-center"
-          initial={{ opacity: 0, y: 30 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true }}
-          transition={{ duration: 0.7 }}
-        >
-          <p className="text-sm font-bold uppercase tracking-widest text-[#00A8E0]">יכולות</p>
-          <h2 className="mt-3 text-4xl font-bold text-zinc-900 sm:text-5xl">הכל במקום אחד</h2>
-          <p className="mx-auto mt-4 max-w-lg text-zinc-500">
-            כלי ניהול מקצועיים שמחברים בין מנהלים, עובדים וה-AI לסידור עבודה חלק ויעיל
+    <div ref={outerRef} style={{ height: `${FEATURE_ITEMS.length * 120}vh` }} dir="rtl">
+      <div
+        className="sticky top-0 h-screen overflow-hidden bg-white flex items-center"
+        style={{ paddingTop: "var(--app-top-nav-height)" }}
+      >
+        {/* Gauche — titre + sous-titre */}
+        <div className="w-1/2 px-8 md:px-16 flex flex-col items-end">
+          <TextRotate
+            ref={textRotateRef}
+            texts={FEATURE_ITEMS.map((f) => f.title)}
+            mainClassName="text-3xl md:text-4xl lg:text-5xl font-bold text-zinc-900 justify-end flex"
+            splitLevelClassName="overflow-hidden pb-1"
+            staggerFrom="first"
+            animatePresenceMode="wait"
+            loop={false}
+            auto={false}
+            staggerDuration={0.025}
+            initial={{ opacity: 1, y: 0 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -30 }}
+            transition={{ type: "spring", duration: 0.4, bounce: 0 }}
+          />
+          <p className="mt-2 text-zinc-500 text-sm md:text-base text-right transition-all duration-300">
+            {FEATURE_ITEMS[activeIndex].desc}
           </p>
-        </motion.div>
+        </div>
 
-        <div className="flex flex-col gap-12 lg:flex-row lg:items-center lg:gap-16">
-          {/* Robot Spline */}
-          <motion.div
-            ref={splineContainerRef}
-            className="flex-shrink-0 lg:w-[420px] h-[380px] lg:h-[520px] rounded-2xl overflow-hidden"
-            style={{ border: "1px solid rgba(0,0,0,0.08)", background: "#0a0f1e" }}
-            initial={{ opacity: 0, x: -40 }}
-            whileInView={{ opacity: 1, x: 0 }}
-            viewport={{ once: true, amount: 0.3 }}
-            transition={{ duration: 0.8, type: "spring", stiffness: 60 }}
-          >
-            <SplineScene
-              scene="https://prod.spline.design/kZDDjO5HuC9GJUM2/scene.splinecode"
-              className="w-full h-full"
-            />
-          </motion.div>
-
-          {/* Liste des features */}
-          <motion.div
-            className="flex-1 divide-y divide-zinc-100"
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, amount: 0.1 }}
-            variants={{ visible: { transition: { staggerChildren: 0.09 } } }}
-          >
-            {FEATURES.map((f, i) => (
-              <motion.div
-                key={f.title}
-                variants={{
-                  hidden: { opacity: 0, x: 40 },
-                  visible: { opacity: 1, x: 0, transition: { type: "spring", stiffness: 60, damping: 14 } },
-                }}
-                whileHover={{ x: -6, transition: { type: "spring", stiffness: 300 } }}
-                onMouseEnter={(e) => {
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  dispatchAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
-                }}
-                onMouseLeave={lookCenter}
-                className="flex items-start gap-5 py-5 cursor-default"
-                dir="rtl"
-              >
-                <span className="mt-0.5 text-xl flex-shrink-0">{f.icon}</span>
-                <div className="flex-1">
-                  <h3 className="text-base font-bold text-zinc-900">{f.title}</h3>
-                  <p className="mt-0.5 text-sm leading-relaxed text-zinc-500">{f.desc}</p>
-                </div>
-                <span className="text-xs font-mono text-zinc-300 flex-shrink-0">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-              </motion.div>
-            ))}
-          </motion.div>
+        {/* Droite — image/vidéo */}
+        <div className="w-1/2 px-6 py-16 h-full flex items-center">
+          <FeatureMedia item={FEATURE_ITEMS[activeIndex]} />
         </div>
       </div>
-    </section>
+    </div>
+  );
+}
+
+function FeatureMedia({ item }: { item: FeatureItem }) {
+  return (
+    <motion.div
+      key={item.title}
+      initial={{ opacity: 0, x: 40 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -40 }}
+      transition={{ type: "spring", duration: 0.5, bounce: 0 }}
+      className="w-full h-[65vh] rounded-2xl overflow-hidden border border-zinc-200 bg-zinc-50 flex items-center justify-center"
+    >
+      {item.mediaType === "video" ? (
+        <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
+      ) : (
+        <img src={item.media} alt={item.title} className="h-full w-full object-contain object-top bg-white" />
+      )}
+    </motion.div>
+  );
+}
+
+/* ─── CTA sticky cinématique ─────────────────────────────────────── */
+function CtaSection() {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({ target: outerRef });
+
+  const titleLX  = useTransform(scrollYProgress, [0.03, 0.12], [-100, 0]);
+  const titleRX  = useTransform(scrollYProgress, [0.03, 0.12], [100, 0]);
+  const titleOp  = useTransform(scrollYProgress, [0.03, 0.12], [0, 1]);
+  const descX    = useTransform(scrollYProgress, [0.10, 0.18], [-80, 0]);
+  const descOp   = useTransform(scrollYProgress, [0.10, 0.18], [0, 1]);
+  const btn1X    = useTransform(scrollYProgress, [0.16, 0.24], [100, 0]);
+  const btn1Op   = useTransform(scrollYProgress, [0.16, 0.24], [0, 1]);
+  const btn2X    = useTransform(scrollYProgress, [0.22, 0.30], [-100, 0]);
+  const btn2Op   = useTransform(scrollYProgress, [0.22, 0.30], [0, 1]);
+  const trustOp  = useTransform(scrollYProgress, [0.28, 0.36], [0, 1]);
+
+  return (
+    <div ref={outerRef} style={{ height: "500vh" }}>
+      <section
+        className="sticky top-0 flex h-screen items-center justify-center overflow-hidden bg-zinc-50"
+        style={{ paddingTop: "var(--app-top-nav-height)" }}
+      >
+        <div className="mx-auto max-w-2xl px-6 text-center">
+          {/* Titre — deux moitiés des côtés */}
+          <div className="flex flex-wrap items-baseline justify-center gap-x-3">
+            <motion.span style={{ x: titleLX, opacity: titleOp }}
+              className="text-4xl font-bold text-zinc-900 sm:text-5xl">מוכן</motion.span>
+            <motion.span style={{ x: titleRX, opacity: titleOp }}
+              className="text-4xl font-bold text-zinc-900 sm:text-5xl">להתחיל?</motion.span>
+          </div>
+
+          {/* Description de gauche */}
+          <motion.p style={{ x: descX, opacity: descOp }}
+            className="mt-4 text-lg text-zinc-500">
+            נהל את הצוות שלך בצורה חכמה יותר — תן ל-AI לבנות את הסידור בשבילך
+          </motion.p>
+
+          {/* Boutons des côtés opposés */}
+          <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
+            <motion.div style={{ x: btn1X, opacity: btn1Op }}>
+              <Link
+                href="/login/director"
+                className="group relative inline-flex items-center gap-2 overflow-hidden rounded-xl px-9 py-4 text-base font-semibold text-white shadow-xl transition-transform duration-200 hover:scale-105"
+                style={{ background: "linear-gradient(135deg, #00A8E0 0%, #0284c7 100%)", boxShadow: "0 0 40px rgba(0,168,224,0.35)" }}
+              >
+                <span aria-hidden className="absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100"
+                  style={{ background: "linear-gradient(135deg, #0284c7 0%, #00A8E0 100%)" }} />
+                <span className="relative">כניסת מנהל</span>
+                <svg viewBox="0 0 20 20" fill="currentColor" className="relative h-4 w-4 rotate-180">
+                  <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+                </svg>
+              </Link>
+            </motion.div>
+
+            <motion.div style={{ x: btn2X, opacity: btn2Op }}>
+              <Link
+                href="/register/director"
+                className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-9 py-4 text-base font-semibold text-zinc-700 transition-all hover:bg-zinc-50 hover:scale-105"
+              >
+                הרשמה חינמית
+              </Link>
+            </motion.div>
+          </div>
+
+          <motion.p style={{ opacity: trustOp }} className="mt-6 text-sm text-zinc-400">
+            גישה מיידית · ללא כרטיס אשראי · בעברית מלאה
+          </motion.p>
+        </div>
+      </section>
+    </div>
   );
 }
 
 /* ─── Landing page ───────────────────────────────────────────────── */
 function LandingPage() {
   const hero = useReveal(0);
-  const stats = useReveal(80);
-  const feat = useReveal(0);
-  const how = useReveal(0);
-  const cta = useReveal(0);
 
   return (
     <div dir="rtl">
@@ -513,18 +489,6 @@ function LandingPage() {
           videoSrc="/enregistrement-ecran-2026-06-03.mov"
           titleComponent={
             <div ref={hero.ref} className="flex flex-col items-center gap-1.5">
-              <img
-                src="/g1-logo.png"
-                alt="G1"
-                width={48}
-                height={48}
-                style={{
-                  opacity: hero.visible ? 1 : 0,
-                  transform: hero.visible ? "scale(1)" : "scale(0.75)",
-                  transition: "opacity 0.7s ease 0.1s, transform 0.7s ease 0.1s",
-                }}
-              />
-
               <h1
                 className="max-w-2xl text-3xl font-bold leading-tight text-zinc-900 sm:text-4xl md:text-5xl"
                 style={{
@@ -535,7 +499,6 @@ function LandingPage() {
               >
                 <AnimatedHeroTitle
                   prefix="סידור עבודה"
-                  suffix="לעסק שלך"
                   words={["חכם", "מהיר", "אוטומטי", "מדויק", "פשוט"]}
                   interval={2000}
                 />
@@ -586,72 +549,12 @@ function LandingPage() {
       </section>
 
 
-      {/* ══ FEATURES — robot Spline + liste ══════════════════════════ */}
-      <FeaturesWithRobot />
+      {/* ══ FEATURES — TextRotate + médias ═══════════════════════════ */}
+      <FeaturesScrollSection />
 
 
-      {/* ══ CTA ═══════════════════════════════════════════════════════ */}
-      <section className="relative overflow-hidden bg-zinc-50 py-24 px-6">
-        <div
-          ref={cta.ref}
-          className="relative z-10 mx-auto max-w-2xl text-center"
-          style={{
-            opacity: cta.visible ? 1 : 0,
-            transform: cta.visible ? "translateY(0)" : "translateY(30px)",
-            transition: "opacity 0.7s ease, transform 0.7s ease",
-          }}
-        >
-          <h2 className="text-3xl font-bold text-zinc-900 sm:text-4xl">
-            מוכן להתחיל?
-          </h2>
-          <p className="mt-4 text-lg text-zinc-500">
-            נהל את הצוות שלך בצורה חכמה יותר — תן ל-AI לבנות את הסידור בשבילך
-          </p>
-
-          <div className="mt-9 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-            <Link
-              href="/login/director"
-              className="group relative inline-flex items-center gap-2 overflow-hidden rounded-xl px-9 py-4 text-base font-semibold text-white shadow-xl transition-transform duration-200 hover:scale-105 active:scale-100"
-              style={{
-                background: "linear-gradient(135deg, #00A8E0 0%, #0284c7 100%)",
-                boxShadow: "0 0 48px rgba(0,168,224,0.4)",
-              }}
-            >
-              <span
-                aria-hidden
-                className="absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-                style={{
-                  background:
-                    "linear-gradient(135deg, #0284c7 0%, #00A8E0 100%)",
-                }}
-              />
-              <span className="relative">כניסת מנהל</span>
-              <svg
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                className="relative h-4 w-4 rotate-180"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </Link>
-
-            <Link
-              href="/register/director"
-              className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-9 py-4 text-base font-semibold text-zinc-700 transition-all duration-200 hover:bg-zinc-50 hover:scale-105 active:scale-100"
-            >
-              הרשמה חינמית
-            </Link>
-          </div>
-
-          <p className="mt-6 text-sm text-zinc-400">
-            גישה מיידית · ללא כרטיס אשראי · בעברית מלאה
-          </p>
-        </div>
-      </section>
+      {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
+      <CtaSection />
 
       {/* ══ FOOTER ════════════════════════════════════════════════════ */}
       <footer className="border-t border-zinc-200 bg-white px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900">

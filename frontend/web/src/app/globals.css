@@ -208,7 +208,7 @@
 /* Liquid glass button */
 .liquid-glass-btn {
   position: relative;
-  color: white;
+  color: #18181b;
   border-color: rgba(255, 255, 255, 0.25);
   background: rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
@@ -248,6 +248,14 @@
 .delay-500  { animation-delay: 500ms; }
 .delay-700  { animation-delay: 700ms; }
 .delay-1000 { animation-delay: 1000ms; }
+
+/* GooeyText gradient */
+.gooey-gradient {
+  background: linear-gradient(135deg, #00A8E0 0%, #7dd3fc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
 
 /* Landing page animations */
 @keyframes g1Float {
