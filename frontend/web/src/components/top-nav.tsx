@@ -20,6 +20,7 @@ export default function TopNav() {
   const [authChecked, setAuthChecked] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isAuthPage = (pathname || "").startsWith("/login") || (pathname || "").startsWith("/register");
+  const isHomePage = pathname === "/";
   const isProtectedPage =
     (pathname || "").startsWith("/director") ||
     (pathname || "").startsWith("/worker");
@@ -109,9 +110,11 @@ export default function TopNav() {
     ensurePlanningWeeklyCachePurgeScheduled();
   }, []);
 
+  const showLoginButtons = isAuthPage || (isHomePage && !userRole);
+
   // Navigation buttons component pour mobile (drawer)
   const renderNavButtonsMobile = () => {
-    if (isAuthPage) {
+    if (showLoginButtons) {
       return (
         <>
           <Link
@@ -139,15 +142,17 @@ export default function TopNav() {
     if (userRole === "director") {
       return (
         <>
-          <Link
-            href="/"
-            onClick={handleLinkClick}
-            className={`${baseBtnMobile} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
-            aria-label="בית"
-            aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
-          >
-            בית
-          </Link>
+          {!isHomePage && (
+            <Link
+              href="/"
+              onClick={handleLinkClick}
+              className={`${baseBtnMobile} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+              aria-label="בית"
+              aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
+            >
+              בית
+            </Link>
+          )}
           <Link
             href="/director/sites"
             onClick={handleLinkClick}
@@ -218,7 +223,7 @@ export default function TopNav() {
 
   // Navigation buttons component (réutilisable pour desktop)
   const renderNavButtons = () => {
-    if (isAuthPage) {
+    if (showLoginButtons) {
   return (
         <>
           <Link
@@ -246,15 +251,17 @@ export default function TopNav() {
     if (userRole === "director") {
       return (
                 <>
-                  <Link
-                    href="/"
-            onClick={handleLinkClick}
-                    className={`${baseBtn} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
-                    aria-label="בית"
-                    aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
-                  >
-                    בית
-                  </Link>
+                  {!isHomePage && (
+                    <Link
+                      href="/"
+                      onClick={handleLinkClick}
+                      className={`${baseBtn} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                      aria-label="בית"
+                      aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
+                    >
+                      בית
+                    </Link>
+                  )}
                   <Link
                     href="/director/sites"
             onClick={handleLinkClick}

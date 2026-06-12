@@ -257,6 +257,18 @@
   background-clip: text;
 }
 
+/* Landing page — fluidité scroll (GPU, sans changer les effets) */
+.landing-page {
+  -webkit-overflow-scrolling: touch;
+}
+.landing-motion-layer {
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+.landing-motion-3d {
+  transform-style: preserve-3d;
+}
+
 /* Landing page animations */
 @keyframes g1Float {
   0%,100% { transform: translateY(0); }

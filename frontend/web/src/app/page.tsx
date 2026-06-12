@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import LoadingAnimation from "@/components/loading-animation";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
-import { SplineScene } from "@/components/ui/splite";
 import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
 import {
   useScroll,
@@ -15,6 +14,39 @@ import {
   motion,
   type MotionValue,
 } from "framer-motion";
+
+/* ─── Scroll progress (métriques cachées, sans layout thrash) ───── */
+function useSectionScrollProgress(outerRef: RefObject<HTMLDivElement | null>) {
+  const { scrollY } = useScroll();
+  const metricsRef = useRef({ top: 0, length: 1 });
+
+  const refresh = useCallback(() => {
+    const el = outerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    metricsRef.current = {
+      top: window.scrollY + rect.top,
+      length: Math.max(el.offsetHeight - window.innerHeight, 1),
+    };
+  }, [outerRef]);
+
+  useLayoutEffect(() => {
+    refresh();
+    window.addEventListener("resize", refresh, { passive: true });
+    const ro = new ResizeObserver(refresh);
+    const el = outerRef.current;
+    if (el) ro.observe(el);
+    return () => {
+      window.removeEventListener("resize", refresh);
+      ro.disconnect();
+    };
+  }, [refresh, outerRef]);
+
+  return useTransform(scrollY, (v) => {
+    const { top, length } = metricsRef.current;
+    return Math.min(Math.max((v - top) / length, 0), 1);
+  });
+}
 
 /* ─── Scroll-reveal hook ─────────────────────────────────────────── */
 function useReveal(delay = 0) {
@@ -174,7 +206,7 @@ const FEATURE_ITEMS: FeatureItem[] = [
   },
 ];
 
-const FEATURES_SCROLL_START = 0.38;
+const FEATURES_SCROLL_START = 0.43;
 
 function featureSegmentBounds(index: number, total: number) {
   const span = (1 - FEATURES_SCROLL_START) / total;
@@ -211,26 +243,35 @@ function FeatureSlidePanel({
 
   return (
     <motion.div
-      className="pointer-events-none absolute inset-0 flex items-center bg-white"
+      className="landing-motion-layer pointer-events-none absolute inset-0 flex items-center bg-white"
       style={{ opacity }}
       dir="rtl"
     >
-      <div className="flex h-full w-full items-center pt-[var(--app-top-nav-height)]">
-        <motion.div className="flex w-1/2 flex-col items-end px-8 md:px-16" style={{ x: textX }}>
-          <h2 className="text-3xl font-bold text-zinc-900 md:text-4xl lg:text-5xl">{item.title}</h2>
+      <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-5 pt-[var(--app-top-nav-height)] md:flex-row md:gap-0 md:px-0">
+        <motion.div
+          className="flex w-full flex-col items-center text-center md:w-1/2 md:items-end md:px-16 md:text-right"
+          style={{ x: textX }}
+        >
+          <span
+            dir="ltr"
+            className="mb-3 inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"
+          >
+            {String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
+          </span>
+          <h2 className="text-2xl font-bold text-zinc-900 sm:text-3xl md:text-4xl lg:text-5xl">{item.title}</h2>
           <motion.p
-            className="mt-2 max-w-md text-right text-sm text-zinc-500 md:text-base"
+            className="mt-2 max-w-md text-center text-sm text-zinc-500 md:text-right md:text-base"
             style={{ opacity: descOp }}
           >
             {item.desc}
           </motion.p>
         </motion.div>
-        <motion.div className="flex h-full w-1/2 items-center px-6 py-16" style={{ x: imageX }}>
-          <div className="flex h-[65vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-sm">
+        <motion.div className="flex w-full items-center md:h-full md:w-1/2 md:px-6 md:py-16" style={{ x: imageX }}>
+          <div className="flex h-[38vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[48vh] md:h-[65vh]">
             {item.mediaType === "video" ? (
               <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
             ) : (
-              <img src={item.media} alt={item.title} className="h-full w-full object-contain object-top bg-white" />
+              <img src={item.media} alt={item.title} className="h-full w-full bg-white object-contain object-top" />
             )}
           </div>
         </motion.div>
@@ -289,35 +330,134 @@ function HeroScrollSection({
   // ── Phase 2 : lecture vidéo ─────────────────────────────────────
   const VIDEO_START = 0.05;
   const VIDEO_END   = 0.14;
+  const VIDEO_PAUSE_END = 0.19;
+  const videoRafRef = useRef<number | null>(null);
+  const videoTargetRef = useRef(0);
+
   useMotionValueEvent(scrollYProgress, "change", (latest) => {
     const video = videoRef.current;
     if (!video || !video.duration || isNaN(video.duration)) return;
+
     if (latest < VIDEO_START) {
-      video.currentTime = 0;
+      videoTargetRef.current = 0;
     } else if (latest <= VIDEO_END) {
       const progress = (latest - VIDEO_START) / (VIDEO_END - VIDEO_START);
-      video.currentTime = Math.min(progress * video.duration, video.duration);
+      videoTargetRef.current = Math.min(progress * video.duration, video.duration);
+    } else if (latest < VIDEO_PAUSE_END) {
+      videoTargetRef.current = video.duration;
+    } else {
+      return;
     }
-    // après VIDEO_END : vidéo reste à la dernière frame
+
+    if (videoRafRef.current != null) return;
+    videoRafRef.current = requestAnimationFrame(() => {
+      videoRafRef.current = null;
+      const v = videoRef.current;
+      if (!v) return;
+      const target = videoTargetRef.current;
+      if (Math.abs(v.currentTime - target) > 0.04) {
+        v.currentTime = target;
+      }
+    });
   });
 
-  // ── Phase 3 : sortie carte ────────────────────────────────────────
-  const cardExitScale = useTransform(scrollYProgress, [0.16, 0.24], [1, 0]);
-  const cardOpacity   = useTransform(scrollYProgress, [0.20, 0.24], [1, 0]);
+  // Pause scroll à la fin de la vidéo : bloque jusqu'au prochain scroll vers le bas
+  const pauseUnlockedRef = useRef(false);
+  const pauseScrollYRef = useRef(0);
 
-  // ── ScrollGooeyText ─────────────────────────────────────────────
-  const gooeyOp       = useTransform(scrollYProgress, [0.24, 0.27, 0.35, 0.38], [0, 1, 1, 0]);
-  const gooeyProgress = useTransform(scrollYProgress, [0.25, 0.36], [0, 1]);
+  useEffect(() => {
+    const outer = outerRef.current;
+    if (!outer || isMobile) return;
+
+    const refreshPauseY = () => {
+      const rect = outer.getBoundingClientRect();
+      const scrollable = Math.max(outer.offsetHeight - window.innerHeight, 1);
+      pauseScrollYRef.current = window.scrollY + rect.top + VIDEO_END * scrollable;
+    };
+
+    refreshPauseY();
+    window.addEventListener("resize", refreshPauseY, { passive: true });
+    const ro = new ResizeObserver(refreshPauseY);
+    ro.observe(outer);
+
+    const clampToPause = () => {
+      const pauseY = pauseScrollYRef.current;
+      if (window.scrollY > pauseY + 1) {
+        window.scrollTo({ top: pauseY, behavior: "auto" });
+      }
+    };
+
+    const onScroll = () => {
+      const pauseY = pauseScrollYRef.current;
+
+      if (window.scrollY < pauseY - 40) {
+        pauseUnlockedRef.current = false;
+        return;
+      }
+
+      if (!pauseUnlockedRef.current && window.scrollY > pauseY + 1) {
+        clampToPause();
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      const pauseY = pauseScrollYRef.current;
+      const y = window.scrollY;
+
+      if (y < pauseY - 40) {
+        pauseUnlockedRef.current = false;
+        return;
+      }
+
+      if (!pauseUnlockedRef.current && y >= pauseY - 8 && e.deltaY > 0) {
+        if (Math.abs(y - pauseY) > 2) {
+          window.scrollTo({ top: pauseY, behavior: "auto" });
+        }
+        e.preventDefault();
+        pauseUnlockedRef.current = true;
+      }
+    };
+
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      window.removeEventListener("resize", refreshPauseY);
+      ro.disconnect();
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("wheel", onWheel);
+      if (videoRafRef.current != null) {
+        cancelAnimationFrame(videoRafRef.current);
+      }
+    };
+  }, [isMobile]);
+
+  // ── Phase 3 : la carte remonte avec le scroll (après la pause) ───
+  const CARD_SCROLL_END = 0.29;
+  const cardY = useTransform(
+    scrollYProgress,
+    [VIDEO_PAUSE_END, CARD_SCROLL_END],
+    ["0vh", "-105vh"],
+  );
+
+  // ── ScrollGooeyText — démarre quand l'écran a quitté le viewport ─
+  const gooeyOp       = useTransform(scrollYProgress, [CARD_SCROLL_END, CARD_SCROLL_END + 0.03, CARD_SCROLL_END + 0.11, CARD_SCROLL_END + 0.14], [0, 1, 1, 0]);
+  const gooeyProgress = useTransform(scrollYProgress, [CARD_SCROLL_END + 0.01, CARD_SCROLL_END + 0.12], [0, 1]);
 
   return (
     <div
       ref={outerRef}
+      className="relative"
       style={{
-        height: "950vh",
+        height: "1000vh",
         background: "#ffffff",
       }}
     >
-      {/* Fond blanc — sans blobs */}
+      {/* Halo doux derrière le hero */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[70vh]"
+        style={{ background: "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(0,168,224,0.10), transparent 65%)" }}
+      />
 
       {/* Titre en flux normal — espace sous la navbar */}
       <div className="relative z-10 flex flex-col items-center gap-2 px-6 pb-8 pt-10 text-center md:pt-14">
@@ -327,19 +467,17 @@ function HeroScrollSection({
       {/* Sticky : toute la cinématique */}
       <div
         className="sticky top-0 z-10 overflow-hidden"
-        style={{ height: "100dvh", perspective: "1200px", background: "#fff" }}
+        style={{ height: "100dvh", perspective: "1200px", background: "#fff", transform: "translateZ(0)" }}
       >
-        {/* Carte vidéo — combine rotateX (entrée) + rotateY/scale/x (sortie) */}
+        {/* Carte vidéo — rotateX/scale à l'entrée, remonte hors écran après la vidéo */}
         <motion.div
           style={{
             rotateX,
             scale: scaleIn,
-            scaleX: cardExitScale,
-            scaleY: cardExitScale,
-            opacity: cardOpacity,
+            y: cardY,
             boxShadow: "0 0 #0000004d, 0 9px 20px #0000004a, 0 37px 37px #00000042, 0 84px 50px #00000026",
           }}
-          className="absolute inset-x-3 inset-y-[3%] rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
+          className="landing-motion-layer landing-motion-3d absolute inset-x-3 inset-y-[3%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
         >
           <div className="h-full w-full overflow-hidden rounded-2xl bg-zinc-900">
             <video
@@ -365,18 +503,18 @@ function HeroScrollSection({
           </div>
         </motion.div>
 
-        {/* GooeyText — morphe entre les 3 stats pendant la sortie de la carte */}
+        {/* GooeyText — démarre une fois la carte vidéo hors écran */}
         <motion.div
           style={{ opacity: gooeyOp as unknown as number }}
-          className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3"
+          className="landing-motion-layer pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3"
         >
           <ScrollGooeyText
             texts={["100%", "30שנ׳", "0 קונפליקטים"]}
             labels={["אוטומציה בתכנון", "זמן יצירת סידור", "שגיאות שיבוץ"]}
             scrollProgress={gooeyProgress}
-            className="w-full"
-            textClassName="text-7xl font-black md:text-8xl gooey-gradient"
-            labelClassName="text-xl font-semibold text-zinc-600"
+            className="w-full px-4"
+            textClassName="text-4xl font-black sm:text-6xl md:text-8xl gooey-gradient"
+            labelClassName="text-base font-semibold text-zinc-600 md:text-xl"
           />
         </motion.div>
 
@@ -395,10 +533,116 @@ function HeroScrollSection({
   );
 }
 
+/* ─── Grille de fonctionnalités (responsive, reveal en cascade) ──── */
+const FEATURE_CHIP_STYLES: Record<string, string> = {
+  blue: "bg-sky-50 text-sky-600 ring-sky-100",
+  indigo: "bg-indigo-50 text-indigo-600 ring-indigo-100",
+  green: "bg-emerald-50 text-emerald-600 ring-emerald-100",
+  amber: "bg-amber-50 text-amber-600 ring-amber-100",
+  purple: "bg-purple-50 text-purple-600 ring-purple-100",
+  rose: "bg-rose-50 text-rose-600 ring-rose-100",
+};
+
+function FeatureGridCard({
+  feature,
+  index,
+  scrollYProgress,
+  cardsStart,
+  cardSpan,
+}: {
+  feature: (typeof FEATURES)[number];
+  index: number;
+  scrollYProgress: MotionValue<number>;
+  cardsStart: number;
+  cardSpan: number;
+}) {
+  const start = cardsStart + index * cardSpan;
+  const enterEnd = start + cardSpan * 0.7;
+
+  const opacity = useTransform(scrollYProgress, [start, enterEnd], [0, 1]);
+  const x = useTransform(scrollYProgress, [start, enterEnd], [100, 0]);
+  const y = useTransform(scrollYProgress, [start, enterEnd], [28, 0]);
+
+  return (
+    <motion.div className="landing-motion-layer" style={{ opacity, x, y }}>
+      <div className="group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
+        <div
+          className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
+        >
+          {feature.icon}
+        </div>
+        <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
+      </div>
+    </motion.div>
+  );
+}
+
+function FeaturesGridSection() {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const scrollYProgress = useSectionScrollProgress(outerRef);
+
+  const badgeOp = useTransform(scrollYProgress, [0.02, 0.07], [0, 1]);
+  const titleX = useTransform(scrollYProgress, [0.04, 0.13], [140, 0]);
+  const titleOp = useTransform(scrollYProgress, [0.04, 0.13], [0, 1]);
+  const descX = useTransform(scrollYProgress, [0.09, 0.17], [-100, 0]);
+  const descOp = useTransform(scrollYProgress, [0.09, 0.17], [0, 1]);
+
+  const cardsStart = 0.2;
+  const cardsEnd = 0.95;
+  const cardSpan = (cardsEnd - cardsStart) / FEATURES.length;
+
+  return (
+    <div ref={outerRef} style={{ height: "520vh" }}>
+      <section
+        className="sticky top-0 min-h-screen overflow-x-hidden bg-gradient-to-b from-white via-sky-50/40 to-white py-10 md:flex md:h-screen md:items-center md:overflow-hidden md:py-0"
+        style={{ paddingTop: "var(--app-top-nav-height)" }}
+        dir="rtl"
+      >
+        <div className="mx-auto w-full max-w-5xl px-5 md:px-6">
+          <div className="text-center">
+            <motion.span
+              style={{ opacity: badgeOp }}
+              className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
+            >
+              למה G1?
+            </motion.span>
+            <motion.h2
+              style={{ x: titleX, opacity: titleOp }}
+              className="landing-motion-layer mt-4 text-3xl font-bold text-zinc-900 sm:text-4xl"
+            >
+              כל מה שצריך לניהול משמרות
+            </motion.h2>
+            <motion.p
+              style={{ x: descX, opacity: descOp }}
+              className="landing-motion-layer mx-auto mt-3 max-w-xl text-sm text-zinc-500 md:text-base"
+            >
+              מהאלגוריתם ועד הממשק — הכל בנוי כדי לחסוך לך זמן ולמנוע טעויות שיבוץ
+            </motion.p>
+          </div>
+
+          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
+            {FEATURES.map((feature, index) => (
+              <FeatureGridCard
+                key={feature.title}
+                feature={feature}
+                index={index}
+                scrollYProgress={scrollYProgress}
+                cardsStart={cardsStart}
+                cardSpan={cardSpan}
+              />
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 /* ─── CTA sticky cinématique ─────────────────────────────────────── */
 function CtaSection() {
   const outerRef = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({ target: outerRef });
+  const scrollYProgress = useSectionScrollProgress(outerRef);
 
   const titleLX  = useTransform(scrollYProgress, [0.03, 0.12], [-100, 0]);
   const titleRX  = useTransform(scrollYProgress, [0.03, 0.12], [100, 0]);
@@ -412,29 +656,29 @@ function CtaSection() {
   const trustOp  = useTransform(scrollYProgress, [0.28, 0.36], [0, 1]);
 
   return (
-    <div ref={outerRef} style={{ height: "500vh" }}>
+    <div ref={outerRef} style={{ height: "300vh" }}>
       <section
-        className="sticky top-0 flex h-screen items-center justify-center overflow-hidden bg-zinc-50"
+        className="sticky top-0 flex h-screen items-center justify-center overflow-hidden bg-white"
         style={{ paddingTop: "var(--app-top-nav-height)" }}
       >
-        <div className="mx-auto max-w-2xl px-6 text-center">
+        <div className="relative mx-auto max-w-2xl px-6 text-center">
           {/* Titre — deux moitiés des côtés */}
           <div className="flex flex-wrap items-baseline justify-center gap-x-3">
             <motion.span style={{ x: titleLX, opacity: titleOp }}
-              className="text-4xl font-bold text-zinc-900 sm:text-5xl">מוכן</motion.span>
+              className="landing-motion-layer text-4xl font-bold text-zinc-900 sm:text-5xl">מוכן</motion.span>
             <motion.span style={{ x: titleRX, opacity: titleOp }}
-              className="text-4xl font-bold text-zinc-900 sm:text-5xl">להתחיל?</motion.span>
+              className="landing-motion-layer text-4xl font-bold text-zinc-900 sm:text-5xl">להתחיל?</motion.span>
           </div>
 
           {/* Description de gauche */}
           <motion.p style={{ x: descX, opacity: descOp }}
-            className="mt-4 text-lg text-zinc-500">
+            className="landing-motion-layer mt-4 text-lg text-zinc-500">
             נהל את הצוות שלך בצורה חכמה יותר — תן ל-AI לבנות את הסידור בשבילך
           </motion.p>
 
           {/* Boutons des côtés opposés */}
           <div className="mt-9 flex flex-wrap items-center justify-center gap-4">
-            <motion.div style={{ x: btn1X, opacity: btn1Op }}>
+            <motion.div className="landing-motion-layer" style={{ x: btn1X, opacity: btn1Op }}>
               <Link
                 href="/login/director"
                 className="group relative inline-flex items-center gap-2 overflow-hidden rounded-xl px-9 py-4 text-base font-semibold text-white shadow-xl transition-transform duration-200 hover:scale-105"
@@ -449,7 +693,7 @@ function CtaSection() {
               </Link>
             </motion.div>
 
-            <motion.div style={{ x: btn2X, opacity: btn2Op }}>
+            <motion.div className="landing-motion-layer" style={{ x: btn2X, opacity: btn2Op }}>
               <Link
                 href="/register/director"
                 className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-9 py-4 text-base font-semibold text-zinc-700 transition-all hover:bg-zinc-50 hover:scale-105"
@@ -473,14 +717,28 @@ function LandingPage() {
   const hero = useReveal(0);
 
   return (
-    <div dir="rtl">
+    <div dir="rtl" className="landing-page">
       {/* ══ HERO — vidéo synchronisée au scroll ══════════════════════ */}
       <section className="relative">
 
         <HeroScrollSection
           videoSrc="/enregistrement-ecran-2026-06-03.mov"
           titleComponent={
-            <div ref={hero.ref} className="flex flex-col items-center gap-1.5">
+            <div ref={hero.ref} className="flex flex-col items-center gap-2">
+              <span
+                className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
+                style={{
+                  opacity: hero.visible ? 1 : 0,
+                  transform: hero.visible ? "translateY(0)" : "translateY(16px)",
+                  transition: "opacity 0.7s ease 0.05s, transform 0.7s ease 0.05s",
+                }}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
+                </span>
+                מופעל על ידי AI
+              </span>
               <h1
                 className="max-w-2xl text-3xl font-bold leading-tight text-zinc-900 sm:text-4xl md:text-5xl"
                 style={{
@@ -509,7 +767,7 @@ function LandingPage() {
               </p>
 
               <div
-                className="flex flex-row gap-3"
+                className="mt-1 flex flex-row flex-wrap items-center justify-center gap-3"
                 style={{
                   opacity: hero.visible ? 1 : 0,
                   transform: hero.visible ? "translateY(0)" : "translateY(20px)",
@@ -540,13 +798,15 @@ function LandingPage() {
 
       </section>
 
+      {/* ══ FEATURES — grille responsive ══════════════════════════════ */}
+      <FeaturesGridSection />
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
       <CtaSection />
 
       {/* ══ FOOTER ════════════════════════════════════════════════════ */}
       <footer className="border-t border-zinc-200 bg-white px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4">
+        <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:flex-wrap sm:justify-between sm:text-right">
           <div className="flex items-center gap-2">
             <img src="/g1-logo.png" alt="G1" width={32} height={32} />
             <span className="font-semibold text-zinc-700 dark:text-zinc-200">
