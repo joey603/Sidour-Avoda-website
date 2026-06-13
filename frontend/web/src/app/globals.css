@@ -269,6 +269,37 @@
   transform-style: preserve-3d;
 }
 
+/* Lumière animée en haut (effet badge EldoraUI) */
+.electric-top-light-dot {
+  offset-anchor: 5px 5px;
+  offset-path: path(
+    "M 69 49.8 h -30 q -3 0 -3 -3 v -13 q 0 -3 -3 -3 h -23 q -3 0 -3 -3 v -13 q 0 -3 -3 -3 h -30"
+  );
+  animation: electric-top-light-path ease-in-out infinite;
+}
+
+@keyframes electric-top-light-path {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  68% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+  82% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+  100% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+}
+
 /* Landing page animations */
 @keyframes g1Float {
   0%,100% { transform: translateY(0); }

@@ -1,13 +1,9 @@
 "use client";
-
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { fetchMe } from "@/lib/auth";
-import LoadingAnimation from "@/components/loading-animation";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
 import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
-import { ElectricStatsCables } from "@/components/ui/electric-top-light";
 import {
   useScroll,
   useTransform,
@@ -15,7 +11,6 @@ import {
   motion,
   type MotionValue,
 } from "framer-motion";
-
 /* ─── Scroll progress (métriques cachées, sans layout thrash) ───── */
 function useSectionScrollProgress(outerRef: RefObject<HTMLDivElement | null>) {
   const { scrollY } = useScroll();
@@ -68,23 +63,6 @@ function useReveal(delay = 0) {
     ob.observe(el);
     return () => ob.disconnect();
   }, [delay]);
-  return { ref, visible };
-}
-
-/* Réapparaît / disparaît selon le scroll (mobile) */
-function useScrollReveal(threshold = 0.15) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ob = new IntersectionObserver(
-      ([e]) => setVisible(e.isIntersecting),
-      { threshold },
-    );
-    ob.observe(el);
-    return () => ob.disconnect();
-  }, [threshold]);
   return { ref, visible };
 }
 
@@ -151,77 +129,32 @@ const FEATURES = [
     ),
   },
 ] as const;
-
-
-/* ─── Root page — auth-gate then landing ────────────────────────── */
-export default function Home() {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const me = await fetchMe();
-        if (cancelled) return;
-        if (me?.role === "director") {
-          router.replace("/director");
-          return;
-        }
-        if (me?.role === "worker") {
-          router.replace("/worker");
-          return;
-        }
-      } catch {
-        /* not authenticated — show landing page */
-      } finally {
-        if (!cancelled) setChecking(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
-
-  if (checking) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 backdrop-blur-md dark:bg-zinc-950/70">
-        <LoadingAnimation size={96} />
-      </div>
-    );
-  }
-
-  return <LandingPage />;
-}
-
-/* ─── Features (scroll cinématique unifié) ───────────────────────── */
+/* ─── Features (scroll cinématique unifié) — moved below for split ─ */
 
 type FeatureItem = {
   title: string;
   desc: string;
   media: string;
   mediaType: "image" | "video";
-  layoutFlipped?: boolean;
 };
 
 const FEATURE_ITEMS: FeatureItem[] = [
   {
     title: "ניהול רב-אתרי",
     desc: "נהל מספר אתרים ותחנות ממקום אחד עם מבט מלא על כל הצוותים",
-    media: "/rav-atariim-sites-list.png",
+    media: "/rav-atariim-sites-list.webp",
     mediaType: "image",
   },
   {
     title: "תפקידים ושיבוצים",
     desc: "הגדר תפקידים לכל עובד, צפה בזמינות ושבץ אוטומטית לפי תפקיד בכל משמרת",
-    media: "/tafkidim-planning.png",
+    media: "/tafkidim-planning.webp",
     mediaType: "image",
-    layoutFlipped: true,
   },
   {
     title: "תפריט עובד",
     desc: "ממשק פשוט לעובדים — זמינות שבועית, היסטוריה ועדכונים בזמן אמת",
-    media: "/worker-availability-menu.png",
+    media: "/worker-availability-menu.webp",
     mediaType: "image",
   },
 ];
@@ -257,27 +190,27 @@ function FeatureSlidePanel({
     exit > 0 ? [start, enterEnd, exitStart, end] : [start, enterEnd, 1, 1],
     exit > 0 ? [0, 1, 1, 0] : [0, 1, 1, 1],
   );
-  const flipped = item.layoutFlipped ?? false;
-  const textX = useTransform(scrollYProgress, [start, enterEnd], flipped ? [-140, 0] : [140, 0]);
-  const imageX = useTransform(scrollYProgress, [start, enterEnd], flipped ? [140, 0] : [-140, 0]);
+  const textX = useTransform(scrollYProgress, [start, enterEnd], [140, 0]);
+  const imageX = useTransform(scrollYProgress, [start, enterEnd], [-140, 0]);
   const descOp = useTransform(scrollYProgress, [start + entrance * 0.45, enterEnd], [0, 1]);
 
   return (
     <motion.div
       className="landing-motion-layer pointer-events-none absolute inset-0 flex items-center bg-white"
       style={{ opacity }}
-      dir={flipped ? "ltr" : "rtl"}
+      dir="rtl"
     >
-      <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-5 pt-[var(--app-top-nav-height)] md:flex-row md:items-center md:gap-0 md:px-0">
+      <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-5 pt-[var(--app-top-nav-height)] md:flex-row md:gap-0 md:px-0">
         <motion.div
-          dir={flipped ? "rtl" : undefined}
-          className={
-            flipped
-              ? "flex w-full flex-col items-center text-center md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
-              : "flex w-full flex-col items-center text-center md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
-          }
+          className="flex w-full flex-col items-center text-center md:w-1/2 md:items-end md:px-16 md:text-right"
           style={{ x: textX }}
         >
+          <span
+            dir="ltr"
+            className="mb-3 inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700"
+          >
+            {String(index + 1).padStart(2, "0")} / {String(total).padStart(2, "0")}
+          </span>
           <h2 className="text-2xl font-bold text-zinc-900 sm:text-3xl md:text-4xl lg:text-5xl">{item.title}</h2>
           <motion.p
             className="mt-2 max-w-md text-center text-sm text-zinc-500 md:text-right md:text-base"
@@ -286,19 +219,19 @@ function FeatureSlidePanel({
             {item.desc}
           </motion.p>
         </motion.div>
-        <motion.div
-          className={
-            flipped
-              ? "flex w-full items-center md:h-full md:w-[58%] md:ps-12 md:pe-6 md:py-16"
-              : "flex w-full items-center md:h-full md:w-[58%] md:pe-12 md:ps-6 md:py-16"
-          }
-          style={{ x: imageX }}
-        >
-          <div className="flex h-[38vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[48vh] md:h-[65vh]">
+        <motion.div className="flex w-full items-center md:h-full md:w-1/2 md:px-6 md:py-16" style={{ x: imageX }}>
+          <div className="relative flex h-[38vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[48vh] md:h-[65vh]">
             {item.mediaType === "video" ? (
               <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
             ) : (
-              <img src={item.media} alt={item.title} className="h-full w-full bg-white object-contain object-top" />
+              <Image
+                src={item.media}
+                alt={item.title}
+                fill
+                sizes="(max-width: 768px) 100vw, 45vw"
+                className="bg-white object-contain object-top"
+                loading="lazy"
+              />
             )}
           </div>
         </motion.div>
@@ -318,6 +251,7 @@ function HeroScrollSection({
   const outerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [shouldLoadVideo, setShouldLoadVideo] = useState(false);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth <= 768);
@@ -326,14 +260,29 @@ function HeroScrollSection({
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  // Force le chargement complet de la vidéo dès le montage
   useEffect(() => {
+    const outer = outerRef.current;
+    if (!outer) return;
+    const ob = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setShouldLoadVideo(true);
+          ob.disconnect();
+        }
+      },
+      { rootMargin: "120px" },
+    );
+    ob.observe(outer);
+    return () => ob.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!shouldLoadVideo) return;
     const video = videoRef.current;
     if (!video) return;
 
     const init = () => { video.currentTime = 0; };
 
-    // Déclenche le chargement si pas encore commencé
     if (video.readyState === 0) video.load();
     else init();
 
@@ -346,7 +295,7 @@ function HeroScrollSection({
       video.removeEventListener("loadeddata", init);
       video.removeEventListener("canplaythrough", init);
     };
-  }, []);
+  }, [shouldLoadVideo]);
 
   const { scrollYProgress } = useScroll({ target: outerRef });
 
@@ -467,9 +416,8 @@ function HeroScrollSection({
   );
 
   // ── ScrollGooeyText — démarre quand l'écran a quitté le viewport ─
-  const GOOEY_END = CARD_SCROLL_END + 0.18;
-  const gooeyOp       = useTransform(scrollYProgress, [CARD_SCROLL_END, CARD_SCROLL_END + 0.03, GOOEY_END - 0.04, GOOEY_END], [0, 1, 1, 0]);
-  const gooeyProgress = useTransform(scrollYProgress, [CARD_SCROLL_END + 0.01, GOOEY_END], [0, 1]);
+  const gooeyOp       = useTransform(scrollYProgress, [CARD_SCROLL_END, CARD_SCROLL_END + 0.03, CARD_SCROLL_END + 0.11, CARD_SCROLL_END + 0.14], [0, 1, 1, 0]);
+  const gooeyProgress = useTransform(scrollYProgress, [CARD_SCROLL_END + 0.01, CARD_SCROLL_END + 0.12], [0, 1]);
 
   return (
     <div
@@ -513,20 +461,19 @@ function HeroScrollSection({
               className="h-full w-full rounded-2xl object-contain scale-110 md:scale-100"
               muted
               playsInline
-              preload="auto"
-              // Réinitialise currentTime dès que la vidéo est prête
+              preload={shouldLoadVideo ? "metadata" : "none"}
               onLoadedMetadata={(e) => { e.currentTarget.currentTime = 0; }}
               onLoadedData={(e) => { e.currentTarget.currentTime = 0; }}
               onCanPlay={(e) => { e.currentTarget.currentTime = 0; }}
               onCanPlayThrough={(e) => { e.currentTarget.currentTime = 0; }}
-              // Retry si erreur de chargement
               onError={(e) => {
                 const v = e.currentTarget;
                 setTimeout(() => { v.load(); }, 1000);
               }}
             >
-              <source src={videoSrc} type="video/mp4" />
-              <source src={videoSrc} type="video/quicktime" />
+              {shouldLoadVideo && (
+                <source src={videoSrc} type="video/quicktime" />
+              )}
             </video>
           </div>
         </motion.div>
@@ -536,24 +483,14 @@ function HeroScrollSection({
           style={{ opacity: gooeyOp as unknown as number }}
           className="landing-motion-layer pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3"
         >
-          <ElectricStatsCables
-            color="#00A8E0"
-            className="w-full max-w-xl"
+          <ScrollGooeyText
+            texts={["100%", "30שנ׳", "0 קונפליקטים"]}
+            labels={["אוטומציה בתכנון", "זמן יצירת סידור", "שגיאות שיבוץ"]}
             scrollProgress={gooeyProgress}
-            holdRatio={0.65}
-            finalHoldRatio={0.35}
-          >
-            <ScrollGooeyText
-              texts={["100%", "30שנ׳", "0 קונפליקטים"]}
-              labels={["אוטומציה בתכנון", "זמן יצירת סידור", "שגיאות שיבוץ"]}
-              scrollProgress={gooeyProgress}
-              holdRatio={0.65}
-              finalHoldRatio={0.35}
-              className="w-full px-4"
-              textClassName="text-3xl font-black leading-none sm:text-5xl md:text-7xl gooey-gradient"
-              labelClassName="text-base font-semibold text-zinc-600 md:text-xl"
-            />
-          </ElectricStatsCables>
+            className="w-full px-4"
+            textClassName="text-4xl font-black sm:text-6xl md:text-8xl gooey-gradient"
+            labelClassName="text-base font-semibold text-zinc-600 md:text-xl"
+          />
         </motion.div>
 
         {/* Features — enchaînement fluide après les stats */}
@@ -603,103 +540,20 @@ function FeatureGridCard({
 
   return (
     <motion.div className="landing-motion-layer" style={{ opacity, x, y }}>
-      <FeatureGridCardContent feature={feature} />
+      <div className="group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
+        <div
+          className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
+        >
+          {feature.icon}
+        </div>
+        <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
+      </div>
     </motion.div>
   );
 }
 
-function FeatureGridCardContent({ feature }: { feature: (typeof FEATURES)[number] }) {
-  return (
-    <div className="group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
-      <div
-        className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
-      >
-        {feature.icon}
-      </div>
-      <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
-      <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
-    </div>
-  );
-}
-
-function FeatureGridCardMobile({
-  feature,
-}: {
-  feature: (typeof FEATURES)[number];
-}) {
-  const { ref, visible } = useScrollReveal(0.2);
-  return (
-    <div
-      ref={ref}
-      style={{
-        opacity: visible ? 1 : 0,
-        transform: visible ? "translateX(0) translateY(0)" : "translateX(60px) translateY(20px)",
-        transition: "opacity 0.55s ease, transform 0.55s ease",
-      }}
-    >
-      <FeatureGridCardContent feature={feature} />
-    </div>
-  );
-}
-
-function FeaturesGridSectionMobile() {
-  const badge = useScrollReveal(0.3);
-  const title = useScrollReveal(0.25);
-  const desc = useScrollReveal(0.2);
-
-  return (
-    <section
-      className="bg-gradient-to-b from-white via-sky-50/40 to-white px-5 py-16"
-      style={{ paddingTop: "calc(var(--app-top-nav-height) + 1.5rem)" }}
-      dir="rtl"
-    >
-      <div className="mx-auto w-full max-w-5xl">
-        <div className="text-center">
-          <span
-            ref={badge.ref}
-            className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
-            style={{
-              opacity: badge.visible ? 1 : 0,
-              transition: "opacity 0.6s ease",
-            }}
-          >
-            למה G1?
-          </span>
-          <h2
-            ref={title.ref}
-            className="mt-4 text-3xl font-bold text-zinc-900"
-            style={{
-              opacity: title.visible ? 1 : 0,
-              transform: title.visible ? "translateX(0)" : "translateX(80px)",
-              transition: "opacity 0.6s ease, transform 0.6s ease",
-            }}
-          >
-            כל מה שצריך לניהול משמרות
-          </h2>
-          <p
-            ref={desc.ref}
-            className="mx-auto mt-3 max-w-xl text-sm text-zinc-500"
-            style={{
-              opacity: desc.visible ? 1 : 0,
-              transform: desc.visible ? "translateX(0)" : "translateX(-60px)",
-              transition: "opacity 0.6s ease, transform 0.6s ease",
-            }}
-          >
-            מהאלגוריתם ועד הממשק — הכל בנוי כדי לחסוך לך זמן ולמנוע טעויות שיבוץ
-          </p>
-        </div>
-
-        <div className="mt-10 grid grid-cols-1 gap-4">
-          {FEATURES.map((feature, index) => (
-            <FeatureGridCardMobile key={feature.title} feature={feature} />
-          ))}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function FeaturesGridSectionDesktop() {
+function FeaturesGridSection() {
   const outerRef = useRef<HTMLDivElement>(null);
   const scrollYProgress = useSectionScrollProgress(outerRef);
 
@@ -716,11 +570,11 @@ function FeaturesGridSectionDesktop() {
   return (
     <div ref={outerRef} style={{ height: "520vh" }}>
       <section
-        className="sticky top-0 flex h-screen items-center overflow-hidden bg-gradient-to-b from-white via-sky-50/40 to-white py-0"
+        className="sticky top-0 min-h-screen overflow-x-hidden bg-gradient-to-b from-white via-sky-50/40 to-white py-10 md:flex md:h-screen md:items-center md:overflow-hidden md:py-0"
         style={{ paddingTop: "var(--app-top-nav-height)" }}
         dir="rtl"
       >
-        <div className="mx-auto w-full max-w-5xl px-6">
+        <div className="mx-auto w-full max-w-5xl px-5 md:px-6">
           <div className="text-center">
             <motion.span
               style={{ opacity: badgeOp }}
@@ -742,7 +596,7 @@ function FeaturesGridSectionDesktop() {
             </motion.p>
           </div>
 
-          <div className="mt-10 grid grid-cols-2 gap-5 lg:grid-cols-3">
+          <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
             {FEATURES.map((feature, index) => (
               <FeatureGridCard
                 key={feature.title}
@@ -758,20 +612,6 @@ function FeaturesGridSectionDesktop() {
       </section>
     </div>
   );
-}
-
-function FeaturesGridSection() {
-  const [isMobile, setIsMobile] = useState(false);
-
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
-
-  if (isMobile) return <FeaturesGridSectionMobile />;
-  return <FeaturesGridSectionDesktop />;
 }
 
 /* ─── CTA sticky cinématique ─────────────────────────────────────── */
@@ -848,7 +688,7 @@ function CtaSection() {
 }
 
 /* ─── Landing page ───────────────────────────────────────────────── */
-function LandingPage() {
+export default function LandingPage() {
   const hero = useReveal(0);
 
   return (
@@ -943,7 +783,7 @@ function LandingPage() {
       <footer className="border-t border-zinc-200 bg-white px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:flex-wrap sm:justify-between sm:text-right">
           <div className="flex items-center gap-2">
-            <img src="/g1-logo.png" alt="G1" width={32} height={32} />
+            <Image src="/g1-logo.webp" alt="G1" width={32} height={32} loading="lazy" />
             <span className="font-semibold text-zinc-700 dark:text-zinc-200">
               G1 Sidour Avoda
             </span>

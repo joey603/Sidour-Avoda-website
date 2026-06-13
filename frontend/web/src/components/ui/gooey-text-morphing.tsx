@@ -99,6 +99,43 @@ export function GooeyText({
   );
 }
 
+export type GooeyScrollState =
+  | { mode: "final-hold"; index: number }
+  | { mode: "hold"; index: number }
+  | { mode: "morph"; indexFrom: number; indexTo: number; frac: number };
+
+/** Résout l'état d'affichage à partir du scroll (partagé avec ElectricStatsCables). */
+export function resolveGooeyScrollState(
+  latest: number,
+  statCount: number,
+  holdRatio: number,
+  finalHoldRatio: number,
+): GooeyScrollState {
+  const activeRange = 1 - finalHoldRatio;
+
+  if (latest >= activeRange) {
+    return { mode: "final-hold", index: statCount - 1 };
+  }
+
+  const normalized = latest / activeRange;
+  const transitions = statCount - 1;
+  const segLen = 1 / transitions;
+  const seg = Math.min(Math.floor(normalized / segLen), transitions - 1);
+  const rawFrac = (normalized - seg * segLen) / segLen;
+
+  if (rawFrac < holdRatio) {
+    return { mode: "hold", index: seg };
+  }
+
+  const frac = (rawFrac - holdRatio) / (1 - holdRatio);
+  return {
+    mode: "morph",
+    indexFrom: seg,
+    indexTo: Math.min(seg + 1, statCount - 1),
+    frac: Math.min(Math.max(frac, 0.001), 0.999),
+  };
+}
+
 interface ScrollGooeyTextProps {
   texts: string[];
   scrollProgress: MotionValue<number>;
@@ -108,6 +145,8 @@ interface ScrollGooeyTextProps {
   labels?: string[];
   /** 0–1 : fraction de chaque segment passée à afficher le texte statique avant de muter (défaut 0.6) */
   holdRatio?: number;
+  /** 0–1 : portion finale du scroll réservée à la dernière stat (défaut 0.35) */
+  finalHoldRatio?: number;
 }
 
 /** Version pilotée par le scroll — pas d'animation automatique */
@@ -119,6 +158,7 @@ export function ScrollGooeyText({
   labelClassName,
   labels,
   holdRatio = 0.65,
+  finalHoldRatio = 0.35,
 }: ScrollGooeyTextProps) {
   const text1Ref = React.useRef<HTMLSpanElement>(null);
   const text2Ref = React.useRef<HTMLSpanElement>(null);
@@ -134,45 +174,46 @@ export function ScrollGooeyText({
   }, [texts, labels]);
 
   useMotionValueEvent(scrollProgress, "change", (latest) => {
-    const n = texts.length;
-    const transitions = n - 1;
-    const segLen = 1 / transitions;
-    const seg = Math.min(Math.floor(latest / segLen), transitions - 1);
-    const rawFrac = (latest - seg * segLen) / segLen; // 0→1 brut dans le segment
+    const state = resolveGooeyScrollState(latest, texts.length, holdRatio, finalHoldRatio);
 
-    // holdRatio = portion statique, (1-holdRatio) = portion de morph
-    const morphStart = holdRatio;
-    const frac = rawFrac < morphStart
-      ? 0                                               // texte statique
-      : (rawFrac - morphStart) / (1 - morphStart);     // morph 0→1
-
-    const idx1 = Math.min(seg, n - 1);
-    const idx2 = Math.min(seg + 1, n - 1);
-
-    if (text1Ref.current) text1Ref.current.textContent = texts[idx1];
-    if (text2Ref.current) text2Ref.current.textContent = texts[idx2];
-    if (label1Ref.current && labels) label1Ref.current.textContent = labels[idx1] ?? "";
-    if (label2Ref.current && labels) label2Ref.current.textContent = labels[idx2] ?? "";
-
-    // Applique l'effet gooey
-    const applyMorph = (f: number) => {
-      if (!text1Ref.current || !text2Ref.current) return;
-      if (f <= 0) {
-        text1Ref.current.style.filter = ""; text1Ref.current.style.opacity = "0%";
-        text2Ref.current.style.filter = ""; text2Ref.current.style.opacity = "100%";
-        if (label1Ref.current) { label1Ref.current.style.filter = ""; label1Ref.current.style.opacity = "100%"; }
-        if (label2Ref.current) { label2Ref.current.style.filter = ""; label2Ref.current.style.opacity = "0%"; }
-        return;
+    const showStatic = (idx: number) => {
+      if (text1Ref.current) {
+        text1Ref.current.textContent = texts[idx];
+        text1Ref.current.style.filter = "";
+        text1Ref.current.style.opacity = "100%";
       }
+      if (text2Ref.current) {
+        text2Ref.current.textContent = texts[idx];
+        text2Ref.current.style.filter = "";
+        text2Ref.current.style.opacity = "0%";
+      }
+      if (label1Ref.current && labels) {
+        label1Ref.current.textContent = labels[idx] ?? "";
+        label1Ref.current.style.filter = "";
+        label1Ref.current.style.opacity = "100%";
+      }
+      if (label2Ref.current && labels) {
+        label2Ref.current.textContent = labels[idx] ?? "";
+        label2Ref.current.style.filter = "";
+        label2Ref.current.style.opacity = "0%";
+      }
+    };
+
+    const applyMorph = (idx1: number, idx2: number, f: number) => {
+      if (!text1Ref.current || !text2Ref.current) return;
+      if (text1Ref.current) text1Ref.current.textContent = texts[idx1];
+      if (text2Ref.current) text2Ref.current.textContent = texts[idx2];
+      if (label1Ref.current && labels) label1Ref.current.textContent = labels[idx1] ?? "";
+      if (label2Ref.current && labels) label2Ref.current.textContent = labels[idx2] ?? "";
+
       const inv = 1 - f;
       text2Ref.current.style.filter = `blur(${Math.min(8 / f - 8, 100)}px)`;
       text2Ref.current.style.opacity = `${Math.pow(f, 0.4) * 100}%`;
       text1Ref.current.style.filter = `blur(${Math.min(8 / inv - 8, 100)}px)`;
       text1Ref.current.style.opacity = `${Math.pow(inv, 0.4) * 100}%`;
-      // Labels : crossfade simple sans blur pour rester nets
       if (label1Ref.current) {
         label1Ref.current.style.filter = "";
-        label1Ref.current.style.opacity = `${(1 - f) * 100}%`;
+        label1Ref.current.style.opacity = `${inv * 100}%`;
       }
       if (label2Ref.current) {
         label2Ref.current.style.filter = "";
@@ -180,20 +221,16 @@ export function ScrollGooeyText({
       }
     };
 
-    // Dernière position : reste sur le dernier texte
-    if (latest >= 1) {
-      if (text1Ref.current) text1Ref.current.textContent = texts[n - 1];
-      if (text2Ref.current) text2Ref.current.textContent = texts[n - 1];
-      if (label1Ref.current && labels) label1Ref.current.textContent = labels[n - 1] ?? "";
-      if (label2Ref.current && labels) label2Ref.current.textContent = labels[n - 1] ?? "";
-      applyMorph(0);
-    } else {
-      applyMorph(Math.min(Math.max(frac, 0.001), 0.999));
+    if (state.mode === "final-hold" || state.mode === "hold") {
+      showStatic(state.index);
+      return;
     }
+
+    applyMorph(state.indexFrom, state.indexTo, state.frac);
   });
 
   return (
-    <div className={cn("relative flex flex-col items-center gap-4", className)}>
+    <div className={cn("relative flex flex-col items-center gap-6", className)}>
       <svg className="absolute h-0 w-0" aria-hidden="true" focusable="false">
         <defs>
           <filter id="scroll-gooey">
@@ -204,17 +241,31 @@ export function ScrollGooeyText({
       </svg>
 
       {/* Nombre */}
-      <div className="relative flex h-24 w-full items-center justify-center"
-        style={{ filter: "url(#scroll-gooey)" }}>
-        <span ref={text1Ref} className={cn("absolute inline-block select-none text-center", textClassName)} />
-        <span ref={text2Ref} className={cn("absolute inline-block select-none text-center", textClassName)} />
+      <div
+        className="relative flex min-h-[5.5rem] w-full items-center justify-center sm:min-h-[7rem] md:min-h-[9rem]"
+        style={{ filter: "url(#scroll-gooey)" }}
+      >
+        <span
+          ref={text1Ref}
+          className={cn(
+            "absolute inset-x-0 top-1/2 inline-block -translate-y-1/2 select-none text-center leading-none",
+            textClassName,
+          )}
+        />
+        <span
+          ref={text2Ref}
+          className={cn(
+            "absolute inset-x-0 top-1/2 inline-block -translate-y-1/2 select-none text-center leading-none",
+            textClassName,
+          )}
+        />
       </div>
 
       {/* Label */}
       {labels && (
-        <div className="relative flex h-8 w-full items-center justify-center">
-          <span ref={label1Ref} className={cn("absolute inline-block select-none text-center", labelClassName)} />
-          <span ref={label2Ref} className={cn("absolute inline-block select-none text-center", labelClassName)} />
+        <div className="relative flex min-h-10 w-full shrink-0 items-center justify-center">
+          <span ref={label1Ref} className={cn("absolute inset-x-0 inline-block select-none text-center", labelClassName)} />
+          <span ref={label2Ref} className={cn("absolute inset-x-0 inline-block select-none text-center", labelClassName)} />
         </div>
       )}
     </div>
