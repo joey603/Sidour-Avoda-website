@@ -2351,10 +2351,10 @@ def solve_schedule_stream(
                         if _count_assigned(cand) < baseline_coverage:
                             skipped_capacity += 1
                             continue
-                        # stop streaming if more holes than baseline
+                        # Candidate moins bonne: la rejeter, mais continuer à chercher d'autres alternatives.
                         if _count_holes(cand) > baseline_holes:
-                            yield {"type": "done"}
-                            return
+                            skipped_capacity += 1
+                            continue
                         signature = sig(cand)
                         tried += 1
                         if signature in seen:
@@ -2433,8 +2433,7 @@ def solve_schedule_stream(
             if _count_assigned(cand) < baseline_coverage:
                 continue
             if _count_holes(cand) > baseline_holes:
-                yield {"type": "done"}
-                return
+                continue
             signature = sig(cand)
             tried += 1
             if signature in seen:

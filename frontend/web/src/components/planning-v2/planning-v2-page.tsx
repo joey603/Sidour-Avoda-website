@@ -156,6 +156,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     indices: number[];
     hasActiveFilters: boolean;
   }>({ indices: [], hasActiveFilters: false });
+  const visibleAlternativeCountRef = useRef(0);
+  const getVisibleAlternativeCount = useCallback(() => visibleAlternativeCountRef.current, []);
   const [visualizationOpen, setVisualizationOpen] = useState(false);
   const [fullscreenReveal, setFullscreenReveal] = useState(false);
   const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(() => {
@@ -187,6 +189,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     editingSaved,
     linkedSitesLength: linkedSites.length,
     weekPurgeSiteIds,
+    getVisibleAlternativeCount,
   });
 
   const hasOfficialSavedWeekPlan =
@@ -669,8 +672,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       const toAdd = [beforeName, afterName].filter((x) => x && !names.includes(x));
       const nextNames = [...names, ...toAdd];
 
-      const stCfg = (site?.config?.stations as unknown[] | undefined)?.[stationIdx];
-      const required = getRequiredFor(stCfg as any, shiftName, dayKey);
+      const stCfg = (site?.config?.stations as Record<string, unknown>[] | undefined)?.[stationIdx];
+      const required = getRequiredFor(stCfg, shiftName, dayKey);
       const maxNamesAllowed = Number(required || 0) + (oldEntry ? others.length + 1 : others.length + 1);
       if (nextNames.length > maxNamesAllowed) {
         toast.error("לא ניתן ליצור משיכות", { description: "אין מספיק מקום בעמדה" });
@@ -1014,6 +1017,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     return summaryFilterState.indices;
   }, [summaryFilterState, plan.alternativeCount, alternativesUiEnabled]);
+
+  useEffect(() => {
+    visibleAlternativeCountRef.current = alternativesUiEnabled ? visibleAlternativeIndices.length : 0;
+  }, [alternativesUiEnabled, visibleAlternativeIndices.length]);
 
   const navigationMemorySnapshot = useMemo(() => {
     if (linkedSites.length <= 1 || protectOfficialSavedPlan) {

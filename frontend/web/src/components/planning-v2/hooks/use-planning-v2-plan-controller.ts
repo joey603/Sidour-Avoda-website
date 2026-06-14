@@ -33,14 +33,16 @@ import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { resolveMaxShifts } from "@/lib/max-shifts";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
-const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = 140;
-const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 30;
-const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = 120;
-const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 28;
-const MULTI_SITE_GENERATION_MAX_NUM_ALTERNATIVES = 320;
-const MULTI_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 35;
-const SINGLE_SITE_GENERATION_MAX_NUM_ALTERNATIVES = 180;
-const SINGLE_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 30;
+const VISIBLE_ALTERNATIVES_BATCH_SIZE = 500;
+const GENERATION_SEARCH_NUM_ALTERNATIVES = 20000;
+const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = GENERATION_SEARCH_NUM_ALTERNATIVES;
+const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 120;
+const SINGLE_SITE_GENERATION_NUM_ALTERNATIVES = GENERATION_SEARCH_NUM_ALTERNATIVES;
+const SINGLE_SITE_GENERATION_TIME_LIMIT_SECONDS = 120;
+const MULTI_SITE_GENERATION_MAX_NUM_ALTERNATIVES = GENERATION_SEARCH_NUM_ALTERNATIVES;
+const MULTI_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 120;
+const SINGLE_SITE_GENERATION_MAX_NUM_ALTERNATIVES = GENERATION_SEARCH_NUM_ALTERNATIVES;
+const SINGLE_SITE_GENERATION_MAX_TIME_LIMIT_SECONDS = 120;
 
 function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
@@ -169,6 +171,7 @@ type PlanControllerArgs = {
   linkedSitesLength: number;
   /** Sites du groupe (courant + liés) pour purger les טיוטות auto issues d’une ריצה depuis la liste sites. */
   weekPurgeSiteIds: number[];
+  getVisibleAlternativeCount?: () => number;
 };
 
 type DraftAlternative = { assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap };
@@ -600,6 +603,7 @@ export function usePlanningV2PlanController({
   editingSaved = false,
   linkedSitesLength,
   weekPurgeSiteIds,
+  getVisibleAlternativeCount,
 }: PlanControllerArgs) {
   type GenerateOptions = {
     excludeDays?: string[];
@@ -1302,14 +1306,16 @@ export function usePlanningV2PlanController({
 
     let idleWatch: number | null = null;
     let noResultWatch: number | null = null;
-    let streamHardTimeoutWatch: number | null = null;
     let stopRequestWatch: number | null = null;
     let idleAutoClosed = false;
     let noResultAutoClosed = false;
-    let streamHardTimeoutClosed = false;
     let sawPlanToPersist = false;
     let sawGeneratedPlan = false;
     let generationVisualFinished = false;
+    let stopped = false;
+    let batchTargetReached = false;
+    let serverExhaustedAlternatives = false;
+    const visibleAlternativeCountAtStart = Math.max(0, Number(getVisibleAlternativeCount?.() || 0));
     const finishGenerationVisualState = () => {
       if (generationVisualFinished) return;
       generationVisualFinished = true;
@@ -1340,6 +1346,25 @@ export function usePlanningV2PlanController({
         });
       });
     };
+
+    const stopWhenBatchTargetReached = () => {
+      const visibleAdded = Math.max(0, Number(getVisibleAlternativeCount?.() || 0) - visibleAlternativeCountAtStart);
+      const batchCount = getVisibleAlternativeCount ? visibleAdded : appendUniqueCountRef.current;
+      if (batchCount < VISIBLE_ALTERNATIVES_BATCH_SIZE) return false;
+      batchTargetReached = true;
+      stopped = true;
+      try {
+        controller.abort();
+      } catch {
+        /* ignore */
+      }
+      return true;
+    };
+
+    const currentBatchVisibleCount = () =>
+      getVisibleAlternativeCount
+        ? Math.max(0, Number(getVisibleAlternativeCount() || 0) - visibleAlternativeCountAtStart)
+        : appendUniqueCountRef.current;
 
     const pruneDraftAlternativesByBestHoles = (bestScore: HoleScore) => {
       const before = draftAlternativesRef.current.length;
@@ -1506,7 +1531,6 @@ export function usePlanningV2PlanController({
       if (!resp.ok || !resp.body) {
         throw new Error(`HTTP ${resp.status}`);
       }
-      let stopped = false;
       if (linkedSitesLength > 1) {
         stopRequestWatch = window.setInterval(() => {
           if (stopped) return;
@@ -1534,10 +1558,10 @@ export function usePlanningV2PlanController({
         } catch {
           /* ignore */
         }
-      }, 30000);
+      }, 130000);
       let lastSseEventAt = Date.now();
-      // Aligné sur planning classique: fin propre après 3s d'inactivité SSE.
-      const idleCloseMs = 3000;
+      // Génération volontairement élargie: laisser le backend chercher longtemps entre deux alternatives valides.
+      const idleCloseMs = 10 * 60 * 1000;
       idleWatch = window.setInterval(() => {
         if (stopped) return;
         if (!sawGeneratedPlan) return;
@@ -1848,6 +1872,7 @@ export function usePlanningV2PlanController({
                   }
                 }
                 scheduleAlternativesFlush();
+                if (stopWhenBatchTargetReached()) return true;
               }
               if (dedupeAlternatives && linkedSnap) {
                 seenLinkedAlternativeSnapshotsRef.current.add(linkedSnap);
@@ -1883,6 +1908,7 @@ export function usePlanningV2PlanController({
               setMoreAlternativesAvailable(true);
             }
             scheduleAlternativesFlush();
+            if (stopWhenBatchTargetReached()) return true;
           }
           return false;
         }
@@ -2057,6 +2083,7 @@ export function usePlanningV2PlanController({
                   }
                 }
                 scheduleAlternativesFlush();
+                if (stopWhenBatchTargetReached()) return true;
               }
               if (dedupeAlternatives && linkedSnap) {
                 seenLinkedAlternativeSnapshotsRef.current.add(linkedSnap);
@@ -2095,6 +2122,7 @@ export function usePlanningV2PlanController({
               setMoreAlternativesAvailable(true);
             }
             scheduleAlternativesFlush();
+            if (stopWhenBatchTargetReached()) return true;
           }
           return false;
         }
@@ -2138,8 +2166,14 @@ export function usePlanningV2PlanController({
           return false;
         }
         if (evt.type === "done") {
+          serverExhaustedAlternatives = currentBatchVisibleCount() < VISIBLE_ALTERNATIVES_BATCH_SIZE;
           finishGenerationVisualState();
-          toast.success("התכנון הושלם");
+          if (serverExhaustedAlternatives && sawGeneratedPlan) {
+            setMoreAlternativesAvailable(false);
+            toast.message("אין חלופות חדשות נוספות");
+          } else {
+            toast.success("התכנון הושלם");
+          }
           stopped = true;
           return true;
         }
@@ -2147,9 +2181,17 @@ export function usePlanningV2PlanController({
       });
     } catch (e: unknown) {
       if ((e as Error)?.name === "AbortError") {
-        if (idleAutoClosed) {
+        if (batchTargetReached) {
           finishGenerationVisualState();
-          toast.success("התכנון הושלם");
+          toast.success("נמצאו 500 חלופות חדשות");
+        } else if (idleAutoClosed) {
+          finishGenerationVisualState();
+          if (sawGeneratedPlan) {
+            setMoreAlternativesAvailable(false);
+            toast.message("אין חלופות חדשות נוספות");
+          } else {
+            toast.success("התכנון הושלם");
+          }
         } else if (noResultAutoClosed) {
           finishGenerationVisualState();
           toast.error("יצירת תכנון נכשלה", { description: "לא התקבלו תוצאות מהשרת." });
@@ -2192,12 +2234,13 @@ export function usePlanningV2PlanController({
         }
         setDraftAlternatives([...nextAlternatives]);
       }
-      // Ne pas utiliser num_alternatives du premier flux pour couper « עוד » : la génération n’est pas
-      // déterministe et peut livrer moins d’alternatives que la limite alors que d’autres existent.
-      // On désactive uniquement après un flux « append » sans aucune alternative nouvelle (voir ci‑dessous).
-      if (appendMode && appendUniqueCountRef.current === 0 && sawGeneratedPlan && (idleAutoClosed || !controller.signal.aborted)) {
+      if (
+        sawGeneratedPlan &&
+        !batchTargetReached &&
+        currentBatchVisibleCount() < VISIBLE_ALTERNATIVES_BATCH_SIZE &&
+        (serverExhaustedAlternatives || idleAutoClosed || !controller.signal.aborted)
+      ) {
         setMoreAlternativesAvailable(false);
-        toast.message("אין חלופות חדשות נוספות");
       }
       const stoppedByUser = userStoppedGenerationRef.current && controller.signal.aborted;
       if (sawPlanToPersist && !stoppedByUser) {
@@ -2251,6 +2294,7 @@ export function usePlanningV2PlanController({
     weekPurgeSiteIds,
     pruneLinkedPlansMemoryAfterStop,
     alternativesFlushRafRef,
+    getVisibleAlternativeCount,
   ]);
 
   const startGeneration = useCallback(

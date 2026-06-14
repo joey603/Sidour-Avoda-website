@@ -799,15 +799,15 @@ def _clamp_generation_budget(
     *,
     linked: bool,
 ) -> tuple[int, int]:
-    """Apply conservative server-side caps for planning generation."""
+    """Temporary high caps while the app is single-user: keep searching so 500 alternatives survive UI filters."""
     if linked:
         return (
-            max(10, min(int(time_limit_seconds), 35)),
-            max(1, min(int(num_alternatives), 320)),
+            max(10, min(int(time_limit_seconds), 120)),
+            max(1, min(int(num_alternatives), 20000)),
         )
     return (
-        max(6, min(int(time_limit_seconds), 30)),
-        max(1, min(int(num_alternatives), 180)),
+        max(6, min(int(time_limit_seconds), 120)),
+        max(1, min(int(num_alternatives), 20000)),
     )
 
 
