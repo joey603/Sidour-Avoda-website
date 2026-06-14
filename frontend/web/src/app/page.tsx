@@ -268,19 +268,19 @@ function FeatureSlidePanel({
       style={{ opacity }}
       dir={flipped ? "ltr" : "rtl"}
     >
-      <div className="flex h-full w-full max-h-full flex-col items-center justify-center gap-3 px-4 py-2 max-md:justify-center max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-md:pt-2 md:flex-row md:items-center md:gap-0 md:px-0 md:py-0 md:pt-[var(--app-top-nav-height)]">
+      <div className="flex h-full w-full max-h-full flex-col items-center justify-center gap-2 px-3 py-3 max-md:justify-start max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-md:pt-3 md:flex-row md:items-center md:gap-0 md:px-0 md:py-0 md:pt-[var(--app-top-nav-height)]">
         <motion.div
           dir={flipped ? "rtl" : undefined}
           className={
             flipped
-              ? "flex w-full flex-col items-center text-center md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
-              : "flex w-full flex-col items-center text-center md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
+              ? "order-2 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
+              : "order-2 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
           }
           style={{ x: textX }}
         >
-          <h2 className="text-xl font-bold text-zinc-900 sm:text-3xl md:text-4xl lg:text-5xl">{item.title}</h2>
+          <h2 className="text-lg font-bold text-zinc-900 sm:text-2xl md:text-4xl lg:text-5xl">{item.title}</h2>
           <motion.p
-            className="mt-1 max-w-md text-center text-xs text-zinc-500 sm:mt-2 sm:text-sm md:text-right md:text-base"
+            className="mt-1 max-w-md text-center text-xs leading-snug text-zinc-500 sm:text-sm md:text-right md:text-base"
             style={{ opacity: descOp }}
           >
             {item.desc}
@@ -289,16 +289,16 @@ function FeatureSlidePanel({
         <motion.div
           className={
             flipped
-              ? "flex w-full items-center md:h-full md:w-[58%] md:ps-12 md:pe-6 md:py-16"
-              : "flex w-full items-center md:h-full md:w-[58%] md:pe-12 md:ps-6 md:py-16"
+              ? "order-1 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:ps-12 md:pe-6 md:py-16"
+              : "order-1 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:pe-12 md:ps-6 md:py-16"
           }
           style={{ x: imageX }}
         >
-          <div className="flex h-[min(26svh,13.5rem)] w-full max-w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[min(32svh,16rem)] md:h-[65vh]">
+          <div className="flex h-[min(46svh,24rem)] w-full max-w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[min(42svh,22rem)] md:h-[65vh]">
             {item.mediaType === "video" ? (
               <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
             ) : (
-              <img src={item.media} alt={item.title} className="h-full w-full bg-white object-contain object-top" />
+              <img src={item.media} alt={item.title} className="h-full w-full bg-white object-contain object-center md:object-top" />
             )}
           </div>
         </motion.div>
@@ -318,6 +318,7 @@ function HeroScrollSection({
   const outerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoResetDoneRef = useRef(false);
+  const VIDEO_OFFSET_SEC = 1;
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -334,7 +335,7 @@ function HeroScrollSection({
 
     const init = () => {
       if (!videoResetDoneRef.current && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-        video.currentTime = 0;
+        video.currentTime = VIDEO_OFFSET_SEC;
         video.pause();
         videoResetDoneRef.current = true;
       }
@@ -363,17 +364,19 @@ function HeroScrollSection({
   const VIDEO_END   = 0.14;
   const VIDEO_PAUSE_END = 0.19;
   const videoRafRef = useRef<number | null>(null);
-  const videoTargetRef = useRef(0);
+  const videoTargetRef = useRef(VIDEO_OFFSET_SEC);
 
   useMotionValueEvent(scrollYProgress, "change", (latest) => {
     const video = videoRef.current;
     if (!video || !video.duration || isNaN(video.duration)) return;
 
+    const playable = Math.max(video.duration - VIDEO_OFFSET_SEC, 0.01);
+
     if (latest < VIDEO_START) {
-      videoTargetRef.current = 0;
+      videoTargetRef.current = VIDEO_OFFSET_SEC;
     } else if (latest <= VIDEO_END) {
       const progress = (latest - VIDEO_START) / (VIDEO_END - VIDEO_START);
-      videoTargetRef.current = Math.min(progress * video.duration, video.duration);
+      videoTargetRef.current = Math.min(VIDEO_OFFSET_SEC + progress * playable, video.duration);
     } else if (latest < VIDEO_PAUSE_END) {
       videoTargetRef.current = video.duration;
     } else {
@@ -504,7 +507,7 @@ function HeroScrollSection({
             y: cardY,
             boxShadow: "0 0 #0000004d, 0 9px 20px #0000004a, 0 37px 37px #00000042, 0 84px 50px #00000026",
           }}
-          className="landing-motion-layer landing-motion-3d absolute inset-x-3 inset-y-[5%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl max-md:inset-y-[6%] md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
+          className="landing-motion-layer landing-motion-3d absolute inset-x-2 inset-y-[3%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl max-md:inset-y-[4%] md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
         >
           <div className="h-full w-full overflow-hidden rounded-2xl bg-zinc-900">
             <video
@@ -615,11 +618,11 @@ function FeatureGridCardContent({
       className={`group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg${centered ? " text-center" : ""}`}
     >
       <div
-        className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}${centered ? " mx-auto" : ""}`}
+        className={`inline-flex h-14 w-14 items-center justify-center rounded-xl ring-1 sm:h-16 sm:w-16 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}${centered ? " mx-auto" : ""}`}
       >
         {feature.icon}
       </div>
-      <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
+      <h3 className="mt-4 text-lg font-bold text-zinc-900 sm:text-xl">{feature.title}</h3>
       <p className={`mt-1.5 text-sm leading-relaxed text-zinc-500${centered ? " mx-auto max-w-sm" : ""}`}>{feature.desc}</p>
     </div>
   );
@@ -655,7 +658,7 @@ function FeaturesGridSectionMobile() {
       style={{ paddingTop: "calc(var(--app-top-nav-height) + 1rem)" }}
       dir="rtl"
     >
-      <div className="mx-auto flex w-full max-w-md flex-col items-center">
+      <div className="mx-auto flex w-full max-w-lg flex-col items-center">
         <div className="flex w-full flex-col items-center text-center">
           <h2
             ref={title.ref}
