@@ -273,8 +273,8 @@ function FeatureSlidePanel({
           dir={flipped ? "rtl" : undefined}
           className={
             flipped
-              ? "order-2 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
-              : "order-2 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
+              ? "order-1 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
+              : "order-1 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
           }
           style={{ x: textX }}
         >
@@ -289,8 +289,8 @@ function FeatureSlidePanel({
         <motion.div
           className={
             flipped
-              ? "order-1 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:ps-12 md:pe-6 md:py-16"
-              : "order-1 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:pe-12 md:ps-6 md:py-16"
+              ? "order-2 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:ps-12 md:pe-6 md:py-16"
+              : "order-2 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:pe-12 md:ps-6 md:py-16"
           }
           style={{ x: imageX }}
         >
