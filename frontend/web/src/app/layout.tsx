@@ -20,7 +20,7 @@ const geistMono = Geist_Mono({
   preload: false,
 });
 
-const FAVICON_VERSION = "9";
+const FAVICON_VERSION = "11";
 
 export const metadata: Metadata = {
   title: "גי וואן - סידור עבודה",
@@ -28,11 +28,12 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: `/favicon.ico?v=${FAVICON_VERSION}`, sizes: "any" },
+      { url: `/favicon-16x16.png?v=${FAVICON_VERSION}`, type: "image/png", sizes: "16x16" },
       { url: `/favicon-32x32.png?v=${FAVICON_VERSION}`, type: "image/png", sizes: "32x32" },
-      { url: `/g1-logo.png?v=${FAVICON_VERSION}`, type: "image/png", sizes: "512x512" },
     ],
     apple: [
       { url: `/apple-touch-icon.png?v=${FAVICON_VERSION}`, sizes: "180x180", type: "image/png" },
+      { url: `/apple-touch-icon-precomposed.png?v=${FAVICON_VERSION}`, sizes: "180x180", type: "image/png" },
     ],
     shortcut: `/favicon.ico?v=${FAVICON_VERSION}`,
   },
