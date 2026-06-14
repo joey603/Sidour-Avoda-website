@@ -268,7 +268,7 @@ function FeatureSlidePanel({
       style={{ opacity }}
       dir={flipped ? "ltr" : "rtl"}
     >
-      <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-5 pt-[var(--app-top-nav-height)] md:flex-row md:items-center md:gap-0 md:px-0">
+      <div className="flex h-full w-full max-h-full flex-col items-center justify-center gap-3 px-4 py-2 max-md:justify-center max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-md:pt-2 md:flex-row md:items-center md:gap-0 md:px-0 md:py-0 md:pt-[var(--app-top-nav-height)]">
         <motion.div
           dir={flipped ? "rtl" : undefined}
           className={
@@ -278,9 +278,9 @@ function FeatureSlidePanel({
           }
           style={{ x: textX }}
         >
-          <h2 className="text-2xl font-bold text-zinc-900 sm:text-3xl md:text-4xl lg:text-5xl">{item.title}</h2>
+          <h2 className="text-xl font-bold text-zinc-900 sm:text-3xl md:text-4xl lg:text-5xl">{item.title}</h2>
           <motion.p
-            className="mt-2 max-w-md text-center text-sm text-zinc-500 md:text-right md:text-base"
+            className="mt-1 max-w-md text-center text-xs text-zinc-500 sm:mt-2 sm:text-sm md:text-right md:text-base"
             style={{ opacity: descOp }}
           >
             {item.desc}
@@ -294,7 +294,7 @@ function FeatureSlidePanel({
           }
           style={{ x: imageX }}
         >
-          <div className="flex h-[38vh] w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[48vh] md:h-[65vh]">
+          <div className="flex h-[min(26svh,13.5rem)] w-full max-w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[min(32svh,16rem)] md:h-[65vh]">
             {item.mediaType === "video" ? (
               <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
             ) : (
@@ -309,14 +309,15 @@ function FeatureSlidePanel({
 
 /* ─── Hero + features — scroll sticky unifié ───────────────────── */
 function HeroScrollSection({
-  titleComponent,
-  videoSrc,
+  videoMp4Src,
+  videoMovSrc,
 }: {
-  titleComponent: React.ReactNode;
-  videoSrc: string;
+  videoMp4Src: string;
+  videoMovSrc: string;
 }) {
   const outerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoResetDoneRef = useRef(false);
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
@@ -326,33 +327,36 @@ function HeroScrollSection({
     return () => window.removeEventListener("resize", check);
   }, []);
 
-  // Force le chargement complet de la vidéo dès le montage
+  // Initialise une seule fois : Chrome peut relancer canplay/canplaythrough pendant les seeks.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
-    const init = () => { video.currentTime = 0; };
+    const init = () => {
+      if (!videoResetDoneRef.current && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        video.currentTime = 0;
+        video.pause();
+        videoResetDoneRef.current = true;
+      }
+    };
 
     // Déclenche le chargement si pas encore commencé
+    video.preload = "auto";
     if (video.readyState === 0) video.load();
     else init();
 
     video.addEventListener("loadedmetadata", init);
-    video.addEventListener("loadeddata", init);
-    video.addEventListener("canplaythrough", init);
 
     return () => {
       video.removeEventListener("loadedmetadata", init);
-      video.removeEventListener("loadeddata", init);
-      video.removeEventListener("canplaythrough", init);
     };
   }, []);
 
   const { scrollYProgress } = useScroll({ target: outerRef });
 
   // ── Phase 1 : rotation entrée ───────────────────────────────────
-  const rotateX  = useTransform(scrollYProgress, [0, 0.07], [35, 0]);
-  const scaleIn  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [0.92, 1] : [1.08, 1]);
+  const rotateX  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [16, 0] : [35, 0]);
+  const scaleIn  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [0.96, 1] : [1.08, 1]);
 
   // ── Phase 2 : lecture vidéo ─────────────────────────────────────
   const VIDEO_START = 0.05;
@@ -487,15 +491,10 @@ function HeroScrollSection({
         style={{ background: "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(0,168,224,0.10), transparent 65%)" }}
       />
 
-      {/* Titre en flux normal — espace sous la navbar */}
-      <div className="relative z-10 flex flex-col items-center gap-2 px-6 pb-8 pt-10 text-center md:pt-14">
-        {titleComponent}
-      </div>
-
       {/* Sticky : toute la cinématique */}
       <div
-        className="sticky top-0 z-10 overflow-hidden"
-        style={{ height: "100dvh", perspective: "1200px", background: "#fff", transform: "translateZ(0)" }}
+        className="landing-sticky-viewport landing-safe-insets sticky top-0 z-10 overflow-hidden"
+        style={{ perspective: "1200px", background: "#fff", transform: "translateZ(0)" }}
       >
         {/* Carte vidéo — rotateX/scale à l'entrée, remonte hors écran après la vidéo */}
         <motion.div
@@ -505,28 +504,24 @@ function HeroScrollSection({
             y: cardY,
             boxShadow: "0 0 #0000004d, 0 9px 20px #0000004a, 0 37px 37px #00000042, 0 84px 50px #00000026",
           }}
-          className="landing-motion-layer landing-motion-3d absolute inset-x-3 inset-y-[3%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
+          className="landing-motion-layer landing-motion-3d absolute inset-x-3 inset-y-[5%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl max-md:inset-y-[6%] md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
         >
           <div className="h-full w-full overflow-hidden rounded-2xl bg-zinc-900">
             <video
               ref={videoRef}
-              className="h-full w-full rounded-2xl object-contain scale-110 md:scale-100"
+              className="h-full w-full rounded-2xl object-contain md:scale-100"
               muted
               playsInline
               preload="auto"
-              // Réinitialise currentTime dès que la vidéo est prête
-              onLoadedMetadata={(e) => { e.currentTarget.currentTime = 0; }}
-              onLoadedData={(e) => { e.currentTarget.currentTime = 0; }}
-              onCanPlay={(e) => { e.currentTarget.currentTime = 0; }}
-              onCanPlayThrough={(e) => { e.currentTarget.currentTime = 0; }}
+              crossOrigin="anonymous"
               // Retry si erreur de chargement
               onError={(e) => {
                 const v = e.currentTarget;
                 setTimeout(() => { v.load(); }, 1000);
               }}
             >
-              <source src={videoSrc} type="video/mp4" />
-              <source src={videoSrc} type="video/quicktime" />
+              <source src={videoMp4Src} type="video/mp4" />
+              <source src={videoMovSrc} type="video/quicktime" />
             </video>
           </div>
         </motion.div>
@@ -534,7 +529,7 @@ function HeroScrollSection({
         {/* GooeyText — démarre une fois la carte vidéo hors écran */}
         <motion.div
           style={{ opacity: gooeyOp as unknown as number }}
-          className="landing-motion-layer pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3"
+          className="landing-motion-layer pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-2 py-6"
         >
           <ElectricStatsCables
             color="#00A8E0"
@@ -608,16 +603,24 @@ function FeatureGridCard({
   );
 }
 
-function FeatureGridCardContent({ feature }: { feature: (typeof FEATURES)[number] }) {
+function FeatureGridCardContent({
+  feature,
+  centered = false,
+}: {
+  feature: (typeof FEATURES)[number];
+  centered?: boolean;
+}) {
   return (
-    <div className="group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
+    <div
+      className={`group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg${centered ? " text-center" : ""}`}
+    >
       <div
-        className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
+        className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}${centered ? " mx-auto" : ""}`}
       >
         {feature.icon}
       </div>
       <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
-      <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
+      <p className={`mt-1.5 text-sm leading-relaxed text-zinc-500${centered ? " mx-auto max-w-sm" : ""}`}>{feature.desc}</p>
     </div>
   );
 }
@@ -633,44 +636,33 @@ function FeatureGridCardMobile({
       ref={ref}
       style={{
         opacity: visible ? 1 : 0,
-        transform: visible ? "translateX(0) translateY(0)" : "translateX(60px) translateY(20px)",
+        transform: visible ? "translateY(0)" : "translateY(20px)",
         transition: "opacity 0.55s ease, transform 0.55s ease",
       }}
     >
-      <FeatureGridCardContent feature={feature} />
+      <FeatureGridCardContent feature={feature} centered />
     </div>
   );
 }
 
 function FeaturesGridSectionMobile() {
-  const badge = useScrollReveal(0.3);
   const title = useScrollReveal(0.25);
   const desc = useScrollReveal(0.2);
 
   return (
     <section
-      className="bg-gradient-to-b from-white via-sky-50/40 to-white px-5 py-16"
-      style={{ paddingTop: "calc(var(--app-top-nav-height) + 1.5rem)" }}
+      className="landing-safe-insets flex justify-center bg-gradient-to-b from-white via-sky-50/40 to-white px-4 py-14 sm:px-5 sm:py-16"
+      style={{ paddingTop: "calc(var(--app-top-nav-height) + 1rem)" }}
       dir="rtl"
     >
-      <div className="mx-auto w-full max-w-5xl">
-        <div className="text-center">
-          <span
-            ref={badge.ref}
-            className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
-            style={{
-              opacity: badge.visible ? 1 : 0,
-              transition: "opacity 0.6s ease",
-            }}
-          >
-            למה G1?
-          </span>
+      <div className="mx-auto flex w-full max-w-md flex-col items-center">
+        <div className="flex w-full flex-col items-center text-center">
           <h2
             ref={title.ref}
-            className="mt-4 text-3xl font-bold text-zinc-900"
+            className="w-full text-center text-2xl font-bold text-zinc-900 sm:text-3xl"
             style={{
               opacity: title.visible ? 1 : 0,
-              transform: title.visible ? "translateX(0)" : "translateX(80px)",
+              transform: title.visible ? "translateY(0)" : "translateY(20px)",
               transition: "opacity 0.6s ease, transform 0.6s ease",
             }}
           >
@@ -678,10 +670,10 @@ function FeaturesGridSectionMobile() {
           </h2>
           <p
             ref={desc.ref}
-            className="mx-auto mt-3 max-w-xl text-sm text-zinc-500"
+            className="mt-3 w-full max-w-sm text-center text-sm leading-relaxed text-zinc-500"
             style={{
               opacity: desc.visible ? 1 : 0,
-              transform: desc.visible ? "translateX(0)" : "translateX(-60px)",
+              transform: desc.visible ? "translateY(0)" : "translateY(16px)",
               transition: "opacity 0.6s ease, transform 0.6s ease",
             }}
           >
@@ -689,7 +681,7 @@ function FeaturesGridSectionMobile() {
           </p>
         </div>
 
-        <div className="mt-10 grid grid-cols-1 gap-4">
+        <div className="mt-10 grid w-full grid-cols-1 gap-4">
           {FEATURES.map((feature, index) => (
             <FeatureGridCardMobile key={feature.title} feature={feature} />
           ))}
@@ -703,7 +695,6 @@ function FeaturesGridSectionDesktop() {
   const outerRef = useRef<HTMLDivElement>(null);
   const scrollYProgress = useSectionScrollProgress(outerRef);
 
-  const badgeOp = useTransform(scrollYProgress, [0.02, 0.07], [0, 1]);
   const titleX = useTransform(scrollYProgress, [0.04, 0.13], [140, 0]);
   const titleOp = useTransform(scrollYProgress, [0.04, 0.13], [0, 1]);
   const descX = useTransform(scrollYProgress, [0.09, 0.17], [-100, 0]);
@@ -722,15 +713,9 @@ function FeaturesGridSectionDesktop() {
       >
         <div className="mx-auto w-full max-w-5xl px-6">
           <div className="text-center">
-            <motion.span
-              style={{ opacity: badgeOp }}
-              className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
-            >
-              למה G1?
-            </motion.span>
             <motion.h2
               style={{ x: titleX, opacity: titleOp }}
-              className="landing-motion-layer mt-4 text-3xl font-bold text-zinc-900 sm:text-4xl"
+              className="landing-motion-layer text-3xl font-bold text-zinc-900 sm:text-4xl"
             >
               כל מה שצריך לניהול משמרות
             </motion.h2>
@@ -793,8 +778,8 @@ function CtaSection() {
   return (
     <div ref={outerRef} style={{ height: "300vh" }}>
       <section
-        className="sticky top-0 flex h-screen items-center justify-center overflow-hidden bg-white"
-        style={{ paddingTop: "var(--app-top-nav-height)" }}
+        className="landing-sticky-viewport landing-safe-insets sticky top-0 flex items-center justify-center overflow-hidden bg-white pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:px-4"
+        style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
       >
         <div className="relative mx-auto max-w-2xl px-6 text-center">
           {/* Titre — deux moitiés des côtés */}
@@ -855,80 +840,81 @@ function LandingPage() {
     <div dir="rtl" className="landing-page">
       {/* ══ HERO — vidéo synchronisée au scroll ══════════════════════ */}
       <section className="relative">
+        <div className="landing-hero-header landing-safe-insets relative z-10 flex flex-col items-center gap-2 px-4 pb-6 text-center sm:px-6 sm:pb-8">
+          <div ref={hero.ref} className="flex flex-col items-center gap-2">
+            <span
+              className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
+              style={{
+                opacity: hero.visible ? 1 : 0,
+                transform: hero.visible ? "translateY(0)" : "translateY(16px)",
+                transition: "opacity 0.7s ease 0.05s, transform 0.7s ease 0.05s",
+              }}
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
+              </span>
+              מופעל על ידי AI
+            </span>
+            <h1
+              className="max-w-2xl text-2xl font-bold leading-tight text-zinc-900 sm:text-4xl md:text-5xl"
+              style={{
+                opacity: hero.visible ? 1 : 0,
+                transform: hero.visible ? "translateY(0)" : "translateY(24px)",
+                transition: "opacity 0.7s ease 0.2s, transform 0.7s ease 0.2s",
+              }}
+            >
+              <AnimatedHeroTitle
+                prefix="סידור עבודה"
+                words={["חכם", "מהיר", "אוטומטי", "מדויק", "פשוט"]}
+                interval={2000}
+              />
+            </h1>
+
+            <p
+              className="max-w-xl text-sm text-zinc-500 md:text-base"
+              style={{
+                opacity: hero.visible ? 1 : 0,
+                transform: hero.visible ? "translateY(0)" : "translateY(24px)",
+                transition: "opacity 0.7s ease 0.35s, transform 0.7s ease 0.35s",
+              }}
+            >
+              פלטפורמה מקצועית לשיבוץ משמרות, ניהול עובדים ותכנון שבועי —
+              ה-AI עושה את העבודה הקשה בשבילך
+            </p>
+
+            <div
+              className="mt-1 flex flex-row flex-wrap items-center justify-center gap-2 sm:gap-3"
+              style={{
+                opacity: hero.visible ? 1 : 0,
+                transform: hero.visible ? "translateY(0)" : "translateY(20px)",
+                transition: "opacity 0.7s ease 0.5s, transform 0.7s ease 0.5s",
+              }}
+            >
+              <Link
+                href="/login/director"
+                className="group relative inline-flex items-center gap-2 overflow-hidden rounded-xl px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform duration-200 hover:scale-105 active:scale-100"
+                style={{
+                  background: "linear-gradient(135deg, #00A8E0 0%, #0284c7 100%)",
+                  boxShadow: "0 0 24px rgba(0,168,224,0.35)",
+                }}
+              >
+                <span aria-hidden className="absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100" style={{ background: "linear-gradient(135deg, #0284c7 0%, #00A8E0 100%)" }} />
+                <span className="relative">כניסת מנהל</span>
+              </Link>
+              <Link
+                href="/login/worker"
+                className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 transition-all duration-200 hover:bg-zinc-50 hover:scale-105 active:scale-100"
+              >
+                כניסת עובד
+              </Link>
+            </div>
+          </div>
+        </div>
 
         <HeroScrollSection
-          videoSrc="/enregistrement-ecran-2026-06-03.mov"
-          titleComponent={
-            <div ref={hero.ref} className="flex flex-col items-center gap-2">
-              <span
-                className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
-                style={{
-                  opacity: hero.visible ? 1 : 0,
-                  transform: hero.visible ? "translateY(0)" : "translateY(16px)",
-                  transition: "opacity 0.7s ease 0.05s, transform 0.7s ease 0.05s",
-                }}
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
-                </span>
-                מופעל על ידי AI
-              </span>
-              <h1
-                className="max-w-2xl text-3xl font-bold leading-tight text-zinc-900 sm:text-4xl md:text-5xl"
-                style={{
-                  opacity: hero.visible ? 1 : 0,
-                  transform: hero.visible ? "translateY(0)" : "translateY(24px)",
-                  transition: "opacity 0.7s ease 0.2s, transform 0.7s ease 0.2s",
-                }}
-              >
-                <AnimatedHeroTitle
-                  prefix="סידור עבודה"
-                  words={["חכם", "מהיר", "אוטומטי", "מדויק", "פשוט"]}
-                  interval={2000}
-                />
-              </h1>
-
-              <p
-                className="max-w-xl text-sm text-zinc-500 md:text-base"
-                style={{
-                  opacity: hero.visible ? 1 : 0,
-                  transform: hero.visible ? "translateY(0)" : "translateY(24px)",
-                  transition: "opacity 0.7s ease 0.35s, transform 0.7s ease 0.35s",
-                }}
-              >
-                פלטפורמה מקצועית לשיבוץ משמרות, ניהול עובדים ותכנון שבועי —
-                ה-AI עושה את העבודה הקשה בשבילך
-              </p>
-
-              <div
-                className="mt-1 flex flex-row flex-wrap items-center justify-center gap-3"
-                style={{
-                  opacity: hero.visible ? 1 : 0,
-                  transform: hero.visible ? "translateY(0)" : "translateY(20px)",
-                  transition: "opacity 0.7s ease 0.5s, transform 0.7s ease 0.5s",
-                }}
-              >
-                <Link
-                  href="/login/director"
-                  className="group relative inline-flex items-center gap-2 overflow-hidden rounded-xl px-6 py-2.5 text-sm font-semibold text-white shadow-lg transition-transform duration-200 hover:scale-105 active:scale-100"
-                  style={{
-                    background: "linear-gradient(135deg, #00A8E0 0%, #0284c7 100%)",
-                    boxShadow: "0 0 24px rgba(0,168,224,0.35)",
-                  }}
-                >
-                  <span aria-hidden className="absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100" style={{ background: "linear-gradient(135deg, #0284c7 0%, #00A8E0 100%)" }} />
-                  <span className="relative">כניסת מנהל</span>
-                </Link>
-                <Link
-                  href="/login/worker"
-                  className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-6 py-2.5 text-sm font-semibold text-zinc-700 transition-all duration-200 hover:bg-zinc-50 hover:scale-105 active:scale-100"
-                >
-                  כניסת עובד
-                </Link>
-              </div>
-            </div>
-          }
+          videoMp4Src="/enregistrement-ecran-2026-06-03-chrome.mp4"
+          videoMovSrc="/enregistrement-ecran-2026-06-03.mov"
         />
 
       </section>
@@ -940,7 +926,7 @@ function LandingPage() {
       <CtaSection />
 
       {/* ══ FOOTER ════════════════════════════════════════════════════ */}
-      <footer className="border-t border-zinc-200 bg-white px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900">
+      <footer className="landing-safe-insets border-t border-zinc-200 bg-white px-4 py-8 dark:border-zinc-800 dark:bg-zinc-900 sm:px-6">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:flex-wrap sm:justify-between sm:text-right">
           <div className="flex items-center gap-2">
             <img src="/g1-logo.png" alt="G1" width={32} height={32} />

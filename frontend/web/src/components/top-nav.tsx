@@ -334,7 +334,7 @@ export default function TopNav() {
     <>
       <div
         id="app-top-nav"
-        className="w-full border-b border-zinc-200 bg-white"
+        className="w-full border-b border-zinc-200 bg-white pt-[env(safe-area-inset-top)]"
       >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 py-3 pr-3 pl-0">
           <div className="flex items-center gap-2">

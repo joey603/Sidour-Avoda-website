@@ -260,6 +260,48 @@
 /* Landing page — fluidité scroll (GPU, sans changer les effets) */
 .landing-page {
   -webkit-overflow-scrolling: touch;
+  overflow-x: clip;
+}
+
+/* Viewport sticky fiable sur mobile (svh = hauteur visible avec barre d’URL) */
+.landing-sticky-viewport {
+  height: 100vh;
+  height: 100svh;
+  height: -webkit-fill-available;
+  max-height: 100dvh;
+}
+
+@media (min-width: 768px) {
+  .landing-sticky-viewport {
+    height: 100dvh;
+    max-height: none;
+  }
+}
+
+.landing-safe-insets {
+  padding-top: max(0px, env(safe-area-inset-top));
+  padding-bottom: max(0px, env(safe-area-inset-bottom));
+  padding-left: max(0px, env(safe-area-inset-left));
+  padding-right: max(0px, env(safe-area-inset-right));
+}
+
+.landing-hero-header {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .landing-hero-header {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .landing-hero-header {
+    margin-top: 2.5rem;
+    padding-top: 2rem;
+  }
 }
 .landing-motion-layer {
   will-change: transform, opacity;
