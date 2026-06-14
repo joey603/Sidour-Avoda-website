@@ -395,7 +395,7 @@ export default function TopNav() {
         <div className="flex items-center gap-3">
           <Link href="/" className="flex items-center gap-2" aria-label="G1 home">
             <img
-              src="/g1-logo.png"
+              src="/g1-logo-nav.png"
               alt="G1"
               width={48}
               height={48}
