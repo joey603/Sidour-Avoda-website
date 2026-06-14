@@ -90,42 +90,27 @@ function SummaryWorkerChip({
   highlighted?: boolean;
 }): ReactElement {
   const col = workerNameChipColor(name, nameColorMap);
-  /** Dépliage comme le chip du גריד au survol : élargir jusqu’au nom complet, sans changer la taille du texte. */
+  /** Surbrillance sans élargir la colonne — largeur fixe comme les autres lignes. */
   return (
     <span
       className={
-        "inline-flex min-h-6 items-center rounded-full border px-1.5 py-0.5 shadow-sm transition-[max-width] duration-200 ease-out md:min-h-9 md:px-3 md:py-1 " +
+        "inline-flex min-h-6 max-w-[8rem] min-w-0 shrink-0 items-center overflow-hidden rounded-full border px-1.5 py-0.5 shadow-sm md:min-h-9 md:max-w-[24rem] md:px-3 md:py-1 " +
         (highlighted
-          ? "max-w-[min(100%,85vw)] shrink-0 overflow-visible ring-2 ring-[#00A8E0] ring-offset-2 ring-offset-white dark:ring-offset-zinc-950 "
-          : "max-w-[8rem] min-w-0 overflow-hidden md:max-w-[24rem] ")
+          ? "ring-2 ring-[#00A8E0] ring-offset-2 ring-offset-white dark:ring-offset-zinc-950 "
+          : "")
       }
       style={{ backgroundColor: col.bg, borderColor: col.border, color: col.text }}
     >
-      <span
-        className={
-          "flex min-w-0 flex-col items-center justify-center text-center leading-tight " +
-          (highlighted ? "max-w-none overflow-visible" : "max-w-full overflow-hidden")
-        }
-      >
+      <span className="flex min-w-0 max-w-full flex-col items-center justify-center overflow-hidden text-center leading-tight">
         <span
           className={
             "block max-w-full leading-tight md:text-center " +
-            (highlighted ? "whitespace-nowrap " : "") +
             (isRtlName(name) ? "text-right" : "text-left")
           }
           dir={isRtlName(name) ? "rtl" : "ltr"}
         >
-          {highlighted ? (
-            <>
-              <span className="text-[8px] md:hidden">{name}</span>
-              <span className="hidden md:inline md:text-sm">{name}</span>
-            </>
-          ) : (
-            <>
           <span className="text-[8px] md:hidden">{truncateSummaryMobile(name)}</span>
           <span className="hidden truncate text-[8px] md:block md:text-sm">{name}</span>
-            </>
-          )}
         </span>
       </span>
     </span>
@@ -732,15 +717,15 @@ export function PlanningV2AssignmentsSummary({
         </div>
       ) : null}
       <div className="max-h-[24rem] overflow-y-auto overflow-x-auto [-webkit-overflow-scrolling:touch]">
-        <table className="min-w-[280px] w-full border-collapse text-[10px] md:text-sm">
+        <table className="min-w-[280px] w-full table-fixed border-collapse text-[10px] md:text-sm">
           <thead>
             <tr className="border-b dark:border-zinc-800">
-              <th className="sticky top-0 z-20 min-w-[8rem] bg-white px-1 md:px-2 py-1 md:py-2 text-center shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
+              <th className="sticky top-0 z-20 w-32 max-w-[10rem] bg-white px-1 py-1 text-center shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)] md:w-64 md:max-w-[26rem] md:px-2 md:py-2">
                 עובד
               </th>
-              <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס&apos; משמרות</th>
+              <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">מס&apos; משמרות</th>
               {showMultiSiteTotalColumn ? (
-                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-right w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
+                <th className="sticky top-0 z-20 bg-white px-1 md:px-2 py-1 md:py-2 text-center w-16 md:w-28 whitespace-nowrap shadow-[0_1px_0_0_rgb(228_228_231)] dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
                   סה״כ שיבוצים
                 </th>
               ) : null}
@@ -778,7 +763,7 @@ export function PlanningV2AssignmentsSummary({
                     boundedAllowedCounts[0] ?? Math.min(Math.max(rawFilter, minAllowed), maxAllowed),
                   );
               const filterSelectClass =
-                "w-full max-w-[4.5rem] rounded-md border px-1.5 py-1 text-center text-[10px] outline-none md:max-w-[5.5rem] md:px-2 md:py-1 md:text-sm " +
+                "w-[4.5rem] rounded-md border px-1.5 py-1 text-center text-[10px] outline-none md:w-[5.5rem] md:px-2 md:py-1 md:text-sm " +
                 (isManuallyModified
                   ? "border-orange-400 bg-orange-50 text-orange-700 dark:border-orange-600 dark:bg-orange-950/30 dark:text-orange-300"
                   : "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-950");
@@ -790,12 +775,9 @@ export function PlanningV2AssignmentsSummary({
               <tr key={nm} className="border-b last:border-0 dark:border-zinc-800">
                 <td
                   className={
-                    "px-1 md:px-2 py-1 md:py-2 text-center align-middle " +
-                    (rowSummaryHighlight
-                      ? "max-w-[min(92vw,42rem)] overflow-visible whitespace-nowrap "
-                      : "w-32 max-w-[10rem] overflow-hidden md:w-64 md:max-w-[26rem] ") +
+                    "w-32 max-w-[10rem] overflow-hidden px-1 py-1 text-center align-middle md:w-64 md:max-w-[26rem] md:px-2 md:py-2 " +
                     (onHighlightWorkerToggle
-                      ? "cursor-pointer touch-manipulation rounded-md outline-none transition-[background-color,max-width] duration-200 focus-visible:ring-2 focus-visible:ring-[#00A8E0] "
+                      ? "cursor-pointer touch-manipulation rounded-md outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-[#00A8E0] "
                       : "") +
                     (rowSummaryHighlight
                       ? "bg-sky-50 ring-1 ring-[#00A8E0]/50 dark:bg-sky-950/40 dark:ring-[#00A8E0]/40 "
@@ -821,7 +803,8 @@ export function PlanningV2AssignmentsSummary({
                     />
                   </span>
                 </td>
-                <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap">
+                <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-center align-middle">
+                  <div className="flex justify-center">
                   {assignmentCountsByVariant.length > 1 ? (
                         <NumberPicker
                       value={pickerValue}
@@ -842,9 +825,10 @@ export function PlanningV2AssignmentsSummary({
                   ) : (
                     c
                   )}
+                  </div>
                 </td>
                 {showMultiSiteTotalColumn ? (
-                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-right">
+                  <td className="px-1 md:px-2 py-1 md:py-2 w-16 md:w-28 whitespace-nowrap text-center align-middle">
                     {totalAssignmentsForSummaryWorker(nm, c, true, workersByName, byIdentity)}
                   </td>
                 ) : null}
