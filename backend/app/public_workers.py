@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from .deps import get_db, get_current_user
-from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, User, UserRole, WorkerInviteToken
+from .models import Site, SiteWorker, SiteWeekPlan, SiteMessage, SiteWeeklyAvailability, User, UserRole, WorkerInviteToken
 from .schemas import (
     WorkerCreate,
     WorkerOut,
@@ -450,6 +450,8 @@ def save_worker_context(
                 site_per_day[str(key)[len(prefix):]] = value
 
         answers_data = {"general": site_general, "perDay": site_per_day}
+        if payload.availability and isinstance(payload.availability, dict):
+            answers_data["availability"] = payload.availability
         if wk:
             base = row.answers if isinstance(row.answers, dict) else {}
             next_answers = dict(base)
@@ -459,6 +461,33 @@ def save_worker_context(
             row.answers = next_answers
         else:
             row.answers = answers_data
+
+        if wk and isinstance(payload.availability, dict):
+            cleaned_weekly = {
+                str(day_key): [str(shift_name) for shift_name in shifts if str(shift_name or "").strip()]
+                for day_key, shifts in payload.availability.items()
+                if isinstance(shifts, list) and not str(day_key).startswith("_")
+            }
+            weekly_row = (
+                db.query(SiteWeeklyAvailability)
+                .filter(SiteWeeklyAvailability.site_id == int(row.site_id))
+                .filter(SiteWeeklyAvailability.week_iso == wk)
+                .first()
+            )
+            if weekly_row:
+                data = dict(weekly_row.availability or {})
+                data[str(row.name)] = cleaned_weekly
+                weekly_row.availability = data
+                weekly_row.updated_at = submitted_at
+            else:
+                db.add(
+                    SiteWeeklyAvailability(
+                        site_id=int(row.site_id),
+                        week_iso=wk,
+                        availability={str(row.name): cleaned_weekly},
+                        updated_at=submitted_at,
+                    )
+                )
 
     db.commit()
     return {"ok": True}

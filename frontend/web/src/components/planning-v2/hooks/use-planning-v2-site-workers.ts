@@ -12,7 +12,6 @@ import { mergeWorkerAvailability } from "../lib/merge-availability";
 import {
   defaultPlanningWeekStart,
   getWeekKeyISO,
-  isNextWeekDisplayed,
   parseWeekQueryParam,
 } from "../lib/week";
 
@@ -170,16 +169,11 @@ export function usePlanningV2SiteWorkers(siteId: string) {
   }, [reloadWeeklyAvailability]);
 
   const workerRowsForTable = useMemo(() => {
-    const isNext = isNextWeekDisplayed(weekStart);
     return workers.map((worker) => ({
       ...worker,
-      availability: mergeWorkerAvailability(
-        worker.availability || EMPTY_WORKER_AVAILABILITY,
-        weeklyAvailability[worker.name] || {},
-        isNext,
-      ),
+      availability: mergeWorkerAvailability(weeklyAvailability[worker.name] || {}),
     }));
-  }, [workers, weeklyAvailability, weekStart]);
+  }, [workers, weeklyAvailability]);
 
   return {
     site,

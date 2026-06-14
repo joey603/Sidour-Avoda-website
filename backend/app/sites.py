@@ -541,25 +541,17 @@ def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, di
     workers: list[dict] = []
     for r in rows:
         ovr = overrides.get(r.name)
-        week_avail, week_station_allow, has_week_station_override = _weekly_override_avail_and_stations(
+        week_avail, week_station_allow, _ = _weekly_override_avail_and_stations(
             ovr if isinstance(ovr, dict) else None,
         )
-        base_availability = getattr(r, "availability", None) or {}
         merged_availability: dict[str, list[str]] = {}
         for day_key in _WEEK_DAY_KEYS:
             if day_key in week_avail:
                 merged_availability[day_key] = list(week_avail.get(day_key) or [])
             else:
-                base_day = base_availability.get(day_key) if isinstance(base_availability, dict) else None
-                merged_availability[day_key] = list(base_day) if isinstance(base_day, list) else []
+                merged_availability[day_key] = []
 
         station_allow = week_station_allow
-        if not has_week_station_override and isinstance(base_availability, dict):
-            station_allow = [
-                int(x)
-                for x in (base_availability.get("_stations") or base_availability.get("_station_indices") or [])
-                if isinstance(x, int) or str(x).lstrip("-").isdigit()
-            ]
         wd: dict = {
             "id": r.id,
             "name": r.name,
@@ -1616,14 +1608,8 @@ def _build_multi_site_generation_context(
                 for k, v in override.items()
                 if isinstance(v, list) and not str(k).startswith("_")
             }
-        elif isinstance(row.availability, dict):
-            new_avail = {
-                str(k): list(v)
-                for k, v in row.availability.items()
-                if isinstance(v, list) and not str(k).startswith("_")
-            }
         else:
-            new_avail = None
+            new_avail = {day_key: [] for day_key in _WEEK_DAY_KEYS}
         if new_avail is not None:
             if group["availability"] is None:
                 group["availability"] = new_avail
@@ -3046,6 +3032,29 @@ def test_auto_planning_now(
     }
 
 
+def _worker_submitted_week_availability(worker_row: SiteWorker, week_iso: str) -> dict[str, list[str]] | None:
+    """זמינות soumise par l'employé pour une semaine précise (stockée dans answers[week])."""
+    raw_answers = worker_row.answers if isinstance(worker_row.answers, dict) else {}
+    week_block = raw_answers.get(week_iso) if isinstance(raw_answers, dict) else None
+    if not isinstance(week_block, dict) or not bool(week_block.get("_availability_submitted")):
+        return None
+    avail = week_block.get("availability")
+    if not isinstance(avail, dict):
+        return None
+    cleaned: dict[str, list[str]] = {}
+    for day_key in _WEEK_DAY_KEYS:
+        shifts = avail.get(day_key)
+        if isinstance(shifts, list):
+            cleaned[day_key] = [str(s) for s in shifts if str(s or "").strip()]
+        else:
+            cleaned[day_key] = []
+    for meta_key in ("_stations", "_station_indices"):
+        meta = avail.get(meta_key)
+        if isinstance(meta, list):
+            cleaned[meta_key] = [str(x) for x in meta]
+    return cleaned
+
+
 @router.get("/{site_id}/weekly-availability", response_model=dict[str, dict[str, list[str]]])
 def get_weekly_availability(
     site_id: int,
@@ -3065,7 +3074,20 @@ def get_weekly_availability(
         .filter(SiteWeeklyAvailability.week_iso == wk)
         .first()
     )
-    return (row.availability or {}) if row else {}
+    result: dict[str, dict[str, list[str]]] = dict(row.availability or {}) if row else {}
+    worker_rows = [
+        w
+        for w in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+        if _site_worker_visible_for_week(w, wk)
+    ]
+    for worker_row in worker_rows:
+        name = str(worker_row.name or "").strip()
+        if not name or name in result:
+            continue
+        submitted = _worker_submitted_week_availability(worker_row, wk)
+        if submitted is not None:
+            result[name] = submitted
+    return result
 
 
 @router.put("/{site_id}/weekly-availability", response_model=dict[str, dict[str, list[str]]])
