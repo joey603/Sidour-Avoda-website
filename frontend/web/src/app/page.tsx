@@ -268,19 +268,19 @@ function FeatureSlidePanel({
       style={{ opacity }}
       dir={flipped ? "ltr" : "rtl"}
     >
-      <div className="flex h-full w-full max-h-full flex-col items-center justify-center gap-2 px-3 py-3 max-md:justify-start max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-md:pt-3 md:flex-row md:items-center md:gap-0 md:px-0 md:py-0 md:pt-[var(--app-top-nav-height)]">
+      <div className="flex h-full w-full max-h-full flex-col items-center justify-center gap-1 px-2 py-2 max-md:justify-start max-md:pb-[max(0.5rem,env(safe-area-inset-bottom))] max-md:pt-2 md:flex-row md:items-center md:gap-0 md:px-0 md:py-0 md:pt-[var(--app-top-nav-height)]">
         <motion.div
           dir={flipped ? "rtl" : undefined}
           className={
             flipped
-              ? "order-1 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-10 md:pe-20 md:text-right"
-              : "order-1 flex w-full flex-col items-center text-center md:order-none md:w-[42%] md:items-start md:ps-20 md:pe-10 md:text-right"
+              ? "order-1 flex w-full shrink-0 flex-col items-center text-center max-md:px-1 md:order-none md:w-[40%] md:items-start md:ps-10 md:pe-20 md:text-right"
+              : "order-1 flex w-full shrink-0 flex-col items-center text-center max-md:px-1 md:order-none md:w-[40%] md:items-start md:ps-20 md:pe-10 md:text-right"
           }
           style={{ x: textX }}
         >
           <h2 className="text-lg font-bold text-zinc-900 sm:text-2xl md:text-4xl lg:text-5xl">{item.title}</h2>
           <motion.p
-            className="mt-1 max-w-md text-center text-xs leading-snug text-zinc-500 sm:text-sm md:text-right md:text-base"
+            className="mt-0.5 max-w-md text-center text-xs leading-snug text-zinc-500 sm:mt-1 sm:text-sm md:mt-2 md:text-right md:text-base"
             style={{ opacity: descOp }}
           >
             {item.desc}
@@ -289,12 +289,12 @@ function FeatureSlidePanel({
         <motion.div
           className={
             flipped
-              ? "order-2 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:ps-12 md:pe-6 md:py-16"
-              : "order-2 flex w-full flex-1 items-center max-md:min-h-0 md:order-none md:h-full md:w-[58%] md:flex-none md:pe-12 md:ps-6 md:py-16"
+              ? "order-2 flex w-full min-h-0 max-md:flex-1 max-md:items-stretch md:order-none md:h-full md:w-[60%] md:flex-none md:items-center md:ps-8 md:pe-4 md:py-8"
+              : "order-2 flex w-full min-h-0 max-md:flex-1 max-md:items-stretch md:order-none md:h-full md:w-[60%] md:flex-none md:items-center md:pe-8 md:ps-4 md:py-8"
           }
           style={{ x: imageX }}
         >
-          <div className="flex h-[min(46svh,24rem)] w-full max-w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:h-[min(42svh,22rem)] md:h-[65vh]">
+          <div className="flex h-full min-h-[min(58svh,28rem)] w-full max-w-full items-center justify-center overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50 shadow-md sm:min-h-[min(60svh,30rem)] md:h-[73vh] md:min-h-0">
             {item.mediaType === "video" ? (
               <video src={item.media} autoPlay muted loop playsInline className="h-full w-full object-cover" />
             ) : (
