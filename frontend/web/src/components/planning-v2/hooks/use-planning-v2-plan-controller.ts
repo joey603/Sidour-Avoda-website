@@ -756,7 +756,7 @@ export function usePlanningV2PlanController({
     setDraftPulls(null);
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
-    const preservedAltIndex = linkedSitesLength > 1 && !protectOfficialSavedPlan
+    const preservedAltIndex = !protectOfficialSavedPlan
       ? Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0))
       : 0;
     setSelectedAlternativeIndex(preservedAltIndex);
@@ -784,7 +784,8 @@ export function usePlanningV2PlanController({
 
   // Multi-sites: כשעוברים בין אתרים, לשמור אלטרנטיבה פעילה זהה לכל האתרים דרך sessionStorage.
   useEffect(() => {
-    if (linkedSitesLength <= 1) return;
+    const mem = readLinkedPlansFromMemory(weekStart);
+    if (linkedSitesLength <= 1 && !mem?.plansBySite?.[String(siteId)]) return;
     let lastAppliedSnap = "";
     const refreshFromMemory = () => {
       // Pendant יצירת תכנון (SSE), le flux met déjà à jour l’état React — ne pas réappliquer
@@ -796,8 +797,9 @@ export function usePlanningV2PlanController({
         return;
       }
       const mem = readLinkedPlansFromMemory(weekStart);
-      const normalizedPlans = buildPersistableLinkedPlans(mem?.plansBySite);
-      const plan = normalizedPlans[String(siteId)];
+      const plansBySite =
+        mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
+      const plan = plansBySite[String(siteId)];
       if (!plan) return;
       const activeIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
       const stopLimit =
@@ -808,13 +810,6 @@ export function usePlanningV2PlanController({
       const snap = JSON.stringify({ activeIdx: appliedActiveIdx, plan, stopLimit });
       if (snap === lastAppliedSnap) return;
       lastAppliedSnap = snap;
-      if (mem?.plansBySite) {
-        const originalRaw = JSON.stringify(mem.plansBySite);
-        const normalizedRaw = JSON.stringify(normalizedPlans);
-        if (stopLimit == null && originalRaw !== normalizedRaw) {
-          saveLinkedPlansToMemory(weekStart, normalizedPlans, activeIdx);
-        }
-      }
       const localAssignments =
         draftAssignmentsRef.current ??
         weekPlanAssignmentsRef.current ??
@@ -991,6 +986,13 @@ export function usePlanningV2PlanController({
     void alternativesUnlockNonce;
     if (generationRunning) return true;
     if (clientStorageReady && readAlternativesUnlockedFromSession(weekIso, siteId)) return true;
+    if (weekPlan?.sourceScope === "auto") {
+      const hasWeekPlanBase = assignmentsNonEmpty(weekPlan.assignments ?? null);
+      const hasWeekPlanAlt = Array.isArray(weekPlan.alternatives)
+        && weekPlan.alternatives.some((alt) =>
+          assignmentsNonEmpty((alt as Record<string, Record<string, string[][]>> | null | undefined) ?? null));
+      if (hasWeekPlanBase || hasWeekPlanAlt) return true;
+    }
     if (clientStorageReady && linkedSitesLength > 1) {
       const mem = readLinkedPlansFromMemory(weekStart);
       const currentPlan = mem?.plansBySite?.[String(siteId)];
@@ -1005,7 +1007,18 @@ export function usePlanningV2PlanController({
       }
     }
     return false;
-  }, [clientStorageReady, weekIso, siteId, generationRunning, alternativesUnlockNonce, linkedSitesLength, weekStart]);
+  }, [
+    clientStorageReady,
+    weekIso,
+    siteId,
+    generationRunning,
+    alternativesUnlockNonce,
+    weekPlan?.sourceScope,
+    weekPlan?.assignments,
+    weekPlan?.alternatives,
+    linkedSitesLength,
+    weekStart,
+  ]);
 
   const safeAlternativeIndex = useMemo(() => {
     const len = assignmentVariants.length;

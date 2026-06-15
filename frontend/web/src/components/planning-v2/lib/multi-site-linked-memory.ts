@@ -1,5 +1,7 @@
 /** Compatible avec `planning/[id]/page.tsx` — même préfixe sessionStorage. */
 
+import { assignmentsNonEmpty } from "./assignments-empty";
+
 export type LinkedSitePlan = {
   assignments?: Record<string, Record<string, string[][]>>;
   alternatives?: Record<string, Record<string, string[][]>>[];
@@ -15,6 +17,45 @@ export type LinkedPlansMemory = {
 };
 
 const multiSiteMemoryPrefix = "multi_site_generated_";
+
+export const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
+
+export function readMultiSiteNavigationInApp(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return sessionStorage.getItem(MULTI_SITE_NAV_FLAG) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function clearMultiSiteNavigationInApp(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Nombre total d’alternatives visibles stockées en mémoire pour un site (base incluse). */
+export function countLinkedPlanVisibleAlternatives(
+  plan: LinkedSitePlan | null | undefined,
+  stopVisibleCount: number | null = null,
+): number {
+  if (!plan || typeof plan !== "object") return 0;
+  const hasBase = assignmentsNonEmpty(
+    (plan.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
+  );
+  const altCount = Array.isArray(plan.alternatives)
+    ? plan.alternatives.filter((alt) =>
+        assignmentsNonEmpty((alt as Record<string, Record<string, string[][]>> | null | undefined) ?? null),
+      ).length
+    : 0;
+  const rawTotal = (hasBase ? 1 : 0) + altCount;
+  if (stopVisibleCount == null) return rawTotal;
+  return Math.min(rawTotal, Math.max(1, stopVisibleCount));
+}
 
 function isoPlanKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

@@ -12,7 +12,7 @@ import { PlanningV2LayoutShell } from "./planning-v2-layout-shell";
 import { PlanningV2MainPaper } from "./planning-v2-main-paper";
 import { PlanningV2SitePaperHeader } from "./planning-v2-site-paper-header";
 import { usePlanningV2SiteWorkers } from "./hooks/use-planning-v2-site-workers";
-import { usePlanningV2WeekPlan } from "./hooks/use-planning-v2-week-plan";
+import { usePlanningV2WeekPlan, type V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
 import { PlanningV2AssignmentsSummary } from "./planning-v2-assignments-summary";
 import { PlanningV2OptionalMessages } from "./planning-v2-optional-messages";
 import { PlanningV2PlanExportButtons } from "./planning-v2-plan-export-buttons";
@@ -35,14 +35,17 @@ import { getWeekKeyISO } from "./lib/week";
 import { computeLinkedSiteHoleEntries } from "./lib/linked-site-holes";
 import {
   clearLinkedPlansFromMemory,
+  clearMultiSiteNavigationInApp,
+  countLinkedPlanVisibleAlternatives,
+  MULTI_SITE_NAV_FLAG,
   readLinkedPlansFromMemory,
+  readMultiSiteNavigationInApp,
   resolveAssignmentsForAlternative,
   resolvePullsForAlternative,
   saveLinkedPlansToMemory,
   type LinkedSitePlan,
 } from "./lib/multi-site-linked-memory";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-const MULTI_SITE_NAV_FLAG = "multi_site_navigation_in_app";
 const PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX = "planning_v2_linked_generation_stop_visible_";
 
 function readLinkedGenerationStopVisibleCountFromSession(weekIso: string): number | null {
@@ -123,10 +126,33 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     () => site?.next_week_saved_plan_status?.scope ?? null,
     [site?.next_week_saved_plan_status?.scope],
   );
+  const navigationInApp = useMemo(() => readMultiSiteNavigationInApp(), []);
+  const initialNavigationWeekPlan = useMemo<V2WeekPlanData>(() => {
+    if (!navigationInApp) return null;
+    const mem = readLinkedPlansFromMemory(weekStart);
+    const plan = mem?.plansBySite?.[String(siteId)];
+    const assignments =
+      plan?.assignments && typeof plan.assignments === "object"
+        ? (plan.assignments as Record<string, Record<string, string[][]>>)
+        : null;
+    if (!assignmentsNonEmpty(assignments)) return null;
+    return {
+      assignments,
+      pulls: plan?.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
+      alternatives: Array.isArray(plan?.alternatives) ? plan.alternatives : [],
+      alternativePulls: Array.isArray(plan?.alternative_pulls) ? plan.alternative_pulls : [],
+      sourceScope: "auto",
+    };
+  }, [navigationInApp, siteId, weekStart]);
   const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(
     siteId,
     weekStart,
     preferredWeekPlanScope,
+    {
+      lightweightNav: navigationInApp,
+      skipInitialReload: navigationInApp && !!initialNavigationWeekPlan,
+      initialPlan: initialNavigationWeekPlan,
+    },
   );
   const { linkedSites, linkedSitesLoading, reloadLinkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const weekPurgeSiteIds = useMemo(() => {
@@ -160,14 +186,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const getVisibleAlternativeCount = useCallback(() => visibleAlternativeCountRef.current, []);
   const [visualizationOpen, setVisualizationOpen] = useState(false);
   const [fullscreenReveal, setFullscreenReveal] = useState(false);
-  const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return sessionStorage.getItem(MULTI_SITE_NAV_FLAG) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(() => navigationInApp);
   const lastCurrentSiteMemorySyncRef = useRef("");
   /** Clic sur une ligne du סיכום שיבוצים → surbrillance de l’עובד dans le גריד. */
   const [summaryHighlightWorkerName, setSummaryHighlightWorkerName] = useState<string | null>(null);
@@ -470,6 +489,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       } catch {
         /* ignore */
       }
+      setMultiSiteNavigationLoading(true);
       router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
     },
     [router, isoWeek],
@@ -1023,27 +1043,23 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, [alternativesUiEnabled, visibleAlternativeIndices.length]);
 
   const navigationMemorySnapshot = useMemo(() => {
-    if (linkedSites.length <= 1 || protectOfficialSavedPlan) {
+    if (protectOfficialSavedPlan) {
       return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
     }
     const mem = readLinkedPlansFromMemory(weekStart);
     const currentPlan = mem?.plansBySite?.[String(siteId)];
-    const hasBase = assignmentsNonEmpty(
-      (currentPlan?.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
-    );
-    const altCount = Array.isArray(currentPlan?.alternatives)
-      ? currentPlan.alternatives.filter((alt) =>
-          assignmentsNonEmpty((alt as Record<string, Record<string, string[][]>> | null | undefined) ?? null)).length
-      : 0;
+    if (!currentPlan && linkedSites.length <= 1 && !multiSiteNavigationLoading) {
+      return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
+    }
     const stopVisibleCount = readLinkedGenerationStopVisibleCountFromSession(getWeekKeyISO(weekStart));
-    const visibleAlternativeCount = stopVisibleCount == null ? (hasBase ? 1 : 0) + altCount : stopVisibleCount;
+    const visibleAlternativeCount = countLinkedPlanVisibleAlternatives(currentPlan, stopVisibleCount);
     const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
     return {
       activeIdx: Math.min(Math.max(0, Number(mem?.activeAltIndex || 0)), maxVisibleIndex),
       currentPlanAlternativeCount: visibleAlternativeCount,
       hasCurrentPlan: !!currentPlan,
     };
-  }, [protectOfficialSavedPlan, linkedSites.length, linkedPlansMemoryTick, siteId, weekStart]);
+  }, [protectOfficialSavedPlan, linkedSites.length, multiSiteNavigationLoading, linkedPlansMemoryTick, siteId, weekStart]);
 
   const selectedVisibleAlternativeIndex = useMemo(() => {
     return visibleAlternativeIndices.indexOf(plan.selectedAlternativeIndex);
@@ -1061,7 +1077,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
 
   const multiSiteNavigationTargetIndex =
-    multiSiteNavigationLoading && linkedSites.length > 1
+    multiSiteNavigationLoading && navigationMemorySnapshot.hasCurrentPlan
       ? navigationMemorySnapshot.activeIdx
       : effectiveAlternativeIndex;
 
@@ -1140,7 +1156,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   useEffect(() => {
     if (protectOfficialSavedPlan) return;
     if (!multiSiteNavigationLoading) return;
-    if (linkedSites.length <= 1) return;
+    if (!navigationMemorySnapshot.hasCurrentPlan) return;
     const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
     if (plan.alternativeCount <= targetIdx) return;
     if (plan.selectedAlternativeIndex === targetIdx) return;
@@ -1148,7 +1164,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   }, [
     protectOfficialSavedPlan,
     multiSiteNavigationLoading,
-    linkedSites.length,
+    navigationMemorySnapshot.hasCurrentPlan,
     navigationMemorySnapshot.activeIdx,
     plan.alternativeCount,
     plan.selectedAlternativeIndex,
@@ -1159,6 +1175,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (linkedSites.length <= 1) return;
     if (plan.generationRunning) return;
     if (weekPlan?.sourceScope !== "auto") return;
+    if (readMultiSiteNavigationInApp()) return;
     const isoWeek = getWeekKeyISO(weekStart);
     let cancelled = false;
 
@@ -1236,6 +1253,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     // En multi-site, `alternativesUiEnabled` peut passer brièvement à false pendant une
     // resynchronisation mémoire / affichage. Ne pas forcer un retour à l'alternative 0
     // sur cet état transitoire, sinon la navigation "saute" au début.
+    if (readMultiSiteNavigationInApp()) return;
     if (linkedSites.length > 1) return;
     if (alternativesUiEnabled) return;
     if (plan.selectedAlternativeIndex !== 0) {
@@ -1256,12 +1274,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const mem = readLinkedPlansFromMemory(weekStart);
     if (!mem?.plansBySite || Object.keys(mem.plansBySite).length === 0) return;
     const memoryActiveIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-    let inAppMultiSiteNavigation = false;
-    try {
-      inAppMultiSiteNavigation = sessionStorage.getItem(MULTI_SITE_NAV_FLAG) === "1";
-    } catch {
-      inAppMultiSiteNavigation = false;
-    }
+    const inAppMultiSiteNavigation = readMultiSiteNavigationInApp();
     const currentSiteKey = String(siteId);
     const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
     const activeIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
@@ -1269,11 +1282,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       return;
     }
     if (inAppMultiSiteNavigation && activeIdx === memoryActiveIdx) {
-      try {
-        sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
-      } catch {
-        /* ignore */
-      }
+      clearMultiSiteNavigationInApp();
     }
     const displayedAssignments = plan.displayAssignments;
     const displayedPulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
@@ -1436,15 +1445,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     linkedPlansMemoryTick,
   ]);
 
-  const expectedLinkedRailCount = useMemo(
-    () =>
-      linkedSites.length <= 1
-        ? 0
-        : [...new Set(linkedSites.map((ls) => Number(ls.id)).filter((id) => Number.isFinite(id) && id > 0 && id !== Number(siteId)))]
-            .length,
-    [linkedSites, siteId],
-  );
-
   const linkedSiteRailBadges = useMemo(() => {
     const weekIso = getWeekKeyISO(weekStart);
     const ids = new Set<number>();
@@ -1544,45 +1544,39 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   useEffect(() => {
     if (!multiSiteNavigationLoading) return;
-    if (siteLoading || workersLoading || weekPlanLoading || linkedSitesLoading) return;
+    if (siteLoading || workersLoading) return;
     if (!navigationMemorySnapshot.hasCurrentPlan) {
-      setMultiSiteNavigationLoading(false);
-      try {
-        sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
-      } catch {
-        /* ignore */
+      if (!weekPlanLoading) {
+        setMultiSiteNavigationLoading(false);
+        clearMultiSiteNavigationInApp();
       }
       return;
     }
-    const needsLinkedRail = hasLinkedSitesRail;
-    const railReady = !needsLinkedRail || linkedSitesRailData.length === expectedLinkedRailCount;
-    const targetAlternativeCount = navigationMemorySnapshot.currentPlanAlternativeCount;
     const targetAlternativeIndex = navigationMemorySnapshot.activeIdx;
+    const hasDisplayablePlan = assignmentsNonEmpty(plan.displayAssignments);
     const alternativesReady =
-      targetAlternativeCount <= 0
-        ? true
-        : plan.alternativeCount >= targetAlternativeCount &&
-          plan.selectedAlternativeIndex === Math.min(targetAlternativeIndex, Math.max(0, plan.alternativeCount - 1));
-    if (!railReady || !alternativesReady) return;
+      hasDisplayablePlan &&
+      plan.selectedAlternativeIndex ===
+        Math.min(targetAlternativeIndex, Math.max(0, plan.alternativeCount - 1));
+    if (!alternativesReady) return;
     setMultiSiteNavigationLoading(false);
-    try {
-      sessionStorage.removeItem(MULTI_SITE_NAV_FLAG);
-    } catch {
-      /* ignore */
-    }
+    clearMultiSiteNavigationInApp();
   }, [
     multiSiteNavigationLoading,
     siteLoading,
     workersLoading,
     weekPlanLoading,
-    linkedSitesLoading,
-    hasLinkedSitesRail,
-    linkedSitesRailData.length,
-    expectedLinkedRailCount,
     navigationMemorySnapshot,
     plan.alternativeCount,
+    plan.displayAssignments,
     plan.selectedAlternativeIndex,
   ]);
+
+  const showPlanningLoadingOverlay =
+    siteLoading ||
+    workersLoading ||
+    (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
+    (multiSiteNavigationLoading && !assignmentsNonEmpty(plan.displayAssignments));
 
   /** Pas de défilement de la page sous le panneau mobile « אתרים מקושרים » lorsqu’il est ouvert (< lg). */
   useEffect(() => {
@@ -2182,7 +2176,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           }}
         />
       </PlanningV2LayoutShell>
-      {siteLoading || workersLoading || weekPlanLoading || multiSiteNavigationLoading ? (
+      {showPlanningLoadingOverlay ? (
         <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
           <LoadingAnimation size={96} />
         </div>

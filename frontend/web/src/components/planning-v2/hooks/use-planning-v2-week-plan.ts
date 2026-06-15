@@ -59,14 +59,23 @@ function normalizePlan(raw: Record<string, unknown> | null | undefined): V2WeekP
   };
 }
 
+type WeekPlanHookOptions = {
+  /** Navigation in-app entre sites liés : une seule requête `auto` (mémoire session = source de vérité). */
+  lightweightNav?: boolean;
+  /** Navigation depuis le rail multi-sites : éviter le gros fetch initial, le plan vient de sessionStorage. */
+  skipInitialReload?: boolean;
+  initialPlan?: V2WeekPlanData;
+};
+
 /** Charge le תכנון שמור (director → shared → auto), comme `fetchExistingSavedPlanForSite` sur le planning. */
 export function usePlanningV2WeekPlan(
   siteId: string,
   weekStart: Date,
   preferredScope?: "director" | "shared" | "auto" | null,
+  options?: WeekPlanHookOptions,
 ) {
-  const [plan, setPlan] = useState<V2WeekPlanData>(null);
-  const [loading, setLoading] = useState(true);
+  const [plan, setPlan] = useState<V2WeekPlanData>(() => options?.initialPlan ?? null);
+  const [loading, setLoading] = useState(() => !options?.skipInitialReload);
 
   const reload = useCallback(async (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => {
     const silent = opts?.silent === true;
@@ -80,7 +89,9 @@ export function usePlanningV2WeekPlan(
     if (!silent) setLoading(true);
     try {
       const effectivePreferredScope = opts?.preferredScope ?? preferredScope;
-      const orderedScopes = buildWeekPlanScopePriority(effectivePreferredScope);
+      const orderedScopes = options?.lightweightNav
+        ? (["auto"] as const)
+        : buildWeekPlanScopePriority(effectivePreferredScope);
       const entries = await Promise.all(
         orderedScopes.map(async (scope) => [scope, await fetchWeekPlanScope(siteId, isoWeek, scope)] as const),
       );
@@ -97,11 +108,16 @@ export function usePlanningV2WeekPlan(
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [siteId, weekStart, preferredScope]);
+  }, [siteId, weekStart, preferredScope, options?.lightweightNav]);
 
   useEffect(() => {
+    if (options?.skipInitialReload) {
+      setPlan(options.initialPlan ?? null);
+      setLoading(false);
+      return;
+    }
     void reload();
-  }, [reload]);
+  }, [reload, options?.skipInitialReload, options?.initialPlan]);
 
   return { plan, loading, reloadWeekPlan: reload };
 }
