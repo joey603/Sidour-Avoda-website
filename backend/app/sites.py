@@ -382,6 +382,30 @@ def _site_worker_visible_for_week(row: SiteWorker, week_iso: str | None) -> bool
     return True
 
 
+def _workers_counts_by_site_for_week(
+    db: Session,
+    director_id: int,
+    week_iso: str,
+) -> tuple[dict[int, int], dict[int, int]]:
+    """Compteurs par site pour une semaine (dimanche), alignés sur `list_workers` / planning."""
+    rows = (
+        db.query(SiteWorker)
+        .join(Site, Site.id == SiteWorker.site_id)
+        .filter(Site.director_id == director_id)
+        .all()
+    )
+    counts: dict[int, int] = {}
+    pending_counts: dict[int, int] = {}
+    for row in rows:
+        if not _site_worker_visible_for_week(row, week_iso):
+            continue
+        sid = int(row.site_id)
+        counts[sid] = counts.get(sid, 0) + 1
+        if bool(getattr(row, "pending_approval", False)):
+            pending_counts[sid] = pending_counts.get(sid, 0) + 1
+    return counts, pending_counts
+
+
 def _schedule_run_time_for_current_week(now: datetime, day_of_week: int, hour: int, minute: int) -> datetime:
     return _week_start_date(now) + timedelta(days=int(day_of_week), hours=int(hour), minutes=int(minute))
 
@@ -3591,24 +3615,8 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
     # En Postgres, le type JSON n'a pas d'opérateur d'égalité → impossible de GROUP BY sur sites.config.
     # On fait donc 2 requêtes simples et on assemble côté Python.
     sites = db.query(Site).filter(Site.director_id == user.id, Site.deleted_at.is_(None)).all()
-    counts_rows = (
-        db.query(SiteWorker.site_id, func.count(SiteWorker.id).label("workers_count"))
-        .join(Site, Site.id == SiteWorker.site_id)
-        .filter(Site.director_id == user.id)
-        .group_by(SiteWorker.site_id)
-        .all()
-    )
-    counts = {r.site_id: int(r.workers_count or 0) for r in counts_rows}
-    pending_counts_rows = (
-        db.query(SiteWorker.site_id, func.count(SiteWorker.id).label("pending_workers_count"))
-        .join(Site, Site.id == SiteWorker.site_id)
-        .filter(Site.director_id == user.id)
-        .filter(SiteWorker.pending_approval == True)
-        .group_by(SiteWorker.site_id)
-        .all()
-    )
-    pending_counts = {r.site_id: int(r.pending_workers_count or 0) for r in pending_counts_rows}
     next_week_iso = _next_week_iso(datetime.now())
+    counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
     site_ids = [int(s.id) for s in sites]
     plan_rows = (
         db.query(SiteWeekPlan)
@@ -3789,9 +3797,10 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
     site = db.get(Site, site_id)
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
-    workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
-    pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
     next_week_iso = _next_week_iso(datetime.now())
+    counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
+    workers_count = counts.get(int(site.id), 0)
+    pending_workers_count = pending_counts.get(int(site.id), 0)
     plan_rows = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.site_id == site.id)
@@ -3863,8 +3872,10 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
         site.config = payload.config
     db.commit()
     db.refresh(site)
-    workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id).count()
-    pending_workers_count = db.query(SiteWorker).filter(SiteWorker.site_id == site.id, SiteWorker.pending_approval == True).count()
+    next_week_iso = _next_week_iso(datetime.now())
+    counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
+    workers_count = counts.get(int(site.id), 0)
+    pending_workers_count = pending_counts.get(int(site.id), 0)
     linked_by_site = _linked_site_cluster_map_for_director(db, user.id)
     return SiteOut(
         id=site.id,
