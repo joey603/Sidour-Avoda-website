@@ -135,7 +135,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       plan?.assignments && typeof plan.assignments === "object"
         ? (plan.assignments as Record<string, Record<string, string[][]>>)
         : null;
-    if (!assignmentsNonEmpty(assignments)) return null;
+    if (!assignments || !assignmentsNonEmpty(assignments)) return null;
     return {
       assignments,
       pulls: plan?.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
