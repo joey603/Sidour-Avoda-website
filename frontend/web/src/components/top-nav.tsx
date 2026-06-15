@@ -111,6 +111,8 @@ export default function TopNav() {
   }, []);
 
   const showLoginButtons = isAuthPage || (isHomePage && !userRole);
+  const homeHref =
+    userRole === "director" ? "/director" : userRole === "worker" ? "/worker" : "/";
 
   // Navigation buttons component pour mobile (drawer)
   const renderNavButtonsMobile = () => {
@@ -144,11 +146,11 @@ export default function TopNav() {
         <>
           {!isHomePage && (
             <Link
-              href="/"
+              href="/director"
               onClick={handleLinkClick}
-              className={`${baseBtnMobile} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+              className={`${baseBtnMobile} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
               aria-label="בית"
-              aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
+              aria-current={pathname === "/director" ? "page" : undefined}
             >
               בית
             </Link>
@@ -253,11 +255,11 @@ export default function TopNav() {
                 <>
                   {!isHomePage && (
                     <Link
-                      href="/"
+                      href="/director"
                       onClick={handleLinkClick}
-                      className={`${baseBtn} ${["/", "/director"].includes(pathname || "") ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                      className={`${baseBtn} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
                       aria-label="בית"
-                      aria-current={["/", "/director"].includes(pathname || "") ? "page" : undefined}
+                      aria-current={pathname === "/director" ? "page" : undefined}
                     >
                       בית
                     </Link>
@@ -393,13 +395,21 @@ export default function TopNav() {
             </div>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-2" aria-label="G1 home">
+          <Link
+            href="/"
+            className="group relative inline-flex items-center pb-1"
+            aria-label="G1 home"
+          >
             <img
               src="/g1-logo-nav.png"
               alt="G1"
               width={48}
               height={48}
-              style={{ display: "block" }}
+              className="block transition-transform duration-200 ease-out group-hover:scale-105"
+            />
+            <span
+              className="pointer-events-none absolute bottom-0 left-1/2 h-0.5 w-[90%] -translate-x-1/2 scale-x-0 rounded-full bg-[#00A8E0] transition-transform duration-200 ease-out group-hover:scale-x-100"
+              aria-hidden
             />
           </Link>
         </div>

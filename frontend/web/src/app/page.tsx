@@ -2,9 +2,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { fetchMe } from "@/lib/auth";
-import LoadingAnimation from "@/components/loading-animation";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
 import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
 import { ElectricStatsCables } from "@/components/ui/electric-top-light";
@@ -153,44 +150,8 @@ const FEATURES = [
 ] as const;
 
 
-/* ─── Root page — auth-gate then landing ────────────────────────── */
+/* ─── Root page — landing publique (logo G1) ─────────────────────── */
 export default function Home() {
-  const router = useRouter();
-  const [checking, setChecking] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const me = await fetchMe();
-        if (cancelled) return;
-        if (me?.role === "director") {
-          router.replace("/director");
-          return;
-        }
-        if (me?.role === "worker") {
-          router.replace("/worker");
-          return;
-        }
-      } catch {
-        /* not authenticated — show landing page */
-      } finally {
-        if (!cancelled) setChecking(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
-
-  if (checking) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 backdrop-blur-md dark:bg-zinc-950/70">
-        <LoadingAnimation size={96} />
-      </div>
-    );
-  }
-
   return <LandingPage />;
 }
 
@@ -264,7 +225,7 @@ function FeatureSlidePanel({
 
   return (
     <motion.div
-      className="landing-motion-layer pointer-events-none absolute inset-0 flex items-center bg-white"
+      className="landing-motion-layer pointer-events-none absolute inset-0 flex items-center bg-transparent"
       style={{ opacity }}
       dir={flipped ? "ltr" : "rtl"}
     >
@@ -484,20 +445,12 @@ function HeroScrollSection({
       className="relative"
       style={{
         height: "1000vh",
-        background: "#ffffff",
       }}
     >
-      {/* Halo doux derrière le hero */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-[70vh]"
-        style={{ background: "radial-gradient(ellipse 70% 50% at 50% 0%, rgba(0,168,224,0.10), transparent 65%)" }}
-      />
-
       {/* Sticky : toute la cinématique */}
       <div
-        className="landing-sticky-viewport landing-safe-insets sticky top-0 z-10 overflow-hidden"
-        style={{ perspective: "1200px", background: "#fff", transform: "translateZ(0)" }}
+        className="landing-sticky-viewport landing-safe-insets relative sticky top-0 z-10 overflow-hidden"
+        style={{ perspective: "1200px", transform: "translateZ(0)" }}
       >
         {/* Carte vidéo — rotateX/scale à l'entrée, remonte hors écran après la vidéo */}
         <motion.div
@@ -534,9 +487,10 @@ function HeroScrollSection({
           style={{ opacity: gooeyOp as unknown as number }}
           className="landing-motion-layer pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-2 py-6"
         >
+          <div className="landing-stats-top-halo pointer-events-none absolute inset-x-0 top-0 z-0" aria-hidden />
           <ElectricStatsCables
             color="#00A8E0"
-            className="w-full max-w-xl"
+            className="relative z-[1] w-full max-w-xl"
             scrollProgress={gooeyProgress}
             holdRatio={0.65}
             finalHoldRatio={0.35}
@@ -564,6 +518,25 @@ function HeroScrollSection({
             total={FEATURE_ITEMS.length}
           />
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Fond seamless landing (dégradé + lueurs sur toute la page) ─── */
+function LandingPageBackdrop() {
+  return (
+    <div className="landing-page-backdrop" aria-hidden>
+      <div className="landing-page-backdrop-gradient" />
+      <div className="landing-page-glows">
+        <span className="landing-glow-orb landing-glow-orb--p1" />
+        <span className="landing-glow-orb landing-glow-orb--p2" />
+        <span className="landing-glow-orb landing-glow-orb--p3" />
+        <span className="landing-glow-orb landing-glow-orb--p4" />
+        <span className="landing-glow-orb landing-glow-orb--p5" />
+        <span className="landing-glow-orb landing-glow-orb--p6" />
+        <span className="landing-glow-orb landing-glow-orb--p7" />
+        <span className="landing-glow-orb landing-glow-orb--p8" />
       </div>
     </div>
   );
@@ -608,22 +581,18 @@ function FeatureGridCard({
 
 function FeatureGridCardContent({
   feature,
-  centered = false,
 }: {
   feature: (typeof FEATURES)[number];
-  centered?: boolean;
 }) {
   return (
-    <div
-      className={`group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg${centered ? " text-center" : ""}`}
-    >
+    <div className="group flex h-full flex-col items-center rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
       <div
-        className={`inline-flex h-14 w-14 items-center justify-center rounded-xl ring-1 sm:h-16 sm:w-16 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}${centered ? " mx-auto" : ""}`}
+        className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl ring-1 sm:h-16 sm:w-16 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
       >
         {feature.icon}
       </div>
       <h3 className="mt-4 text-lg font-bold text-zinc-900 sm:text-xl">{feature.title}</h3>
-      <p className={`mt-1.5 text-sm leading-relaxed text-zinc-500${centered ? " mx-auto max-w-sm" : ""}`}>{feature.desc}</p>
+      <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
     </div>
   );
 }
@@ -643,7 +612,7 @@ function FeatureGridCardMobile({
         transition: "opacity 0.55s ease, transform 0.55s ease",
       }}
     >
-      <FeatureGridCardContent feature={feature} centered />
+      <FeatureGridCardContent feature={feature} />
     </div>
   );
 }
@@ -654,11 +623,11 @@ function FeaturesGridSectionMobile() {
 
   return (
     <section
-      className="landing-safe-insets flex justify-center bg-gradient-to-b from-white via-sky-50/40 to-white px-4 py-14 sm:px-5 sm:py-16"
+      className="landing-safe-insets relative flex justify-center px-4 py-14 sm:px-5 sm:py-16"
       style={{ paddingTop: "calc(var(--app-top-nav-height) + 1rem)" }}
       dir="rtl"
     >
-      <div className="mx-auto flex w-full max-w-lg flex-col items-center">
+      <div className="relative z-[1] mx-auto flex w-full max-w-lg flex-col items-center">
         <div className="flex w-full flex-col items-center text-center">
           <h2
             ref={title.ref}
@@ -710,11 +679,11 @@ function FeaturesGridSectionDesktop() {
   return (
     <div ref={outerRef} style={{ height: "520vh" }}>
       <section
-        className="sticky top-0 flex h-screen items-center overflow-hidden bg-gradient-to-b from-white via-sky-50/40 to-white py-0"
+        className="sticky top-0 relative flex h-screen items-center overflow-hidden py-0"
         style={{ paddingTop: "var(--app-top-nav-height)" }}
         dir="rtl"
       >
-        <div className="mx-auto w-full max-w-5xl px-6">
+        <div className="relative z-[1] mx-auto w-full max-w-5xl px-6">
           <div className="text-center">
             <motion.h2
               style={{ x: titleX, opacity: titleOp }}
@@ -781,10 +750,10 @@ function CtaSection() {
   return (
     <div ref={outerRef} style={{ height: "300vh" }}>
       <section
-        className="landing-sticky-viewport landing-safe-insets sticky top-0 flex items-center justify-center overflow-hidden bg-white pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:px-4"
+        className="landing-sticky-viewport landing-safe-insets relative sticky top-0 flex items-center justify-center overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:px-4"
         style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
       >
-        <div className="relative mx-auto max-w-2xl px-6 text-center">
+        <div className="relative z-[1] mx-auto max-w-2xl px-6 text-center">
           {/* Titre — deux moitiés des côtés */}
           <div className="flex flex-wrap items-baseline justify-center gap-x-3">
             <motion.span style={{ x: titleLX, opacity: titleOp }}
@@ -818,10 +787,10 @@ function CtaSection() {
 
             <motion.div className="landing-motion-layer" style={{ x: btn2X, opacity: btn2Op }}>
               <Link
-                href="/register/director"
+                href="/login/worker"
                 className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-9 py-4 text-base font-semibold text-zinc-700 transition-all hover:bg-zinc-50 hover:scale-105"
               >
-                הרשמה חינמית
+                כניסת עובד
               </Link>
             </motion.div>
           </div>
@@ -841,9 +810,12 @@ function LandingPage() {
 
   return (
     <div dir="rtl" className="landing-page">
-      {/* ══ HERO — vidéo synchronisée au scroll ══════════════════════ */}
+      <LandingPageBackdrop />
+      <div className="relative z-[1]">
+      {/* ══ HERO — titre + vidéo scroll ═══════════════════════════════ */}
       <section className="relative">
-        <div className="landing-hero-header landing-safe-insets relative z-10 flex flex-col items-center gap-2 px-4 pb-6 text-center sm:px-6 sm:pb-8">
+        <div className="landing-hero-top relative">
+          <div className="landing-hero-header landing-safe-insets relative flex flex-col items-center gap-2 px-4 pb-6 text-center sm:px-6 sm:pb-8">
           <div ref={hero.ref} className="flex flex-col items-center gap-2">
             <span
               className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
@@ -914,6 +886,7 @@ function LandingPage() {
             </div>
           </div>
         </div>
+        </div>
 
         <HeroScrollSection
           videoMp4Src="/enregistrement-ecran-2026-06-03-chrome.mp4"
@@ -927,33 +900,7 @@ function LandingPage() {
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
       <CtaSection />
-
-      {/* ══ FOOTER ════════════════════════════════════════════════════ */}
-      <footer className="landing-safe-insets border-t border-zinc-200 bg-white px-4 py-8 dark:border-zinc-800 dark:bg-zinc-900 sm:px-6">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:flex-wrap sm:justify-between sm:text-right">
-          <div className="flex items-center gap-2">
-            <img src="/g1-logo.png" alt="G1" width={32} height={32} />
-            <span className="font-semibold text-zinc-700 dark:text-zinc-200">
-              G1 Sidour Avoda
-            </span>
-          </div>
-          <p className="text-sm text-zinc-400">© 2025 G1 · סידור עבודה חכם</p>
-          <div className="flex gap-5 text-sm">
-            <Link
-              href="/login/director"
-              className="text-zinc-400 transition-colors hover:text-[#00A8E0]"
-            >
-              מנהלים
-            </Link>
-            <Link
-              href="/login/worker"
-              className="text-zinc-400 transition-colors hover:text-[#00A8E0]"
-            >
-              עובדים
-            </Link>
-          </div>
-        </div>
-      </footer>
+      </div>
     </div>
   );
 }

@@ -540,14 +540,14 @@ function FeatureGridCard({
 
   return (
     <motion.div className="landing-motion-layer" style={{ opacity, x, y }}>
-      <div className="group h-full rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
+      <div className="group flex h-full flex-col items-center rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-sky-200 hover:shadow-lg">
         <div
-          className={`inline-flex h-12 w-12 items-center justify-center rounded-xl ring-1 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ring-1 sm:h-14 sm:w-14 ${FEATURE_CHIP_STYLES[feature.color] ?? FEATURE_CHIP_STYLES.blue}`}
         >
           {feature.icon}
         </div>
-        <h3 className="mt-4 text-lg font-bold text-zinc-900">{feature.title}</h3>
-        <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
+        <h3 className="mt-4 text-lg font-bold text-zinc-900 sm:text-xl">{feature.title}</h3>
+        <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-zinc-500">{feature.desc}</p>
       </div>
     </motion.div>
   );
@@ -670,10 +670,10 @@ function CtaSection() {
 
             <motion.div className="landing-motion-layer" style={{ x: btn2X, opacity: btn2Op }}>
               <Link
-                href="/register/director"
+                href="/login/worker"
                 className="inline-flex items-center gap-2 rounded-xl border border-zinc-300 bg-white px-9 py-4 text-base font-semibold text-zinc-700 transition-all hover:bg-zinc-50 hover:scale-105"
               >
-                הרשמה חינמית
+                כניסת עובד
               </Link>
             </motion.div>
           </div>
@@ -778,33 +778,6 @@ export default function LandingPage() {
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
       <CtaSection />
-
-      {/* ══ FOOTER ════════════════════════════════════════════════════ */}
-      <footer className="border-t border-zinc-200 bg-white px-6 py-8 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 text-center sm:flex-row sm:flex-wrap sm:justify-between sm:text-right">
-          <div className="flex items-center gap-2">
-            <Image src="/g1-logo.webp" alt="G1" width={32} height={32} loading="lazy" />
-            <span className="font-semibold text-zinc-700 dark:text-zinc-200">
-              G1 Sidour Avoda
-            </span>
-          </div>
-          <p className="text-sm text-zinc-400">© 2025 G1 · סידור עבודה חכם</p>
-          <div className="flex gap-5 text-sm">
-            <Link
-              href="/login/director"
-              className="text-zinc-400 transition-colors hover:text-[#00A8E0]"
-            >
-              מנהלים
-            </Link>
-            <Link
-              href="/login/worker"
-              className="text-zinc-400 transition-colors hover:text-[#00A8E0]"
-            >
-              עובדים
-            </Link>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

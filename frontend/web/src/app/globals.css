@@ -277,10 +277,140 @@
   background-clip: text;
 }
 
-/* Landing page — fluidité scroll (GPU, sans changer les effets) */
+/* Landing page — fond seamless (dégradé + lueurs sur toute la hauteur) */
 .landing-page {
   -webkit-overflow-scrolling: touch;
   overflow-x: clip;
+  position: relative;
+  isolation: isolate;
+  background-color: #ffffff;
+}
+
+.landing-page-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.landing-page-backdrop-gradient {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #f3faff 7%,
+    #ffffff 14%,
+    #f8fcff 24%,
+    #ffffff 34%,
+    #f5fbff 44%,
+    #ffffff 54%,
+    #eff8ff 64%,
+    #ffffff 74%,
+    #f6fcff 84%,
+    #ffffff 92%,
+    #f0f9ff 100%
+  );
+}
+
+.landing-page-glows {
+  position: absolute;
+  inset: 0;
+}
+
+/* Halo lumineux au-dessus de la zone stats (100% / Gooey) */
+.landing-stats-top-halo {
+  height: min(62vh, 520px);
+  background: radial-gradient(
+    ellipse 90% 75% at 50% 0%,
+    rgba(0, 168, 224, 0.13) 0%,
+    rgba(125, 211, 252, 0.07) 38%,
+    rgba(255, 255, 255, 0) 72%
+  );
+  filter: blur(20px);
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 42%, transparent 100%);
+}
+
+.landing-glow-orb {
+  position: absolute;
+  border-radius: 50%;
+  border: none;
+  box-shadow: none;
+  filter: blur(88px);
+  will-change: auto;
+}
+
+.landing-glow-orb--p1 {
+  width: clamp(220px, 38vw, 520px);
+  height: clamp(220px, 38vw, 520px);
+  top: 1%;
+  right: -10%;
+  background: rgba(0, 168, 224, 0.06);
+}
+
+.landing-glow-orb--p2 {
+  width: clamp(180px, 32vw, 440px);
+  height: clamp(180px, 32vw, 440px);
+  top: 11%;
+  left: -10%;
+  background: rgba(56, 189, 248, 0.09);
+}
+
+/* Zone animation 100% / stats — orbe droite très atténué */
+.landing-glow-orb--p3 {
+  width: clamp(160px, 28vw, 360px);
+  height: clamp(160px, 28vw, 360px);
+  top: 22%;
+  right: -14%;
+  background: rgba(0, 168, 224, 0.035);
+}
+
+.landing-glow-orb--p4 {
+  width: clamp(170px, 30vw, 400px);
+  height: clamp(170px, 30vw, 400px);
+  top: 34%;
+  left: -6%;
+  background: rgba(125, 211, 252, 0.09);
+}
+
+.landing-glow-orb--p5 {
+  width: clamp(210px, 36vw, 480px);
+  height: clamp(210px, 36vw, 480px);
+  top: 46%;
+  right: -12%;
+  background: rgba(0, 168, 224, 0.05);
+}
+
+.landing-glow-orb--p6 {
+  width: clamp(190px, 32vw, 420px);
+  height: clamp(190px, 32vw, 420px);
+  top: 58%;
+  left: 8%;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.landing-glow-orb--p7 {
+  width: clamp(200px, 35vw, 450px);
+  height: clamp(200px, 35vw, 450px);
+  top: 70%;
+  right: -14%;
+  background: rgba(0, 168, 224, 0.045);
+}
+
+.landing-glow-orb--p8 {
+  width: clamp(160px, 28vw, 380px);
+  height: clamp(160px, 28vw, 380px);
+  top: 82%;
+  left: -4%;
+  background: rgba(125, 211, 252, 0.09);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-glow-orb {
+    filter: blur(72px);
+  }
 }
 
 /* Viewport sticky fiable sur mobile (svh = hauteur visible avec barre d’URL) */
@@ -308,6 +438,10 @@
 .landing-hero-header {
   margin-top: 1.5rem;
   padding-top: 1.25rem;
+}
+
+.landing-hero-top {
+  position: relative;
 }
 
 @media (min-width: 640px) {
