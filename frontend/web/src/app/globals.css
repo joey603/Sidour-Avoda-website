@@ -205,6 +205,26 @@
   background: oklch(0.45 0 0);
 }
 
+/* Planning v2 — barre d’action fixe : home indicator + mode app (sans barre Safari) */
+#planning-v2-action-bar {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  #planning-v2-action-bar {
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  }
+  #planning-v2-action-bar .planning-v2-action-bar-inner {
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+  }
+}
+@media (max-width: 1023px) {
+  #planning-v2-action-bar .planning-v2-action-bar-inner {
+    padding-top: 0.875rem;
+    padding-bottom: 0.875rem;
+  }
+}
+
 /* Liquid glass button */
 .liquid-glass-btn {
   position: relative;
