@@ -272,18 +272,24 @@ function FeatureSlidePanel({
 function HeroScrollSection({
   videoMp4Src,
   videoMovSrc,
+  videoIntroReady = false,
 }: {
   videoMp4Src: string;
   videoMovSrc: string;
+  videoIntroReady?: boolean;
 }) {
   const outerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoResetDoneRef = useRef(false);
   const VIDEO_OFFSET_SEC = 1;
   const [isMobile, setIsMobile] = useState(false);
+  const [viewportH, setViewportH] = useState(800);
 
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth <= 768);
+    const check = () => {
+      setIsMobile(window.innerWidth <= 768);
+      setViewportH(window.innerHeight);
+    };
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
@@ -350,7 +356,7 @@ function HeroScrollSection({
       const v = videoRef.current;
       if (!v) return;
       const target = videoTargetRef.current;
-      if (Math.abs(v.currentTime - target) > 0.04) {
+      if (Math.abs(v.currentTime - target) > 0.1) {
         v.currentTime = target;
       }
     });
@@ -359,6 +365,7 @@ function HeroScrollSection({
   // Pause scroll à la fin de la vidéo : bloque jusqu'au prochain scroll vers le bas
   const pauseUnlockedRef = useRef(false);
   const pauseScrollYRef = useRef(0);
+  const pauseClampRafRef = useRef<number | null>(null);
 
   useEffect(() => {
     const outer = outerRef.current;
@@ -375,24 +382,14 @@ function HeroScrollSection({
     const ro = new ResizeObserver(refreshPauseY);
     ro.observe(outer);
 
-    const clampToPause = () => {
+    const snapToPause = () => {
       const pauseY = pauseScrollYRef.current;
-      if (window.scrollY > pauseY + 1) {
-        window.scrollTo({ top: pauseY, behavior: "auto" });
-      }
-    };
-
-    const onScroll = () => {
-      const pauseY = pauseScrollYRef.current;
-
-      if (window.scrollY < pauseY - 40) {
-        pauseUnlockedRef.current = false;
-        return;
-      }
-
-      if (!pauseUnlockedRef.current && window.scrollY > pauseY + 1) {
-        clampToPause();
-      }
+      if (Math.abs(window.scrollY - pauseY) <= 3) return;
+      if (pauseClampRafRef.current != null) return;
+      pauseClampRafRef.current = requestAnimationFrame(() => {
+        pauseClampRafRef.current = null;
+        window.scrollTo({ top: pauseScrollYRef.current, behavior: "auto" });
+      });
     };
 
     const onWheel = (e: WheelEvent) => {
@@ -405,21 +402,20 @@ function HeroScrollSection({
       }
 
       if (!pauseUnlockedRef.current && y >= pauseY - 8 && e.deltaY > 0) {
-        if (Math.abs(y - pauseY) > 2) {
-          window.scrollTo({ top: pauseY, behavior: "auto" });
-        }
         e.preventDefault();
+        snapToPause();
         pauseUnlockedRef.current = true;
       }
     };
 
-    window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => {
       window.removeEventListener("resize", refreshPauseY);
       ro.disconnect();
-      window.removeEventListener("scroll", onScroll);
       window.removeEventListener("wheel", onWheel);
+      if (pauseClampRafRef.current != null) {
+        cancelAnimationFrame(pauseClampRafRef.current);
+      }
       if (videoRafRef.current != null) {
         cancelAnimationFrame(videoRafRef.current);
       }
@@ -431,7 +427,7 @@ function HeroScrollSection({
   const cardY = useTransform(
     scrollYProgress,
     [VIDEO_PAUSE_END, CARD_SCROLL_END],
-    ["0vh", "-105vh"],
+    [0, -viewportH * 1.05],
   );
 
   // ── ScrollGooeyText — démarre quand l'écran a quitté le viewport ─
@@ -449,19 +445,28 @@ function HeroScrollSection({
     >
       {/* Sticky : toute la cinématique */}
       <div
-        className="landing-sticky-viewport landing-safe-insets relative sticky top-0 z-10 overflow-hidden"
-        style={{ perspective: "1200px", transform: "translateZ(0)" }}
+        className="landing-sticky-viewport landing-sticky-shell landing-safe-insets relative sticky top-0 z-10 overflow-hidden"
       >
         {/* Carte vidéo — rotateX/scale à l'entrée, remonte hors écran après la vidéo */}
         <motion.div
+          initial={false}
+          animate={{ opacity: videoIntroReady ? 1 : 0 }}
+          transition={{ duration: 0.45, ease: "easeOut" }}
           style={{
             rotateX,
             scale: scaleIn,
-            y: cardY,
-            boxShadow: "0 0 #0000004d, 0 9px 20px #0000004a, 0 37px 37px #00000042, 0 84px 50px #00000026",
+            transformPerspective: 1200,
+            pointerEvents: videoIntroReady ? "auto" : "none",
           }}
-          className="landing-motion-layer landing-motion-3d absolute inset-x-2 inset-y-[3%] z-20 rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl max-md:inset-y-[4%] md:inset-y-8 md:inset-x-32 md:rounded-[28px] md:p-3"
+          className="landing-motion-layer landing-motion-3d absolute inset-x-2 inset-y-[3%] z-20 max-md:inset-y-[4%] md:inset-y-8 md:inset-x-32"
         >
+          <motion.div
+            style={{
+              y: cardY,
+              boxShadow: "0 0 #0000004d, 0 9px 20px #0000004a, 0 37px 37px #00000042, 0 84px 50px #00000026",
+            }}
+            className="h-full w-full rounded-[14px] border-4 border-[#6C6C6C] bg-[#222222] p-1 shadow-2xl md:rounded-[28px] md:p-3"
+          >
           <div className="h-full w-full overflow-hidden rounded-2xl bg-zinc-900">
             <video
               ref={videoRef}
@@ -480,6 +485,7 @@ function HeroScrollSection({
               <source src={videoMovSrc} type="video/quicktime" />
             </video>
           </div>
+          </motion.div>
         </motion.div>
 
         {/* GooeyText — démarre une fois la carte vidéo hors écran */}
@@ -557,18 +563,26 @@ function FeatureGridCard({
   index,
   scrollYProgress,
   cardsStart,
+  cardsEnd,
   cardSpan,
 }: {
   feature: (typeof FEATURES)[number];
   index: number;
   scrollYProgress: MotionValue<number>;
   cardsStart: number;
+  cardsEnd: number;
   cardSpan: number;
 }) {
   const start = cardsStart + index * cardSpan;
-  const enterEnd = start + cardSpan * 0.7;
+  const enterEnd = start + cardSpan * 0.65;
+  const isLast = index === FEATURES.length - 1;
+  const opacityEnd = isLast ? Math.min(enterEnd + cardSpan * 0.12, cardsEnd) : enterEnd;
 
-  const opacity = useTransform(scrollYProgress, [start, enterEnd], [0, 1]);
+  const opacity = useTransform(
+    scrollYProgress,
+    isLast ? [start, enterEnd, opacityEnd] : [start, enterEnd],
+    isLast ? [0, 1, 1] : [0, 1],
+  );
   const x = useTransform(scrollYProgress, [start, enterEnd], [100, 0]);
   const y = useTransform(scrollYProgress, [start, enterEnd], [28, 0]);
 
@@ -673,13 +687,13 @@ function FeaturesGridSectionDesktop() {
   const descOp = useTransform(scrollYProgress, [0.09, 0.17], [0, 1]);
 
   const cardsStart = 0.2;
-  const cardsEnd = 0.95;
+  const cardsEnd = 0.76;
   const cardSpan = (cardsEnd - cardsStart) / FEATURES.length;
 
   return (
-    <div ref={outerRef} style={{ height: "520vh" }}>
+    <div ref={outerRef} style={{ height: "620vh" }}>
       <section
-        className="sticky top-0 relative flex h-screen items-center overflow-hidden py-0"
+        className="sticky top-0 landing-sticky-viewport landing-sticky-shell relative flex items-center overflow-hidden py-0"
         style={{ paddingTop: "var(--app-top-nav-height)" }}
         dir="rtl"
       >
@@ -707,6 +721,7 @@ function FeaturesGridSectionDesktop() {
                 index={index}
                 scrollYProgress={scrollYProgress}
                 cardsStart={cardsStart}
+                cardsEnd={cardsEnd}
                 cardSpan={cardSpan}
               />
             ))}
@@ -750,7 +765,7 @@ function CtaSection() {
   return (
     <div ref={outerRef} style={{ height: "300vh" }}>
       <section
-        className="landing-sticky-viewport landing-safe-insets relative sticky top-0 flex items-center justify-center overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:px-4"
+        className="landing-sticky-viewport landing-sticky-shell landing-safe-insets relative sticky top-0 flex items-center justify-center overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))] max-md:px-4"
         style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
       >
         <div className="relative z-[1] mx-auto max-w-2xl px-6 text-center">
@@ -807,6 +822,13 @@ function CtaSection() {
 /* ─── Landing page ───────────────────────────────────────────────── */
 function LandingPage() {
   const hero = useReveal(0);
+  const [videoIntroReady, setVideoIntroReady] = useState(false);
+
+  useEffect(() => {
+    if (!hero.visible) return;
+    const timer = window.setTimeout(() => setVideoIntroReady(true), 650);
+    return () => window.clearTimeout(timer);
+  }, [hero.visible]);
 
   return (
     <div dir="rtl" className="landing-page">
@@ -814,29 +836,16 @@ function LandingPage() {
       <div className="relative z-[1]">
       {/* ══ HERO — titre + vidéo scroll ═══════════════════════════════ */}
       <section className="relative">
-        <div className="landing-hero-top relative">
-          <div className="landing-hero-header landing-safe-insets relative flex flex-col items-center gap-2 px-4 pb-6 text-center sm:px-6 sm:pb-8">
-          <div ref={hero.ref} className="flex flex-col items-center gap-2">
-            <span
-              className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs font-semibold text-sky-700"
-              style={{
-                opacity: hero.visible ? 1 : 0,
-                transform: hero.visible ? "translateY(0)" : "translateY(16px)",
-                transition: "opacity 0.7s ease 0.05s, transform 0.7s ease 0.05s",
-              }}
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-sky-500" />
-              </span>
-              מופעל על ידי AI
-            </span>
+        <div className={`landing-hero-stage${videoIntroReady ? " landing-hero-stage--compact" : ""}`}>
+          <div className="landing-hero-top relative">
+            <div className="landing-hero-header landing-safe-insets relative flex w-full flex-col items-center gap-2 px-4 pb-6 text-center sm:px-6 sm:pb-8">
+              <div ref={hero.ref} className="flex flex-col items-center gap-2">
             <h1
               className="max-w-2xl text-2xl font-bold leading-tight text-zinc-900 sm:text-4xl md:text-5xl"
               style={{
                 opacity: hero.visible ? 1 : 0,
                 transform: hero.visible ? "translateY(0)" : "translateY(24px)",
-                transition: "opacity 0.7s ease 0.2s, transform 0.7s ease 0.2s",
+                transition: "opacity 0.45s ease, transform 0.45s ease",
               }}
             >
               <AnimatedHeroTitle
@@ -851,7 +860,7 @@ function LandingPage() {
               style={{
                 opacity: hero.visible ? 1 : 0,
                 transform: hero.visible ? "translateY(0)" : "translateY(24px)",
-                transition: "opacity 0.7s ease 0.35s, transform 0.7s ease 0.35s",
+                transition: "opacity 0.45s ease 0.08s, transform 0.45s ease 0.08s",
               }}
             >
               פלטפורמה מקצועית לשיבוץ משמרות, ניהול עובדים ותכנון שבועי —
@@ -863,7 +872,7 @@ function LandingPage() {
               style={{
                 opacity: hero.visible ? 1 : 0,
                 transform: hero.visible ? "translateY(0)" : "translateY(20px)",
-                transition: "opacity 0.7s ease 0.5s, transform 0.7s ease 0.5s",
+                transition: "opacity 0.45s ease 0.16s, transform 0.45s ease 0.16s",
               }}
             >
               <Link
@@ -887,10 +896,12 @@ function LandingPage() {
           </div>
         </div>
         </div>
+        </div>
 
         <HeroScrollSection
           videoMp4Src="/enregistrement-ecran-2026-06-03-chrome.mp4"
           videoMovSrc="/enregistrement-ecran-2026-06-03.mov"
+          videoIntroReady={videoIntroReady}
         />
 
       </section>

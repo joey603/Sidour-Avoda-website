@@ -413,19 +413,16 @@
   }
 }
 
-/* Viewport sticky fiable sur mobile (svh = hauteur visible avec barre d’URL) */
+/* Viewport sticky — une seule unité (évite les sauts vh/svh/dvh sur Chrome) */
 .landing-sticky-viewport {
-  height: 100vh;
-  height: 100svh;
-  height: -webkit-fill-available;
+  height: 100dvh;
   max-height: 100dvh;
 }
 
-@media (min-width: 768px) {
-  .landing-sticky-viewport {
-    height: 100dvh;
-    max-height: none;
-  }
+.landing-sticky-shell {
+  contain: layout style;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 
 .landing-safe-insets {
@@ -444,6 +441,16 @@
   position: relative;
 }
 
+/* Réserve le 1er écran — transition douce quand la vidéo apparaît */
+.landing-hero-stage {
+  min-height: calc(100dvh - var(--app-top-nav-height, 0px));
+  transition: min-height 0.5s ease;
+}
+
+.landing-hero-stage--compact {
+  min-height: 0;
+}
+
 @media (min-width: 640px) {
   .landing-hero-header {
     margin-top: 2rem;
@@ -458,11 +465,12 @@
   }
 }
 .landing-motion-layer {
-  will-change: transform, opacity;
   backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 .landing-motion-3d {
   transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
 }
 
 /* Lumière animée en haut (effet badge EldoraUI) */

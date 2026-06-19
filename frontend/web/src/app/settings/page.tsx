@@ -119,7 +119,7 @@ export default function SettingsPage() {
   if (!me) return null;
 
   return (
-    <main className="min-h-screen bg-zinc-50 p-6 dark:bg-zinc-950" dir="rtl">
+    <main className="min-h-screen p-6" dir="rtl">
       <div className="mx-auto max-w-3xl space-y-6">
         <div>
           <h1 className="text-2xl font-bold">הגדרות</h1>

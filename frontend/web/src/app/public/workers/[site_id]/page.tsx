@@ -138,7 +138,7 @@ export default function PublicWorkerRegistrationPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-zinc-900 dark:to-zinc-800 p-6">
+    <div className="min-h-screen p-6">
       <div className="mx-auto max-w-2xl">
         <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mb-6 text-center">
