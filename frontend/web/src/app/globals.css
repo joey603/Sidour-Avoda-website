@@ -451,6 +451,12 @@
   min-height: 0;
 }
 
+/* Réserve la hauteur scroll hero avant hydratation client (prod Vercel) */
+.landing-hero-scroll-spacer {
+  height: 1000vh;
+  pointer-events: none;
+}
+
 @media (min-width: 640px) {
   .landing-hero-header {
     margin-top: 2rem;

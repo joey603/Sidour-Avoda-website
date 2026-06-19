@@ -13,6 +13,41 @@ import {
   type MotionValue,
 } from "framer-motion";
 
+/* ─── Client / viewport (évite les sauts SSR → prod) ───────────── */
+function useClientReady() {
+  const [ready, setReady] = useState(false);
+  useLayoutEffect(() => setReady(true), []);
+  return ready;
+}
+
+function useLandingViewportRef() {
+  const viewportRef = useRef({ isMobile: false, height: 800 });
+
+  useLayoutEffect(() => {
+    const sync = () => {
+      viewportRef.current = {
+        isMobile: window.innerWidth <= 768,
+        height: window.innerHeight,
+      };
+    };
+    sync();
+    window.addEventListener("resize", sync, { passive: true });
+    return () => window.removeEventListener("resize", sync);
+  }, []);
+
+  return viewportRef;
+}
+
+function lerpRange(
+  value: number,
+  [inMin, inMax]: [number, number],
+  [outMin, outMax]: [number, number],
+) {
+  if (inMax === inMin) return outMax;
+  const t = Math.min(Math.max((value - inMin) / (inMax - inMin), 0), 1);
+  return outMin + (outMax - outMin) * t;
+}
+
 /* ─── Scroll progress (métriques cachées, sans layout thrash) ───── */
 function useSectionScrollProgress(outerRef: RefObject<HTMLDivElement | null>) {
   const { scrollY } = useScroll();
@@ -281,24 +316,20 @@ function HeroScrollSection({
   const outerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoResetDoneRef = useRef(false);
+  const videoScrubReadyRef = useRef(false);
   const VIDEO_OFFSET_SEC = 1;
-  const [isMobile, setIsMobile] = useState(false);
-  const [viewportH, setViewportH] = useState(800);
-
-  useEffect(() => {
-    const check = () => {
-      setIsMobile(window.innerWidth <= 768);
-      setViewportH(window.innerHeight);
-    };
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
-  }, []);
+  const viewportRef = useLandingViewportRef();
 
   // Initialise une seule fois : Chrome peut relancer canplay/canplaythrough pendant les seeks.
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+
+    const markScrubReady = () => {
+      if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+        videoScrubReadyRef.current = true;
+      }
+    };
 
     const init = () => {
       if (!videoResetDoneRef.current && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -306,6 +337,7 @@ function HeroScrollSection({
         video.pause();
         videoResetDoneRef.current = true;
       }
+      markScrubReady();
     };
 
     // Déclenche le chargement si pas encore commencé
@@ -314,17 +346,27 @@ function HeroScrollSection({
     else init();
 
     video.addEventListener("loadedmetadata", init);
+    video.addEventListener("loadeddata", markScrubReady);
+    video.addEventListener("canplaythrough", markScrubReady);
 
     return () => {
       video.removeEventListener("loadedmetadata", init);
+      video.removeEventListener("loadeddata", markScrubReady);
+      video.removeEventListener("canplaythrough", markScrubReady);
     };
   }, []);
 
   const { scrollYProgress } = useScroll({ target: outerRef });
 
   // ── Phase 1 : rotation entrée ───────────────────────────────────
-  const rotateX  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [16, 0] : [35, 0]);
-  const scaleIn  = useTransform(scrollYProgress, [0, 0.07], isMobile ? [0.96, 1] : [1.08, 1]);
+  const rotateX = useTransform(scrollYProgress, (v) => {
+    const start = viewportRef.current.isMobile ? 16 : 35;
+    return lerpRange(v, [0, 0.07], [start, 0]);
+  });
+  const scaleIn = useTransform(scrollYProgress, (v) => {
+    const start = viewportRef.current.isMobile ? 0.96 : 1.08;
+    return lerpRange(v, [0, 0.07], [start, 1]);
+  });
 
   // ── Phase 2 : lecture vidéo ─────────────────────────────────────
   const VIDEO_START = 0.05;
@@ -335,7 +377,7 @@ function HeroScrollSection({
 
   useMotionValueEvent(scrollYProgress, "change", (latest) => {
     const video = videoRef.current;
-    if (!video || !video.duration || isNaN(video.duration)) return;
+    if (!video || !videoScrubReadyRef.current || !video.duration || isNaN(video.duration)) return;
 
     const playable = Math.max(video.duration - VIDEO_OFFSET_SEC, 0.01);
 
@@ -369,7 +411,7 @@ function HeroScrollSection({
 
   useEffect(() => {
     const outer = outerRef.current;
-    if (!outer || isMobile) return;
+    if (!outer || viewportRef.current.isMobile) return;
 
     const refreshPauseY = () => {
       const rect = outer.getBoundingClientRect();
@@ -420,14 +462,12 @@ function HeroScrollSection({
         cancelAnimationFrame(videoRafRef.current);
       }
     };
-  }, [isMobile]);
+  }, [viewportRef]);
 
   // ── Phase 3 : la carte remonte avec le scroll (après la pause) ───
   const CARD_SCROLL_END = 0.29;
-  const cardY = useTransform(
-    scrollYProgress,
-    [VIDEO_PAUSE_END, CARD_SCROLL_END],
-    [0, -viewportH * 1.05],
+  const cardY = useTransform(scrollYProgress, (v) =>
+    lerpRange(v, [VIDEO_PAUSE_END, CARD_SCROLL_END], [0, -viewportRef.current.height * 1.05]),
   );
 
   // ── ScrollGooeyText — démarre quand l'écran a quitté le viewport ─
@@ -733,16 +773,16 @@ function FeaturesGridSectionDesktop() {
 }
 
 function FeaturesGridSection() {
-  const [isMobile, setIsMobile] = useState(false);
+  const [variant, setVariant] = useState<"pending" | "mobile" | "desktop">("pending");
 
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768);
-    check();
-    window.addEventListener("resize", check);
-    return () => window.removeEventListener("resize", check);
+  useLayoutEffect(() => {
+    setVariant(window.innerWidth < 768 ? "mobile" : "desktop");
   }, []);
 
-  if (isMobile) return <FeaturesGridSectionMobile />;
+  if (variant === "pending") {
+    return <div className="landing-safe-insets min-h-[50vh]" aria-hidden />;
+  }
+  if (variant === "mobile") return <FeaturesGridSectionMobile />;
   return <FeaturesGridSectionDesktop />;
 }
 
@@ -821,6 +861,7 @@ function CtaSection() {
 
 /* ─── Landing page ───────────────────────────────────────────────── */
 function LandingPage() {
+  const clientReady = useClientReady();
   const hero = useReveal(0);
   const [videoIntroReady, setVideoIntroReady] = useState(false);
 
@@ -898,19 +939,23 @@ function LandingPage() {
         </div>
         </div>
 
-        <HeroScrollSection
-          videoMp4Src="/enregistrement-ecran-2026-06-03-chrome.mp4"
-          videoMovSrc="/enregistrement-ecran-2026-06-03.mov"
-          videoIntroReady={videoIntroReady}
-        />
+        {clientReady ? (
+          <HeroScrollSection
+            videoMp4Src="/enregistrement-ecran-2026-06-03-chrome.mp4"
+            videoMovSrc="/enregistrement-ecran-2026-06-03.mov"
+            videoIntroReady={videoIntroReady}
+          />
+        ) : (
+          <div className="landing-hero-scroll-spacer" aria-hidden />
+        )}
 
       </section>
 
       {/* ══ FEATURES — grille responsive ══════════════════════════════ */}
-      <FeaturesGridSection />
+      {clientReady ? <FeaturesGridSection /> : null}
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
-      <CtaSection />
+      {clientReady ? <CtaSection /> : null}
       </div>
     </div>
   );
