@@ -88,6 +88,8 @@ export function PlanningV2PlanExportButtons({
       `${label}-${weekIso}-planning-data.csv`,
       new Blob([csv], { type: "text/csv;charset=utf-8" }),
     );
+    const logoUrl =
+      typeof window !== "undefined" ? `${window.location.origin}/g1-logo-nav.png` : undefined;
     const html = buildPlanningGridStyledHtml({
       siteLabel,
       weekStart,
@@ -96,6 +98,7 @@ export function PlanningV2PlanExportButtons({
       pulls: pulls ?? null,
       site,
       nameColorMap,
+      logoUrl,
     });
     window.setTimeout(() => {
       triggerDownloadBlob(

@@ -93,6 +93,7 @@ import {
   planningColorForRoleChip,
   workerNameChipColor,
 } from "../lib/worker-name-chip-color";
+import { buildPullHighlightKindByNormName } from "../lib/planning-v2-pull-slot-display";
 import TimePicker from "@/components/time-picker";
 
 type PlanningV2StationWeekGridProps = {
@@ -361,69 +362,6 @@ function splitRangeForPulls(start: string, end: string): { before: { start: stri
     before: { start: fmt(s), end: fmt(mid) },
     after: { start: fmt(mid), end: fmt(e) },
   };
-}
-
-/**
- * Aligné sur `pullHighlightKindByName` du planning : anneau orange sur le trou + le `before` (garde précédente) + le `after` (garde suivante).
- */
-function buildPullHighlightKindByNormName(
-  pulls: Record<string, unknown> | null | undefined,
-  shiftNamesAll: string[],
-  dayIdx: number,
-  dayKey: string,
-  shiftName: string,
-  stationIndex: number,
-): Map<string, "cell" | "before" | "after"> {
-  const out = new Map<string, "cell" | "before" | "after">();
-  if (!pulls) return out;
-  const shiftsCount = shiftNamesAll.length;
-  const shiftIdx = shiftNamesAll.indexOf(shiftName);
-  if (shiftIdx < 0) return out;
-
-  const sameCoord = (a: { dayIdx: number; shiftIdx: number } | null, bDayIdx: number, bShiftIdx: number) =>
-    !!a && a.dayIdx === bDayIdx && a.shiftIdx === bShiftIdx;
-
-  for (const [pullKey, entryAny] of Object.entries(pulls)) {
-    const parts = String(pullKey || "").split("|");
-    if (parts.length < 4) continue;
-    const pullDayKey = parts[0];
-    const pullShiftName = parts[1];
-    if (Number(parts[2]) !== Number(stationIndex)) continue;
-
-    const pullDayIdx = DAY_COLS.findIndex((c) => c.key === pullDayKey);
-    const pullShiftIdx = shiftNamesAll.indexOf(pullShiftName);
-    if (pullDayIdx < 0 || pullShiftIdx < 0) continue;
-
-    const pullPrevCoord =
-      pullDayIdx === 0 && pullShiftIdx === 0
-        ? null
-        : pullShiftIdx === 0
-          ? { dayIdx: pullDayIdx - 1, shiftIdx: shiftsCount - 1 }
-          : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx - 1 };
-    const pullNextCoord =
-      pullDayIdx === DAY_COLS.length - 1 && pullShiftIdx === shiftsCount - 1
-        ? null
-        : pullShiftIdx === shiftsCount - 1
-          ? { dayIdx: pullDayIdx + 1, shiftIdx: 0 }
-          : { dayIdx: pullDayIdx, shiftIdx: pullShiftIdx + 1 };
-
-    const entry = entryAny as { before?: { name?: string }; after?: { name?: string } };
-    const beforeName = normName(entry?.before?.name || "");
-    const afterName = normName(entry?.after?.name || "");
-
-    if (pullDayKey === dayKey && pullShiftName === shiftName) {
-      if (beforeName) out.set(beforeName, "cell");
-      if (afterName) out.set(afterName, "cell");
-      continue;
-    }
-    if (beforeName && sameCoord(pullPrevCoord, dayIdx, shiftIdx)) {
-      out.set(beforeName, "before");
-    }
-    if (afterName && sameCoord(pullNextCoord, dayIdx, shiftIdx)) {
-      out.set(afterName, "after");
-    }
-  }
-  return out;
 }
 
 /**
@@ -1194,6 +1132,7 @@ export function PlanningV2StationWeekGrid({
                                       idx,
                                       slotIdx,
                                     );
+                                    const hasGuardDisplayOnSlot = !!guardTimeStr;
                                     const redTimeLine = guardTimeStr || pullTime;
                                     const showDraftFixedPin = shouldShowDraftFixedPinForWorker(
                                       draftFixedAssignmentsSnapshot,
@@ -1301,8 +1240,12 @@ export function PlanningV2StationWeekGrid({
                                               ? " z-30 w-[18rem] max-w-[18rem]"
                                               : "") +
                                             (summaryPickActive ? "" : ring + pullAdjacentRing) +
-                                            (hasPullOnSlot || shiftHoursActiveHere ? " cursor-pointer" : "") +
-                                            (shiftHoursActiveHere && !summaryPickActive ? " ring-2 ring-yellow-500" : "") +
+                                            (hasPullOnSlot || hasGuardDisplayOnSlot || shiftHoursActiveHere
+                                              ? " cursor-pointer"
+                                              : "") +
+                                            ((hasGuardDisplayOnSlot || shiftHoursActiveHere) && !summaryPickActive
+                                              ? " ring-2 ring-yellow-500"
+                                              : "") +
                                             ((!dragNm && isSlotHovered && !summaryPickActive
                                               ? " z-[40] scale-110 ring-2 ring-[#00A8E0] "
                                               : "") ||
@@ -1346,7 +1289,11 @@ export function PlanningV2StationWeekGrid({
                                             setExpandedSlotKey((k) => (k === expKey ? null : k))
                                           }
                                           onClick={() => {
-                                            if (shiftHoursActiveHere && nmTrim && onUpsertGuardDisplay) {
+                                            if (
+                                              nmTrim &&
+                                              onUpsertGuardDisplay &&
+                                              (shiftHoursActiveHere || hasGuardDisplayOnSlot)
+                                            ) {
                                               const hours = hoursFromConfig(st, sn) || hoursOf(sn);
                                               const parsed = parseHoursRange(hours);
                                               const gd = pullsMap[slotPullKey]?.guardDisplay;

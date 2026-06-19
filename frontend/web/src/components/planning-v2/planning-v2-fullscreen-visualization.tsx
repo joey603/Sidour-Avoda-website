@@ -44,6 +44,8 @@ export function PlanningV2FullscreenVisualization({
 
   const srcDoc = useMemo(() => {
     if (!assignmentsNonEmpty(assignments ?? null)) return "";
+    const logoUrl =
+      typeof window !== "undefined" ? `${window.location.origin}/g1-logo-nav.png` : undefined;
     return buildPlanningGridStyledHtml({
       siteLabel,
       weekStart,
@@ -53,6 +55,7 @@ export function PlanningV2FullscreenVisualization({
       site,
       nameColorMap,
       emptyCellsGray: true,
+      logoUrl,
     });
   }, [siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap]);
 

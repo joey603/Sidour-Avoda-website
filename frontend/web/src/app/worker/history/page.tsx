@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
-import LoadingAnimation from "@/components/loading-animation";
+import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
 
 interface Site {
   id: number;
@@ -369,21 +369,13 @@ export default function WorkerHistoryPage() {
   }, [weekStart, isCalendarOpen]);
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <LoadingAnimation size={80} />
-      </div>
-    );
+    return <LoadingOverlay size={80} />;
   }
 
   return (
     <div className="min-h-screen p-6">
       <div className="mx-auto max-w-4xl space-y-6">
-        {weekPlanLoading ? (
-          <div className="fixed inset-0 z-50 flex min-h-[100lvh] w-full max-w-[100vw] items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
-            <LoadingAnimation size={96} />
-          </div>
-        ) : null}
+        {weekPlanLoading ? <LoadingOverlay size={96} /> : null}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">היסטוריה</h1>
           <div className="flex flex-1 items-center justify-center gap-2 md:gap-3">

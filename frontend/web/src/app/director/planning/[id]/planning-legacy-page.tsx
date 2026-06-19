@@ -14,7 +14,7 @@ import { apiFetch, getApiBaseUrl } from "@/lib/api";
 import { fetchMe } from "@/lib/auth";
 import { toast } from "sonner";
 import TimePicker from "@/components/time-picker";
-import LoadingAnimation from "@/components/loading-animation";
+import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
 import NumberPicker from "@/components/number-picker";
 import PullsLimitPicker from "@/components/pulls-limit-picker";
 import ReactMarkdown from "react-markdown";
@@ -5603,18 +5603,14 @@ export default function PlanningLegacyPage() {
           </div>
         ) : null}
         {loading || !workersResolvedForPage ? (
-          <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
-            <LoadingAnimation size={96} />
-          </div>
+          <LoadingOverlay size={96} />
         ) : error ? (
           <p className="text-red-600">{error}</p>
         ) : (
           <>
           {/* Lazy loading: keep UI visible, show a centered overlay while week data refreshes */}
           {isRefreshingWeekData ? (
-            <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
-              <LoadingAnimation size={96} />
-            </div>
+            <LoadingOverlay size={96} />
           ) : null}
           <div className="relative w-full rounded-2xl border p-4 dark:border-zinc-800 space-y-6">
             <div className="mb-2 relative">

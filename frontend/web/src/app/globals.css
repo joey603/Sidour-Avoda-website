@@ -177,6 +177,48 @@
   height: -webkit-fill-available;
 }
 
+/* Overlay chargement natif/PWA : fond plein écran + animation centrée */
+.app-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.app-loading-overlay__content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
+  transform: translateZ(0);
+}
+
+.dark .app-loading-overlay {
+  background: rgba(9, 9, 11, 0.78);
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  .app-loading-overlay {
+    height: 100lvh;
+    min-height: 100lvh;
+  }
+}
+
 /* Barre de défilement visible — planning v2 : panneau « אתרים מקושרים » (mobile + desktop) */
 .planning-v2-linked-rail-scroll {
   scrollbar-gutter: stable;

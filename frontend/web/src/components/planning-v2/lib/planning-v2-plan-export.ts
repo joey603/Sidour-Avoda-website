@@ -13,7 +13,7 @@ import {
   isShiftEnabledForStation,
   shiftNamesFromSite,
 } from "./station-grid-helpers";
-import { slotTimeMetaFromPulls } from "./planning-v2-pull-slot-display";
+import { slotTimeMetaFromPulls, buildPullHighlightKindByNormName } from "./planning-v2-pull-slot-display";
 import { workerNameChipColor } from "./worker-name-chip-color";
 
 function normName(s: string): string {
@@ -282,8 +282,11 @@ export function buildPlanningGridStyledHtml(params: {
   site: SiteSummary | null;
   nameColorMap: Map<string, { bg: string; border: string; text: string }>;
   emptyCellsGray?: boolean;
+  /** URL absolue recommandée pour iframe srcDoc (ex. origin + /g1-logo-nav.png). */
+  logoUrl?: string;
 }): string {
-  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap, emptyCellsGray = false } = params;
+  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap, emptyCellsGray = false, logoUrl } =
+    params;
   const summary = buildSummaryRows(workers, assignments, pulls);
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
@@ -323,7 +326,7 @@ export function buildPlanningGridStyledHtml(params: {
     <div style="font-weight:600;">${escapeHtml(sn)}</div>
     ${shiftHoursHtml}
   </td>
-  ${DAY_COLS.map((d) => {
+  ${DAY_COLS.map((d, dayIdx) => {
     const required = getRequiredFor(st as object, sn, d.key);
     const activeDay = isDayActive(st, d.key);
     const show = activeDay && required > 0;
@@ -333,6 +336,14 @@ export function buildPlanningGridStyledHtml(params: {
     const merged = mergeCellRawWithPulls(assignments, pulls ?? null, d.key, sn, idx);
     const slotCount = Math.max(required, merged.length, 1);
     const slots = Array.from({ length: slotCount }, (_, slotIdx) => String(merged[slotIdx] || "").trim());
+    const pullHighlightByNormName = buildPullHighlightKindByNormName(
+      pulls ?? null,
+      shiftNamesAll,
+      dayIdx,
+      d.key,
+      sn,
+      idx,
+    );
     const slotBoxes = slots
       .map((nm, slotIdx) => {
         if (!nm) {
@@ -341,14 +352,23 @@ export function buildPlanningGridStyledHtml(params: {
           };color:#a1a1aa;font-size:11px;text-align:center;">—</div>`;
         }
         const col = workerNameChipColor(nm, nameColorMap);
+        const nmKey = normName(nm);
+        const pullRel = pullHighlightByNormName.get(nmKey);
         const slotTime = slotTimeMetaFromPulls(pulls ?? null, d.key, sn, idx, slotIdx, nm);
+        const highlightKind =
+          slotTime?.highlight === "guard" ? "guard" : slotTime?.highlight === "pull" || pullRel ? "pull" : null;
+        const slotBg =
+          highlightKind === "guard" ? "#fef9c3" : highlightKind === "pull" ? "#ffedd5" : "#fff";
+        const slotBorder =
+          highlightKind === "guard" ? "#eab308" : highlightKind === "pull" ? "#fb923c" : "#e4e4e7";
+        const slotBorderWidth = highlightKind ? "2px" : "1px";
         const roleHtml = slotTime?.roleName
           ? `<div style="margin-top:2px;font-size:10px;font-weight:600;color:#334155;">${escapeHtml(slotTime.roleName)}</div>`
           : "";
         const timeHtml = slotTime
           ? `<div style="margin-top:2px;font-size:10px;font-weight:700;color:${slotTime.red ? "#dc2626" : "#52525b"};">${escapeHtml(slotTime.label)}</div>`
           : "";
-        return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:1px solid #e4e4e7;background:#fff;text-align:center;">
+        return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:${slotBorderWidth} solid ${slotBorder};background:${slotBg};text-align:center;">
   <span style="display:inline-block;max-width:100%;padding:4px 8px;border-radius:9999px;border:1px solid ${escapeHtml(col.border)};background:${escapeHtml(col.bg)};color:${escapeHtml(col.text)};font-size:11px;">${escapeHtml(nm)}</span>
   ${roleHtml}
   ${timeHtml}
@@ -386,6 +406,9 @@ ${headerCells}
   html, body { margin: 0; padding: 0; width: 100%; max-width: 100%; overflow-x: auto; }
   body { background: #fff; color: #18181b; -webkit-text-size-adjust: 100%; }
   .page-wrap { padding: 12px; width: 100%; max-width: 100%; margin: 0 auto; }
+  .page-header { position: relative; margin-bottom: 16px; min-height: 44px; }
+  .page-logo { position: absolute; left: 0; top: 0; height: 40px; width: auto; max-width: 120px; object-fit: contain; }
+  .page-title-block { text-align: center; padding-inline: 128px 12px; }
   .grid-table { min-width: 720px; width: 100%; border-collapse: collapse; font-family: system-ui, -apple-system, sans-serif; }
   .summary-table { border-collapse: collapse; width: 100%; max-width: 560px; margin-bottom: 24px; font-size: 13px; }
   @media (max-width: 640px) {
@@ -396,8 +419,13 @@ ${headerCells}
 </head>
 <body>
 <div class="page-wrap">
+<div class="page-header">
+${logoUrl ? `<img src="${escapeHtml(logoUrl)}" alt="G1" class="page-logo" />` : ""}
+<div class="page-title-block">
 <h1 style="font-size:18px;margin:0 0 12px;">${escapeHtml(siteLabel)}</h1>
-<p style="margin:0 0 16px;color:#52525b;font-size:14px;">שבוע מתאריך: ${escapeHtml(getWeekKeyISO(weekStart))}</p>
+<p style="margin:0;color:#52525b;font-size:14px;">שבוע מתאריך: ${escapeHtml(getWeekKeyISO(weekStart))}</p>
+</div>
+</div>
 <h2 style="font-size:15px;margin:16px 0 8px;">סיכום משמרות לפי עובד</h2>
 <table dir="rtl" class="summary-table">
 <thead><tr>

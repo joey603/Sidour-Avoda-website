@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import LoadingAnimation from "@/components/loading-animation";
+import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
 import { PlanningV2Page } from "@/components/planning-v2/planning-v2-page";
 
 /**
@@ -13,11 +13,7 @@ import { PlanningV2Page } from "@/components/planning-v2/planning-v2-page";
 export default function DirectorPlanningSitePage() {
   return (
     <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-          <LoadingAnimation />
-        </div>
-      }
+      fallback={<LoadingOverlay />}
     >
       <PlanningV2Page />
     </Suspense>

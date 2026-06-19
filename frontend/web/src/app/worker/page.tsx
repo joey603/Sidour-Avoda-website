@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
-import LoadingAnimation from "@/components/loading-animation";
+import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
 import { PlanningV2LayoutShell } from "@/components/planning-v2/planning-v2-layout-shell";
 import { WorkerHomeSitePanels } from "@/components/worker/worker-home-site-panels";
 
@@ -446,11 +446,7 @@ export default function WorkerDashboard() {
   }
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <LoadingAnimation size={80} />
-      </div>
-    );
+    return <LoadingOverlay size={80} />;
   }
 
   return (
