@@ -217,6 +217,10 @@
     height: 100lvh;
     min-height: 100lvh;
   }
+
+  .app-loading-overlay__content {
+    transform: translateY(calc(-18px - env(safe-area-inset-bottom) * 0.25)) translateZ(0);
+  }
 }
 
 /* Barre de défilement visible — planning v2 : panneau « אתרים מקושרים » (mobile + desktop) */

@@ -13,6 +13,15 @@ import Link from "next/link";
 
 type Role = "worker" | "director";
 
+function isStandaloneApp() {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia("(display-mode: fullscreen)").matches ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+  );
+}
+
 export default function TopNav() {
   const router = useRouter();
   const pathname = usePathname();
@@ -89,6 +98,15 @@ export default function TopNav() {
     router.replace(target);
   }, [authChecked, isAuthPage, isProtectedPage, pathname, router, userRole]);
 
+  // En mode app native, ouvrir directement le tableau de bord directeur au lieu de la landing.
+  useEffect(() => {
+    if (!authChecked) return;
+    if (!isHomePage) return;
+    if (userRole !== "director") return;
+    if (!isStandaloneApp()) return;
+    router.replace("/director");
+  }, [authChecked, isHomePage, router, userRole]);
+
   const baseBtn =
     "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm transition-colors border";
   const baseBtnMobile =
@@ -144,17 +162,15 @@ export default function TopNav() {
     if (userRole === "director") {
       return (
         <>
-          {!isHomePage && (
-            <Link
-              href="/director"
-              onClick={handleLinkClick}
-              className={`${baseBtnMobile} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
-              aria-label="בית"
-              aria-current={pathname === "/director" ? "page" : undefined}
-            >
-              בית
-            </Link>
-          )}
+          <Link
+            href="/director"
+            onClick={handleLinkClick}
+            className={`${baseBtnMobile} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+            aria-label="בית"
+            aria-current={pathname === "/director" ? "page" : undefined}
+          >
+            בית
+          </Link>
           <Link
             href="/director/sites"
             onClick={handleLinkClick}
@@ -253,17 +269,15 @@ export default function TopNav() {
     if (userRole === "director") {
       return (
                 <>
-                  {!isHomePage && (
-                    <Link
-                      href="/director"
-                      onClick={handleLinkClick}
-                      className={`${baseBtn} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
-                      aria-label="בית"
-                      aria-current={pathname === "/director" ? "page" : undefined}
-                    >
-                      בית
-                    </Link>
-                  )}
+                  <Link
+                    href="/director"
+                    onClick={handleLinkClick}
+                    className={`${baseBtn} ${pathname === "/director" ? "bg-[#00A8E0] text-white border-[#00A8E0]" : inactiveClasses}`}
+                    aria-label="בית"
+                    aria-current={pathname === "/director" ? "page" : undefined}
+                  >
+                    בית
+                  </Link>
                   <Link
                     href="/director/sites"
             onClick={handleLinkClick}
