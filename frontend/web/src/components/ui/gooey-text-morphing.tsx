@@ -164,6 +164,8 @@ export function ScrollGooeyText({
   const text2Ref = React.useRef<HTMLSpanElement>(null);
   const label1Ref = React.useRef<HTMLSpanElement>(null);
   const label2Ref = React.useRef<HTMLSpanElement>(null);
+  const lastStaticIndexRef = React.useRef<number | null>(null);
+  const lastMorphPairRef = React.useRef("");
 
   // Initialise les textes
   React.useEffect(() => {
@@ -171,12 +173,17 @@ export function ScrollGooeyText({
     if (text2Ref.current) text2Ref.current.textContent = texts[1] ?? texts[0];
     if (label1Ref.current && labels) label1Ref.current.textContent = labels[0];
     if (label2Ref.current && labels) label2Ref.current.textContent = labels[1] ?? labels?.[0] ?? "";
+    lastStaticIndexRef.current = null;
+    lastMorphPairRef.current = "";
   }, [texts, labels]);
 
   useMotionValueEvent(scrollProgress, "change", (latest) => {
     const state = resolveGooeyScrollState(latest, texts.length, holdRatio, finalHoldRatio);
 
     const showStatic = (idx: number) => {
+      if (lastStaticIndexRef.current === idx) return;
+      lastStaticIndexRef.current = idx;
+      lastMorphPairRef.current = "";
       if (text1Ref.current) {
         text1Ref.current.textContent = texts[idx];
         text1Ref.current.style.filter = "";
@@ -201,10 +208,15 @@ export function ScrollGooeyText({
 
     const applyMorph = (idx1: number, idx2: number, f: number) => {
       if (!text1Ref.current || !text2Ref.current) return;
-      if (text1Ref.current) text1Ref.current.textContent = texts[idx1];
-      if (text2Ref.current) text2Ref.current.textContent = texts[idx2];
-      if (label1Ref.current && labels) label1Ref.current.textContent = labels[idx1] ?? "";
-      if (label2Ref.current && labels) label2Ref.current.textContent = labels[idx2] ?? "";
+      const pair = `${idx1}:${idx2}`;
+      if (lastMorphPairRef.current !== pair) {
+        lastMorphPairRef.current = pair;
+        lastStaticIndexRef.current = null;
+        text1Ref.current.textContent = texts[idx1];
+        text2Ref.current.textContent = texts[idx2];
+        if (label1Ref.current && labels) label1Ref.current.textContent = labels[idx1] ?? "";
+        if (label2Ref.current && labels) label2Ref.current.textContent = labels[idx2] ?? "";
+      }
 
       const inv = 1 - f;
       text2Ref.current.style.filter = `blur(${Math.min(8 / f - 8, 100)}px)`;

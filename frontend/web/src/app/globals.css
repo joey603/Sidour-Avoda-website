@@ -292,6 +292,9 @@
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  contain: paint;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
 }
 
 .landing-page-backdrop-gradient {
@@ -317,6 +320,7 @@
 .landing-page-glows {
   position: absolute;
   inset: 0;
+  contain: paint;
 }
 
 /* Halo lumineux au-dessus de la zone stats (100% / Gooey) */
@@ -339,6 +343,8 @@
   border: none;
   box-shadow: none;
   filter: blur(88px);
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
   will-change: auto;
 }
 
@@ -420,7 +426,7 @@
 }
 
 .landing-sticky-shell {
-  contain: layout style;
+  contain: layout paint style;
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
 }

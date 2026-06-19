@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { type MotionValue, useMotionValueEvent } from "framer-motion";
 import { resolveGooeyScrollState } from "@/components/ui/gooey-text-morphing";
 import { cn } from "@/lib/utils";
@@ -100,10 +100,14 @@ export function ElectricStatsCables({
   duration = 2.2,
 }: ElectricStatsCablesProps) {
   const [cablePosition, setCablePosition] = useState<"top" | "bottom">("top");
+  const cablePositionRef = useRef<"top" | "bottom">("top");
 
   useMotionValueEvent(scrollProgress, "change", (latest) => {
     const idx = getDominantStatIndex(latest, statCount, holdRatio, finalHoldRatio);
-    setCablePosition(CABLE_BY_STAT_INDEX[idx] ?? "top");
+    const nextPosition = CABLE_BY_STAT_INDEX[idx] ?? "top";
+    if (nextPosition === cablePositionRef.current) return;
+    cablePositionRef.current = nextPosition;
+    setCablePosition(nextPosition);
   });
 
   return (
