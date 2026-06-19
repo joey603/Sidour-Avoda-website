@@ -98,14 +98,19 @@ export default function TopNav() {
     router.replace(target);
   }, [authChecked, isAuthPage, isProtectedPage, pathname, router, userRole]);
 
-  // En mode app native, ouvrir directement le tableau de bord directeur au lieu de la landing.
+  // En mode app native, ouvrir le tableau de bord directeur par défaut (sauf clic logo → /?landing=1).
   useEffect(() => {
     if (!authChecked) return;
     if (!isHomePage) return;
     if (userRole !== "director") return;
     if (!isStandaloneApp()) return;
+    if (typeof window !== "undefined") {
+      if (new URLSearchParams(window.location.search).get("landing") === "1") return;
+    }
     router.replace("/director");
   }, [authChecked, isHomePage, router, userRole]);
+
+  const logoHref = userRole ? "/?landing=1" : "/";
 
   const baseBtn =
     "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm transition-colors border";
@@ -410,7 +415,7 @@ export default function TopNav() {
         </div>
         <div className="flex items-center gap-3">
           <Link
-            href="/"
+            href={logoHref}
             className="group relative inline-flex items-center pb-1"
             aria-label="G1 home"
           >
