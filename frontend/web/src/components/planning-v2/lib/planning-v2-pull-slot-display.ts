@@ -17,8 +17,10 @@ export type SlotTimeMeta = {
   highlight?: "guard" | "pull";
 };
 
+type PullsLike = PlanningV2PullsMap | Record<string, unknown>;
+
 function pullEntryForWorkerInCell(
-  pulls: PlanningV2PullsMap,
+  pulls: PullsLike,
   dayKey: string,
   shiftName: string,
   stationIdx: number,
@@ -65,7 +67,7 @@ function timeRangeForWorkerInPull(entry: PlanningV2PullEntry, workerName: string
  * Priorité : guardDisplay > plage complète before/after (comme le grig).
  */
 export function slotTimeMetaFromPulls(
-  pulls: PlanningV2PullsMap | null | undefined,
+  pulls: PullsLike | null | undefined,
   dayKey: string,
   shiftName: string,
   stationIdx: number,
@@ -96,7 +98,7 @@ export function slotTimeMetaFromPulls(
  * Anneau orange sur le trou + garde before (précédente) + garde after (suivante) — comme le grig planning.
  */
 export function buildPullHighlightKindByNormName(
-  pulls: PlanningV2PullsMap | null | undefined,
+  pulls: PullsLike | null | undefined,
   shiftNamesAll: string[],
   dayIdx: number,
   dayKey: string,
