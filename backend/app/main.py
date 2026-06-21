@@ -7,7 +7,7 @@ from threading import Event, Thread
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 
-from .database import SessionLocal
+from .database import SessionLocal, settings
 from .auth import router as auth_router
 from .sites import router as sites_router, process_auto_planning_tick
 from .public_workers import router as public_workers_router
@@ -86,6 +86,10 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def start_auto_planning_scheduler():
+        if not settings.auto_planning_scheduler_enabled:
+            logger.info("Auto-planning scheduler disabled")
+            return
+
         existing = getattr(app.state, "auto_planning_thread", None)
         if existing and existing.is_alive():
             return
@@ -102,7 +106,8 @@ def create_app() -> FastAPI:
                     logger.exception("Auto-planning scheduler tick failed")
                 finally:
                     db.close()
-                stop_event.wait(30)
+                interval = max(30, int(settings.auto_planning_scheduler_interval_seconds or 30))
+                stop_event.wait(interval)
 
         thread = Thread(target=loop, name="auto-planning-scheduler", daemon=True)
         thread.start()
