@@ -41,9 +41,10 @@ class Settings(BaseSettings):
 
     # Have I Been Pwned (Pwned Passwords) à l’inscription — désactivé par défaut (tests / compat).
     enable_pwned_password_check: bool = False
-    # Désactivé par défaut pour laisser Neon s'endormir quand personne n'utilise l'app.
-    auto_planning_scheduler_enabled: bool = False
-    auto_planning_scheduler_interval_seconds: int = 30
+    # Scheduler intelligent : pas de polling 30s, réveil au créneau programmé seulement.
+    auto_planning_scheduler_enabled: bool = True
+    # Quand aucun תכנון אוטומטי actif, ou pour repérer un changement de config.
+    auto_planning_scheduler_idle_recheck_seconds: int = 3600
 
 
 settings = Settings()

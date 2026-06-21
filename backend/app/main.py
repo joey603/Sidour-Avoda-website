@@ -9,7 +9,11 @@ from alembic.config import Config as AlembicConfig
 
 from .database import SessionLocal, settings
 from .auth import router as auth_router
-from .sites import router as sites_router, process_auto_planning_tick
+from .sites import (
+    router as sites_router,
+    compute_auto_planning_scheduler_sleep_seconds,
+    process_auto_planning_tick,
+)
 from .public_workers import router as public_workers_router
 from .deps import get_current_user, require_role
 from .rate_limit import reset_rate_limits
@@ -98,16 +102,23 @@ def create_app() -> FastAPI:
         app.state.auto_planning_stop_event = stop_event
 
         def loop():
+            idle_recheck = max(60, int(settings.auto_planning_scheduler_idle_recheck_seconds or 3600))
             while not stop_event.is_set():
+                sleep_seconds = idle_recheck
                 db = SessionLocal()
                 try:
-                    process_auto_planning_tick(db)
+                    sleep_seconds = compute_auto_planning_scheduler_sleep_seconds(
+                        db,
+                        idle_recheck_seconds=idle_recheck,
+                    )
+                    if sleep_seconds <= 0:
+                        process_auto_planning_tick(db)
                 except Exception:
                     logger.exception("Auto-planning scheduler tick failed")
                 finally:
                     db.close()
-                interval = max(30, int(settings.auto_planning_scheduler_interval_seconds or 30))
-                stop_event.wait(interval)
+                if stop_event.wait(sleep_seconds):
+                    break
 
         thread = Thread(target=loop, name="auto-planning-scheduler", daemon=True)
         thread.start()

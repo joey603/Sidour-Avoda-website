@@ -2849,6 +2849,42 @@ def _run_auto_planning_for_director(
         _release_generation_slot(slot_token)
 
 
+def compute_auto_planning_scheduler_sleep_seconds(
+    db: Session,
+    *,
+    idle_recheck_seconds: int,
+    now: datetime | None = None,
+) -> int:
+    """Délai avant le prochain réveil du scheduler (0 = exécuter le tick maintenant)."""
+    idle = max(60, int(idle_recheck_seconds or 3600))
+    now = now or datetime.now()
+    configs = (
+        db.query(DirectorAutoPlanningConfig)
+        .filter(DirectorAutoPlanningConfig.enabled == True)
+        .all()
+    )
+    if not configs:
+        return idle
+
+    earliest_wake: float | None = None
+    for config in configs:
+        next_run_at = _next_effective_run_time(now, config)
+        if now >= next_run_at:
+            target_week_iso = _next_week_iso(next_run_at)
+            if (config.last_run_week_iso or "").strip() != target_week_iso:
+                return 0
+            continue
+        delta = (next_run_at - now).total_seconds()
+        if earliest_wake is None or delta < earliest_wake:
+            earliest_wake = delta
+
+    if earliest_wake is None:
+        return idle
+    if earliest_wake <= 60:
+        return 0
+    return min(int(earliest_wake), idle)
+
+
 def process_auto_planning_tick(db: Session) -> None:
     now = datetime.now()
     configs = db.query(DirectorAutoPlanningConfig).filter(DirectorAutoPlanningConfig.enabled == True).all()
