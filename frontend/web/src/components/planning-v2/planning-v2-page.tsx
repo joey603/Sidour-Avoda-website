@@ -176,6 +176,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     resolve: (v: boolean) => void;
   } | null>(null);
   const [manualDragWorkerName, setManualDragWorkerName] = useState<string | null>(null);
+  /** Début de drag עובד → quitter משיכה / שינוי שעות pour permettre le drop. */
+  const handleDraggingWorkerChange = useCallback((workerName: string | null) => {
+    if (workerName) {
+      setPullsModeStationIdx(null);
+      setShiftHoursModeStationIdx(null);
+    }
+    setManualDragWorkerName(workerName);
+  }, []);
   const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [summaryFilterState, setSummaryFilterState] = useState<{
@@ -1681,7 +1689,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         pullsModeStationIdx={pullsModeStationIdx}
         shiftHoursModeStationIdx={shiftHoursModeStationIdx}
         draggingWorkerName={manualDragWorkerName}
-        onDraggingWorkerChange={setManualDragWorkerName}
+        onDraggingWorkerChange={handleDraggingWorkerChange}
         availabilityByWorkerName={availabilityByWorkerName}
         availabilityOverlays={displayedAvailabilityOverlays}
         onTogglePullsModeStation={(idx) => {
@@ -1726,6 +1734,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     displayedAvailabilityOverlays,
     editingSaved,
     effectiveAlternativeIndex,
+    handleDraggingWorkerChange,
     handleManualSlotDragOutside,
     handleManualSlotDrop,
     handleRemoveGuardDisplay,
@@ -2077,10 +2086,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             availabilityOverlays={availabilityOverlays}
             workersLoading={workersLoading}
             onWorkersChanged={refreshWorkersAndGrid}
-            workersNameDraggable={
-              manualEditable && pullsModeStationIdx === null && shiftHoursModeStationIdx === null
-            }
-            onWorkerNameDragPreview={setManualDragWorkerName}
+            workersNameDraggable={manualEditable}
+            onWorkerNameDragPreview={handleDraggingWorkerChange}
             readOnly={siteIsArchived}
           />
           {!visualizationOpen ? renderPlanningVisualizationContent() : null}

@@ -438,6 +438,14 @@ export function PlanningV2StationWeekGrid({
   useEffect(() => {
     if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
   }, [shiftHoursEditor]);
+
+  // Quitter משיכה / שינוי שעות (ex. début de drag) → fermer les modales associées
+  useEffect(() => {
+    if (pullsModeStationIdx == null) setPullsEditor(null);
+  }, [pullsModeStationIdx]);
+  useEffect(() => {
+    if (shiftHoursModeStationIdx == null) setShiftHoursEditor(null);
+  }, [shiftHoursModeStationIdx]);
   const stations = (Array.isArray(site?.config?.stations) ? site?.config?.stations : []) as Record<
     string,
     unknown
@@ -783,11 +791,9 @@ export function PlanningV2StationWeekGrid({
                           const isPastDay = dateCell < today0;
                           const pullsActiveHere = pullsModeStationIdx === idx;
                           const shiftHoursActiveHere = shiftHoursModeStationIdx === idx;
+                          // Drag autorisé même en mode משיכה / שינוי שעות (le drag désactive le mode).
                           const dndHere =
-                            manualEditable &&
-                            typeof onManualSlotDrop === "function" &&
-                            pullsModeStationIdx !== idx &&
-                            shiftHoursModeStationIdx !== idx;
+                            manualEditable && typeof onManualSlotDrop === "function";
                           const cellRaw = mergeCellRawWithPulls(
                             assignmentsSafe,
                             pulls || null,
