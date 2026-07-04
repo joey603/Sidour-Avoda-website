@@ -360,6 +360,8 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
     const enabledShifts = shiftNamesAll.filter((sn) => isShiftEnabledForStation(st, sn));
     const gridLastCol = dayStartCol + DAY_COLS.length * 2 - 1;
     const blackBandRows: number[] = [];
+    /** Hauteurs minimales des lignes du planning (évite les lignes de garde vides compressées). */
+    const scheduleRowMinHeight = new Map<number, number>();
 
     const paintBlackBand = (bandRow: number) => {
       blackBandRows.push(bandRow);
@@ -434,16 +436,20 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         };
       });
 
+      const ME_AD_ROW_HEIGHT = 20;
+      const TIME_ROW_HEIGHT = 20;
+      const NAME_ROW_HEIGHT = 24;
+
       // Ligne de cases מ | עד (une paire de cellules par jour)
       const meAdRow = ws.getRow(meAdRowIdx);
-      meAdRow.height = 18;
+      meAdRow.height = ME_AD_ROW_HEIGHT;
       dayMeta.forEach((meta, dayIdx) => {
         const col = dayStartCol + dayIdx * 2;
         const fromLabel = ws.getCell(meAdRowIdx, col);
         const toLabel = ws.getCell(meAdRowIdx, col + 1);
         if (meta.allBlack) {
-          fromLabel.value = "";
-          toLabel.value = "";
+          fromLabel.value = " ";
+          toLabel.value = " ";
           applyFill(fromLabel, BLACK);
           applyFill(toLabel, BLACK);
           styleCenter(fromLabel, { size: 10, color: WHITE, bold: false });
@@ -460,15 +466,15 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
 
       // Ligne horaires (sous les cases מ / עד)
       const timeRow = ws.getRow(timeRowIdx);
-      timeRow.height = 18;
+      timeRow.height = TIME_ROW_HEIGHT;
       dayMeta.forEach((meta, dayIdx) => {
         const col = dayStartCol + dayIdx * 2;
         const fromCell = ws.getCell(timeRowIdx, col);
         const toCell = ws.getCell(timeRowIdx, col + 1);
 
         if (meta.allBlack) {
-          fromCell.value = "";
-          toCell.value = "";
+          fromCell.value = " ";
+          toCell.value = " ";
           applyFill(fromCell, BLACK);
           applyFill(toCell, BLACK);
           styleCenter(fromCell, { size: 10, color: WHITE, bold: false });
@@ -476,8 +482,8 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
           return;
         }
 
-        fromCell.value = meta.from;
-        toCell.value = meta.to;
+        fromCell.value = meta.from || " ";
+        toCell.value = meta.to || " ";
         if (meta.anyHighlight) {
           applyFill(fromCell, YELLOW);
           applyFill(toCell, YELLOW);
@@ -491,11 +497,11 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         }
       });
 
-      // Lignes noms (une par slot)
+      // Lignes noms (une par slot) — hauteur fixe même si toute la ligne est vide
       for (let slot = 0; slot < maxSlots; slot++) {
         const nameRowIdx = nameStartRow + slot;
         const nameRow = ws.getRow(nameRowIdx);
-        nameRow.height = 20;
+        nameRow.height = NAME_ROW_HEIGHT;
         dayMeta.forEach((meta, dayIdx) => {
           const col = dayStartCol + dayIdx * 2;
           const name = meta.names[slot] || "";
@@ -504,7 +510,8 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
 
           ws.mergeCells(nameRowIdx, col, nameRowIdx, col + 1);
           const cell = ws.getCell(nameRowIdx, col);
-          cell.value = meta.allBlack ? "" : name;
+          // Espace insécable pour empêcher Excel de compresser une ligne vide
+          cell.value = meta.allBlack ? " " : name || " ";
           if (meta.allBlack) {
             applyFill(cell, BLACK);
             applyFill(ws.getCell(nameRowIdx, col + 1), BLACK);
@@ -520,6 +527,16 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
           }
           applyBorder(ws.getCell(nameRowIdx, col + 1));
         });
+      }
+
+      // Réappliquer les hauteurs en fin de bloc (évite l'écrasement si ligne entièrement vide)
+      scheduleRowMinHeight.set(meAdRowIdx, ME_AD_ROW_HEIGHT);
+      scheduleRowMinHeight.set(timeRowIdx, TIME_ROW_HEIGHT);
+      ws.getRow(meAdRowIdx).height = ME_AD_ROW_HEIGHT;
+      ws.getRow(timeRowIdx).height = TIME_ROW_HEIGHT;
+      for (let slot = 0; slot < maxSlots; slot++) {
+        scheduleRowMinHeight.set(nameStartRow + slot, NAME_ROW_HEIGHT);
+        ws.getRow(nameStartRow + slot).height = NAME_ROW_HEIGHT;
       }
 
       row = blockEndRow + 1;
@@ -566,13 +583,20 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
     // Toutes les barres noires entre gardes : même épaisseur.
     const BLACK_BAND_HEIGHT = LEGEND_ROW_HEIGHT;
     for (const bandRow of blackBandRows) {
-      ws.getRow(bandRow).height = BLACK_BAND_HEIGHT;
+      if (!scheduleRowMinHeight.has(bandRow)) {
+        ws.getRow(bandRow).height = BLACK_BAND_HEIGHT;
+      }
     }
 
-    // Titre / date / jour : hauteurs stables (ne pas se faire écraser par la légende / bandes).
+    // Titre / date / jour : hauteurs stables.
     ws.getRow(1).height = 18;
     ws.getRow(2).height = 20;
     ws.getRow(3).height = 20;
+
+    // Dernier mot : lignes de garde (même vides) gardent leur hauteur.
+    for (const [r, h] of scheduleRowMinHeight) {
+      ws.getRow(r).height = h;
+    }
   }
 
   const buffer = await workbook.xlsx.writeBuffer();
