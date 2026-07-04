@@ -39,6 +39,14 @@ function pullEntryForWorkerInCell(
   return null;
 }
 
+function formatHourDisplay(t: string): string {
+  const m = String(t || "")
+    .trim()
+    .match(/^(\d{1,2})(?::(\d{2}))?$/);
+  if (!m) return String(t || "").trim();
+  return `${Number(m[1])}:${m[2] || "00"}`;
+}
+
 function timeRangeForWorkerInPull(entry: PlanningV2PullEntry, workerName: string): string | null {
   const nm = normName(workerName);
   if (!nm) return null;
@@ -58,6 +66,52 @@ function timeRangeForWorkerInPull(entry: PlanningV2PullEntry, workerName: string
     if (s && en) return `${s}–${en}`;
     if (s) return s;
     if (en) return en;
+  }
+  return null;
+}
+
+/**
+ * Horaires affichés sur la garde adjacente à une משיכה (pas la cellule trou) :
+ * - before (garde du matin si משיכה midi/nuit) : début de sa garde → fin indiquée dans la משיכה
+ * - after (remplaçant) : début indiqué dans la משיכה → fin de sa garde
+ *
+ * Ex. matin→nuit, transition 18:00 :
+ *   Hanna (before) : 6:00 → 18:00
+ *   autre (after)  : 18:00 → 6:00
+ */
+export function pullExtendedHoursForAdjacentRole(
+  pulls: PullsLike | null | undefined,
+  stationIdx: number,
+  workerName: string,
+  role: "before" | "after",
+  homeShiftFrom: string,
+  homeShiftTo: string,
+): { from: string; to: string } | null {
+  if (!pulls) return null;
+  const nm = normName(workerName);
+  if (!nm) return null;
+  const homeFrom = formatHourDisplay(homeShiftFrom);
+  const homeTo = formatHourDisplay(homeShiftTo);
+  if (!homeFrom || !homeTo) return null;
+
+  for (const [k, entryAny] of Object.entries(pulls)) {
+    const parts = String(k || "").split("|");
+    if (parts.length < 4) continue;
+    if (Number(parts[2]) !== Number(stationIdx)) continue;
+    const entry = entryAny as PlanningV2PullEntry;
+    const beforeName = normName(String(entry?.before?.name || ""));
+    const afterName = normName(String(entry?.after?.name || ""));
+    const hasBoth = !!beforeName && !!afterName;
+    if (!hasBoth) continue;
+
+    if (role === "before" && beforeName === nm) {
+      const pullEnd = formatHourDisplay(String(entry.before?.end || "").trim());
+      if (pullEnd) return { from: homeFrom, to: pullEnd };
+    }
+    if (role === "after" && afterName === nm) {
+      const pullStart = formatHourDisplay(String(entry.after?.start || "").trim());
+      if (pullStart) return { from: pullStart, to: homeTo };
+    }
   }
   return null;
 }

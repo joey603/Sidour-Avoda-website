@@ -16,6 +16,7 @@ import {
 } from "./station-grid-helpers";
 import {
   buildPullHighlightKindByNormName,
+  pullExtendedHoursForAdjacentRole,
   slotTimeMetaFromPulls,
 } from "./planning-v2-pull-slot-display";
 
@@ -90,38 +91,6 @@ function parseTimeLabel(label: string | null | undefined): { from: string; to: s
   return { from: fmt(m[1], m[2]), to: fmt(m[3], m[4]) };
 }
 
-/** Horaires before/after d'une משיכה pour ce travailleur (même hors cellule trou). */
-function pullHoursForWorkerAnywhere(
-  pulls: PlanningV2PullsMap | null | undefined,
-  stationIdx: number,
-  workerName: string,
-): { from: string; to: string } | null {
-  if (!pulls) return null;
-  const nm = normName(workerName);
-  if (!nm) return null;
-  for (const [k, entry] of Object.entries(pulls)) {
-    const parts = String(k).split("|");
-    if (parts.length < 4) continue;
-    if (Number(parts[2]) !== Number(stationIdx)) continue;
-    if (!isRealPullEntry(entry)) continue;
-    const e = entry as {
-      before?: { name?: string; start?: string; end?: string };
-      after?: { name?: string; start?: string; end?: string };
-    };
-    if (normName(String(e.before?.name || "")) === nm) {
-      const s = String(e.before?.start || "").trim();
-      const en = String(e.before?.end || "").trim();
-      if (s && en) return parseTimeLabel(`${s}–${en}`);
-    }
-    if (normName(String(e.after?.name || "")) === nm) {
-      const s = String(e.after?.start || "").trim();
-      const en = String(e.after?.end || "").trim();
-      if (s && en) return parseTimeLabel(`${s}–${en}`);
-    }
-  }
-  return null;
-}
-
 /** Jaune + gras : שינוי שעות (guard) ou משיכה (pull / before / after). */
 function slotHighlightMeta(
   pulls: PlanningV2PullsMap | null | undefined,
@@ -132,6 +101,8 @@ function slotHighlightMeta(
   stationIdx: number,
   slotIdx: number,
   workerName: string,
+  homeShiftFrom: string,
+  homeShiftTo: string,
 ): { highlight: boolean; from: string; to: string } {
   const meta = slotTimeMetaFromPulls(pulls, dayKey, shiftName, stationIdx, slotIdx, workerName);
   const pullRel = buildPullHighlightKindByNormName(
@@ -148,9 +119,23 @@ function slotHighlightMeta(
     pullRel === "before" ||
     pullRel === "after" ||
     pullRel === "cell";
-  const custom =
-    parseTimeLabel(meta?.label) ||
-    (highlight ? pullHoursForWorkerAnywhere(pulls, stationIdx, workerName) : null);
+
+  // שינוי שעות : horaires indiqués tels quels
+  let custom = meta?.highlight === "guard" ? parseTimeLabel(meta?.label) : null;
+
+  // משיכה sur la garde adjacente : début garde d'origine → fin משיכה (before),
+  // ou début משיכה → fin garde d'origine (after)
+  if (!custom && (pullRel === "before" || pullRel === "after")) {
+    custom = pullExtendedHoursForAdjacentRole(
+      pulls,
+      stationIdx,
+      workerName,
+      pullRel,
+      homeShiftFrom,
+      homeShiftTo,
+    );
+  }
+
   return {
     highlight: !!highlight,
     from: custom?.from || "",
@@ -422,7 +407,18 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         const allBlack = inactive || pullHole;
         const names = allBlack ? [] : baseCellNames(assignments, d.key, sn, stationIdx);
         const highlights = names.map((name, slotIdx) =>
-          slotHighlightMeta(pulls ?? null, shiftNamesAll, dayIdx, d.key, sn, stationIdx, slotIdx, name),
+          slotHighlightMeta(
+            pulls ?? null,
+            shiftNamesAll,
+            dayIdx,
+            d.key,
+            sn,
+            stationIdx,
+            slotIdx,
+            name,
+            defaultFrom,
+            defaultTo,
+          ),
         );
         const anyHighlight = highlights.some((h) => h.highlight);
         const customHours = highlights.find((h) => h.highlight && h.from && h.to);
