@@ -87,7 +87,8 @@ function parseTimeLabel(label: string | null | undefined): { from: string; to: s
   if (!label) return null;
   const m = String(label).match(/(\d{1,2})(?::(\d{2}))?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?/);
   if (!m) return null;
-  const fmt = (h: string, min?: string) => `${Number(h)}:${min || "00"}`;
+  const fmt = (h: string, min?: string) =>
+    `${String(Number(h)).padStart(2, "0")}:${(min || "00").padStart(2, "0")}`;
   return { from: fmt(m[1], m[2]), to: fmt(m[3], m[4]) };
 }
 
@@ -154,7 +155,8 @@ function parseHours(hours: string | null): { from: string; to: string } {
   if (!hours) return { from: "", to: "" };
   const m = String(hours).match(/(\d{1,2})(?::(\d{2}))?\s*[-–:]\s*(\d{1,2})(?::(\d{2}))?/);
   if (!m) return { from: String(hours), to: "" };
-  const fmt = (h: string, min?: string) => `${Number(h)}:${min || "00"}`;
+  const fmt = (h: string, min?: string) =>
+    `${String(Number(h)).padStart(2, "0")}:${(min || "00").padStart(2, "0")}`;
   return { from: fmt(m[1], m[2]), to: fmt(m[3], m[4]) };
 }
 

@@ -44,7 +44,7 @@ function formatHourDisplay(t: string): string {
     .trim()
     .match(/^(\d{1,2})(?::(\d{2}))?$/);
   if (!m) return String(t || "").trim();
-  return `${Number(m[1])}:${m[2] || "00"}`;
+  return `${String(Number(m[1])).padStart(2, "0")}:${(m[2] || "00").padStart(2, "0")}`;
 }
 
 function timeRangeForWorkerInPull(entry: PlanningV2PullEntry, workerName: string): string | null {
