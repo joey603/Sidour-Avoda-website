@@ -289,6 +289,38 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     prevLinkedSitesLengthRef.current = linkedSites.length;
   }, [linkedSites.length]);
 
+  /** Masquer חלופות si la grille du site courant est vide, sauf multi-site avec un autre site non vide. */
+  const currentGridNonEmpty = useMemo(
+    () => assignmentsNonEmpty(plan.displayAssignments),
+    [plan.displayAssignments],
+  );
+  const otherLinkedSiteGridNonEmpty = useMemo(() => {
+    if (linkedSites.length <= 1 || protectOfficialSavedPlan) return false;
+    const mem = readLinkedPlansFromMemory(weekStart);
+    const plansBySite = mem?.plansBySite;
+    if (!plansBySite || typeof plansBySite !== "object") return false;
+    const currentKey = String(siteId);
+    const altIdx = plan.selectedAlternativeIndex;
+    for (const ls of linkedSites) {
+      const key = String(ls.id);
+      if (key === currentKey) continue;
+      const sitePlan = plansBySite[key] as LinkedSitePlan | undefined;
+      if (!sitePlan) continue;
+      const asg = resolveAssignmentsForAlternative(sitePlan, altIdx);
+      if (assignmentsNonEmpty(asg)) return true;
+    }
+    return false;
+  }, [
+    linkedSites,
+    siteId,
+    weekStart,
+    protectOfficialSavedPlan,
+    linkedPlansMemoryTick,
+    plan.selectedAlternativeIndex,
+  ]);
+  const alternativesGridVisible = currentGridNonEmpty || otherLinkedSiteGridNonEmpty;
+  const alternativesUiVisible = alternativesUiEnabled && alternativesGridVisible;
+
   /** Rail mobile « אתרים מקושרים » : fermé par défaut à chaque changement de site / semaine. */
   useEffect(() => {
     setShowLinkedSitesRail(false);
@@ -1774,7 +1806,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         pulls={plan.displayPulls}
         assignmentVariants={plan.assignmentVariants}
         pullVariants={plan.pullVariants}
-        alternativesEnabled={alternativesUiEnabled}
+        alternativesEnabled={alternativesUiVisible}
         selectedAlternativeIndex={effectiveAlternativeIndex}
         onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
         onFilteredAlternativesChange={setSummaryFilterState}
@@ -1820,7 +1852,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     weekPlanLoading,
     weekStart,
     workers,
-    alternativesUiEnabled,
+    alternativesUiVisible,
   ]);
 
   const renderLinkedSitesRailContent = () => (
@@ -1829,7 +1861,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
           <div className="flex flex-col items-end gap-0.5">
-            {alternativesUiEnabled ? (
+            {alternativesUiVisible ? (
                 <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
                 חלופה מסוננת{" "}
                 {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
@@ -2232,7 +2264,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               : plan.startMoreAlternatives
           }
           moreAlternativesAvailable={plan.moreAlternativesAvailable}
-          alternativesEnabled={alternativesUiEnabled || actionBarAlternativesFrozen || actionBarAlternativesResetPending}
+          alternativesEnabled={
+            alternativesUiVisible || actionBarAlternativesFrozen || actionBarAlternativesResetPending
+          }
           alternativesFrozen={actionBarAlternativesFrozen}
           alternativesFiltered={
             actionBarAltSnap ? actionBarAltSnap.alternativesFiltered : summaryFilterState.hasActiveFilters
