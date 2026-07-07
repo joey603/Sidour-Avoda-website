@@ -12,6 +12,9 @@ type PlanningWorkersTableProps = {
   workerNameDraggable?: boolean;
   /** מצב ידני: עדכון שם העובד הנגרר להדגשת יעדים בגריד */
   onWorkerNameDragPreview?: (workerName: string | null) => void;
+  selectedWorkerName?: string | null;
+  selectedWorkerFromGrid?: boolean;
+  onWorkerSelectToggle?: (workerName: string) => void;
 };
 
 function normWorkerName(value: string): string {
@@ -28,6 +31,9 @@ export function PlanningWorkersTable({
   onRowClick,
   workerNameDraggable = false,
   onWorkerNameDragPreview,
+  selectedWorkerName = null,
+  selectedWorkerFromGrid = false,
+  onWorkerSelectToggle,
 }: PlanningWorkersTableProps) {
   const overlaysByNormName = Object.entries(availabilityOverlays || {}).reduce(
     (acc, [name, byDay]) => {
@@ -71,14 +77,33 @@ export function PlanningWorkersTable({
                 }`}
               >
                 <td className="w-20 overflow-hidden px-1 py-1 text-center md:w-40 md:px-3 md:py-2">
+                  {(() => {
+                    const isNameSelected =
+                      !!selectedWorkerName &&
+                      !selectedWorkerFromGrid &&
+                      normWorkerName(selectedWorkerName) === normWorkerName(w.name);
+                    return (
                   <span
+                    data-manual-worker-select="1"
                     className={
                       "block w-full truncate text-center text-[10px] md:text-sm " +
-                      (workerNameDraggable ? "cursor-grab touch-none active:cursor-grabbing" : "")
+                      (workerNameDraggable || onWorkerSelectToggle
+                        ? "cursor-pointer touch-manipulation "
+                        : "") +
+                      (workerNameDraggable ? "active:cursor-grabbing " : "") +
+                      (isNameSelected
+                        ? "rounded-full ring-2 ring-[#00A8E0] ring-offset-1 ring-offset-white dark:ring-offset-zinc-950 "
+                        : "")
                     }
                     dir={isRtlName(w.name) ? "rtl" : "ltr"}
                     title={w.name}
                     draggable={workerNameDraggable}
+                    onClick={(e) => {
+                      if (onWorkerSelectToggle) {
+                        e.stopPropagation();
+                        onWorkerSelectToggle(String(w.name || "").trim());
+                      }
+                    }}
                     onDragStart={(e) => {
                       if (!workerNameDraggable) return;
                       e.stopPropagation();
@@ -97,6 +122,8 @@ export function PlanningWorkersTable({
                   >
                     {w.name}
                   </span>
+                    );
+                  })()}
                   {w.pendingApproval && (
                     <span className="mt-1 inline-block rounded-full bg-blue-600/10 px-2 py-0.5 text-[9px] text-blue-700 md:text-[10px] dark:text-blue-300">
                       ממתין לאישור

@@ -31,6 +31,9 @@ type PlanningWorkersSectionProps = {
   /** גרירת שם לגריד במצב ידני */
   workersNameDraggable?: boolean;
   onWorkerNameDragPreview?: (workerName: string | null) => void;
+  selectedWorkerName?: string | null;
+  selectedWorkerFromGrid?: boolean;
+  onWorkerSelectToggle?: (workerName: string) => void;
   /** Site archivé — pas d’ajout / édition travailleurs */
   readOnly?: boolean;
 };
@@ -46,6 +49,9 @@ export function PlanningWorkersSection({
   onWorkersChanged,
   workersNameDraggable = false,
   onWorkerNameDragPreview,
+  selectedWorkerName = null,
+  selectedWorkerFromGrid = false,
+  onWorkerSelectToggle,
   readOnly = false,
 }: PlanningWorkersSectionProps) {
   const modals = usePlanningV2WorkerModals(siteId, site, weekStart, workers, availabilityOverlays, () => {
@@ -143,6 +149,9 @@ export function PlanningWorkersSection({
               onRowClick={readOnly ? undefined : modals.onTableRowClick}
               workerNameDraggable={workersNameDraggable}
               onWorkerNameDragPreview={onWorkerNameDragPreview}
+              selectedWorkerName={selectedWorkerName}
+              selectedWorkerFromGrid={selectedWorkerFromGrid}
+              onWorkerSelectToggle={onWorkerSelectToggle}
             />
           )}
           <p className="text-center text-[11px] text-zinc-500 dark:text-zinc-400">

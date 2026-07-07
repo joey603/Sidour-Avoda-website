@@ -176,14 +176,43 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     resolve: (v: boolean) => void;
   } | null>(null);
   const [manualDragWorkerName, setManualDragWorkerName] = useState<string | null>(null);
-  /** Début de drag עובד → quitter משיכה / שינוי שעות pour permettre le drop. */
+  const [manualSelectSource, setManualSelectSource] = useState<ManualDragSource | null>(null);
+  /** Début de drag / sélection עובד → quitter משיכה / שינוי שעות. */
   const handleDraggingWorkerChange = useCallback((workerName: string | null) => {
     if (workerName) {
       setPullsModeStationIdx(null);
       setShiftHoursModeStationIdx(null);
     }
     setManualDragWorkerName(workerName);
+    if (!workerName) setManualSelectSource(null);
   }, []);
+  const handleWorkerSelectToggle = useCallback(
+    (workerName: string, source: ManualDragSource | null = null) => {
+      const nm = String(workerName || "").trim();
+      if (!nm) return;
+      const nameMatch =
+        !!manualDragWorkerName && normWorkerName(manualDragWorkerName) === normWorkerName(nm);
+      const sourceMatch =
+        !source && !manualSelectSource
+          ? true
+          : !!source &&
+            !!manualSelectSource &&
+            source.dayKey === manualSelectSource.dayKey &&
+            source.shiftName === manualSelectSource.shiftName &&
+            source.stationIndex === manualSelectSource.stationIndex &&
+            source.slotIndex === manualSelectSource.slotIndex;
+      if (nameMatch && sourceMatch) {
+        setManualDragWorkerName(null);
+        setManualSelectSource(null);
+        return;
+      }
+      setPullsModeStationIdx(null);
+      setShiftHoursModeStationIdx(null);
+      setManualDragWorkerName(nm);
+      setManualSelectSource(source);
+    },
+    [manualDragWorkerName, manualSelectSource],
+  );
   const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [summaryFilterState, setSummaryFilterState] = useState<{
@@ -338,6 +367,22 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   // les confirmations de contraintes restent gérées par analyzeManualSlotDrop dans handleManualSlotDrop.
   const manualEditable =
     !siteIsArchived && plan.isManual && (!isSavedMode || editingSaved || linkedSites.length > 1);
+
+  /** Désélectionner l’עובד actif au clic hors grille / palette / noms. */
+  useEffect(() => {
+    if (!manualEditable || !manualDragWorkerName) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target;
+      if (!(t instanceof Element)) return;
+      if (t.closest("[data-manual-worker-select]")) return;
+      if (t.closest('[data-slot="1"]')) return;
+      if (t.closest('[role="dialog"]')) return;
+      setManualDragWorkerName(null);
+      setManualSelectSource(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [manualEditable, manualDragWorkerName]);
 
   const handleResetStation = (stationIdx: number) => {
     plan.resetManualStation(stationIdx);
@@ -580,6 +625,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             }
           }
           plan.commitDraftAssignments(nextAssignments);
+          if (p.dragSource) {
+            setManualSelectSource({
+              dayKey: p.dayKey,
+              shiftName: p.shiftName,
+              stationIndex: p.stationIndex,
+              slotIndex: p.slotIndex,
+              workerName: p.workerName,
+            });
+          }
           return;
         }
         if (r.action === "confirm_availability") {
@@ -1689,7 +1743,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         pullsModeStationIdx={pullsModeStationIdx}
         shiftHoursModeStationIdx={shiftHoursModeStationIdx}
         draggingWorkerName={manualDragWorkerName}
+        selectedWorkerSource={manualSelectSource}
         onDraggingWorkerChange={handleDraggingWorkerChange}
+        onWorkerSelectToggle={handleWorkerSelectToggle}
         availabilityByWorkerName={availabilityByWorkerName}
         availabilityOverlays={displayedAvailabilityOverlays}
         onTogglePullsModeStation={(idx) => {
@@ -1735,6 +1791,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     editingSaved,
     effectiveAlternativeIndex,
     handleDraggingWorkerChange,
+    handleWorkerSelectToggle,
     handleManualSlotDragOutside,
     handleManualSlotDrop,
     handleRemoveGuardDisplay,
@@ -1745,6 +1802,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     handleUpsertPull,
     isSavedMode,
     manualDragWorkerName,
+    manualSelectSource,
     manualEditable,
     plan.assignmentVariants,
     plan.displayAssignments,
@@ -2006,7 +2064,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden px-3 py-6 pb-56 sm:px-4 lg:px-4 md:pb-40 [&_button]:touch-manipulation [&_button]:select-none"
+      className="min-h-screen overflow-x-hidden px-3 py-6 pb-[calc(var(--planning-v2-action-bar-px,14rem)+2rem)] sm:px-4 lg:px-4 [&_button]:touch-manipulation [&_button]:select-none"
       dir="rtl"
     >
       <PlanningV2LayoutShell>
@@ -2088,6 +2146,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             onWorkersChanged={refreshWorkersAndGrid}
             workersNameDraggable={manualEditable}
             onWorkerNameDragPreview={handleDraggingWorkerChange}
+            selectedWorkerName={manualDragWorkerName}
+            selectedWorkerFromGrid={!!manualSelectSource}
+            onWorkerSelectToggle={manualEditable ? handleWorkerSelectToggle : undefined}
             readOnly={siteIsArchived}
           />
           {!visualizationOpen ? renderPlanningVisualizationContent() : null}
@@ -2103,6 +2164,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             onOpenVisualization={() => setVisualizationOpen(true)}
           />
         </PlanningV2MainPaper>
+        <div className="h-6 shrink-0" aria-hidden />
         {hasLinkedSitesRail ? (
           <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:flex lg:h-[calc(100dvh-var(--planning-v2-rail-top-px)-var(--planning-v2-action-bar-px)-0.75rem)] lg:min-h-0 lg:w-[20rem] lg:flex-col lg:overflow-hidden lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
             {renderLinkedSitesRailContent()}

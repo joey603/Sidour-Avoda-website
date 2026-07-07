@@ -138,9 +138,9 @@ export function PlanningV2PlanExportButtons({
       <button
         type="button"
         onClick={() => void handleExportPdf()}
-        disabled={pdfExporting}
-        className="inline-flex items-center gap-1 rounded-md border border-sky-300 bg-gradient-to-b from-sky-50 to-sky-100/80 px-2.5 py-1.5 text-xs font-medium text-sky-900 shadow-sm transition hover:border-sky-400 hover:from-sky-100 hover:to-sky-100 disabled:opacity-60 dark:border-sky-700 dark:from-sky-950/50 dark:to-sky-950/30 dark:text-sky-100 dark:hover:border-sky-600 dark:hover:from-sky-900/60"
-        title="אותו תוכן כמו ב-CSV — PDF עם גופן עברי (ללא html2canvas)"
+        disabled={pdfExporting || !canVisualize}
+        className="inline-flex items-center gap-1 rounded-md border border-sky-300 bg-gradient-to-b from-sky-50 to-sky-100/80 px-2.5 py-1.5 text-xs font-medium text-sky-900 shadow-sm transition hover:border-sky-400 hover:from-sky-100 hover:to-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:from-sky-950/50 dark:to-sky-950/30 dark:text-sky-100 dark:hover:border-sky-600 dark:hover:from-sky-900/60"
+        title={canVisualize ? "אותו תוכן כמו ב-CSV — PDF עם גופן עברי (ללא html2canvas)" : "אין תכנון לייצוא"}
       >
         <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm2-2h8v-2H8v2zm0-4h8v-2H8v2zm0-4h5V8H8v2z" />
