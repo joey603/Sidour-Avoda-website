@@ -1657,6 +1657,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   };
 
   const handleSavePlan = async (publishToWorkers: boolean) => {
+    setPullsModeStationIdx(null);
+    setShiftHoursModeStationIdx(null);
     await plan.savePlan(publishToWorkers);
     setEditingSaved(false);
   };
@@ -2253,10 +2255,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           readOnly={siteIsArchived}
           editingSaved={editingSaved}
           onEditingSavedChange={setEditingSaved}
-          onCancelSavedEdit={async () => {
+          onCancelSavedEdit={() => {
             setPullsModeStationIdx(null);
             setShiftHoursModeStationIdx(null);
-            await plan.cancelSavedEditing();
+            plan.cancelSavedEditing();
           }}
           reloadWeekPlan={reloadWeekPlan}
           generationRunning={plan.generationRunning}

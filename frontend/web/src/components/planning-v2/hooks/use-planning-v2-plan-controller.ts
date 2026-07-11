@@ -2403,16 +2403,46 @@ export function usePlanningV2PlanController({
     setSelectedAlternativeIndex(0);
   }, []);
 
-  /** יציאה ממצב עריכת תכנון שמור — מנקה טיוטה, טוען מחדש מהשרת, מסנכרן isManual. */
-  const cancelSavedEditing = useCallback(async () => {
+  /** יציאה ממצב עריכת תכנון שמור — שחזור מיידי ללא טעינה מהשרת. */
+  const cancelSavedEditing = useCallback(() => {
+    userStoppedGenerationRef.current = true;
+    try {
+      abortRef.current?.abort();
+    } catch {
+      /* ignore */
+    }
+    abortRef.current = null;
+    genBusyRef.current = false;
+    generationIdRef.current = null;
+    if (alternativesFlushRafRef.current != null) {
+      try {
+        window.cancelAnimationFrame(alternativesFlushRafRef.current);
+      } catch {
+        /* ignore */
+      }
+      alternativesFlushRafRef.current = null;
+    }
+    stopVisibleAlternativeCountRef.current = null;
+    setGenerationRunning(false);
+    setReplaceGenerationUiClear(false);
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationRunningToSession(weekIso, false);
+      writeLinkedGenerationStopRequestToSession(weekIso, false);
+      clearLinkedPlansFromMemory(weekStart);
+    }
+    draftAssignmentsRef.current = null;
+    draftPullsRef.current = {};
+    draftAlternativesRef.current = [];
     setDraftAssignments(null);
     setDraftPulls(null);
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
     setSelectedAlternativeIndex(0);
-    planLoadedForManualRef.current = false;
-    await reloadWeekPlan();
-  }, [reloadWeekPlan]);
+    setMoreAlternativesAvailable(true);
+    // Remettre ידני/אוטומטי comme au plan sauvegardé (ערוך peut avoir forcé אוטומטי).
+    setIsManual(!!weekPlan?.isManual);
+    planLoadedForManualRef.current = true;
+  }, [linkedSitesLength, weekIso, weekPlan?.isManual, weekStart]);
 
   const enterManualWithGridReset = useCallback(() => {
     const emptyAssignments = buildEmptyAssignmentsForSite(site);

@@ -923,6 +923,8 @@ export function PlanningV2ActionBar({
                   onClick={() => {
                     if (!hasPersistedWeekPlan || readOnly) return;
                     onEditingSavedChange(true);
+                    // Plan sauvegardé en ידני → ערוך ouvre en אוטומטי (garde la grille).
+                    if (isManual) onIsManualChange(false);
                   }}
                   disabled={readOnly || !hasPersistedWeekPlan}
                   className={
@@ -943,13 +945,8 @@ export function PlanningV2ActionBar({
                 <button
                   type="button"
                   onClick={() => {
-                    void (async () => {
-                      try {
-                        await onCancelSavedEdit?.();
-                      } finally {
-                        onEditingSavedChange(false);
-                      }
-                    })();
+                    onCancelSavedEdit?.();
+                    onEditingSavedChange(false);
                   }}
                   className="inline-flex items-center gap-2 rounded-md bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 dark:bg-gray-500 dark:hover:bg-gray-600 whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs"
                 >
