@@ -6,7 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
-import LoadingAnimation from "@/components/loading-animation";
+import { LoadingOverlay } from "@/components/loading-animation";
 import { PlanningV2Header } from "./planning-v2-header";
 import { PlanningV2LayoutShell } from "./planning-v2-layout-shell";
 import { PlanningV2MainPaper } from "./planning-v2-main-paper";
@@ -2332,11 +2332,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           }}
         />
       </PlanningV2LayoutShell>
-      {showPlanningLoadingOverlay ? (
-        <div className="fixed inset-0 z-50 flex h-[100lvh] min-h-[100lvh] w-screen items-center justify-center overflow-x-hidden overscroll-none bg-white/70 backdrop-blur-md md:h-screen-mobile md:min-h-screen-mobile dark:bg-zinc-950/70 dark:backdrop-blur-md">
-          <LoadingAnimation size={96} />
-        </div>
-      ) : null}
+      {showPlanningLoadingOverlay ? <LoadingOverlay size={96} /> : null}
       {visualizationOpen ? (
         <div
           className={
