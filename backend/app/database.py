@@ -32,7 +32,8 @@ class Settings(BaseSettings):
         return v
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24
+    # Session connectée : 30 jours (JWT + cookie HttpOnly). Surcharge via ACCESS_TOKEN_EXPIRE_MINUTES.
+    access_token_expire_minutes: int = 60 * 24 * 30
     auth_cookie_name: str = "sidour_access_token"
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"
