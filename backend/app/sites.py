@@ -868,8 +868,11 @@ def _summarize_auto_planning_result(
                     cell = per_station[t_idx] if t_idx < len(per_station) else []
                     if isinstance(cell, list):
                         total_assigned += len([nm for nm in cell if str(nm or "").strip()])
-    if isinstance(pulls, dict):
-        total_assigned = max(0, total_assigned - len(pulls))
+    # Une משיכה ajoute ~2 noms pour 1 créneau : on retire len(pulls) pour obtenir
+    # le remplissage effectif (שיבוצים pleins + créneaux couverts par משיכה).
+    pulls_n = _pulls_count(pulls if isinstance(pulls, dict) else None)
+    if pulls_n:
+        total_assigned = max(0, total_assigned - pulls_n)
 
     complete = (error is None) and (total_assigned == total_required)
     return {

@@ -139,27 +139,38 @@ type PreservedWeekPlanStats = {
   complete?: boolean;
 };
 
+/**
+ * `assigned` API = remplissage effectif (שיבוצים + créneaux משיכה, déjà nettoyé).
+ * Affichage : on retire les משיכות du numérateur ; vert s’il n’y a plus de חורים
+ * (une משיכה compte pour combler un créneau).
+ */
 function getWeekPlanStatusDisplay(site: Site, preserved: PreservedWeekPlanStats | undefined) {
   const st = getSiteAutoPlanningStatus(site);
   const fromServer = !!st?.exists;
   if (fromServer && st) {
+    const filled = st.assigned_count ?? 0;
+    const required = st.required_count ?? 0;
+    const pulls = st.pulls_count ?? 0;
     return {
-      assigned: st.assigned_count ?? 0,
-      required: st.required_count ?? 0,
-      pulls: st.pulls_count ?? 0,
-      complete: !!st.complete,
+      assigned: Math.max(0, filled - pulls),
+      required,
+      pulls,
+      complete: !!st.complete || (required >= 0 && filled === required),
       showAssignmentsLine: true,
     };
   }
   if (preserved) {
-    const assigned = preserved.assigned;
+    const filled = preserved.assigned;
     const required = preserved.required;
+    const pulls = preserved.pulls;
     const complete =
-      preserved.complete !== undefined ? preserved.complete : required > 0 && assigned >= required;
+      preserved.complete !== undefined
+        ? !!preserved.complete || (required >= 0 && filled === required)
+        : required >= 0 && filled === required;
     return {
-      assigned,
+      assigned: Math.max(0, filled - pulls),
       required,
-      pulls: preserved.pulls,
+      pulls,
       complete,
       showAssignmentsLine: true,
     };
@@ -173,11 +184,13 @@ function getWeekPlanStatusDisplay(site: Site, preserved: PreservedWeekPlanStats 
     String(last.week_iso) === String(weekKey) &&
     last.error == null
   ) {
+    const filled = last.assigned_count ?? 0;
+    const required = last.required_count ?? 0;
     return {
-      assigned: last.assigned_count ?? 0,
-      required: last.required_count ?? 0,
+      assigned: filled,
+      required,
       pulls: 0,
-      complete: !!last.complete,
+      complete: !!last.complete || (required >= 0 && filled === required),
       showAssignmentsLine: true,
     };
   }
