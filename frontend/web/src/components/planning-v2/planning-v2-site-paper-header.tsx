@@ -73,9 +73,7 @@ export function PlanningV2SitePaperHeader({
               if (!idValid || readOnly) return;
               try {
                 setWorkerInviteLinkLoading(true);
-                const result = await apiFetch<{ invite_path: string }>(`/director/sites/${siteId}/worker-invite`, {
-                  headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                });
+                const result = await apiFetch<{ invite_path: string }>(`/director/sites/${siteId}/worker-invite`);
                 const absoluteUrl =
                   typeof window !== "undefined" ? `${window.location.origin}${result.invite_path}` : result.invite_path;
                 const copied = await copyTextWithFallback(absoluteUrl);

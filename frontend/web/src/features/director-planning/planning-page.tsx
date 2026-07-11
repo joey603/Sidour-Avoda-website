@@ -28,8 +28,7 @@ const EMPTY_WORKER_AVAILABILITY = {
   wed: [],
   thu: [],
   fri: [],
-  sat: [],
-};
+  sat: []};
 
 const AVAILABILITY_DAY_KEYS = Object.keys(EMPTY_WORKER_AVAILABILITY) as Array<keyof typeof EMPTY_WORKER_AVAILABILITY>;
 
@@ -357,14 +356,12 @@ export default function PlanningPage() {
         key,
         name: worker.name,
         phone: worker.phone ?? null,
-        entries: [worker],
-      });
+        entries: [worker]});
     }
     return Array.from(grouped.values())
       .map((group) => ({
         ...group,
-        entries: [...group.entries].sort((left, right) => left.siteName.localeCompare(right.siteName)),
-      }))
+        entries: [...group.entries].sort((left, right) => left.siteName.localeCompare(right.siteName))}))
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [existingWorkersCatalog]);
   const filteredExistingWorkers = useMemo(() => {
@@ -391,9 +388,7 @@ export default function PlanningPage() {
     let cancelled = false;
     (async () => {
       try {
-        const cfg = await apiFetch<any>("/director/sites/settings/auto-planning", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
+        const cfg = await apiFetch<any>("/director/sites/settings/auto-planning");
         if (cancelled) return;
         setAutoPlanningWeeklyEnabled(!!cfg?.enabled);
       } catch {
@@ -627,14 +622,12 @@ export default function PlanningPage() {
     if (weekPlanSaveBadgeKind === "director") {
       return {
         label: "נשמר (מנהל)",
-        className: "inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
-      };
+        className: "inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"};
     }
     if (weekPlanSaveBadgeKind === "shared") {
       return {
         label: "נשמר ונשלח לעובדים",
-        className: "inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300",
-      };
+        className: "inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300"};
     }
     return null;
   }, [weekPlanSaveBadgeKind]);
@@ -659,8 +652,7 @@ export default function PlanningPage() {
     edit: "ערוך",
     delete: "מחק",
     save_director: "שמור",
-    save_shared: "שמור ואשלח",
-  };
+    save_shared: "שמור ואשלח"};
 
   // --- Pulls ("משיכות") ---
   type PullEntry = {
@@ -746,8 +738,7 @@ export default function PlanningPage() {
     return DOMPurify.sanitize(rawHtml, {
       USE_PROFILES: { html: true },
       ADD_TAGS: ["mark"],
-      ADD_ATTR: ["style", "data-color"],
-    });
+      ADD_ATTR: ["style", "data-color"]});
   }
 
   function escapeHtml(s: string): string {
@@ -793,13 +784,10 @@ export default function PlanningPage() {
       attributes: {
         class:
           "tiptap-editor min-h-32 rounded-b-md bg-white px-3 py-2 text-sm outline-none dark:bg-zinc-900",
-        dir: "rtl",
-      },
-    },
+        dir: "rtl"}},
     onUpdate: ({ editor }) => {
       setNewMessageText(editor.getHTML());
-    },
-  });
+    }});
 
   useEffect(() => {
     if (!isAddMessageOpen) return;
@@ -816,9 +804,7 @@ export default function PlanningPage() {
     const wk = isoYMD(weekStart);
     try {
       setMessagesLoading(true);
-      const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-      });
+      const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`);
       setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
     } catch {
       setMessages([]);
@@ -843,9 +829,7 @@ export default function PlanningPage() {
     (async () => {
       try {
         setMessagesLoading(true);
-        const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
+        const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`);
         if (!alive) return;
         setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
       } catch {
@@ -1021,8 +1005,7 @@ export default function PlanningPage() {
         label: `${rawIndex + 1}/${totalAll}`,
         currentIndex: rawIndex,
         total: totalAll,
-        useRawNavigation: true,
-      };
+        useRawNavigation: true};
     }
     const displayTotal = total > 0 ? total : totalAll;
     if (displayTotal <= 0) {
@@ -1030,16 +1013,14 @@ export default function PlanningPage() {
         label: null,
         currentIndex: -1,
         total: 0,
-        useRawNavigation: false,
-      };
+        useRawNavigation: false};
     }
     const currentVisibleIndex = filteredAiPlanPosition;
     return {
       label: `${currentVisibleIndex >= 0 ? currentVisibleIndex + 1 : 0}/${displayTotal}`,
       currentIndex: currentVisibleIndex,
       total: displayTotal,
-      useRawNavigation: false,
-    };
+      useRawNavigation: false};
   }, [filteredAiPlanIndices.length, aiAssignmentsVariants.length, filteredAiPlanPosition, preserveLinkedAltSelection, linkedSites.length, altIndex]);
   const displayedAlternativeLabel = displayedAlternativeState.label;
   useEffect(() => {
@@ -1103,7 +1084,6 @@ export default function PlanningPage() {
         const fromApi = await apiFetch<Record<string, WorkerAvailability>>(
           `/director/sites/${params.id}/weekly-availability?week=${encodeURIComponent(wk)}`,
           {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           },
         );
@@ -1132,9 +1112,7 @@ export default function PlanningPage() {
       const wk = getWeekKeyISO(weekStart);
       await apiFetch<Record<string, WorkerAvailability>>(`/director/sites/${params.id}/weekly-availability`, {
         method: "PUT",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        body: JSON.stringify({ week_iso: wk, availability: next }),
-      });
+        body: JSON.stringify({ week_iso: wk, availability: next })});
     } catch {}
   }
 
@@ -1149,8 +1127,7 @@ export default function PlanningPage() {
       wed: Array.isArray(wa.wed) ? wa.wed : [],
       thu: Array.isArray(wa.thu) ? wa.thu : [],
       fri: Array.isArray(wa.fri) ? wa.fri : [],
-      sat: Array.isArray(wa.sat) ? wa.sat : [],
-    });
+      sat: Array.isArray(wa.sat) ? wa.sat : []});
     const normalizeShiftList = (list: string[]): string[] => {
       const seen = new Set<string>();
       return (list || []).reduce<string[]>((acc, raw) => {
@@ -1197,8 +1174,7 @@ export default function PlanningPage() {
         wed: normalizeShiftList(base.wed),
         thu: normalizeShiftList(base.thu),
         fri: normalizeShiftList(base.fri),
-        sat: normalizeShiftList(base.sat),
-      };
+        sat: normalizeShiftList(base.sat)};
     });
     // Ajouter les overlays (disponibilités rouges)
     Object.keys(availabilityOverlays || {}).forEach((name) => {
@@ -1229,8 +1205,7 @@ export default function PlanningPage() {
         wed: normalizeShiftList(perDay.wed),
         thu: normalizeShiftList(perDay.thu),
         fri: normalizeShiftList(perDay.fri),
-        sat: normalizeShiftList(perDay.sat),
-      };
+        sat: normalizeShiftList(perDay.sat)};
     });
     return out;
   }
@@ -1308,8 +1283,7 @@ export default function PlanningPage() {
             name: rw.name,
             maxShifts: currentMaxShifts,
             roles: Array.isArray(rw.roles) ? rw.roles : [],
-            availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] },
-          };
+            availability: rw.availability || { sun: [], mon: [], tue: [], wed: [], thu: [], fri: [], sat: [] }};
         })
       : workers;
     return list.find((w) => (w.name || "").trim() === trimmed);
@@ -2476,8 +2450,7 @@ export default function PlanningPage() {
           const summary = analyzePlanPullPriority(plan.assignments, plan.pulls);
           return {
             holes: acc.holes + summary.holes,
-            assigned: acc.assigned + summary.assigned,
-          };
+            assigned: acc.assigned + summary.assigned};
         },
         { holes: 0, assigned: 0 },
       );
@@ -2615,8 +2588,7 @@ export default function PlanningPage() {
         ...linkedSite,
         assignedCount: assigned,
         requiredCount: required,
-        holesCount: Math.max(0, required - assigned),
-      };
+        holesCount: Math.max(0, required - assigned)};
     });
   }, [linkedSites, weekStart, aiPlan, savedWeekPlan, site, params.id, pullsByHoleKey, altIndex]);
 
@@ -2761,8 +2733,7 @@ export default function PlanningPage() {
                 : (incomingAlternatives.length >= existingAlternatives.length ? incomingAlternatives : existingAlternatives),
               alternative_pulls: replaceCandidatesFromIncoming && incomingPlan
                 ? incomingAlternativePulls
-                : (incomingAlternativePulls.length >= existingAlternativePulls.length ? incomingAlternativePulls : existingAlternativePulls),
-            },
+                : (incomingAlternativePulls.length >= existingAlternativePulls.length ? incomingAlternativePulls : existingAlternativePulls)},
           ];
         }),
       ) as Record<string, LinkedSitePlan>;
@@ -2796,8 +2767,7 @@ export default function PlanningPage() {
             {
               ...plan,
               alternatives,
-              alternative_pulls: alternativePulls,
-            },
+              alternative_pulls: alternativePulls},
           ];
         }),
       ) as Record<string, LinkedSitePlan>;
@@ -2816,8 +2786,7 @@ export default function PlanningPage() {
           week: getWeekKeyISO(start),
           activeAltIndex,
           before: existingCountsBySite,
-          after: nextCountsBySite,
-        });
+          after: nextCountsBySite});
       }
       const currentSitePlan = nextPlansBySite[currentSiteIdRef.current];
       const maxIndexForCurrentSite = Math.max(
@@ -2842,13 +2811,11 @@ export default function PlanningPage() {
       if ("plansBySite" in parsed && parsed.plansBySite && typeof parsed.plansBySite === "object") {
         return {
           activeAltIndex: Number(parsed.activeAltIndex || 0),
-          plansBySite: parsed.plansBySite as Record<string, LinkedSitePlan>,
-        };
+          plansBySite: parsed.plansBySite as Record<string, LinkedSitePlan>};
       }
       return {
         activeAltIndex: 0,
-        plansBySite: parsed as Record<string, LinkedSitePlan>,
-      };
+        plansBySite: parsed as Record<string, LinkedSitePlan>};
     } catch {
       return null;
     }
@@ -2958,9 +2925,7 @@ export default function PlanningPage() {
       siteIds.map(async (siteId) => {
         try {
           await apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          });
+            method: "DELETE"});
         } catch {
           // Ignore: absence de brouillon auto ou cache déjà nettoyé.
         }
@@ -2987,16 +2952,14 @@ export default function PlanningPage() {
   function reorderLinkedSitePlanCandidates(plan: LinkedSitePlan, orderedIndices: number[]): LinkedSitePlan {
     const candidates = orderedIndices.map((candidateIndex) => ({
       assignments: resolveAssignmentsForAlternative(plan, candidateIndex) || {},
-      pulls: resolvePullsForAlternative(plan, candidateIndex) || {},
-    }));
+      pulls: resolvePullsForAlternative(plan, candidateIndex) || {}}));
     const [nextBaseCandidate, ...nextAlternativeCandidates] = candidates;
     return {
       ...plan,
       assignments: nextBaseCandidate?.assignments || plan.assignments,
       pulls: nextBaseCandidate?.pulls || plan.pulls || {},
       alternatives: nextAlternativeCandidates.map((candidate) => candidate.assignments || {}),
-      alternative_pulls: nextAlternativeCandidates.map((candidate) => candidate.pulls || {}),
-    };
+      alternative_pulls: nextAlternativeCandidates.map((candidate) => candidate.pulls || {})};
   }
 
   function collectSavedAssignmentsBySite(
@@ -3049,8 +3012,7 @@ export default function PlanningPage() {
     if (orderedIndices.every((candidateIndex, index) => candidateIndex === index)) {
       return {
         activeAltIndex: Math.max(0, orderedIndices.indexOf(preferredCompatible)),
-        plansBySite,
-      };
+        plansBySite};
     }
 
     const reorderedPlansBySite = Object.fromEntries(
@@ -3062,8 +3024,7 @@ export default function PlanningPage() {
 
     return {
       activeAltIndex: Math.max(0, orderedIndices.indexOf(preferredCompatible)),
-      plansBySite: reorderedPlansBySite,
-    };
+      plansBySite: reorderedPlansBySite};
   }
 
   function reorderLinkedPlansForSavedSites(
@@ -3087,8 +3048,7 @@ export default function PlanningPage() {
         sameAssignmentsMap(resolveAssignmentsForAlternative(plansBySite[siteKey], candidateIndex), savedAssignments)
           ? matchedCount + 1
           : matchedCount
-      ), 0),
-    }));
+      ), 0)}));
 
     const bestScore = Math.max(...candidateScores.map(({ score }) => score), 0);
     if (bestScore <= 0) return null;
@@ -3123,8 +3083,7 @@ export default function PlanningPage() {
               siteKey,
               reorderLinkedSitePlanCandidates(sitePlan, orderedIndices),
             ]),
-          ) as Record<string, LinkedSitePlan>,
-    };
+          ) as Record<string, LinkedSitePlan>};
   }
 
   function formatMultiSiteAlternativeLabel(plan: LinkedSitePlan | null | undefined, index: number) {
@@ -3189,8 +3148,7 @@ export default function PlanningPage() {
         pulls: plan.pulls || {},
         alternativePulls: Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [],
         status: plan.status || "DONE",
-        objective: Number(plan.objective || 0),
-      };
+        objective: Number(plan.objective || 0)};
     });
     setAltIndex((prev) => (prev === index ? prev : index));
     baseAssignmentsRef.current = plan.assignments;
@@ -3444,8 +3402,7 @@ export default function PlanningPage() {
       const cur = prev[dayKey] || [];
       return {
         ...prev,
-        [dayKey]: cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift],
-      };
+        [dayKey]: cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift]};
     });
   }
 
@@ -3460,18 +3417,15 @@ export default function PlanningPage() {
         setLoading(false);
       }
       try {
-        const data = await apiFetch(`/director/sites/${params.id}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
+        const data = await apiFetch(`/director/sites/${params.id}`);
         setSite(data);
         writeSessionCache(multiSiteSiteCacheKey(params.id), data);
       } catch (e: any) {
         // Fallback: tenter via la liste si la lecture directe 404 juste après création
         try {
           const list = await apiFetch<any[]>(`/director/sites/`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
-          });
+      });
           const found = list.find((s: any) => String(s.id) === String(params.id));
           if (found) {
             setSite(found);
@@ -3494,7 +3448,6 @@ export default function PlanningPage() {
     }
     try {
       const list = await apiFetch<LinkedSite[]>(`/director/sites/${params.id}/linked-sites?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
       const nextList = Array.isArray(list) ? list : [];
@@ -3662,8 +3615,7 @@ export default function PlanningPage() {
         toMemoryMaxCandidates: memoryMaxCandidateCount,
         toMemoryCandidatesBySite: memoryCandidatesBySite,
         toFilterCount: activeAssignmentCountFilters.length,
-        toPreserve: preserveLinkedAltSelection,
-      });
+        toPreserve: preserveLinkedAltSelection});
       sessionStorage.removeItem(multiSiteNavigationLogKey(weekStart));
     } catch {}
   }, [params.id, weekStart, displayedAlternativeLabel]);
@@ -3737,9 +3689,6 @@ export default function PlanningPage() {
         setWorkersLoading(false);
       }
       const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-        },
         cache: "no-store" as any,
       });
       // Si l'utilisateur a déjà changé de semaine/site entre-temps, ignorer cette réponse
@@ -3759,8 +3708,7 @@ export default function PlanningPage() {
         phone: w.phone ?? null,
         linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
         linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
-        pendingApproval: !!(w.pending_approval ?? w.pendingApproval),
-      }));
+        pendingApproval: !!(w.pending_approval ?? w.pendingApproval)}));
       writeSessionCache(multiSiteWorkersCacheKey(params.id, weekStart), mapped);
 
       // --- Handle renames (worker name changed outside planning) ---
@@ -3873,8 +3821,7 @@ export default function PlanningPage() {
             out[k] = {
               ...entry,
               before: { ...b, name: bn },
-              after: { ...a, name: an },
-            };
+              after: { ...a, name: an }};
           }
           return out;
         });
@@ -3931,7 +3878,6 @@ export default function PlanningPage() {
   async function refreshWorkersAnswersFromApi() {
     try {
       const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
       const byId = new Map<number, any>((list || []).map((w: any) => [Number(w.id), w]));
@@ -3965,13 +3911,11 @@ export default function PlanningPage() {
     try {
       const [allWorkersList, sitesList] = await Promise.all([
         apiFetch<any[]>("/director/sites/all-workers", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
-        }),
+      }),
         apiFetch<any[]>("/director/sites/", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
-        }),
+      }),
       ]);
       const siteNameById = new Map<number, string>(
         (sitesList || []).map((siteItem: any) => [Number(siteItem.id), String(siteItem.name || `אתר #${siteItem.id}`)]),
@@ -3984,8 +3928,7 @@ export default function PlanningPage() {
         phone: workerItem.phone ?? null,
         maxShifts: Number(workerItem.max_shifts ?? workerItem.maxShifts ?? 5),
         roles: Array.isArray(workerItem.roles) ? workerItem.roles : [],
-        availability: workerItem.availability || { ...EMPTY_WORKER_AVAILABILITY },
-      }));
+        availability: workerItem.availability || { ...EMPTY_WORKER_AVAILABILITY }}));
       setExistingWorkersCatalog(nextCatalog);
     } catch (e: any) {
       toast.error("שגיאה בטעינת עובדים קיימים", { description: String(e?.message || "") || undefined });
@@ -4013,15 +3956,12 @@ export default function PlanningPage() {
     try {
       const createdWorker = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: worker.name,
           phone: worker.phone ?? null,
           max_shifts: sourceEntry.maxShifts || 5,
           roles: Array.isArray(sourceEntry.roles) ? sourceEntry.roles : [],
-          availability: sourceEntry.availability || {},
-        }),
-      });
+          availability: sourceEntry.availability || {}})});
       setWorkers((prev) => {
         const fallbackAvail = { ...EMPTY_WORKER_AVAILABILITY };
         const mapped: Worker = {
@@ -4034,8 +3974,7 @@ export default function PlanningPage() {
           phone: createdWorker.phone ?? null,
           linkedSiteIds: Array.isArray(createdWorker.linked_site_ids) ? createdWorker.linked_site_ids : [],
           linkedSiteNames: Array.isArray(createdWorker.linked_site_names) ? createdWorker.linked_site_names : [],
-          pendingApproval: !!createdWorker.pending_approval,
-        };
+          pendingApproval: !!createdWorker.pending_approval};
         const idx = prev.findIndex((item) => Number(item.id) === Number(mapped.id));
         if (idx >= 0) return prev.map((item) => (Number(item.id) === Number(mapped.id) ? mapped : item));
         return [...prev, mapped];
@@ -4090,8 +4029,7 @@ export default function PlanningPage() {
             phone: currentWorker?.phone ?? savedWorker.phone ?? null,
             linkedSiteIds: currentWorker?.linkedSiteIds || [],
             linkedSiteNames: currentWorker?.linkedSiteNames || [],
-            pendingApproval: !!currentWorker?.pendingApproval,
-          };
+            pendingApproval: !!currentWorker?.pendingApproval};
         })
       : (workers || []).map((worker) => ({
           ...worker,
@@ -4099,8 +4037,7 @@ export default function PlanningPage() {
             (worker.availability || EMPTY_WORKER_AVAILABILITY) as Record<string, string[]>,
             (currentWeekly[worker.name] || {}) as Record<string, string[]>,
             isNextWeekDisplay,
-          ),
-        }));
+          )}));
     const displayedIds = new Set(baseWorkers.map((worker) => Number(worker.id)));
     const extraWorkers = (workers || [])
       .filter((worker) => !displayedIds.has(Number(worker.id)))
@@ -4110,8 +4047,7 @@ export default function PlanningPage() {
           (worker.availability || EMPTY_WORKER_AVAILABILITY) as Record<string, string[]>,
           (currentWeekly[worker.name] || {}) as Record<string, string[]>,
           isNextWeekDisplay,
-        ),
-      }));
+        )}));
 
     return [...baseWorkers, ...extraWorkers].filter((worker) => !hiddenIds.has(worker.id));
   }, [hiddenWorkerIds, savedWeekPlan, weekStart, weeklyAvailability, workers]);
@@ -4167,8 +4103,7 @@ export default function PlanningPage() {
         return {
           id: questionId,
           label: String(question.label || question.question || question.text || questionId),
-          value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value),
-        };
+          value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value)};
       })
       .filter(Boolean) as Array<{ id: string; label: string; value: string }>;
 
@@ -4190,31 +4125,27 @@ export default function PlanningPage() {
             return {
               dayKey: dayDef.key,
               dayLabel: dayKeyToDate.get(dayDef.key) || dayDef.key,
-              value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value),
-            };
+              value: typeof value === "boolean" ? (value ? "כן" : "לא") : String(value)};
           })
           .filter(Boolean) as Array<{ dayKey: string; dayLabel: string; value: string }>;
         if (!items.length) return null;
         return {
           id: questionId,
           label: String(question.label || question.question || question.text || questionId),
-          items,
-        };
+          items};
       })
       .filter(Boolean) as Array<{ id: string; label: string; items: Array<{ dayKey: string; dayLabel: string; value: string }> }>;
 
     return {
       hasWeekAnswers: true,
       generalItems,
-      perDayItems,
-    };
+      perDayItems};
   }, [dayDefs, editingWorkerId, editingWorkerResolved, site?.config?.questions, weekStart]);
 
   const workerModalShiftBuckets = useMemo(() => ({
     morningName: allShiftNames.find((shiftName) => /בוקר|^0?6|06-14/i.test(shiftName || "")),
     noonName: allShiftNames.find((shiftName) => /צהריים|14-22|^1?4/i.test(shiftName || "")),
-    nightName: allShiftNames.find((shiftName) => /לילה|22-06|^2?2|night/i.test(shiftName || "")),
-  }), [allShiftNames]);
+    nightName: allShiftNames.find((shiftName) => /לילה|22-06|^2?2|night/i.test(shiftName || ""))}), [allShiftNames]);
 
   const workerModalBulkSelection = useMemo(() => {
     const isAllSelected = (shiftName?: string) => {
@@ -4224,8 +4155,7 @@ export default function PlanningPage() {
     return {
       morningAll: isAllSelected(workerModalShiftBuckets.morningName),
       noonAll: isAllSelected(workerModalShiftBuckets.noonName),
-      nightAll: isAllSelected(workerModalShiftBuckets.nightName),
-    };
+      nightAll: isAllSelected(workerModalShiftBuckets.nightName)};
   }, [dayDefs, newWorkerAvailability, workerModalShiftBuckets]);
 
   const currentWeekWorkersForEditor = useMemo<Worker[]>(() => (
@@ -4239,8 +4169,7 @@ export default function PlanningPage() {
           answers: savedWorker.answers || {},
           phone: savedWorker.phone ?? null,
           linkedSiteIds: Array.isArray(savedWorker.linked_site_ids) ? savedWorker.linked_site_ids : [],
-          linkedSiteNames: Array.isArray(savedWorker.linked_site_names) ? savedWorker.linked_site_names : [],
-        }))
+          linkedSiteNames: Array.isArray(savedWorker.linked_site_names) ? savedWorker.linked_site_names : []}))
       : workers
   ), [savedWeekPlan, workers]);
 
@@ -4327,8 +4256,7 @@ export default function PlanningPage() {
               start,
               {
                 ...linkedMemoryPlans.plansBySite,
-                [String(params.id)]: autoPlan,
-              },
+                [String(params.id)]: autoPlan},
               linkedMemoryPlans?.activeAltIndex || 0,
               "load-saved-plan-auto-priority",
             );
@@ -4373,8 +4301,7 @@ export default function PlanningPage() {
           assignments: localSavedPlan.assignments,
           isManual: !!localSavedPlan.isManual,
           workers: Array.isArray(localSavedPlan.workers) ? localSavedPlan.workers : undefined,
-          pulls: localSavedPlan.pulls,
-        };
+          pulls: localSavedPlan.pulls};
         setSavedWeekPlan(nextSavedPlan);
         if (localSavedPlan.pulls && typeof localSavedPlan.pulls === "object") setPullsByHoleKey(localSavedPlan.pulls);
         if (typeof window !== "undefined") {
@@ -4430,8 +4357,7 @@ export default function PlanningPage() {
             ? fromAuto.alternativePulls
             : (Array.isArray(fromAuto.alternative_pulls) ? fromAuto.alternative_pulls : []),
           status: String(fromAuto.status || "DONE"),
-          objective: Number(fromAuto.objective || 0),
-        });
+          objective: Number(fromAuto.objective || 0)});
         baseAssignmentsRef.current = fromAuto.assignments;
         setAltIndex(0);
         setManualAssignments(null);
@@ -4605,8 +4531,7 @@ export default function PlanningPage() {
           answers: ((w as any).answers && typeof (w as any).answers === "object") ? (w as any).answers : {},
       phone: (w as any).phone ?? null,
       linked_site_ids: Array.isArray((w as any).linked_site_ids) ? (w as any).linked_site_ids : ((w as any).linkedSiteIds || []),
-      linked_site_names: Array.isArray((w as any).linked_site_names) ? (w as any).linked_site_names : ((w as any).linkedSiteNames || []),
-    }));
+      linked_site_names: Array.isArray((w as any).linked_site_names) ? (w as any).linked_site_names : ((w as any).linkedSiteNames || [])}));
   }
 
   async function fetchWorkersSnapshotForSite(siteId: number) {
@@ -4616,9 +4541,8 @@ export default function PlanningPage() {
       return buildWorkersSnapshot(cachedWorkers);
     }
     const list = await apiFetch<any[]>(`/director/sites/${siteId}/workers?week=${encodeURIComponent(getWeekKeyISO(weekStart))}`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       cache: "no-store" as any,
-    });
+      });
     const mapped: Worker[] = (list || []).map((w: any) => ({
       id: w.id,
       name: w.name,
@@ -4629,8 +4553,7 @@ export default function PlanningPage() {
       phone: w.phone ?? null,
       linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : [],
       linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : [],
-      pendingApproval: !!(w.pending_approval ?? w.pendingApproval),
-    }));
+      pendingApproval: !!(w.pending_approval ?? w.pendingApproval)}));
     writeSessionCache(multiSiteWorkersCacheKey(siteId, weekStart), mapped);
     return buildWorkersSnapshot(mapped);
   }
@@ -4647,8 +4570,7 @@ export default function PlanningPage() {
         assignments: parsed.assignments,
         isManual: !!parsed.isManual,
         workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-        pulls: parsed?.pulls && typeof parsed.pulls === "object" ? parsed.pulls : {},
-      };
+        pulls: parsed?.pulls && typeof parsed.pulls === "object" ? parsed.pulls : {}};
     } catch {
       return null;
     }
@@ -4657,7 +4579,6 @@ export default function PlanningPage() {
   async function fetchWeekPlanScope(siteId: number, isoWeek: string, scope: "director" | "shared" | "auto") {
     try {
       return await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
     } catch {
@@ -4679,16 +4600,14 @@ export default function PlanningPage() {
         assignments: fromDirector.assignments,
         isManual: !!fromDirector.isManual,
         workers: Array.isArray(fromDirector.workers) ? fromDirector.workers : undefined,
-        pulls: fromDirector?.pulls && typeof fromDirector.pulls === "object" ? fromDirector.pulls : {},
-      };
+        pulls: fromDirector?.pulls && typeof fromDirector.pulls === "object" ? fromDirector.pulls : {}};
     }
     if (fromShared?.assignments) {
       return {
         assignments: fromShared.assignments,
         isManual: !!fromShared.isManual,
         workers: Array.isArray(fromShared.workers) ? fromShared.workers : undefined,
-        pulls: fromShared?.pulls && typeof fromShared.pulls === "object" ? fromShared.pulls : {},
-      };
+        pulls: fromShared?.pulls && typeof fromShared.pulls === "object" ? fromShared.pulls : {}};
     }
     return null;
   }
@@ -4711,7 +4630,6 @@ export default function PlanningPage() {
     const isoWeek = getWeekKeyISO(start);
     try {
       const fromAuto = await apiFetch<any>(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
       if (!fromAuto || typeof fromAuto !== "object" || !fromAuto.assignments) return null;
@@ -4728,8 +4646,7 @@ export default function PlanningPage() {
           ? fromAuto.alternativePulls
           : (Array.isArray(fromAuto.alternative_pulls) ? fromAuto.alternative_pulls : []),
         status: String(fromAuto.status || "DONE"),
-        objective: Number(fromAuto.objective || 0),
-      };
+        objective: Number(fromAuto.objective || 0)};
     } catch {
       return null;
     }
@@ -4751,8 +4668,7 @@ export default function PlanningPage() {
       isManual: isManualPlan,
       assignments,
       pulls: sanitizePullsMap(pulls),
-      workers: workersSnapshot,
-    };
+      workers: workersSnapshot};
   }
 
   async function persistWeekPlanForSite(siteId: number, publishToWorkers: boolean, payload: any) {
@@ -4762,9 +4678,7 @@ export default function PlanningPage() {
     try {
       await apiFetch<any>(`/director/sites/${siteId}/week-plan`, {
           method: "PUT",
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          body: JSON.stringify({ week_iso: getWeekKeyISO(start), scope, data: payload }),
-        });
+          body: JSON.stringify({ week_iso: getWeekKeyISO(start), scope, data: payload })});
       if (siteId === Number(params.id)) {
         setActiveSavedPlanKey(scope === "shared" ? "db:shared" : "db:director");
       }
@@ -4792,8 +4706,7 @@ export default function PlanningPage() {
       phone: w.phone ?? existingById.get(Number(w.id))?.phone ?? null,
       linkedSiteIds: Array.isArray(w.linked_site_ids) ? w.linked_site_ids : (existingById.get(Number(w.id))?.linkedSiteIds || []),
       linkedSiteNames: Array.isArray(w.linked_site_names) ? w.linked_site_names : (existingById.get(Number(w.id))?.linkedSiteNames || []),
-      pendingApproval: !!(w.pending_approval ?? w.pendingApproval ?? existingById.get(Number(w.id))?.pendingApproval),
-    }));
+      pendingApproval: !!(w.pending_approval ?? w.pendingApproval ?? existingById.get(Number(w.id))?.pendingApproval)}));
   }
 
   function buildWeeklyAvailabilityFromPlanWorkers(planWorkers?: SavedWeekPlanState["workers"]) {
@@ -4833,8 +4746,7 @@ export default function PlanningPage() {
         assignments: assignmentsAny,
         alternatives: [],
         status,
-        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-      } as any);
+        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0} as any);
     }
     const mappedWorkers = mapSavedPlanWorkersToState(plan.workers);
     if (mappedWorkers) setWorkers(mappedWorkers);
@@ -4844,8 +4756,7 @@ export default function PlanningPage() {
       assignments: plan.assignments,
       isManual: !!plan.isManual,
       workers: Array.isArray(plan.workers) ? plan.workers : undefined,
-      pulls,
-    });
+      pulls});
     setPullsByHoleKey(pulls || {});
     setPullsModeStationIdx(null);
     setPullsEditor(null);
@@ -4905,8 +4816,7 @@ export default function PlanningPage() {
         assignments: assignmentsSnapshot as Record<string, Record<string, string[][]>>,
         isManual: payload.isManual,
         workers: payload.workers,
-        pulls: payload.pulls,
-      }, "SAVED");
+        pulls: payload.pulls}, "SAVED");
       setPullsByHoleKey(pullsSnapshot);
       const linkedMemory = readLinkedPlansFromMemory(weekStart);
       if (linkedMemory?.plansBySite && Object.keys(linkedMemory.plansBySite).length > 1) {
@@ -4992,8 +4902,7 @@ export default function PlanningPage() {
           assignments: currentSitePlan.assignments as Record<string, Record<string, string[][]>>,
           isManual: currentSitePlan.payload.isManual,
           workers: currentSitePlan.payload.workers,
-          pulls: currentSitePlan.payload.pulls,
-        }, "SAVED");
+          pulls: currentSitePlan.payload.pulls}, "SAVED");
       }
       setEditingSaved(false);
       savedPlanBeforeEditRef.current = null;
@@ -5098,9 +5007,8 @@ export default function PlanningPage() {
         const scope = String(key) === "db:shared" ? "shared" : "director";
         try {
           parsed = await apiFetch<any>(`/director/sites/${params.id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
-          });
+      });
         } catch {}
       }
       // Fallback legacy localStorage
@@ -5132,8 +5040,7 @@ export default function PlanningPage() {
         assignments: parsed.assignments,
         isManual: !!parsed.isManual,
         workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-        pulls,
-      };
+        pulls};
       restoreSavedPlanState(restoredPlan, "SAVED");
       if (!Array.isArray(parsed.workers) || parsed.workers.length === 0) {
         loadWorkers();
@@ -5167,8 +5074,7 @@ export default function PlanningPage() {
           isManual: !!savedWeekPlan.isManual,
           assignments: savedWeekPlan.assignments,
           pulls: savedWeekPlan.pulls || {},
-          workers: Array.isArray(savedWeekPlan.workers) ? savedWeekPlan.workers : [],
-        };
+          workers: Array.isArray(savedWeekPlan.workers) ? savedWeekPlan.workers : []};
       } else {
         const localSavedPlan = readLocalSavedPlanForSite(targetSiteId);
         if (localSavedPlan) {
@@ -5178,8 +5084,7 @@ export default function PlanningPage() {
             isManual: !!localSavedPlan.isManual,
             assignments: localSavedPlan.assignments,
             pulls: localSavedPlan.pulls || {},
-            workers: Array.isArray(localSavedPlan.workers) ? localSavedPlan.workers : [],
-          };
+            workers: Array.isArray(localSavedPlan.workers) ? localSavedPlan.workers : []};
         } else {
           const [fromShared, fromDirector] = await Promise.all([
             fetchWeekPlanScope(targetSiteId, isoWeek, "shared"),
@@ -5197,20 +5102,15 @@ export default function PlanningPage() {
           isManual: false,
           assignments: null,
           pulls: {},
-          workers: parsed.workers || [],
-        };
+          workers: parsed.workers || []};
         try {
           await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan`, {
             method: "PUT",
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-            body: JSON.stringify({ week_iso: isoWeek, scope: "shared", data: payload }),
-          });
+            body: JSON.stringify({ week_iso: isoWeek, scope: "shared", data: payload })});
           // supprimer le draft director pour éviter confusion
           try {
             await apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
-              method: "DELETE",
-              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-            });
+              method: "DELETE"});
           } catch {}
           if (updateCurrentState) setActiveSavedPlanKey("db:shared");
         } catch {}
@@ -5224,13 +5124,9 @@ export default function PlanningPage() {
         // Si aucune donnée n'existe, supprimer complètement (DB + local)
         await Promise.allSettled([
           apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          }),
+            method: "DELETE"}),
           apiFetch<any>(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-          }),
+            method: "DELETE"}),
         ]);
         if (typeof window !== "undefined") {
           try { localStorage.removeItem(keyShared); } catch {}
@@ -5347,8 +5243,7 @@ export default function PlanningPage() {
                           memoryCandidatesBySite,
                           filterCount: activeAssignmentCountFilters.length,
                           preserve: preserveLinkedAltSelection,
-                          toSite: linkedSite.id,
-                        });
+                          toSite: linkedSite.id});
                         try {
                           sessionStorage.setItem(
                             multiSiteNavigationLogKey(weekStart),
@@ -5362,8 +5257,7 @@ export default function PlanningPage() {
                               fromMemoryCandidatesBySite: memoryCandidatesBySite,
                               fromFilterCount: activeAssignmentCountFilters.length,
                               fromPreserve: preserveLinkedAltSelection,
-                              toSite: String(linkedSite.id),
-                            }),
+                              toSite: String(linkedSite.id)}),
                           );
                         } catch {}
                         saveLinkedPlansToMemory(weekStart, linkedMemory.plansBySite, altIndex, "navigate-before-push");
@@ -5467,9 +5361,7 @@ export default function PlanningPage() {
                     try {
                       setPendingInviteActionLoading(true);
                       const approved = await apiFetch<any>(`/director/sites/${params.id}/workers/${pendingInviteWorker.id}/approve-invite`, {
-                        method: "POST",
-                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                      });
+                        method: "POST"});
                       setWorkers((prev) => prev.map((worker) => (
                         worker.id === pendingInviteWorker.id
                           ? {
@@ -5478,8 +5370,7 @@ export default function PlanningPage() {
                               phone: approved.phone ?? null,
                               linkedSiteIds: Array.isArray(approved.linked_site_ids) ? approved.linked_site_ids : [],
                               linkedSiteNames: Array.isArray(approved.linked_site_names) ? approved.linked_site_names : [],
-                              pendingApproval: false,
-                            }
+                              pendingApproval: false}
                           : worker
                       )));
                       setPendingInviteWorker(null);
@@ -5502,9 +5393,7 @@ export default function PlanningPage() {
                     try {
                       setPendingInviteActionLoading(true);
                       await apiFetch(`/director/sites/${params.id}/workers/${pendingInviteWorker.id}/reject-invite`, {
-                        method: "DELETE",
-                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                      });
+                        method: "DELETE"});
                       setWorkers((prev) => prev.filter((worker) => worker.id !== pendingInviteWorker.id));
                       setPendingInviteWorker(null);
                       toast.success("העובד נדחה והוסר מהאתר");
@@ -5542,9 +5431,7 @@ export default function PlanningPage() {
                   onClick={async () => {
                     try {
                       setWorkerInviteLinkLoading(true);
-                      const result = await apiFetch<{ invite_path: string }>(`/director/sites/${params.id}/worker-invite`, {
-                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                      });
+                      const result = await apiFetch<{ invite_path: string }>(`/director/sites/${params.id}/worker-invite`);
                       const absoluteUrl = typeof window !== "undefined"
                         ? `${window.location.origin}${result.invite_path}`
                         : result.invite_path;
@@ -5817,14 +5704,11 @@ export default function PlanningPage() {
                             await apiFetch<any>(`/director/sites/${params.id}/create-worker-user`, {
                             method: "POST",
                             headers: { 
-                              Authorization: `Bearer ${localStorage.getItem("access_token")}`,
                               "Content-Type": "application/json"
                             },
                             body: JSON.stringify({
                               name: trimmedName,
-                              phone: digitsPhone,
-                            }),
-                          });
+                              phone: digitsPhone})});
                             userCreated = true;
                           } catch (userError: any) {
                             // Si le User existe déjà (téléphone déjà utilisé - erreur 400), continuer quand même
@@ -5850,15 +5734,12 @@ export default function PlanningPage() {
                           // Ainsi, si on clique sur "ביטול" dans הוספת עובד, le worker reste dans le site (sans זמינות).
                           const createdWorker = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
                             method: "POST",
-                            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             body: JSON.stringify({
                               name: trimmedName,
                               phone: digitsPhone,
                               max_shifts: 5,
                               roles: [],
-                              availability: {},
-                            }),
-                          });
+                              availability: {}})});
 
                           // Mettre à jour la liste localement pour afficher le worker tout de suite
                           setWorkers((prev) => {
@@ -5870,8 +5751,7 @@ export default function PlanningPage() {
                               roles: Array.isArray(createdWorker.roles) ? createdWorker.roles : [],
                               availability: createdWorker.availability || fallbackAvail,
                               answers: createdWorker.answers || {},
-                              phone: createdWorker.phone ?? null,
-                            };
+                              phone: createdWorker.phone ?? null};
                             const idx = prev.findIndex((w) => w.id === mapped.id);
                             if (idx >= 0) return prev.map((w) => (w.id === mapped.id ? mapped : w));
                             return [...prev, mapped];
@@ -6227,9 +6107,7 @@ export default function PlanningPage() {
                           });
                           try {
                             await apiFetch(`/director/sites/${params.id}/workers/${wid}`, {
-                              method: "DELETE",
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                            });
+                              method: "DELETE"});
                             void refreshLinkedSites();
                             toast.success("העובד נמחק בהצלחה");
                             setIsAddModalOpen(false);
@@ -6292,16 +6170,13 @@ export default function PlanningPage() {
                             const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
                             const updated = await apiFetch<any>(`/director/sites/${params.id}/workers/${editingWorkerId}`, {
                               method: "PUT",
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                               body: JSON.stringify({
                                 name: trimmed,
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
                                   week_iso: getWeekKeyISO(weekStart),
                                   weekly_availability: newWorkerAvailability,
-                                  propagate_linked_availability: propagateLinkedAvailability,
-                              }),
-                            });
+                                  propagate_linked_availability: propagateLinkedAvailability})});
                             const mapped: Worker = {
                               id: updated.id,
                               name: updated.name,
@@ -6312,8 +6187,7 @@ export default function PlanningPage() {
                                 phone: updated.phone ?? null,
                                 linkedSiteIds: Array.isArray(updated.linked_site_ids) ? updated.linked_site_ids : [],
                                 linkedSiteNames: Array.isArray(updated.linked_site_names) ? updated.linked_site_names : [],
-                                pendingApproval: !!(updated.pending_approval ?? updated.pendingApproval),
-                            };
+                                pendingApproval: !!(updated.pending_approval ?? updated.pendingApproval)};
                             setWorkers((prev) => prev.map((x) => (x.id === editingWorkerId ? mapped : x)));
                               void refreshLinkedSites();
                             if (availabilityChanged || maxShiftsChanged || rolesChanged) {
@@ -6358,15 +6232,13 @@ export default function PlanningPage() {
                             // Le backend gère automatiquement la réutilisation si le worker existe déjà
                             const result = await apiFetch<any>(`/director/sites/${params.id}/workers`, {
                               method: "POST",
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                               body: JSON.stringify({
                                 name: trimmed,
                                 phone: newWorkerPhone.trim() || null, // Passer le téléphone pour lier automatiquement au User
                                 max_shifts: newWorkerMax,
                                 roles: newWorkerRoles,
                                 availability: newWorkerAvailability, // Sauvegarder la disponibilité dans la base de données
-                              }),
-                            });
+                              })});
                             const mapped: Worker = {
                               id: result.id,
                               name: result.name,
@@ -6377,8 +6249,7 @@ export default function PlanningPage() {
                               phone: result.phone ?? null,
                               linkedSiteIds: Array.isArray(result.linked_site_ids) ? result.linked_site_ids : [],
                               linkedSiteNames: Array.isArray(result.linked_site_names) ? result.linked_site_names : [],
-                              pendingApproval: !!(result.pending_approval ?? result.pendingApproval),
-                            };
+                              pendingApproval: !!(result.pending_approval ?? result.pendingApproval)};
                             // Vérifier si le worker existe déjà dans la liste (réutilisé)
                             const existingIndex = workers.findIndex((w) => w.id === result.id);
                             if (existingIndex >= 0) {
@@ -6526,8 +6397,7 @@ export default function PlanningPage() {
                                         onChange={(e) => {
                                           setQuestionVisibility((prev) => ({
                                             ...prev,
-                                            [qid]: e.target.checked,
-                                          }));
+                                            [qid]: e.target.checked}));
                                         }}
                                         className="rounded"
                                       />
@@ -6542,8 +6412,7 @@ export default function PlanningPage() {
                                       onChange={(e) => {
                                         setQuestionFilters((prev) => ({
                                           ...prev,
-                                          [qid]: e.target.value || undefined,
-                                        }));
+                                          [qid]: e.target.value || undefined}));
                                       }}
                                       className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
@@ -6558,8 +6427,7 @@ export default function PlanningPage() {
                                       onChange={(e) => {
                                         setQuestionFilters((prev) => ({
                                           ...prev,
-                                          [qid]: e.target.value || undefined,
-                                        }));
+                                          [qid]: e.target.value || undefined}));
                                       }}
                                       className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
@@ -6573,8 +6441,7 @@ export default function PlanningPage() {
                                       onChange={(e) => {
                                         setQuestionFilters((prev) => ({
                                           ...prev,
-                                          [qid]: e.target.value || undefined,
-                                        }));
+                                          [qid]: e.target.value || undefined}));
                                       }}
                                       className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
                                     >
@@ -6590,8 +6457,7 @@ export default function PlanningPage() {
                                       onChange={(e) => {
                                         setQuestionFilters((prev) => ({
                                           ...prev,
-                                          [qid]: e.target.value.trim() || undefined,
-                                        }));
+                                          [qid]: e.target.value.trim() || undefined}));
                                       }}
                                       placeholder="הזן ערך לחיפוש..."
                                       className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"
@@ -7780,8 +7646,7 @@ export default function PlanningPage() {
                   const afterStart = e - each;
                   return {
                     before: { start: fromMinutes(s), end: fromMinutes(beforeEnd) },
-                    after: { start: fromMinutes(afterStart), end: fromMinutes(e) },
-                  };
+                    after: { start: fromMinutes(afterStart), end: fromMinutes(e) }};
                 }
                 function roleRequirements(st: any, shiftName: string, dayKey: string): Record<string, number> {
                   const out: Record<string, number> = {};
@@ -8723,8 +8588,7 @@ export default function PlanningPage() {
                                                                       afterEnd: entry.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
-                                                                      roleName,
-                                                                    });
+                                                                      roleName});
                                                                   }}
                                                                   onDragStart={(e) => onWorkerDragStart(e, nm)}
                                                                   onDragEnd={onWorkerDragEnd}
@@ -8824,8 +8688,7 @@ export default function PlanningPage() {
                                                                               afterEnd: entry.after.end,
                                                                               shiftStart,
                                                                               shiftEnd,
-                                                                              roleName,
-                                                                            });
+                                                                              roleName});
                                                                           }}
                                                                         >
                                                                           {txt}
@@ -9040,8 +8903,7 @@ export default function PlanningPage() {
                                                                       afterEnd: split.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
-                                                                      roleName,
-                                                                    });
+                                                                      roleName});
                                                                   }}
                       >
                                                                   <span className="text-[7px] md:text-[10px] font-medium" style={{ color: rc.text }}>{hint}</span>
@@ -9147,8 +9009,7 @@ export default function PlanningPage() {
                                                                       afterEnd: split.after.end,
                                                                       shiftStart,
                                                                       shiftEnd,
-                                                                      roleName,
-                                                                    });
+                                                                      roleName});
                                                                   }}
                                                                   style={undefined}
                                                       >
@@ -9369,8 +9230,7 @@ export default function PlanningPage() {
                                                                   afterEnd: entry.after.end,
                                                                   shiftStart,
                                                                   shiftEnd,
-                                                                  roleName,
-                                                                });
+                                                                  roleName});
                                                               }}
                                                             >
                                                               <span className="flex flex-col items-center text-center leading-tight flex-1 min-w-0 w-full overflow-hidden">
@@ -9478,8 +9338,7 @@ export default function PlanningPage() {
                                                                           afterEnd: entry.after.end,
                                                                           shiftStart,
                                                                           shiftEnd,
-                                                                          roleName,
-                                                                        });
+                                                                          roleName});
                                                                       }}
                                                                     >
                                                                       {txt}
@@ -9568,8 +9427,7 @@ export default function PlanningPage() {
                                                                         afterEnd: split.after.end,
                                                                         shiftStart,
                                                                         shiftEnd,
-                                                                        roleName,
-                                                                      });
+                                                                        roleName});
                                                                     }}
                                                                   >
                                                                     <span className="text-[7px] md:text-[10px] font-medium" style={{ color: c.text }}>{slot.roleHint}</span>
@@ -9647,8 +9505,7 @@ export default function PlanningPage() {
                                                                         afterEnd: split.after.end,
                                                                         shiftStart,
                                                                         shiftEnd,
-                                                                        roleName,
-                                                                      });
+                                                                        roleName});
                                                                     }}
                                                                   >
                                                                     {/* Garder la même hauteur qu'une chip remplie (2 lignes) */}
@@ -10137,8 +9994,7 @@ export default function PlanningPage() {
                           maxShifts: Number(w.maxShifts || 0),
                           roles: Array.isArray(w.roles) ? w.roles : [],
                           availability: w.availability || {},
-                          answers: w.answers || {},
-                        }))
+                          answers: w.answers || {}}))
                       : workers;
                     workerList.forEach((w) => { if (!counts.has(w.name)) counts.set(w.name, 0); });
                     const order = new Map<string, number>();
@@ -10392,8 +10248,7 @@ export default function PlanningPage() {
                                       </div>
                                     ),
                                     th: ({ children }) => <th className="border px-2 py-1 text-right bg-zinc-50 dark:bg-zinc-800">{children}</th>,
-                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>,
-                                  }}
+                                    td: ({ children }) => <td className="border px-2 py-1 text-right align-top">{children}</td>}}
                                 >
                                   {raw}
                                 </ReactMarkdown>
@@ -10443,9 +10298,7 @@ export default function PlanningPage() {
                                 setMessages((prev) => prev.filter((msg) => Number(msg.id) !== Number(m.id)));
                                 try {
                                   await apiFetch<string>(`/director/sites/${siteId}/messages/${m.id}?week=${encodeURIComponent(wk)}`, {
-                                    method: "DELETE",
-                                    headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                  });
+                                    method: "DELETE"});
                                 } catch {
                                   setMessages(previousMessages);
                                 }
@@ -10475,9 +10328,7 @@ export default function PlanningPage() {
                                     `/director/sites/${siteId}/messages/${m.id}`,
                                     {
                                       method: "PATCH",
-                                      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                      body: JSON.stringify({ scope, week_iso: wk }),
-                                    }
+                                      body: JSON.stringify({ scope, week_iso: wk })}
                                   );
         setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
                                 } catch {}
@@ -10626,9 +10477,7 @@ export default function PlanningPage() {
                                 `/director/sites/${siteId}/messages/${editingMessageId}`,
                                 {
                                   method: "PATCH",
-                                  headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                  body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
-                                }
+                                  body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk })}
                               );
                               setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
                               closeMessageModal();
@@ -10638,9 +10487,7 @@ export default function PlanningPage() {
                               `/director/sites/${siteId}/messages`,
                               {
                                 method: "POST",
-                                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-                                body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
-                              }
+                                body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk })}
                             );
                             setMessages((prev) => sortMessagesChronologically([...prev, created]));
                           } catch {}
@@ -10877,8 +10724,7 @@ export default function PlanningPage() {
                           siteId: currentSiteIdRef.current,
                           eventIndex: details?.index,
                           source: details?.source,
-                          generationId: details?.generation_id,
-                        });
+                          generationId: details?.generation_id});
                       };
                       const warnTooManyPulls = (scope: "single" | "linked", itemType: "base" | "alternative", pulls: any, details?: any) => {
                         if (effectivePullsLimit == null) return;
@@ -10893,16 +10739,14 @@ export default function PlanningPage() {
                           siteId: currentSiteIdRef.current,
                           eventIndex: details?.index,
                           source: details?.source,
-                          generationId: details?.generation_id,
-                        });
+                          generationId: details?.generation_id});
                       };
                       if (linkedSites.length > 1) {
                         const linkedResp = await fetch(`${getApiBaseUrl()}/director/sites/${params.id}/ai-generate-linked/stream`, {
                           method: "POST",
                           headers: {
                             Accept: "text/event-stream",
-                            "Content-Type": "application/json",
-                          },
+                            "Content-Type": "application/json"},
                           body: JSON.stringify({
                             week_iso: getWeekKeyISO(weekStart),
                             num_alternatives: 500,
@@ -10911,11 +10755,9 @@ export default function PlanningPage() {
                             pulls_limits_by_site: effectivePullsLimitsBySite,
                             fixed_assignments: fixed || undefined,
                             exclude_days: effectiveExcludeDays,
-                            weekly_availability: weeklyAvailabilityForRequest,
-                          }),
+                            weekly_availability: weeklyAvailabilityForRequest}),
                           credentials: "include",
-                          signal: controller.signal,
-                        });
+                          signal: controller.signal});
                         if (!linkedResp.ok || !linkedResp.body) {
                           throw new Error(`HTTP ${linkedResp.status}`);
                         }
@@ -10956,8 +10798,7 @@ export default function PlanningPage() {
                                         assignments: incomingPlan.assignments,
                                         pulls: incomingPlan.pulls || {},
                                         alternatives: Array.isArray(incomingPlan.alternatives) ? incomingPlan.alternatives : [],
-                                        alternative_pulls: Array.isArray(incomingPlan.alternative_pulls) ? incomingPlan.alternative_pulls : [],
-                                      },
+                                        alternative_pulls: Array.isArray(incomingPlan.alternative_pulls) ? incomingPlan.alternative_pulls : []},
                                     ];
                                   }),
                                 ) as Record<string, LinkedSitePlan>;
@@ -10998,8 +10839,7 @@ export default function PlanningPage() {
                                           alternative_pulls: [
                                             ...((mergedPlans[siteKey]?.pulls ? [mergedPlans[siteKey].pulls] : []) as Record<string, PullEntry>[]),
                                             ...((mergedPlans[siteKey]?.alternative_pulls || []) as Record<string, PullEntry>[]),
-                                          ],
-                                        },
+                                          ]},
                                       ]),
                                     ) as Record<string, LinkedSitePlan>;
                                     const nextActiveIndex = activeIndex + 1;
@@ -11022,8 +10862,7 @@ export default function PlanningPage() {
                                         alternative_pulls: [
                                           ...((prevPlan?.alternative_pulls || []) as Record<string, PullEntry>[]),
                                           (incomingPlan.pulls || {}),
-                                        ],
-                                      };
+                                        ]};
                                     });
                                     saveLinkedPlansToMemory(weekStart, mergedPlans, Number(existingMemory?.activeAltIndex || 0), "sse-alt-append");
                                   }
@@ -11067,8 +10906,7 @@ export default function PlanningPage() {
                                         : [
                                             ...((prevPlan?.alternative_pulls || []) as Record<string, PullEntry>[]),
                                             (incomingPlan.pulls || {}),
-                                          ],
-                                    };
+                                          ]};
                                   });
                                   if (promoteIncomingAsBase) {
                                     streamPullPriorityPromotedRef.current = true;
@@ -11129,8 +10967,7 @@ export default function PlanningPage() {
                         method: "POST",
                         headers: {
                           Accept: "text/event-stream",
-                          "Content-Type": "application/json",
-                        },
+                          "Content-Type": "application/json"},
                         body: JSON.stringify({ 
                           num_alternatives: 500, 
                           auto_pulls_enabled: autoPullsEnabled,
@@ -11140,8 +10977,7 @@ export default function PlanningPage() {
                           weekly_availability: weeklyAvailabilityForRequest
                         }),
                         credentials: "include",
-                        signal: controller.signal,
-                      });
+                        signal: controller.signal});
                       if (!resp.ok || !resp.body) {
                         throw new Error(`HTTP ${resp.status}`);
                       }
@@ -11178,8 +11014,7 @@ export default function PlanningPage() {
                                 pulls: evt.pulls || {},
                                 alternativePulls: [],
                                 status: "STREAMING",
-                                objective: 0,
-                              } as any);
+                                objective: 0} as any);
                               baseAssignmentsRef.current = evt.assignments;
                               toast.success("תכנון בסיסי מוכן");
                               armIdle();
@@ -11215,8 +11050,7 @@ export default function PlanningPage() {
                                       alternativePulls: [
                                         ...((prev.pulls ? [prev.pulls] : []) as Record<string, PullEntry>[]),
                                         ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
-                                      ],
-                                    } as any;
+                                      ]} as any;
                                   }
                                   const duplicateBase =
                                     sameAssignmentsMap(previousBaseAssignments, evt.assignments) &&
@@ -11230,8 +11064,7 @@ export default function PlanningPage() {
                                   return {
                                     ...prev,
                                     alternatives: [...((prev.alternatives || []) as Record<string, Record<string, string[][]>>[]), evt.assignments],
-                                    alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})],
-                                  } as any;
+                                    alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})]} as any;
                                 }
                                 const promoteIncomingAsBase =
                                   !streamPullPriorityPromotedRef.current &&
@@ -11255,13 +11088,11 @@ export default function PlanningPage() {
                                       alternativePulls: [
                                         ...(prev.pulls ? [prev.pulls] : []),
                                         ...((prev.alternativePulls || []) as Record<string, PullEntry>[]),
-                                      ],
-                                    }
+                                      ]}
                                   : {
                                       ...prev,
                                       alternatives: [...alts, evt.assignments],
-                                      alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})],
-                                    };
+                                      alternativePulls: [...((prev.alternativePulls || []) as Record<string, PullEntry>[]), (evt.pulls || {})]};
                                 if (promoteIncomingAsBase) {
                                   baseAssignmentsRef.current = evt.assignments;
                                   streamPullPriorityPromotedRef.current = true;
@@ -11714,8 +11545,7 @@ export default function PlanningPage() {
                         assignments: nextAssignments,
                         alternatives: [],
                         status: "TEMP",
-                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0,
-                      } as any);
+                        objective: typeof (aiPlan as any)?.objective === "number" ? (aiPlan as any).objective : 0} as any);
                       // Pas de cadenas ici : ils ne reflètent le brouillon « שיבוצים קבועים » qu’après יצירת תכנון
                     } else {
                       pendingManualFixedAssignmentsRef.current = null;
@@ -12171,8 +12001,7 @@ export default function PlanningPage() {
                   wed: "ד'",
                   thu: "ה'",
                   fri: "ו'",
-                  sat: "ש'",
-                };
+                  sat: "ש'"};
                 const dayLabel = dayLabels[pullsEditor.dayKey] || pullsEditor.dayKey;
                 return `${dayLabel} • ${pullsEditor.shiftName} • עמדה ${pullsEditor.stationIdx + 1}`;
               })()}
@@ -12457,9 +12286,7 @@ export default function PlanningPage() {
                     [p.key]: {
                       before: { name: p.beforeName, start: p.beforeStart, end: p.beforeEnd },
                       after: { name: p.afterName, start: p.afterStart, end: p.afterEnd },
-                      roleName: p.roleName,
-                    },
-                  }));
+                      roleName: p.roleName}}));
                   setPullsEditor(null);
                 }}
               >

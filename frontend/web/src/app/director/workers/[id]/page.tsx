@@ -93,11 +93,9 @@ export default function WorkerDetailsPage() {
       try {
         const [workers, sitesList] = await Promise.all([
           apiFetch<Worker[]>("/director/sites/all-workers", {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           }),
           apiFetch<Site[]>("/director/sites/", {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           }),
         ]);
@@ -138,7 +136,6 @@ export default function WorkerDetailsPage() {
     (async () => {
       try {
         const site = await apiFetch<any>(`/director/sites/${worker.site_id}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
         });
         if (gen !== weekPlanFetchGenRef.current) return;
@@ -193,7 +190,6 @@ export default function WorkerDetailsPage() {
         const wk = iso(start);
         const siteId = worker.site_id;
         const authOpts = {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as const,
         };
         /** שיבוצים : רק תכנון שפורסם לעובדים (scope=shared), לא טיוטת מנהל / auto */
@@ -223,7 +219,6 @@ export default function WorkerDetailsPage() {
 
         try {
           const fromPublic = await apiFetch<any>(`/public/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             cache: "no-store" as any,
           });
           if (gen !== weekPlanFetchGenRef.current) return;
@@ -733,7 +728,6 @@ export default function WorkerDetailsPage() {
                       try {
                         const updated = await apiFetch<Worker>(`/director/sites/${worker.site_id}/workers/${worker.id}`, {
                           method: "PUT",
-                          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                           body: JSON.stringify({
                             name,
                             phone,
@@ -777,7 +771,6 @@ export default function WorkerDetailsPage() {
                       try {
                         await apiFetch(`/director/sites/${worker.site_id}/workers/${worker.id}/reset-password-to-phone`, {
                           method: "POST",
-                          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                         });
                         toast.success("הסיסמה אופסה למספר הטלפון");
                       } catch (e: unknown) {
@@ -806,7 +799,6 @@ export default function WorkerDetailsPage() {
                     try {
                       await apiFetch(`/director/sites/${worker.site_id}/workers/${worker.id}`, {
                         method: "DELETE",
-                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                       });
                       toast.success("העובד הוסר מהאתר");
                       router.push("/director/workers");

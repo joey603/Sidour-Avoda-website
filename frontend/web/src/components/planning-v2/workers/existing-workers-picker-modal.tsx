@@ -65,11 +65,9 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
     try {
       const [allWorkersList, sitesList] = await Promise.all([
         apiFetch<Record<string, unknown>[]>("/director/sites/all-workers", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as RequestCache,
         }),
         apiFetch<Record<string, unknown>[]>("/director/sites/", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as RequestCache,
         }),
       ]);
@@ -165,7 +163,6 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
     try {
       await apiFetch(`/director/sites/${siteId}/workers`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: worker.name,
           phone: worker.phone ?? null,

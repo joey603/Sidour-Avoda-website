@@ -222,19 +222,15 @@ export function PlanningV2ActionBar({
     if (!Number.isFinite(id) || id <= 0) return;
     setDeleting(true);
     try {
-      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
       await Promise.allSettled([
         apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
           method: "DELETE",
-          headers,
         }),
         apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
           method: "DELETE",
-          headers,
         }),
         apiFetch(`/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
           method: "DELETE",
-          headers,
         }),
       ]);
       toast.success("התכנון נמחק בהצלחה");
@@ -251,19 +247,15 @@ export function PlanningV2ActionBar({
 
   const deletePlanForSite = useCallback(
     async (targetSiteId: number) => {
-      const headers = { Authorization: `Bearer ${localStorage.getItem("access_token")}` };
       await Promise.allSettled([
         apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=director`, {
           method: "DELETE",
-          headers,
         }),
         apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=shared`, {
           method: "DELETE",
-          headers,
         }),
         apiFetch(`/director/sites/${targetSiteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`, {
           method: "DELETE",
-          headers,
         }),
       ]);
     },

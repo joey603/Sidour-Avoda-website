@@ -79,7 +79,6 @@ export default function EditSitePage() {
       if (me.role !== "director") return router.replace("/worker");
       try {
         const site = await apiFetch<any>(`/director/sites/${params.id}`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as any,
         });
         setName(site?.name || "");
@@ -119,7 +118,6 @@ export default function EditSitePage() {
     try {
       await apiFetch(`/director/sites/${params.id}`, {
         method: "PUT",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: name.trim(),
           config: { stations, questions },

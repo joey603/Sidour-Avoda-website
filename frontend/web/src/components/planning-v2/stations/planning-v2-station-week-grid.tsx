@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import type { PlanningV2PullEntry, PlanningWorker, SiteSummary } from "../types";
 
@@ -369,43 +369,11 @@ function splitRangeForPulls(start: string, end: string): { before: { start: stri
 const MIN_STATION_GRID_ZOOM = 1;
 const MAX_STATION_GRID_ZOOM = 2;
 const STATION_GRID_ZOOM_STEP = 0.1;
-const STATION_GRID_CELL_GAP_PX = 4;
 
 function roundStationZoom(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function useIsMdUp(): boolean {
-  return useSyncExternalStore(
-    (onStoreChange) => {
-      const mq = window.matchMedia("(min-width: 768px)");
-      mq.addEventListener("change", onStoreChange);
-      return () => mq.removeEventListener("change", onStoreChange);
-    },
-    () => window.matchMedia("(min-width: 768px)").matches,
-    () => false,
-  );
-}
-
-
-const STATION_GRID_DAY_COUNT = 7;
-
-/** Table en mode zoom : dimensions de base ; le wrapper applique `zoom` sur tout le contenu. */
-const STATION_GRID_ZOOMED_TABLE_CLASS = "border-separate table-fixed text-[8px] md:text-sm";
-
-function getStationGridTableBaseWidth(isMdUp: boolean): {
-  shiftColPx: number;
-  dayColPx: number;
-  tableWidthPx: number;
-  gapPx: number;
-} {
-  const shiftColPx = isMdUp ? 112 : 40;
-  const dayColPx = isMdUp ? 84 : 56;
-  const gapPx = STATION_GRID_CELL_GAP_PX;
-  const tableWidthPx =
-    shiftColPx + STATION_GRID_DAY_COUNT * dayColPx + (STATION_GRID_DAY_COUNT + 1) * gapPx;
-  return { shiftColPx, dayColPx, tableWidthPx, gapPx };
-}
 
 /**
  * גריד שבועי לפי עמדה — structure / tailles / couleurs alignées sur le planning (+ עריכה ידנית / DnD).
@@ -478,23 +446,52 @@ export function PlanningV2StationWeekGrid({
   }>(null);
   const [shiftHoursOorConfirm, setShiftHoursOorConfirm] = useState(false);
   const [stationZoomByIdx, setStationZoomByIdx] = useState<Record<number, number>>({});
+  /** Dimensions naturelles capturées au 1er zoom — largeur pour scaler H, hauteur pour figer le paper. */
+  const [stationZoomBaseSizeByIdx, setStationZoomBaseSizeByIdx] = useState<
+    Record<number, { width: number; height: number }>
+  >({});
+  const stationGridScrollRefByIdx = useRef<Record<number, HTMLDivElement | null>>({});
   const getStationZoom = useCallback(
     (stationIdx: number) => stationZoomByIdx[stationIdx] ?? MIN_STATION_GRID_ZOOM,
     [stationZoomByIdx],
   );
   const adjustStationZoom = useCallback((stationIdx: number, delta: number) => {
-    setStationZoomByIdx((prev) => {
-      const current = prev[stationIdx] ?? MIN_STATION_GRID_ZOOM;
-      const next = roundStationZoom(
-        Math.min(MAX_STATION_GRID_ZOOM, Math.max(MIN_STATION_GRID_ZOOM, current + delta)),
+    const current = stationZoomByIdx[stationIdx] ?? MIN_STATION_GRID_ZOOM;
+    const next = roundStationZoom(
+      Math.min(MAX_STATION_GRID_ZOOM, Math.max(MIN_STATION_GRID_ZOOM, current + delta)),
+    );
+    if (next === current) return;
+
+    // Au passage 1 → >1 : figer la taille visible (boutons ± restent juste sous la grille).
+    if (current <= MIN_STATION_GRID_ZOOM && next > MIN_STATION_GRID_ZOOM) {
+      const scroller = stationGridScrollRefByIdx.current[stationIdx];
+      const table = scroller?.querySelector("table");
+      const width = Math.round(
+        table?.getBoundingClientRect().width || scroller?.clientWidth || 0,
       );
-      if (next === current) return prev;
-      return { ...prev, [stationIdx]: next };
-    });
-  }, []);
+      const height = Math.round(
+        table?.getBoundingClientRect().height || scroller?.clientHeight || 0,
+      );
+      if (width > 0 && height > 0) {
+        setStationZoomBaseSizeByIdx((sizes) => {
+          const prev = sizes[stationIdx];
+          if (prev?.width === width && prev?.height === height) return sizes;
+          return { ...sizes, [stationIdx]: { width, height } };
+        });
+      }
+    }
+    if (next <= MIN_STATION_GRID_ZOOM) {
+      setStationZoomBaseSizeByIdx((sizes) => {
+        if (sizes[stationIdx] == null) return sizes;
+        const { [stationIdx]: _removed, ...rest } = sizes;
+        return rest;
+      });
+    }
+
+    setStationZoomByIdx((prev) => ({ ...prev, [stationIdx]: next }));
+  }, [stationZoomByIdx]);
   const dragSourceRef = useRef<ManualDragSource | null>(null);
   const didDropRef = useRef(false);
-  const isMdUp = useIsMdUp();
 
   useEffect(() => {
     if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
@@ -705,7 +702,7 @@ export function PlanningV2StationWeekGrid({
           <div
             key={idx}
             className={
-              "rounded-xl border border-zinc-200 p-3 pb-4 dark:border-zinc-800 " +
+              "overflow-hidden rounded-xl border border-zinc-200 p-3 pb-3 dark:border-zinc-800 " +
               (pullsModeStationIdx === idx
                 ? "ring-2 ring-orange-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
                 : shiftHoursModeStationIdx === idx
@@ -802,52 +799,41 @@ export function PlanningV2StationWeekGrid({
             {(() => {
               const stationZoom = getStationZoom(idx);
               const isZoomedIn = stationZoom > MIN_STATION_GRID_ZOOM;
-              const gridBase = getStationGridTableBaseWidth(isMdUp);
+              const zoomBase = stationZoomBaseSizeByIdx[idx];
               return (
-            <div className="relative">
+            <div className="relative w-full min-w-0">
+              {/*
+                Au repos : hauteur = contenu (boutons juste sous la grille).
+                En zoom : hauteur figée à la taille initiale → paper stable, scroll interne.
+              */}
               <div
+                ref={(el) => {
+                  stationGridScrollRefByIdx.current[idx] = el;
+                }}
                 className={
-                  (isZoomedIn
-                    ? "max-h-[32rem] overflow-auto"
-                    : "max-h-[32rem] overflow-y-auto overflow-x-hidden md:overflow-x-auto") +
-                  " pb-1"
+                  "w-full min-w-0 overflow-x-auto overflow-y-auto pb-1 " +
+                  (isZoomedIn ? "" : "max-h-[min(32rem,70vh)]")
+                }
+                style={
+                  isZoomedIn && zoomBase?.height
+                    ? { height: `${zoomBase.height}px`, maxHeight: `${zoomBase.height}px` }
+                    : undefined
                 }
               >
                 <div
-                  className={isZoomedIn ? "inline-block min-w-0 origin-top-left" : undefined}
+                  className={isZoomedIn ? "box-border inline-block" : "w-full"}
                   style={
                     isZoomedIn
                       ? ({
                           zoom: stationZoom,
                           WebkitZoom: stationZoom,
+                          width: zoomBase?.width ? `${zoomBase.width}px` : "100%",
+                          minWidth: zoomBase?.width ? `${zoomBase.width}px` : "100%",
                         } as CSSProperties)
                       : undefined
                   }
                 >
-              <table
-                className={
-                  isZoomedIn
-                    ? STATION_GRID_ZOOMED_TABLE_CLASS
-                    : "w-full table-fixed border-collapse text-[8px] md:text-sm"
-                }
-                style={
-                  isZoomedIn
-                    ? {
-                        width: `${gridBase.tableWidthPx}px`,
-                        minWidth: `${gridBase.tableWidthPx}px`,
-                        borderSpacing: `${gridBase.gapPx}px`,
-                      }
-                    : undefined
-                }
-              >
-                {isZoomedIn ? (
-                  <colgroup>
-                    <col style={{ width: `${gridBase.shiftColPx}px` }} />
-                    {DAY_COLS.map((d) => (
-                      <col key={d.key} style={{ width: `${gridBase.dayColPx}px` }} />
-                    ))}
-                  </colgroup>
-                ) : null}
+              <table className="w-full table-fixed border-collapse text-[8px] md:text-sm">
                 <thead>
                   <tr className="border-b dark:border-zinc-800">
                     <th className="sticky top-0 z-30 w-10 bg-white px-0 py-0.5 text-right align-bottom text-[8px] shadow-[0_1px_0_0_rgb(228_228_231)] md:w-28 md:px-2 md:py-2 md:text-sm dark:bg-zinc-950 dark:shadow-[0_1px_0_0_rgb(39_39_42)]">
@@ -1627,13 +1613,13 @@ export function PlanningV2StationWeekGrid({
               </table>
                 </div>
               </div>
-              <div className="mt-2 flex items-center justify-start">
-                <div className="flex items-center overflow-hidden rounded-md border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
+              <div className="mt-1.5 flex shrink-0 items-center justify-start">
+                <div className="flex items-center overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-700 dark:bg-zinc-900">
                   <button
                     type="button"
                     onClick={() => adjustStationZoom(idx, -STATION_GRID_ZOOM_STEP)}
                     disabled={stationZoom <= MIN_STATION_GRID_ZOOM}
-                    className="inline-flex h-6 w-6 items-center justify-center text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    className="inline-flex h-10 w-10 items-center justify-center text-xl font-semibold leading-none text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     aria-label="הקטנת תצוגת הגריד"
                     title="הקטנה"
                   >
@@ -1643,7 +1629,7 @@ export function PlanningV2StationWeekGrid({
                     type="button"
                     onClick={() => adjustStationZoom(idx, STATION_GRID_ZOOM_STEP)}
                     disabled={stationZoom >= MAX_STATION_GRID_ZOOM}
-                    className="inline-flex h-6 w-6 items-center justify-center border-l border-zinc-200 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    className="inline-flex h-10 w-10 items-center justify-center border-l border-zinc-200 text-xl font-semibold leading-none text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     aria-label="הגדלת תצוגת הגריד"
                     title="הגדלה"
                   >

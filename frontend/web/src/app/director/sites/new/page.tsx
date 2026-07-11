@@ -102,7 +102,6 @@ export default function NewSitePage() {
     try {
       const created = await apiFetch<{ id: number }>("/director/sites/", {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: name.trim(),
           config: {
@@ -117,7 +116,6 @@ export default function NewSitePage() {
         for (let i = 0; i < 3; i++) {
           try {
             await apiFetch(`/director/sites/${created.id}`, {
-              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
               cache: "no-store" as any,
             });
             ok = true;

@@ -456,7 +456,6 @@ export default function SitesList() {
   async function fetchSites() {
     try {
       const list = await apiFetch<Site[]>("/director/sites/", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store",
       });
       setSites(list);
@@ -468,7 +467,6 @@ export default function SitesList() {
   async function fetchAutoPlanningConfig() {
     try {
       const config = await apiFetch<AutoPlanningConfig>("/director/sites/settings/auto-planning", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store",
       });
       setAutoPlanningConfig(config);
@@ -594,7 +592,6 @@ export default function SitesList() {
     try {
       await apiFetch(`/director/sites/${id}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
       deleteOk = true;
       toast.success("האתר נמחק בהצלחה");
@@ -602,7 +599,6 @@ export default function SitesList() {
       // Vérifier l'état réel: si le site n'existe plus, considérer comme succès
       try {
         const list = await apiFetch<Site[]>("/director/sites/", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store",
         });
         const stillThere = (list || []).some((s) => Number(s.id) === Number(id));
@@ -694,7 +690,6 @@ export default function SitesList() {
       }
       const saved = await apiFetch<AutoPlanningConfig>("/director/sites/settings/auto-planning", {
         method: "PUT",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           enabled: autoPlanningForm.enabled,
           day_of_week: autoPlanningForm.day_of_week,
@@ -721,7 +716,6 @@ export default function SitesList() {
     try {
       const result = await apiFetch<AutoPlanningTestResponse>("/director/sites/settings/auto-planning/test-now", {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
       setAutoPlanningConfig(result.config);
       clearAutoWeeklyWorkerChangesForWeek(result.target_week_iso);
@@ -797,7 +791,6 @@ export default function SitesList() {
         }
         await apiFetch(`/director/sites/${s.id}/week-plan/promote-auto?week=${encodeURIComponent(weekIso)}&publish=${publish ? "true" : "false"}`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         });
         setSitePromoteBadge((prev) => ({ ...prev, [s.id]: publish ? "published" : "saved" }));
         done++;
@@ -828,7 +821,7 @@ export default function SitesList() {
     }
   }
 
-  async function deleteSavedWeekPlanCore(site: Site, authHeaders: { Authorization: string }): Promise<{
+  async function deleteSavedWeekPlanCore(site: Site): Promise<{
     existingAuto: Record<string, unknown> | null;
     copiedSavedPlanToAuto: boolean;
   }> {
@@ -848,7 +841,6 @@ export default function SitesList() {
     }
     const existingAuto = await apiFetch<Record<string, unknown> | null>(
       `/director/sites/${site.id}/week-plan?week=${encodeURIComponent(weekIso)}&scope=auto`,
-      { headers: authHeaders },
     );
     let copiedSavedPlanToAuto = false;
     if (existingAuto == null) {
@@ -856,7 +848,6 @@ export default function SitesList() {
       for (const planScope of ["shared", "director"] as const) {
         const d = await apiFetch<Record<string, unknown> | null>(
           `/director/sites/${site.id}/week-plan?week=${encodeURIComponent(weekIso)}&scope=${planScope}`,
-          { headers: authHeaders },
         );
         if (d != null) {
           dataToDraft = d;
@@ -866,7 +857,6 @@ export default function SitesList() {
       if (dataToDraft != null) {
         await apiFetch(`/director/sites/${site.id}/week-plan`, {
           method: "PUT",
-          headers: authHeaders,
           body: JSON.stringify({ week_iso: weekIso, scope: "auto", data: dataToDraft }),
         });
         copiedSavedPlanToAuto = true;
@@ -874,11 +864,9 @@ export default function SitesList() {
     }
     await apiFetch(`/director/sites/${site.id}/week-plan?week=${encodeURIComponent(weekIso)}&scope=director`, {
       method: "DELETE",
-      headers: authHeaders,
     });
     await apiFetch(`/director/sites/${site.id}/week-plan?week=${encodeURIComponent(weekIso)}&scope=shared`, {
       method: "DELETE",
-      headers: authHeaders,
     });
     return { existingAuto, copiedSavedPlanToAuto };
   }
@@ -904,9 +892,6 @@ export default function SitesList() {
         ? "למחוק את הסידור השמור לשבוע זה מכל האתרים המקושרים?"
         : "למחוק את הסידור השמור לשבוע זה?";
     if (!window.confirm(confirmMsg)) return;
-    const token = localStorage.getItem("access_token");
-    if (!token) return;
-    const authHeaders = { Authorization: `Bearer ${token}` };
     setDeleteWeekPlanSiteId(origin.id);
     try {
       let lastMeta: { existingAuto: Record<string, unknown> | null; copiedSavedPlanToAuto: boolean } | null = null;
@@ -915,7 +900,7 @@ export default function SitesList() {
         const s = sites.find((x) => x.id === id);
         if (!s || !hasSavedWeekPlanForWeek(s)) continue;
         setDeleteWeekPlanSiteId(s.id);
-        lastMeta = await deleteSavedWeekPlanCore(s, authHeaders);
+        lastMeta = await deleteSavedWeekPlanCore(s);
         doneCount++;
         setSitePromoteBadge((prev) => {
           const next = { ...prev };

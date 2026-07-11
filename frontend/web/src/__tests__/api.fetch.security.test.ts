@@ -1,5 +1,5 @@
 /**
- * Comportement client de apiFetch (erreurs, 401, en-têtes) — sans importer la page planning.
+ * Comportement client de apiFetch (erreurs, 401, cookie auth) — sans importer la page planning.
  */
 
 describe("apiFetch — sécurité et erreurs HTTP", () => {
@@ -17,7 +17,7 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
     jest.resetModules();
   });
 
-  it("ajoute Content-Type application/json pour un corps JSON", async () => {
+  it("ajoute Content-Type application/json et credentials include", async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -33,17 +33,40 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     const h = new Headers(init.headers);
     expect(h.get("Content-Type")).toBe("application/json");
+    expect(init.credentials).toBe("include");
   });
 
-  it("sur 401 hors /auth/, efface access_token et redirige hors page login", async () => {
+  it("supprime un Authorization Bearer null/undefined avant l’envoi", async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ ok: true }),
+    });
+    global.fetch = fetchMock;
+
+    const { apiFetch } = await import("@/lib/api");
+    await apiFetch("/director/sites/", {
+      headers: { Authorization: "Bearer null" },
+    });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const h = new Headers(init.headers);
+    expect(h.get("Authorization")).toBeNull();
+  });
+
+  it("sur 401, efface le reste localStorage access_token sans redirection globale", async () => {
     localStorage.setItem("access_token", "stale-token");
     const hrefSpy = jest.fn();
     Object.defineProperty(window, "location", {
       configurable: true,
+      writable: true,
       value: {
         pathname: "/director/sites",
         search: "",
-        href: "http://localhost/director/sites",
+        get href() {
+          return "http://localhost/director/sites";
+        },
         set href(v: string) {
           hrefSpy(v);
         },
@@ -51,7 +74,6 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
         replace: jest.fn(),
         reload: jest.fn(),
       },
-      writable: true,
     });
 
     global.fetch = jest.fn().mockResolvedValue({
@@ -64,21 +86,22 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
     const { apiFetch } = await import("@/lib/api");
     await expect(apiFetch("/director/sites/")).rejects.toThrow();
     expect(localStorage.getItem("access_token")).toBeNull();
-    expect(hrefSpy).toHaveBeenCalled();
-    const target = hrefSpy.mock.calls[0][0] as string;
-    expect(target).toContain("/login/director");
-    expect(target).toContain("returnUrl=");
+    // La redirection login est laissée aux pages / gardes — pas dans apiFetch.
+    expect(hrefSpy).not.toHaveBeenCalled();
   });
 
-  it("sur 401 pour /auth/login, n’applique pas la redirection globale (pas de href)", async () => {
+  it("sur 401 pour /auth/login, n’applique pas de redirection", async () => {
     localStorage.setItem("access_token", "x");
     const hrefSpy = jest.fn();
     Object.defineProperty(window, "location", {
       configurable: true,
+      writable: true,
       value: {
         pathname: "/login/director",
         search: "",
-        href: "http://localhost/login/director",
+        get href() {
+          return "http://localhost/login/director";
+        },
         set href(v: string) {
           hrefSpy(v);
         },
@@ -86,7 +109,6 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
         replace: jest.fn(),
         reload: jest.fn(),
       },
-      writable: true,
     });
 
     global.fetch = jest.fn().mockResolvedValue({
@@ -101,14 +123,17 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
     expect(hrefSpy).not.toHaveBeenCalled();
   });
 
-  it("sur 403, ne vide pas le token par défaut", async () => {
+  it("sur 403, ne vide pas le reste localStorage par défaut", async () => {
     localStorage.setItem("access_token", "tok");
     Object.defineProperty(window, "location", {
       configurable: true,
+      writable: true,
       value: {
         pathname: "/director",
         search: "",
-        href: "http://localhost/director",
+        get href() {
+          return "http://localhost/director";
+        },
         set href(_v: string) {
           throw new Error("unexpected redirect");
         },
@@ -116,7 +141,6 @@ describe("apiFetch — sécurité et erreurs HTTP", () => {
         replace: jest.fn(),
         reload: jest.fn(),
       },
-      writable: true,
     });
 
     global.fetch = jest.fn().mockResolvedValue({

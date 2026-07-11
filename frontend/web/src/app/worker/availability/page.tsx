@@ -170,9 +170,7 @@ export default function WorkerAvailabilityPage() {
   const loadWorkerContextFromServer = useCallback(async (wid: number | null = workerId) => {
     try {
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
-      const workerData = await apiFetch<WorkerContextResponse>(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-      });
+      const workerData = await apiFetch<WorkerContextResponse>(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`);
 
       if (workerData) {
         const rawSites = Array.isArray(workerData.sites) ? workerData.sites : [];
@@ -428,7 +426,6 @@ export default function WorkerAvailabilityPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
         },
         body: JSON.stringify({
           max_shifts: maxShifts,

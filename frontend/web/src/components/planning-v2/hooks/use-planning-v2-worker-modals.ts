@@ -279,7 +279,6 @@ export function usePlanningV2WorkerModals(
           await apiFetch(`/director/sites/${siteId}/create-worker-user`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${localStorage.getItem("access_token")}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -305,7 +304,6 @@ export function usePlanningV2WorkerModals(
 
         const createdWorker = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           body: JSON.stringify({
             name: trimmedName,
             phone: digitsPhone,
@@ -348,7 +346,6 @@ export function usePlanningV2WorkerModals(
       const weekIso = getWeekKeyISO(weekStart);
       await apiFetch(`/director/sites/${siteId}/workers/${wid}?week=${encodeURIComponent(weekIso)}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       });
       toast.success("העובד הוסר מהשבוע הנבחר והלאה");
       closeWorkerEditor();
@@ -411,7 +408,6 @@ export function usePlanningV2WorkerModals(
         const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
           const updated = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers/${editingWorkerId}`, {
             method: "PUT",
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
             body: JSON.stringify({
               name: trimmed,
               max_shifts: newWorkerMax,
@@ -442,7 +438,6 @@ export function usePlanningV2WorkerModals(
       const { _stations: _newWorkerStations, ...availabilityForProfile } = newWorkerAvailability;
       const result = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: trimmed,
           phone: null,

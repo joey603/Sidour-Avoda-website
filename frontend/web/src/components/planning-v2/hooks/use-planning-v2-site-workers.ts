@@ -81,9 +81,7 @@ export function usePlanningV2SiteWorkers(siteId: string) {
     }
     setSiteLoading(true);
     try {
-      const raw = await apiFetch<SiteSummary & { deleted_at?: number | null }>(`/director/sites/${siteId}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-      });
+      const raw = await apiFetch<SiteSummary & { deleted_at?: number | null }>(`/director/sites/${siteId}`);
       const { deleted_at: deletedAtRaw, ...rest } = raw;
       setSite({ ...rest, deletedAt: deletedAtRaw ?? null });
     } catch {
@@ -108,7 +106,6 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       const list = await apiFetch<Record<string, unknown>[]>(
         `/director/sites/${siteId}/workers?week=${encodeURIComponent(wk)}`,
         {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as RequestCache,
         },
       );
@@ -137,7 +134,6 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       const fromApi = await apiFetch<Record<string, WorkerAvailability>>(
         `/director/sites/${siteId}/weekly-availability?week=${encodeURIComponent(wk)}`,
         {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store" as RequestCache,
         },
       );

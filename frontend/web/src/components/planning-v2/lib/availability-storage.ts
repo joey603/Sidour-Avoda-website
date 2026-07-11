@@ -48,7 +48,6 @@ export async function persistWeeklyAvailabilityForSiteWeek(
     const wk = getWeekKeyISO(weekStart);
     await apiFetch(`/director/sites/${siteId}/weekly-availability`, {
       method: "PUT",
-      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
       body: JSON.stringify({ week_iso: wk, availability: next }),
     });
   } catch {

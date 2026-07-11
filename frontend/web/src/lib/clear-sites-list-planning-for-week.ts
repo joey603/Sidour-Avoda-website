@@ -89,8 +89,6 @@ export function clearWeeklyPlanLocalStorageKeysForWeekAndSites(weekIso: string, 
 export async function deleteAutoScopeWeekPlansForSites(weekIso: string, siteIds: number[]): Promise<void> {
   const wk = String(weekIso || "").trim();
   if (!wk) return;
-  const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-  if (!token) return;
   const uniq = normalizeSiteIds(siteIds);
   await Promise.all(
     uniq.map(async (sid) => {
@@ -99,7 +97,6 @@ export async function deleteAutoScopeWeekPlansForSites(weekIso: string, siteIds:
           `/director/sites/${sid}/week-plan?week=${encodeURIComponent(wk)}&scope=auto`,
           {
             method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
           },
         );
       } catch {

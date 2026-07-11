@@ -2,7 +2,8 @@
 
 import { apiFetch, apiFetchWithRetry } from "./api";
 
-const TOKEN_KEY = "access_token";
+/** Clé legacy — plus utilisée pour l’auth (cookie HttpOnly). Conservée pour nettoyer d’anciens restes. */
+const LEGACY_TOKEN_KEY = "access_token";
 
 type Role = "worker" | "director";
 
@@ -27,20 +28,24 @@ export function notifyAuthSessionChanged() {
   }
 }
 
+/** @deprecated Auth = cookie HttpOnly via apiFetch(credentials: include). Ne persiste plus de JWT. */
 export function setToken(_token: string) {
-  if (typeof window === "undefined") return;
-  // Compat legacy: on ne persiste plus le JWT côté navigateur.
-  localStorage.removeItem(TOKEN_KEY);
-  notifyAuthSessionChanged();
+  clearToken();
 }
 
+/** @deprecated Toujours null — la session vit dans le cookie, pas dans localStorage. */
 export function getToken(): string | null {
   return null;
 }
 
+/** Efface d’éventuels restes localStorage + notifie l’UI (après logout / 401). */
 export function clearToken() {
   if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_KEY);
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+  } catch {
+    // ignore
+  }
   notifyAuthSessionChanged();
 }
 
@@ -62,6 +67,7 @@ function decodeJwtPayload(token: string | null): Record<string, unknown> | null 
   }
 }
 
+/** @deprecated Préférer fetchMe() — plus de JWT côté client. */
 export function getRoleFromToken(token: string | null): Role | null {
   if (!token) return null;
   const payload = decodeJwtPayload(token);
@@ -69,12 +75,13 @@ export function getRoleFromToken(token: string | null): Role | null {
   return role === "worker" || role === "director" ? (role as Role) : null;
 }
 
+/** @deprecated Préférer fetchMe() — plus de JWT côté client. */
 export function isTokenExpired(token: string | null, skewSeconds = 30): boolean {
   if (!token) return true;
   const payload = decodeJwtPayload(token);
   const expRaw = payload?.exp;
   const expSeconds = typeof expRaw === "number" ? expRaw : Number(expRaw);
-  if (!Number.isFinite(expSeconds)) return false; // pas de exp → on ne suppose pas expiré
+  if (!Number.isFinite(expSeconds)) return false;
   const nowSeconds = Date.now() / 1000;
   return nowSeconds >= expSeconds - skewSeconds;
 }
@@ -95,7 +102,6 @@ export async function fetchMe(): Promise<AuthMe | null> {
   } catch (e: unknown) {
     const msg = String((e as Error)?.message || "");
     if (msg.includes("401")) {
-      // token invalide/expiré → forcer reconnexion
       clearToken();
       return null;
     }
@@ -114,5 +120,3 @@ export async function logout() {
     clearToken();
   }
 }
-
-

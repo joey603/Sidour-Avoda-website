@@ -23,8 +23,7 @@ const dayLabels: Record<string, string> = {
   wed: "רביעי",
   thu: "חמישי",
   fri: "שישי",
-  sat: "שבת",
-};
+  sat: "שבת"};
 
 const isRtlName = (s: string) => /[\u0590-\u05FF]/.test(String(s || "")); // hébreu
 
@@ -50,8 +49,7 @@ function normalizeWeekPlanPulls(raw: unknown): Record<string, WeekPlanPullEntry>
     if (!beforeName || !beforeStart || !beforeEnd || !afterName || !afterStart || !afterEnd) continue;
     out[String(key)] = {
       before: { name: beforeName, start: beforeStart, end: beforeEnd },
-      after: { name: afterName, start: afterStart, end: afterEnd },
-    };
+      after: { name: afterName, start: afterStart, end: afterEnd }};
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -95,8 +93,7 @@ export default function WorkerHistoryPage() {
       name: workerName,
       max_shifts: workerData.max_shifts,
       roles: workerData.roles,
-      availability: workerData.availability,
-    };
+      availability: workerData.availability};
   }, [workerName, workerData]);
 
   // Nombre de עובדים requis (comme sur le planning directeur)
@@ -150,13 +147,11 @@ export default function WorkerHistoryPage() {
           if (parsed.availability && typeof parsed.availability === 'object') {
             return {
               availability: parsed.availability,
-              max_shifts: typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6 ? parsed.maxShifts : undefined,
-            };
+              max_shifts: typeof parsed.maxShifts === 'number' && parsed.maxShifts >= 1 && parsed.maxShifts <= 6 ? parsed.maxShifts : undefined};
           } else {
             // Sinon, c'est directement l'objet availability
             return {
-              availability: parsed,
-            };
+              availability: parsed};
           }
         }
       }
@@ -186,9 +181,7 @@ export default function WorkerHistoryPage() {
       
       try {
         // Charger les sites où le travailleur est enregistré
-        const sitesList = await apiFetch<Site[]>("/public/sites/worker-sites", {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        });
+        const sitesList = await apiFetch<Site[]>("/public/sites/worker-sites");
         // Sites actifs d’abord (comme la logique « fiche » côté directeur), puis nom
         const sorted = [...(sitesList || [])].sort((a, b) => {
           const rank = (s: Site) => {
@@ -237,9 +230,7 @@ export default function WorkerHistoryPage() {
     setSelectedSiteRemovedByPlanning(false);
     try {
       // Charger la config complète du site
-      const site = await apiFetch<{ id: number; name: string; config: any }>(`/public/sites/${siteId}/config`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-      });
+      const site = await apiFetch<{ id: number; name: string; config: any }>(`/public/sites/${siteId}/config`);
       setSiteConfig(site?.config || null);
       
       // Charger les données du worker depuis le serveur (source de vérité)
@@ -251,11 +242,7 @@ export default function WorkerHistoryPage() {
           roles: string[];
           availability: Record<string, string[]>;
           answers: { general?: Record<string, any>; perDay?: Record<string, any> } | Record<string, any>;
-        }>(`/public/sites/${siteId}/worker-availability`, {
-          headers: { 
-            Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-          },
-        });
+        }>(`/public/sites/${siteId}/worker-availability`);
         
         if (workerInfo) {
           // Utiliser les זמינות depuis le serveur (source de vérité)
@@ -268,8 +255,7 @@ export default function WorkerHistoryPage() {
           setWorkerData({
             max_shifts: finalMaxShifts,
             roles: workerInfo.roles || [],
-            availability: finalAvailability,
-          });
+            availability: finalAvailability});
         }
       } catch (e2: any) {
         // Si le serveur échoue, essayer de charger depuis localStorage comme fallback
@@ -279,8 +265,7 @@ export default function WorkerHistoryPage() {
           setWorkerData({
             max_shifts: storedData.max_shifts,
             roles: [],
-            availability: storedData.availability || {},
-          });
+            availability: storedData.availability || {}});
         }
       }
     } catch (e: any) {
@@ -320,9 +305,8 @@ export default function WorkerHistoryPage() {
         if (!archived) {
           try {
             fromApi = await apiFetch<any>(`/public/sites/${selectedSiteId}/week-plan?week=${encodeURIComponent(wk)}`, {
-              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
               cache: "no-store" as any,
-            });
+      });
           } catch {
             fromApi = null;
           }
@@ -334,8 +318,7 @@ export default function WorkerHistoryPage() {
             assignments: fa.assignments as Record<string, Record<string, string[][]>>,
             isManual: !!fa.isManual,
             workers: Array.isArray(fa.workers) ? fa.workers : undefined,
-            pulls: normalizeWeekPlanPulls(fa.pulls),
-          });
+            pulls: normalizeWeekPlanPulls(fa.pulls)});
           return;
         }
       } catch {}
@@ -349,8 +332,7 @@ export default function WorkerHistoryPage() {
               assignments: parsed.assignments,
               isManual: !!parsed.isManual,
               workers: Array.isArray(parsed.workers) ? parsed.workers : undefined,
-              pulls: normalizeWeekPlanPulls(parsed?.pulls),
-            });
+              pulls: normalizeWeekPlanPulls(parsed?.pulls)});
             return;
           }
         }

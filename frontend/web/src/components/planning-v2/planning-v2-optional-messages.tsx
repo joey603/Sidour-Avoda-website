@@ -99,7 +99,6 @@ export function PlanningV2OptionalMessages({
       setMessagesLoading(true);
       const res = await apiFetch<OptionalMessage[]>(
         `/director/sites/${siteId}/messages?week=${encodeURIComponent(wk)}`,
-        { headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` } },
       );
       setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
     } catch {
@@ -270,7 +269,6 @@ export function PlanningV2OptionalMessages({
                             `/director/sites/${siteId}/messages/${m.id}?week=${encodeURIComponent(wk)}`,
                             {
                               method: "DELETE",
-                              headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             },
                           );
                         } catch {
@@ -299,7 +297,6 @@ export function PlanningV2OptionalMessages({
                         try {
                           const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages/${m.id}`, {
                             method: "PATCH",
-                            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                             body: JSON.stringify({ scope, week_iso: wk }),
                           });
                           setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
@@ -488,7 +485,6 @@ export function PlanningV2OptionalMessages({
                     if (editingMessageId) {
                       const res = await apiFetch<OptionalMessage[]>(`/director/sites/${siteId}/messages/${editingMessageId}`, {
                         method: "PATCH",
-                        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                         body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
                       });
                       setMessages(Array.isArray(res) ? sortMessagesChronologically(res) : []);
@@ -497,7 +493,6 @@ export function PlanningV2OptionalMessages({
                     }
                     const created = await apiFetch<OptionalMessage>(`/director/sites/${siteId}/messages`, {
                       method: "POST",
-                      headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                       body: JSON.stringify({ text: txt, scope: targetScope, week_iso: wk }),
                     });
                     setMessages((prev) => sortMessagesChronologically([...prev, created]));

@@ -1320,7 +1320,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             const raw = await apiFetch<Record<string, unknown> | null>(
               `/director/sites/${id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`,
               {
-                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
                 cache: "no-store" as RequestCache,
               },
             );

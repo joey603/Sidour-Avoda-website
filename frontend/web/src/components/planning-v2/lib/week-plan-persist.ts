@@ -55,7 +55,6 @@ export async function persistWeekPlanToApi(
   const week_iso = getWeekKeyISO(weekStart);
   await apiFetch(`/director/sites/${siteId}/week-plan`, {
     method: "PUT",
-    headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
     body: JSON.stringify({ week_iso, scope, data }),
   });
 }
@@ -69,7 +68,6 @@ export async function persistAutoWeekPlanDraftToApi(
   const week_iso = getWeekKeyISO(weekStart);
   await apiFetch(`/director/sites/${siteId}/week-plan`, {
     method: "PUT",
-    headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
     body: JSON.stringify({ week_iso, scope: "auto", data }),
   });
 }

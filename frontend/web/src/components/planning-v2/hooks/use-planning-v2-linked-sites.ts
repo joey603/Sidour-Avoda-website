@@ -41,7 +41,6 @@ export function usePlanningV2LinkedSites(siteId: string, weekStart: Date) {
       const list = await apiFetch<LinkedSiteRow[]>(
         `/director/sites/${siteId}/linked-sites?week=${encodeURIComponent(wk)}`,
         {
-          headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           cache: "no-store",
         },
       );

@@ -98,9 +98,7 @@ export default function DirectorDashboard() {
     (async () => {
       setSitesLoading(true);
       try {
-        const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
         const data = await apiFetch<Site[]>("/director/sites/", {
-          headers: { Authorization: `Bearer ${token}` },
           cache: "no-store" as RequestCache,
         });
         if (!cancelled) setSites(Array.isArray(data) ? data : []);

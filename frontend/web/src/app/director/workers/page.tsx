@@ -69,7 +69,6 @@ export default function WorkersList() {
   async function fetchWorkers() {
     try {
       const list = await apiFetch<Worker[]>("/director/sites/all-workers", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as RequestCache,
       });
       setWorkers(list || []);
@@ -81,7 +80,6 @@ export default function WorkersList() {
   async function fetchSites() {
     try {
       const list = await apiFetch<Site[]>("/director/sites/", {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as RequestCache,
       });
       setSites(list || []);
@@ -177,7 +175,6 @@ export default function WorkersList() {
       try {
       await apiFetch(`/director/sites/${selectedSiteId}/create-worker-user`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: newWorkerName.trim(),
           phone: normalizedNewWorkerPhone,
@@ -211,7 +208,6 @@ export default function WorkersList() {
       try {
         await apiFetch(`/director/sites/${selectedSiteId}/workers`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         body: JSON.stringify({
           name: newWorkerName.trim(),
           phone: normalizedNewWorkerPhone, // Passer le téléphone pour lier automatiquement au User

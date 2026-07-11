@@ -20,7 +20,6 @@ async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "direc
     return await apiFetch<Record<string, unknown> | null>(
       `/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`,
       {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as RequestCache,
       },
     );

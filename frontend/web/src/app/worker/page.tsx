@@ -224,7 +224,6 @@ export default function WorkerDashboard() {
     try {
       const wk = iso(weekStart);
       const fromApi = await apiFetch<any>(`/public/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         cache: "no-store" as any,
       });
       if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
@@ -261,7 +260,6 @@ export default function WorkerDashboard() {
         const sitesList = await apiFetch<Array<{ id: number; name: string; site_deleted?: boolean }>>(
           "/public/sites/worker-sites",
           {
-            headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
           },
         );
         const activeSites = (sitesList || []).filter((s) => !s.site_deleted);
@@ -286,7 +284,6 @@ export default function WorkerDashboard() {
             const siteConfig = await apiFetch<{ id: number; name: string; config: any }>(
               `/public/sites/${site.id}/config`,
               {
-                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
               },
             );
 
@@ -297,13 +294,11 @@ export default function WorkerDashboard() {
             const messagesCurrent = await apiFetch<SiteMessage[]>(
               `/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(currentWeekStart))}`,
               {
-                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
               },
             );
             const messagesNext = await apiFetch<SiteMessage[]>(
               `/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(nextWeekStart))}`,
               {
-                headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
               },
             );
 
