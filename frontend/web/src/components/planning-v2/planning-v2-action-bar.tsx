@@ -202,7 +202,12 @@ export function PlanningV2ActionBar({
     ),
   );
   const canAltPrev = alternativesInteractive && hasAlternatives && altCurrent > 0;
-  const canAltNext = alternativesInteractive && hasAlternatives && altCurrent < alternativeCount - 1;
+  // Pendant le streaming : autoriser « suivant » même en bout de liste — le handler
+  // flushe les alternatives SSE en attente ; s’il n’y en a pas encore, le clamp no-op.
+  const canAltNext =
+    alternativesInteractive &&
+    hasAlternatives &&
+    (altCurrent < alternativeCount - 1 || (generationRunning && moreAlternativesAvailable));
   const canRequestMoreAlternatives =
     alternativesInteractive &&
     hasAlternatives &&

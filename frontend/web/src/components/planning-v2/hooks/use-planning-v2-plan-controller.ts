@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
@@ -19,6 +19,7 @@ import {
   buildPersistableLinkedPlans,
   clearLinkedPlansFromMemory,
   readLinkedPlansFromMemory,
+  readMultiSiteNavigationInApp,
   saveLinkedPlansToMemory,
   type LinkedSitePlan,
 } from "../lib/multi-site-linked-memory";
@@ -640,6 +641,9 @@ export function usePlanningV2PlanController({
   const bestGeneratedHoleScoreRef = useRef<HoleScore | null>(null);
   const appendUniqueCountRef = useRef(0);
   const alternativesFlushRafRef = useRef<number | null>(null);
+  const generationRunningRef = useRef(false);
+  /** Index choisi manuellement pendant le streaming — ne pas le faire écraser par la mémoire. */
+  const userPickedAltIndexRef = useRef<number | null>(null);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
   const workersRef = useRef(workers);
 
@@ -650,6 +654,9 @@ export function usePlanningV2PlanController({
     draftPullsRef.current = draftPulls || {};
   }, [draftPulls]);
   useEffect(() => {
+    // Pendant le SSE, la ref est la source de vérité (en avance sur le state).
+    // Ne pas l’écraser avec un state en retard (perdrait des alternatives streamées).
+    if (generationRunningRef.current) return;
     draftAlternativesRef.current = draftAlternatives;
   }, [draftAlternatives]);
   useEffect(() => {
@@ -726,6 +733,13 @@ export function usePlanningV2PlanController({
 
   const generationRunning = localGenerationRunning || sharedLinkedGenerationRunning;
   const generationStoppable = (localGenerationRunning && abortRef.current !== null) || (linkedSitesLength > 1 && sharedLinkedGenerationRunning);
+  generationRunningRef.current = generationRunning;
+
+  useEffect(() => {
+    if (!generationRunning) {
+      userPickedAltIndexRef.current = null;
+    }
+  }, [generationRunning]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -791,7 +805,8 @@ export function usePlanningV2PlanController({
       // Pendant יצירת תכנון (SSE), le flux met déjà à jour l’état React — ne pas réappliquer
       // la mémoire ici : sinon `linked-plans-memory-updated` (microtâche) rivalise avec
       // `setDraftAlternatives` et peut provoquer « Maximum update depth exceeded ».
-      if (genBusyRef.current) return;
+      // Aussi: sur les sites liés (genBusyRef false), éviter d’écraser la navigation חלופות.
+      if (genBusyRef.current || generationRunningRef.current) return;
       if (protectOfficialSavedPlan) {
         setSelectedAlternativeIndex(0);
         return;
@@ -1030,10 +1045,25 @@ export function usePlanningV2PlanController({
     // Pendant la génération SSE, `alternativeCount` bouge à chaque événement — ne pas resynchroniser
     // l’index ici (sinon boucle avec les effets du résumé / filtres qui appellent aussi setSelected).
     if (generationRunning) return;
-    if (safeAlternativeIndex !== selectedAlternativeIndex) {
-      setSelectedAlternativeIndex(safeAlternativeIndex);
+    if (safeAlternativeIndex === selectedAlternativeIndex) return;
+    // Multi-site: si l’index mémoire (ex. חלופה 19) dépasse encore assignmentVariants
+    // (plan pas entièrement réhydraté), ne pas écraser vers 0 — sinon la navigation
+    // « פתח אתר » se fige sur חלופה 1.
+    if (selectedAlternativeIndex > safeAlternativeIndex) {
+      if (readMultiSiteNavigationInApp()) return;
+      if (linkedSitesLength > 1) {
+        const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
+        if (memIdx === selectedAlternativeIndex) return;
+      }
     }
-  }, [generationRunning, safeAlternativeIndex, selectedAlternativeIndex]);
+    setSelectedAlternativeIndex(safeAlternativeIndex);
+  }, [
+    generationRunning,
+    linkedSitesLength,
+    safeAlternativeIndex,
+    selectedAlternativeIndex,
+    weekStart,
+  ]);
 
   const displayAssignments = useMemo(() => {
     if (assignmentVariants.length === 0) return null;
@@ -1344,18 +1374,21 @@ export function usePlanningV2PlanController({
       if (alternativesFlushRafRef.current != null) return;
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
         alternativesFlushRafRef.current = null;
-        setDraftAlternatives((prev) => {
-          const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
-          const stopLimit = stopVisibleAlternativeCountRef.current;
-          const maxDraftAlternatives =
-            stopLimit == null ? normalized.length : draftAssignmentsRef.current ? Math.max(0, stopLimit - 1) : stopLimit;
-          const next = normalized.slice(0, maxDraftAlternatives);
-          if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
-            draftAlternativesRef.current = next;
-          }
-          // Évite les renders inutiles quand rien n'a changé.
-          if (prev.length === next.length) return prev;
-          return [...next];
+        // Transition basse priorité : les clics חלופות restent urgents et ne se mettent pas en file.
+        startTransition(() => {
+          setDraftAlternatives((prev) => {
+            const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+            const stopLimit = stopVisibleAlternativeCountRef.current;
+            const maxDraftAlternatives =
+              stopLimit == null ? normalized.length : draftAssignmentsRef.current ? Math.max(0, stopLimit - 1) : stopLimit;
+            const next = normalized.slice(0, maxDraftAlternatives);
+            if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
+              draftAlternativesRef.current = next;
+            }
+            // Évite les renders inutiles quand rien n'a changé.
+            if (prev.length === next.length) return prev;
+            return [...next];
+          });
         });
       });
     };
@@ -2497,12 +2530,45 @@ export function usePlanningV2PlanController({
     [autoPullsStorageKey],
   );
 
+  const flushPendingAlternativesNow = useCallback(() => {
+    if (typeof window !== "undefined" && alternativesFlushRafRef.current != null) {
+      try {
+        window.cancelAnimationFrame(alternativesFlushRafRef.current);
+      } catch {
+        /* ignore */
+      }
+      alternativesFlushRafRef.current = null;
+    }
+    const stopLimit = stopVisibleAlternativeCountRef.current;
+    const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+    const maxDraftAlternatives =
+      stopLimit == null ? normalized.length : draftAssignmentsRef.current ? Math.max(0, stopLimit - 1) : stopLimit;
+    const next = normalized.slice(0, maxDraftAlternatives);
+    if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
+      draftAlternativesRef.current = next;
+    }
+    setDraftAlternatives((prev) => {
+      if (prev.length === next.length) {
+        return prev === draftAlternativesRef.current ? prev : [...next];
+      }
+      return [...next];
+    });
+    const hasBase = !!draftAssignmentsRef.current;
+    return (hasBase ? 1 : 0) + next.length;
+  }, [dedupeAlternatives]);
+
   const setSelectedAlternativeIndexSynced = useCallback(
     (index: number) => {
-      const next = Math.max(0, Number(index || 0));
-      setSelectedAlternativeIndex((prev) => {
-        return prev === next ? prev : next;
-      });
+      // Pendant le streaming, flusher les alternatives SSE en retard avant d’appliquer
+      // l’index. Pas de flushSync ici : ce setter est aussi appelé depuis des useEffect.
+      let maxIdx = Number.POSITIVE_INFINITY;
+      if (generationRunningRef.current) {
+        const liveCount = flushPendingAlternativesNow();
+        maxIdx = Math.max(0, liveCount - 1);
+      }
+      const next = Math.min(Math.max(0, Number(index || 0)), maxIdx);
+      userPickedAltIndexRef.current = next;
+      setSelectedAlternativeIndex((prev) => (prev === next ? prev : next));
       if (linkedSitesLength > 1) {
         const mem = readLinkedPlansFromMemory(weekStart);
         if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
@@ -2513,7 +2579,7 @@ export function usePlanningV2PlanController({
         }
       }
     },
-    [siteId, weekIso, linkedSitesLength, weekStart],
+    [flushPendingAlternativesNow, linkedSitesLength, siteId, weekIso, weekStart],
   );
 
   return {

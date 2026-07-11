@@ -131,6 +131,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (!navigationInApp) return null;
     const mem = readLinkedPlansFromMemory(weekStart);
     const plan = mem?.plansBySite?.[String(siteId)];
+    // Précharger base + alternatives pour que assignmentVariants couvre activeAltIndex
+    // dès le premier rendu (évite le clamp vers חלופה 1).
     const assignments =
       plan?.assignments && typeof plan.assignments === "object"
         ? (plan.assignments as Record<string, Record<string, string[][]>>)
@@ -272,10 +274,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const [linkedPlansMemoryTick, setLinkedPlansMemoryTick] = useState(0);
   useEffect(() => {
     if (linkedSites.length <= 1) return;
-    const bump = () => setLinkedPlansMemoryTick((n) => n + 1);
+    const bump = () => {
+      // Pendant le streaming SSE, ne pas re-render toute la page à chaque alternative
+      // (sinon les clics חלופות se mettent en file et « rattrapent » ensuite).
+      if (plan.generationRunning) return;
+      setLinkedPlansMemoryTick((n) => n + 1);
+    };
     window.addEventListener("linked-plans-memory-updated", bump as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", bump as EventListener);
-  }, [linkedSites.length]);
+  }, [linkedSites.length, plan.generationRunning]);
 
   const prevLinkedSitesLengthRef = useRef<number>(linkedSites.length);
   useEffect(() => {
@@ -574,10 +581,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       } catch {
         /* ignore */
       }
+      // Persister l’index חלופה avant le remount (comme legacy navigate-before-push).
+      const mem = readLinkedPlansFromMemory(weekStart);
+      if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
+        const nextIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
+        saveLinkedPlansToMemory(weekStart, mem.plansBySite, nextIdx);
+      }
       setMultiSiteNavigationLoading(true);
       router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
     },
-    [router, isoWeek],
+    [router, isoWeek, weekStart, plan.selectedAlternativeIndex],
   );
 
   const handleManualSlotDrop = useCallback(
@@ -1148,8 +1161,14 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const stopVisibleCount = readLinkedGenerationStopVisibleCountFromSession(getWeekKeyISO(weekStart));
     const visibleAlternativeCount = countLinkedPlanVisibleAlternatives(currentPlan, stopVisibleCount);
     const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
+    const rawActiveIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
+    // Pendant « פתח אתר », garder l’index partagé mémoire même si le plan cible
+    // n’a pas encore toutes ses alternatives chargées (sinon clamp → חלופה 1).
+    const activeIdx = multiSiteNavigationLoading
+      ? rawActiveIdx
+      : Math.min(rawActiveIdx, maxVisibleIndex);
     return {
-      activeIdx: Math.min(Math.max(0, Number(mem?.activeAltIndex || 0)), maxVisibleIndex),
+      activeIdx,
       currentPlanAlternativeCount: visibleAlternativeCount,
       hasCurrentPlan: !!currentPlan,
     };
@@ -1233,14 +1252,20 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     plan.generationRunning && !alternativesUiEnabled && alternativesBarHold !== null;
   const actionBarAltSnap = actionBarAlternativesFrozen ? alternativesBarHold : null;
   const actionBarAlternativesResetPending = plan.generationRunning && !actionBarAltSnap && plan.alternativeCount === 0;
+  // Geler la nav seulement pendant le reset initial (avant le 1er plan SSE).
+  // Dès que des חלופות streamées existent, prev/next restent interactifs.
+  const actionBarAlternativesNavFrozen = actionBarAlternativesFrozen || actionBarAlternativesResetPending;
 
   useEffect(() => {
     if (plan.generationRunning) return;
+    if (multiSiteNavigationLoading) return;
+    if (readMultiSiteNavigationInApp()) return;
     if (!summaryFilterState.hasActiveFilters) return;
     if (effectiveAlternativeIndex === plan.selectedAlternativeIndex) return;
     plan.setSelectedAlternativeIndex(effectiveAlternativeIndex);
   }, [
     effectiveAlternativeIndex,
+    multiSiteNavigationLoading,
     plan.generationRunning,
     plan.selectedAlternativeIndex,
     plan.setSelectedAlternativeIndex,
@@ -1252,14 +1277,20 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (!multiSiteNavigationLoading) return;
     if (!navigationMemorySnapshot.hasCurrentPlan) return;
     const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
-    if (plan.alternativeCount <= targetIdx) return;
-    if (plan.selectedAlternativeIndex === targetIdx) return;
-    plan.setSelectedAlternativeIndex(targetIdx);
+    const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
+    // Attendre que les variantes locales rattrapent la mémoire (ou dépassent la cible).
+    if (plan.alternativeCount <= targetIdx) {
+      if (memoryCount <= 0 || plan.alternativeCount < memoryCount) return;
+    }
+    const appliedIdx = Math.min(targetIdx, Math.max(0, plan.alternativeCount - 1));
+    if (plan.selectedAlternativeIndex === appliedIdx) return;
+    plan.setSelectedAlternativeIndex(appliedIdx);
   }, [
     protectOfficialSavedPlan,
     multiSiteNavigationLoading,
     navigationMemorySnapshot.hasCurrentPlan,
     navigationMemorySnapshot.activeIdx,
+    navigationMemorySnapshot.currentPlanAlternativeCount,
     plan.alternativeCount,
     plan.selectedAlternativeIndex,
     plan.setSelectedAlternativeIndex,
@@ -1647,11 +1678,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       return;
     }
     const targetAlternativeIndex = navigationMemorySnapshot.activeIdx;
+    const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
     const hasDisplayablePlan = assignmentsNonEmpty(plan.displayAssignments);
+    const variantsCaughtUp =
+      plan.alternativeCount > targetAlternativeIndex ||
+      (memoryCount > 0 && plan.alternativeCount >= memoryCount);
+    const appliedTarget =
+      plan.alternativeCount > 0
+        ? Math.min(targetAlternativeIndex, plan.alternativeCount - 1)
+        : targetAlternativeIndex;
+    // Exiger la vraie חלופה partagée — pas Math.min(target, count-1) seul qui
+    // validait à tort חלופה 1 tant que le plan n’était pas réhydraté.
     const alternativesReady =
       hasDisplayablePlan &&
-      plan.selectedAlternativeIndex ===
-        Math.min(targetAlternativeIndex, Math.max(0, plan.alternativeCount - 1));
+      variantsCaughtUp &&
+      plan.selectedAlternativeIndex === appliedTarget;
     if (!alternativesReady) return;
     setMultiSiteNavigationLoading(false);
     clearMultiSiteNavigationInApp();
@@ -1670,7 +1711,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     siteLoading ||
     workersLoading ||
     (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
-    (multiSiteNavigationLoading && !assignmentsNonEmpty(plan.displayAssignments));
+    // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
+    multiSiteNavigationLoading;
 
   /** Pas de défilement de la page sous le panneau mobile « אתרים מקושרים » lorsqu’il est ouvert (< lg). */
   useEffect(() => {
@@ -2267,15 +2309,26 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           alternativesEnabled={
             alternativesUiVisible || actionBarAlternativesFrozen || actionBarAlternativesResetPending
           }
-          alternativesFrozen={actionBarAlternativesFrozen}
+          alternativesFrozen={actionBarAlternativesNavFrozen}
           alternativesFiltered={
             actionBarAltSnap ? actionBarAltSnap.alternativesFiltered : summaryFilterState.hasActiveFilters
           }
           alternativesTotalCount={actionBarAltSnap ? actionBarAltSnap.alternativesTotalCount : plan.alternativeCount}
           onSelectedAlternativeChange={(visibleIndex) => {
             const target = visibleAlternativeIndices[visibleIndex];
-            if (typeof target !== "number") return;
-            plan.setSelectedAlternativeIndex(target);
+            if (typeof target === "number") {
+              plan.setSelectedAlternativeIndex(target);
+              return;
+            }
+            // Pendant le streaming : avancer/reculer en index absolu même si la liste
+            // visible n’a pas encore rattrapé le flush SSE.
+            if (plan.generationRunning) {
+              const abs = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
+              const delta = visibleIndex - Math.max(0, selectedVisibleAlternativeIndex);
+              if (delta !== 0) {
+                plan.setSelectedAlternativeIndex(Math.max(0, abs + delta));
+              }
+            }
           }}
         />
       </PlanningV2LayoutShell>
