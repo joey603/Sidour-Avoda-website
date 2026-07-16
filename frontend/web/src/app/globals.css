@@ -217,6 +217,10 @@
 
 .app-loading-overlay__content {
   display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: calc(100% - var(--app-top-nav-height, 0px));
+  margin-top: var(--app-top-nav-height, 0px);
   align-items: center;
   justify-content: center;
   padding:
@@ -252,6 +256,20 @@
   .dark .app-loading-overlay {
     box-shadow: 0 0 0 max(env(safe-area-inset-top), 48px) #09090b;
   }
+}
+
+.screen-below-top-nav-center {
+  min-height: calc(100vh - var(--app-top-nav-height, 0px));
+  min-height: calc(100dvh - var(--app-top-nav-height, 0px));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding:
+    max(1rem, env(safe-area-inset-top))
+    max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom))
+    max(1rem, env(safe-area-inset-left));
 }
 
 /* Barre de défilement visible — planning v2 : panneau « אתרים מקושרים » (mobile + desktop) */

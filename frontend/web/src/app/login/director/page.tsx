@@ -100,7 +100,7 @@ function DirectorLoginInner() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
+    <div className="screen-below-top-nav-center">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-4">
           <h1 className="text-2xl font-semibold">התחברות מנהל</h1>
@@ -156,7 +156,7 @@ function DirectorLoginInner() {
 
 export default function DirectorLoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center p-6"><LoadingAnimation size={80} /></div>}>
+    <Suspense fallback={<div className="screen-below-top-nav-center"><LoadingAnimation size={80} /></div>}>
       <DirectorLoginInner />
     </Suspense>
   );

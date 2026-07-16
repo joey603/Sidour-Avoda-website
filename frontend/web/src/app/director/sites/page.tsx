@@ -1004,7 +1004,7 @@ export default function SitesList() {
   }
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen-mobile bg-white p-6 dark:bg-zinc-950">
       <div className="mx-auto max-w-3xl space-y-6">
         {/* Carte statistiques: nombre de sites */}
         <section className="grid grid-cols-1 gap-3">

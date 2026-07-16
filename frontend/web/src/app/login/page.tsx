@@ -11,7 +11,7 @@ function LoginInner() {
   const workerHref = returnUrl ? `/login/worker?returnUrl=${encodeURIComponent(returnUrl)}` : "/login/worker";
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
+    <div className="screen-below-top-nav-center">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 space-y-4">
         <div>
           <h1 className="text-2xl font-semibold">התחברות</h1>
@@ -40,7 +40,7 @@ function LoginInner() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><p>מעביר...</p></div>}>
+    <Suspense fallback={<div className="screen-below-top-nav-center"><p>מעביר...</p></div>}>
       <LoginInner />
     </Suspense>
   );
