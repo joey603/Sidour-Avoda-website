@@ -48,8 +48,8 @@ function useVisualViewportOverlayStyle(enabled: boolean) {
       if (!vv) {
         el.style.top = `-${topPad}px`;
         el.style.left = "0px";
-        el.style.width = "100%";
-        el.style.height = `calc(100% + ${topPad + bottomPad}px)`;
+        el.style.width = "100vw";
+        el.style.height = `calc(100dvh + ${topPad + bottomPad}px)`;
         return;
       }
 
