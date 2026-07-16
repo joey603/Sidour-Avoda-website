@@ -22,8 +22,9 @@ jobs:
       - name: Deploy on Oracle via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.ORACLE_HOST }}
-          username: ${{ secrets.ORACLE_USER }}
+          # host/user publics (voir DEPLOY.md) — seule la clé reste en secret repo
+          host: 129.159.131.86
+          username: ubuntu
           key: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
           port: 22
           command_timeout: 10m

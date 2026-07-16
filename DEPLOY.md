@@ -14,20 +14,20 @@ au code pousse sur `main`.
 
 Déclenchement manuel : onglet Actions → **Deploy Oracle backend** → Run workflow.
 
-Secrets repo requis (`Settings → Secrets and variables → Actions`) :
+Secret repo requis (`Settings → Secrets and variables → Actions`) :
 
 | Secret | Valeur |
 |--------|--------|
-| `ORACLE_HOST` | `129.159.131.86` |
-| `ORACLE_USER` | `ubuntu` |
 | `ORACLE_SSH_PRIVATE_KEY` | contenu de la clé privée SSH Oracle |
+
+(`host` / `user` sont dans le workflow, pas des secrets.)
 
 ```bash
 # Depuis le Mac (une fois)
-gh secret set ORACLE_HOST --body "129.159.131.86"
-gh secret set ORACLE_USER --body "ubuntu"
-gh secret set ORACLE_SSH_PRIVATE_KEY < /Users/yoelibarthel/Downloads/ssh-key-2026-04-08.key
+gh secret set ORACLE_SSH_PRIVATE_KEY -R joey603/Sidour-Avoda-website < /Users/yoelibarthel/Downloads/ssh-key-2026-04-08.key
 ```
+
+Si l’IDE affiche encore « Context access might be invalid: ORACLE_SSH_PRIVATE_KEY », c’est un faux positif de l’extension GitHub Actions : le secret existe bien et le workflow tourne.
 
 ## Serveur cible
 
