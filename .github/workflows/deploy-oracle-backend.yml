@@ -1,0 +1,41 @@
+name: Deploy Oracle backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "deploy/oracle/**"
+      - ".github/workflows/deploy-oracle-backend.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-oracle-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: SSH deploy + restart sidour-backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Deploy on Oracle via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USER }}
+          key: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          port: 22
+          command_timeout: 10m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            # Premier pull minimal pour récupérer le script à jour, puis deploy complet
+            cd /home/ubuntu/Sidour-Avoda-website
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            if [[ -f deploy/oracle/deploy-backend.sh ]]; then
+              install -m 0755 deploy/oracle/deploy-backend.sh /home/ubuntu/deploy-backend.sh
+            fi
+            /home/ubuntu/deploy-backend.sh

@@ -3,6 +3,32 @@
 Ce guide explique comment mettre a jour le backend de production pour qu'il corresponde
 au code pousse sur `main`.
 
+## Déploiement automatique (GitHub Actions)
+
+À chaque **push sur `main`** qui touche `backend/**` ou `deploy/oracle/**`, le workflow
+[`.github/workflows/deploy-oracle-backend.yml`](.github/workflows/deploy-oracle-backend.yml) :
+
+1. se connecte en SSH à Oracle
+2. lance [`deploy/oracle/deploy-backend.sh`](deploy/oracle/deploy-backend.sh) (`git pull` + pip + restart forcé)
+3. vérifie `GET /health`
+
+Déclenchement manuel : onglet Actions → **Deploy Oracle backend** → Run workflow.
+
+Secrets repo requis (`Settings → Secrets and variables → Actions`) :
+
+| Secret | Valeur |
+|--------|--------|
+| `ORACLE_HOST` | `129.159.131.86` |
+| `ORACLE_USER` | `ubuntu` |
+| `ORACLE_SSH_PRIVATE_KEY` | contenu de la clé privée SSH Oracle |
+
+```bash
+# Depuis le Mac (une fois)
+gh secret set ORACLE_HOST --body "129.159.131.86"
+gh secret set ORACLE_USER --body "ubuntu"
+gh secret set ORACLE_SSH_PRIVATE_KEY < /Users/yoelibarthel/Downloads/ssh-key-2026-04-08.key
+```
+
 ## Serveur cible
 
 - **IP (Oracle Cloud)** : `129.159.131.86`
@@ -25,80 +51,27 @@ Une fois connecté **sur le serveur**, pour lancer le déploiement (après avoir
 - Venv : `/home/ubuntu/Sidour-Avoda-website/backend/.venv`
 - Service systemd : `sidour-backend`
 
-## 1. Creer le script de deploiement
+## Déploiement manuel (secours)
 
-Sur le serveur Oracle :
-
-```bash
-nano /home/ubuntu/deploy-backend.sh
-```
-
-Colle ce contenu :
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-PROJECT_DIR="/home/ubuntu/Sidour-Avoda-website"
-BACKEND_DIR="$PROJECT_DIR/backend"
-VENV_DIR="$BACKEND_DIR/.venv"
-BRANCH="main"
-SERVICE_NAME="sidour-backend"
-
-echo "==> Deploiement backend"
-cd "$PROJECT_DIR"
-
-echo "==> Git fetch"
-git fetch origin
-
-echo "==> Checkout $BRANCH"
-git checkout "$BRANCH"
-
-echo "==> Pull latest"
-git pull --ff-only origin "$BRANCH"
-
-echo "==> Activer venv"
-source "$VENV_DIR/bin/activate"
-
-echo "==> Installer dependances"
-pip install -r "$BACKEND_DIR/requirements.txt"
-
-echo "==> Verification syntaxe Python"
-python3 -m py_compile "$BACKEND_DIR/app/main.py" "$BACKEND_DIR/app/sites.py" "$BACKEND_DIR/app/schemas.py" "$BACKEND_DIR/app/models.py"
-
-echo "==> Restart service $SERVICE_NAME"
-sudo systemctl restart "$SERVICE_NAME"
-
-echo "==> Status service"
-sudo systemctl --no-pager --full status "$SERVICE_NAME"
-
-echo "==> Derniers logs"
-sudo journalctl -u "$SERVICE_NAME" -n 50 --no-pager
-
-echo "==> Deploiement termine"
-```
-
-## 2. Rendre le script executable
-
-```bash
-chmod +x /home/ubuntu/deploy-backend.sh
-```
-
-## 3. Lancer le script
+Sur le serveur :
 
 ```bash
 /home/ubuntu/deploy-backend.sh
 ```
 
-## 4. Verifier que le backend fonctionne
+Le script source de vérité est [`deploy/oracle/deploy-backend.sh`](deploy/oracle/deploy-backend.sh)
+(copié vers `/home/ubuntu/deploy-backend.sh` à chaque deploy).
+
+## Verifier que le backend fonctionne
 
 ```bash
 sudo systemctl status sidour-backend --no-pager
 sudo journalctl -u sidour-backend -n 50 --no-pager
+curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/docs
 ```
 
-Si `sidour-backend` est `active (running)` et que `/docs` repond, le backend de production
+Si `sidour-backend` est `active (running)` et que `/health` repond, le backend de production
 correspond bien au code pousse.
 
 ---
