@@ -81,7 +81,7 @@ export function WorkerEditModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[10000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="flex h-[72vh] h-[72dvh] min-h-0 max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[34rem]">
         <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">
@@ -344,9 +344,18 @@ export function WorkerEditModal({
             type="button"
             onClick={() => void onSave()}
             disabled={workerModalSaving}
-            className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:cursor-not-allowed disabled:opacity-60"
+            aria-busy={workerModalSaving}
+            className="inline-flex min-w-[5.5rem] items-center justify-center rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:cursor-not-allowed disabled:opacity-90"
           >
-            {workerModalSaving ? "שומר..." : "שמור"}
+            {workerModalSaving ? (
+              <span
+                className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
+                role="status"
+                aria-label="שומר"
+              />
+            ) : (
+              "שמור"
+            )}
           </button>
         </div>
       </div>

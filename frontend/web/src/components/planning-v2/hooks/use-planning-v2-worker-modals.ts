@@ -21,7 +21,8 @@ export function usePlanningV2WorkerModals(
   weekStart: Date,
   workers: PlanningWorker[],
   availabilityOverlaysByWorkerName: Record<string, Record<string, string[]>>,
-  reloadWorkers: () => void,
+  reloadWorkers: (opts?: { silent?: boolean }) => void | Promise<void>,
+  onWorkerModalSavingChange?: (saving: boolean) => void,
 ) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [questionFilters, setQuestionFilters] = useState<Record<string, string | undefined>>({});
@@ -384,6 +385,7 @@ export function usePlanningV2WorkerModals(
     }
 
     setWorkerModalSaving(true);
+    onWorkerModalSavingChange?.(true);
     try {
       if (editingWorkerId) {
         const currentWorker = editingWorkerResolved;
@@ -419,10 +421,10 @@ export function usePlanningV2WorkerModals(
           });
           void updated;
           await persistWorkerNameWeeklyOverride(siteId, weekStart, trimmed, newWorkerAvailability);
+          await reloadWorkers({ silent: true });
           toast.success("עובד עודכן בהצלחה!");
           setOriginalAvailability(cloneWorkerAvailability(newWorkerAvailability));
           closeWorkerEditor();
-          reloadWorkers();
         };
 
         if (availabilityChanged && linkedOtherSiteNames.length > 0) {
@@ -449,14 +451,15 @@ export function usePlanningV2WorkerModals(
       });
       void result;
       await persistWorkerNameWeeklyOverride(siteId, weekStart, trimmed, newWorkerAvailability);
+      await reloadWorkers({ silent: true });
       toast.success("עובד נוסף בהצלחה!");
       closeWorkerEditor();
-      reloadWorkers();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "";
       toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
     } finally {
       setWorkerModalSaving(false);
+      onWorkerModalSavingChange?.(false);
     }
   }, [
     closeWorkerEditor,
@@ -467,6 +470,7 @@ export function usePlanningV2WorkerModals(
     newWorkerMax,
     newWorkerName,
     newWorkerRoles,
+    onWorkerModalSavingChange,
     originalAvailability,
     reloadWorkers,
     site?.name,
@@ -574,6 +578,7 @@ export function usePlanningV2WorkerModals(
         pendingLinkedAvailabilitySaveRef.current = null;
         setLinkedAvailabilityConfirmSites(null);
         setWorkerModalSaving(true);
+        onWorkerModalSavingChange?.(true);
         try {
           if (run) await run(true);
         } catch (e: unknown) {
@@ -581,6 +586,7 @@ export function usePlanningV2WorkerModals(
           toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
         } finally {
           setWorkerModalSaving(false);
+          onWorkerModalSavingChange?.(false);
         }
       },
     },

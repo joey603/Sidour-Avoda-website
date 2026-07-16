@@ -92,7 +92,8 @@ export function usePlanningV2SiteWorkers(siteId: string) {
     }
   }, [siteId]);
 
-  const reloadWorkers = useCallback(async () => {
+  const reloadWorkers = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) {
       setWorkers([]);
@@ -100,7 +101,7 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       return;
     }
     const req = ++loadReq.current;
-    setWorkersLoading(true);
+    if (!silent) setWorkersLoading(true);
     try {
       const wk = getWeekKeyISO(weekStart);
       const list = await apiFetch<Record<string, unknown>[]>(
@@ -118,7 +119,7 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       toast.error("שגיאה בטעינת עובדים", { description: msg });
       setWorkers([]);
     } finally {
-      if (req === loadReq.current) setWorkersLoading(false);
+      if (req === loadReq.current && !silent) setWorkersLoading(false);
     }
   }, [siteId, weekStart]);
 

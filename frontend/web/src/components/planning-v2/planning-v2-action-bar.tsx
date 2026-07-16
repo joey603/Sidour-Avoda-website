@@ -966,7 +966,7 @@ export function PlanningV2ActionBar({
                     "inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap [@media(orientation:landscape)_and_(max-width:1024px)]:px-2 [@media(orientation:landscape)_and_(max-width:1024px)]:py-1 [@media(orientation:landscape)_and_(max-width:1024px)]:text-xs " +
                     (canSavePlan
                       ? "border-green-600 bg-white text-green-700 hover:bg-green-50 dark:border-green-500 dark:bg-zinc-900 dark:text-green-300 dark:hover:bg-green-900/30"
-                      : "cursor-not-allowed border-zinc-200 bg-zinc-100 text-zinc-400 opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-500")
+                      : "cursor-not-allowed border-zinc-300 bg-zinc-300 text-zinc-600 opacity-60 dark:border-zinc-700 dark:bg-zinc-700 dark:text-zinc-400")
                   }
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>

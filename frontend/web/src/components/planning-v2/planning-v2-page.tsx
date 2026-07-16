@@ -170,6 +170,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const router = useRouter();
   const [editingSaved, setEditingSaved] = useState(false);
   const [editingSavedGenerationStarted, setEditingSavedGenerationStarted] = useState(false);
+  const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
   const [shiftHoursModeStationIdx, setShiftHoursModeStationIdx] = useState<number | null>(null);
   const [manualConfirm, setManualConfirm] = useState<{
@@ -1709,11 +1710,12 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   ]);
 
   const showPlanningLoadingOverlay =
-    siteLoading ||
-    workersLoading ||
-    (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
-    // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
-    multiSiteNavigationLoading;
+    !workerModalSaving &&
+    (siteLoading ||
+      workersLoading ||
+      (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
+      // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
+      multiSiteNavigationLoading);
 
   /** Pas de défilement de la page sous le panneau mobile « אתרים מקושרים » lorsqu’il est ouvert (< lg). */
   useEffect(() => {
@@ -2218,7 +2220,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             rows={workerRowsForTable}
             availabilityOverlays={availabilityOverlays}
             workersLoading={workersLoading}
+            reloadWorkers={reloadWorkers}
+            reloadWeeklyAvailability={reloadWeeklyAvailability}
             onWorkersChanged={refreshWorkersAndGrid}
+            onWorkerModalSavingChange={setWorkerModalSaving}
             workersNameDraggable={manualEditable}
             onWorkerNameDragPreview={handleDraggingWorkerChange}
             selectedWorkerName={manualDragWorkerName}

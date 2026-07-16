@@ -27,6 +27,10 @@ type PlanningWorkersSectionProps = {
   rows: Array<PlanningWorker & { availability: PlanningWorker["availability"] }>;
   availabilityOverlays?: Record<string, Record<string, string[]>>;
   workersLoading: boolean;
+  /** Recharge list עובדים (silent = pas d’overlay plein écran). */
+  reloadWorkers: (opts?: { silent?: boolean }) => void | Promise<void>;
+  reloadWeeklyAvailability: () => void | Promise<void>;
+  /** Refresh lourd (workers + plan + linked) — invitations / suppressions. */
   onWorkersChanged: () => void;
   /** גרירת שם לגריד במצב ידני */
   workersNameDraggable?: boolean;
@@ -36,6 +40,8 @@ type PlanningWorkersSectionProps = {
   onWorkerSelectToggle?: (workerName: string) => void;
   /** Site archivé — pas d’ajout / édition travailleurs */
   readOnly?: boolean;
+  /** Pendant שמור זמינות : masquer l’overlay flou directeur. */
+  onWorkerModalSavingChange?: (saving: boolean) => void;
 };
 
 export function PlanningWorkersSection({
@@ -46,6 +52,8 @@ export function PlanningWorkersSection({
   rows,
   availabilityOverlays = {},
   workersLoading,
+  reloadWorkers,
+  reloadWeeklyAvailability,
   onWorkersChanged,
   workersNameDraggable = false,
   onWorkerNameDragPreview,
@@ -53,10 +61,26 @@ export function PlanningWorkersSection({
   selectedWorkerFromGrid = false,
   onWorkerSelectToggle,
   readOnly = false,
+  onWorkerModalSavingChange,
 }: PlanningWorkersSectionProps) {
-  const modals = usePlanningV2WorkerModals(siteId, site, weekStart, workers, availabilityOverlays, () => {
-    onWorkersChanged();
-  });
+  const modals = usePlanningV2WorkerModals(
+    siteId,
+    site,
+    weekStart,
+    workers,
+    availabilityOverlays,
+    async (opts) => {
+      if (opts?.silent) {
+        await Promise.all([
+          Promise.resolve(reloadWorkers({ silent: true })),
+          Promise.resolve(reloadWeeklyAvailability()),
+        ]);
+        return;
+      }
+      onWorkersChanged();
+    },
+    onWorkerModalSavingChange,
+  );
 
   const [workerListSearch, setWorkerListSearch] = useState("");
 
