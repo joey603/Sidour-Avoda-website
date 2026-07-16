@@ -97,4 +97,8 @@ def test_health_public_no_auth(client):
     """Sonde /health pour chargeurs et tests de charge — sans auth."""
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body.get("status") == "ok"
+    # Absent hors Oracle (fichier watchdog manquant) → null ; présent en prod.
+    assert "watchdog" in body
+    assert body["watchdog"] is None or isinstance(body["watchdog"], dict)
