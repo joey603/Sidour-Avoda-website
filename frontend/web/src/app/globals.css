@@ -177,7 +177,7 @@
   height: -webkit-fill-available;
 }
 
-/* Overlay chargement natif/PWA : fond plein écran + animation centrée */
+/* Overlay chargement natif/PWA : fond plein écran opaque + animation centrée */
 .app-loading-overlay {
   position: fixed;
   top: 0;
@@ -197,9 +197,7 @@
   padding: 0;
   overflow: hidden;
   overscroll-behavior: none;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: #ffffff;
   /* Évite les couches iOS qui décalent le fixed sous la barre de statut */
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
@@ -217,10 +215,10 @@
 }
 
 .dark .app-loading-overlay {
-  background: rgba(9, 9, 11, 0.78);
+  background: #09090b;
 }
 
-/* PWA / plein écran : couvrir aussi les safe-areas (encoche) sans décaler le flou vers le bas */
+/* PWA / plein écran : couvrir aussi les safe-areas (encoche) */
 @media (display-mode: standalone), (display-mode: fullscreen) {
   .app-loading-overlay {
     top: 0;
@@ -231,12 +229,12 @@
     height: 100%;
     min-height: 100%;
     min-height: -webkit-fill-available;
-    /* Surcouverture légère si iOS décale le calque fixed */
-    box-shadow: 0 0 0 max(env(safe-area-inset-top), 48px) rgba(255, 255, 255, 0.82);
+    /* Surcouverture si iOS décale le calque fixed */
+    box-shadow: 0 0 0 max(env(safe-area-inset-top), 48px) #ffffff;
   }
 
   .dark .app-loading-overlay {
-    box-shadow: 0 0 0 max(env(safe-area-inset-top), 48px) rgba(9, 9, 11, 0.78);
+    box-shadow: 0 0 0 max(env(safe-area-inset-top), 48px) #09090b;
   }
 }
 

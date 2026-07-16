@@ -15,7 +15,7 @@ export function planningCellNames(cell: unknown): string[] {
   return cell.map((name) => String(name ?? "").trim()).filter(Boolean);
 }
 
-function normPullWorkerName(s: string): string {
+export function normPullWorkerName(s: string): string {
   return String(s || "")
     .normalize("NFKC")
     .trim()

@@ -157,6 +157,8 @@ export function PlanningV2ActionBar({
   /** Comme planning : יצירת תכנון bloquée si génération, plan serveur sans édition, ou mode ידני */
   const generationBlocked = readOnly || generationRunning || (isSavedMode && !editingSaved) || (isManual && !editingSaved);
   const showAutoManual = !isSavedMode || editingSaved;
+  /** En תכנון שמור verrouillé : pas de stop / יוצר même si un stream traîne encore. */
+  const showGenerationProgressUi = generationRunning && !(isSavedMode && !editingSaved);
 
   const canSavePlan =
     !readOnly &&
@@ -668,7 +670,7 @@ export function PlanningV2ActionBar({
         <div className="planning-v2-action-bar-inner mx-auto grid w-full max-w-none grid-cols-1 place-items-center gap-3 px-3 py-3 text-sm md:gap-4 md:py-4 sm:px-6">
           <div className="order-2 flex w-full flex-col items-center justify-center gap-2 md:order-1 md:gap-2">
             <div className="flex w-full flex-nowrap items-center justify-center gap-2 overflow-x-auto [@media(orientation:landscape)_and_(max-width:1024px)]:gap-1">
-              {generationRunning && generationStoppable && (
+              {showGenerationProgressUi && generationStoppable && (
                 <button
                   type="button"
                   onClick={() => onStopGeneration()}
@@ -683,7 +685,7 @@ export function PlanningV2ActionBar({
                 className={
                   "inline-flex shrink-0 overflow-hidden rounded-md border disabled:opacity-60 " +
                   (generationBlocked ? "border-zinc-300 dark:border-zinc-600" : "border-[#00A8E0]") +
-                  (generationRunning ? " backdrop-blur-md supports-[backdrop-filter]:bg-white/25 dark:supports-[backdrop-filter]:bg-zinc-900/35" : "")
+                  (showGenerationProgressUi ? " backdrop-blur-md supports-[backdrop-filter]:bg-white/25 dark:supports-[backdrop-filter]:bg-zinc-900/35" : "")
                 }
               >
                 <button
@@ -697,7 +699,7 @@ export function PlanningV2ActionBar({
                       : "bg-[#00A8E0] text-white hover:bg-[#0092c6]")
                   }
                 >
-                  {generationRunning ? (
+                  {showGenerationProgressUi ? (
                     <span className="inline-flex items-center gap-2">
                       <span
                         className="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-zinc-500/35 border-t-zinc-700 motion-safe:animate-spin dark:border-zinc-400/30 dark:border-t-zinc-100"

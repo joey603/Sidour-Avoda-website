@@ -25,7 +25,7 @@ import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { usePlanningV2PlanController } from "./hooks/use-planning-v2-plan-controller";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
 import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
-import { analyzeManualSlotDrop, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
+import { analyzeManualSlotDrop, stripPullsFromCellForReplacement, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
 import type { PlanningV2PullEntry, PlanningV2PullsMap, WorkerAvailability } from "./types";
@@ -676,7 +676,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               dayKey: p.dayKey,
               shiftName: p.shiftName,
               stationIndex: p.stationIndex,
-              slotIndex: p.slotIndex,
+              slotIndex: flags.forceReplacePull ? 0 : p.slotIndex,
               workerName: p.workerName,
             });
           }
@@ -732,6 +732,26 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           );
           if (!ok) return;
           flags = { ...flags, forceMaxShifts: true };
+          continue;
+        }
+        if (r.action === "confirm_replace_pull") {
+          const ok = await waitManualConfirm(
+            "משיכה",
+            `בתא זה קיימת משיכה. להחליף את המשיכה בעובד "${r.workerName}"?`,
+          );
+          if (!ok) return;
+          const baseNow = plan.getLatestAssignmentBase();
+          const pullsNow = (plan.displayPulls || {}) as PlanningV2PullsMap;
+          const { nextBase, nextPulls } = stripPullsFromCellForReplacement(
+            baseNow,
+            pullsNow,
+            p.dayKey,
+            p.shiftName,
+            p.stationIndex,
+          );
+          plan.commitDraftPulls(nextPulls);
+          plan.commitDraftAssignments(nextBase);
+          flags = { ...flags, forceReplacePull: true };
           continue;
         }
       }
@@ -1660,6 +1680,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const handleSavePlan = async (publishToWorkers: boolean) => {
     setPullsModeStationIdx(null);
     setShiftHoursModeStationIdx(null);
+    // Arrêter le stream חלופות : après שמור le plan est verrouillé, stop/יוצר n’ont plus de sens.
+    if (plan.generationRunning) {
+      plan.stopGeneration();
+    }
     await plan.savePlan(publishToWorkers);
     setEditingSaved(false);
   };

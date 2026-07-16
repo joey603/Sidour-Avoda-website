@@ -83,6 +83,7 @@ import {
   isDayActive,
   isShiftEnabledForStation,
   planningCellNames,
+  normPullWorkerName,
   pullSlotsAllowDistinctWorkers,
   shiftNamesFromSite,
   stationHasIsolatedHole,
@@ -93,7 +94,10 @@ import {
   planningColorForRoleChip,
   workerNameChipColor,
 } from "../lib/worker-name-chip-color";
-import { buildPullHighlightKindByNormName } from "../lib/planning-v2-pull-slot-display";
+import {
+  buildPullHighlightKindByNormName,
+  pullHighlightRingClass,
+} from "../lib/planning-v2-pull-slot-display";
 import TimePicker from "@/components/time-picker";
 
 type PlanningV2StationWeekGridProps = {
@@ -197,6 +201,30 @@ function shouldShowDraftFixedPinForWorker(
   // Affichage robuste du cadenas: dès que le worker fait partie du snapshot fixe de la cellule.
   // Le planning classique garde aussi ce comportement visuel après génération autour des fixes.
   return isWorkerInDraftFixedSnapshot(snap, dayKey, shiftName, stationIdx, workerName);
+}
+
+/** שמור sans עריכה : pas d’interaction sur les bulles d’une משיכה (comme le planning classique). */
+function blockSavedViewPullBubble(
+  isSavedMode: boolean,
+  editingSaved: boolean,
+  pulls: Record<string, unknown> | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIdx: number,
+  workerName: string,
+): boolean {
+  if (!isSavedMode || editingSaved) return false;
+  const nm = normPullWorkerName(String(workerName || ""));
+  if (!nm) return false;
+  const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
+  for (const [k, v] of Object.entries(pulls || {})) {
+    if (!String(k).startsWith(prefix)) continue;
+    if (!isRealPullEntry(v)) continue;
+    const e = v as PlanningV2PullEntry;
+    if (normPullWorkerName(String(e?.before?.name || "")) === nm) return true;
+    if (normPullWorkerName(String(e?.after?.name || "")) === nm) return true;
+  }
+  return false;
 }
 
 function truncateMobile6(value: unknown): string {
@@ -309,27 +337,6 @@ function mergeCellRawWithPulls(
     /* ignore */
   }
   return baseArr;
-}
-
-function pullRingClass(
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-): string {
-  if (!pulls) return "";
-  const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  const nm = normName(workerName);
-  if (!nm) return "";
-  for (const [k, v] of Object.entries(pulls)) {
-    if (!String(k).startsWith(prefix)) continue;
-    const e = v as { before?: { name?: string }; after?: { name?: string } };
-    if (normName(e?.before?.name) === nm || normName(e?.after?.name) === nm) {
-      return " ring-2 ring-orange-400";
-    }
-  }
-  return "";
 }
 
 function parseHoursRange(range: string | null): { start: string; end: string } | null {
@@ -501,6 +508,9 @@ export function PlanningV2StationWeekGrid({
   useEffect(() => {
     if (pullsModeStationIdx == null) setPullsEditor(null);
   }, [pullsModeStationIdx]);
+  useEffect(() => {
+    if (isSavedMode && !editingSaved) setPullsEditor(null);
+  }, [isSavedMode, editingSaved]);
   useEffect(() => {
     if (shiftHoursModeStationIdx == null) setShiftHoursEditor(null);
   }, [shiftHoursModeStationIdx]);
@@ -1229,16 +1239,13 @@ export function PlanningV2StationWeekGrid({
                                     const rcRole = roleToShow
                                       ? planningColorForRoleChip(roleToShow, roleColorMapPlanning)
                                       : null;
-                                    const ring = pullRingClass(pulls || null, d.key, sn, idx, nm);
                                     const nmKey = normName(nm);
                                     const summaryPickActive =
                                       !!summaryHighlightNorm && !!nmKey && nmKey === summaryHighlightNorm;
-                                    const pullRel = pullHighlightByNormName.get(nmKey);
-                                    const pullAdjacentRing =
-                                      pullRel === "before" || pullRel === "after" ? " ring-2 ring-orange-400" : "";
+                                    const pullRel = pullHighlightByNormName.get(normPullWorkerName(nm));
+                                    const pullHighlightRing = pullHighlightRingClass(pullRel);
                                     const pullOrangeOutline =
-                                      !summaryPickActive &&
-                                      (ring.trim().length > 0 || pullAdjacentRing.trim().length > 0);
+                                      !summaryPickActive && pullHighlightRing.trim().length > 0;
                                     const expKey = expandedKeyFor(
                                       d.key,
                                       sn,
@@ -1298,6 +1305,15 @@ export function PlanningV2StationWeekGrid({
                                     const hasPullOnSlot =
                                       !!String(existingPull?.before?.name || "").trim() ||
                                       !!String(existingPull?.after?.name || "").trim();
+                                    const blockPullBubble = blockSavedViewPullBubble(
+                                      isSavedMode,
+                                      editingSaved,
+                                      pulls || null,
+                                      d.key,
+                                      sn,
+                                      idx,
+                                      nm,
+                                    );
                                     const activeNm = (draggingWorkerName || "").trim();
                                     const isWorkerSelectedHere =
                                       !!activeNm &&
@@ -1362,7 +1378,7 @@ export function PlanningV2StationWeekGrid({
                                         data-rolehint={fillHint || undefined}
                                       >
                                         <span
-                                          tabIndex={0}
+                                          tabIndex={blockPullBubble ? -1 : 0}
                                           data-manual-worker-select="1"
                                           data-dkey={d.key}
                                           data-sname={sn}
@@ -1383,8 +1399,9 @@ export function PlanningV2StationWeekGrid({
                                             (expandedSlotKey === expKey
                                               ? " z-30 w-[18rem] max-w-[18rem]"
                                               : "") +
-                                            (summaryPickActive ? "" : ring + pullAdjacentRing) +
-                                            (hasPullOnSlot || hasGuardDisplayOnSlot || shiftHoursActiveHere
+                                            (summaryPickActive ? "" : pullHighlightRing) +
+                                            ((hasPullOnSlot || hasGuardDisplayOnSlot || shiftHoursActiveHere) &&
+                                            !blockPullBubble
                                               ? " cursor-pointer"
                                               : "") +
                                             ((hasGuardDisplayOnSlot || shiftHoursActiveHere) && !summaryPickActive
@@ -1412,27 +1429,36 @@ export function PlanningV2StationWeekGrid({
                                             backgroundColor: c.bg,
                                             borderColor:
                                               pullOrangeOutline
-                                                ? c.border
+                                                ? "rgb(251 146 60)"
                                                 : rcRole
                                                   ? rcRole.border
                                                   : c.border,
                                             color: c.text,
                                           }}
                                           title={nm}
-                                          onPointerDown={() => setExpandedSlotKey(expKey)}
+                                          onPointerDown={() => {
+                                            if (blockPullBubble) return;
+                                            setExpandedSlotKey(expKey);
+                                          }}
                                           onPointerEnter={(e) => {
+                                            if (blockPullBubble) return;
                                             if (e.pointerType === "mouse") setExpandedSlotKey(expKey);
                                           }}
                                           onPointerLeave={(e) => {
+                                            if (blockPullBubble) return;
                                             if (e.pointerType === "mouse") {
                                               setExpandedSlotKey((k) => (k === expKey ? null : k));
                                             }
                                           }}
-                                          onFocus={() => setExpandedSlotKey(expKey)}
+                                          onFocus={() => {
+                                            if (blockPullBubble) return;
+                                            setExpandedSlotKey(expKey);
+                                          }}
                                           onBlur={() =>
                                             setExpandedSlotKey((k) => (k === expKey ? null : k))
                                           }
                                           onClick={(e) => {
+                                            if (blockPullBubble) return;
                                             if (
                                               nmTrim &&
                                               onUpsertGuardDisplay &&

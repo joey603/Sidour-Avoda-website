@@ -1,12 +1,13 @@
 import type { PlanningV2PullEntry, PlanningV2PullsMap } from "../types";
-import { DAY_COLS } from "./station-grid-helpers";
+import { DAY_COLS, normPullWorkerName } from "./station-grid-helpers";
 
 function normName(s: string): string {
-  return String(s || "")
-    .normalize("NFKC")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
+  return normPullWorkerName(s);
+}
+
+function isRealPullEntry(entry: unknown): boolean {
+  const e = entry as PlanningV2PullEntry | undefined;
+  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
 }
 
 export type SlotTimeMeta = {
@@ -148,6 +149,12 @@ export function slotTimeMetaFromPulls(
   return { label: range, red: true, highlight: "pull" };
 }
 
+/** Anneau orange משיכה (trou, garde avant ou garde après). */
+export function pullHighlightRingClass(kind: "cell" | "before" | "after" | undefined): string {
+  if (!kind) return "";
+  return " ring-2 ring-orange-400";
+}
+
 /**
  * Anneau orange sur le trou + garde before (précédente) + garde after (suivante) — comme le grig planning.
  */
@@ -169,6 +176,7 @@ export function buildPullHighlightKindByNormName(
     !!a && a.dayIdx === bDayIdx && a.shiftIdx === bShiftIdx;
 
   for (const [pullKey, entryAny] of Object.entries(pulls)) {
+    if (!isRealPullEntry(entryAny)) continue;
     const parts = String(pullKey || "").split("|");
     if (parts.length < 4) continue;
     const pullDayKey = parts[0];

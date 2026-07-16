@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
-import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
+import LoadingAnimation from "@/components/loading-animation";
 
 interface Site {
   id: number;
@@ -112,7 +112,11 @@ export default function DirectorDashboard() {
   }, []);
 
   if (loading) {
-    return <LoadingOverlay size={96} />;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
+        <LoadingAnimation size={96} />
+      </div>
+    );
   }
 
   const totalSites = sites.length;

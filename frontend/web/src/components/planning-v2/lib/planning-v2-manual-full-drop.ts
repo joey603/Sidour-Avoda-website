@@ -1,4 +1,4 @@
-import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import type { PlanningV2PullEntry, PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
 import { resolveMaxShifts } from "@/lib/max-shifts";
 import { workerAdjustedWeeklyTotalAcrossLinkedSites } from "./assignments-summary-math";
 import type { ManualDragSource } from "./planning-v2-manual-drop";
@@ -156,23 +156,29 @@ export function mutateManualSlotAssignment(
     slotIndex: number;
     workerName: string;
     dragSource: ManualDragSource | null;
+    /** Après remplacement משיכה : une seule case avec l'עובד (pas les 2 bulles משיכה). */
+    replacePullCell?: boolean;
   },
 ): Record<string, Record<string, string[][]>> {
   const trimmed = String(args.workerName || "").trim();
   const next: Record<string, Record<string, string[][]>> = JSON.parse(JSON.stringify(baseInput || {}));
-  const { dayKey, shiftName, stationIndex, slotIndex, stationsCount, dragSource } = args;
+  const { dayKey, shiftName, stationIndex, slotIndex, stationsCount, dragSource, replacePullCell } = args;
 
   ensureShiftRow(next, dayKey, shiftName, stationsCount);
 
-  const beforeArr: string[] = Array.from(next[dayKey][shiftName][stationIndex] || []);
-  const nextTarget = Array.from(beforeArr as string[]);
-  while (nextTarget.length <= slotIndex) nextTarget.push("");
   const nt = normName(trimmed);
-  for (let i = 0; i < nextTarget.length; i++) {
-    if (normName(nextTarget[i]) === nt) nextTarget[i] = "";
+  if (replacePullCell) {
+    next[dayKey][shiftName][stationIndex] = [trimmed];
+  } else {
+    const beforeArr: string[] = Array.from(next[dayKey][shiftName][stationIndex] || []);
+    const nextTarget = Array.from(beforeArr as string[]);
+    while (nextTarget.length <= slotIndex) nextTarget.push("");
+    for (let i = 0; i < nextTarget.length; i++) {
+      if (normName(nextTarget[i]) === nt) nextTarget[i] = "";
+    }
+    nextTarget[slotIndex] = trimmed;
+    next[dayKey][shiftName][stationIndex] = nextTarget;
   }
-  nextTarget[slotIndex] = trimmed;
-  next[dayKey][shiftName][stationIndex] = nextTarget;
 
   const isMoveFromSlot = !!(dragSource && normName(dragSource.workerName) === nt);
   if (isMoveFromSlot && dragSource) {
@@ -511,6 +517,7 @@ export type ManualDropFlags = {
   forceRole?: boolean;
   forceRules?: boolean;
   forceMaxShifts?: boolean;
+  forceReplacePull?: boolean;
 };
 
 export type ManualSlotDropAnalysis =
@@ -519,7 +526,50 @@ export type ManualSlotDropAnalysis =
   | { action: "confirm_availability"; workerName: string; dayKey: string; shiftName: string }
   | { action: "confirm_role"; workerName: string; roleName: string }
   | { action: "confirm_rules"; lines: string[] }
-  | { action: "confirm_max_shifts"; maxShifts: number; total: number };
+  | { action: "confirm_max_shifts"; maxShifts: number; total: number }
+  | { action: "confirm_replace_pull"; workerName: string };
+
+function isRealPullEntry(entry: unknown): boolean {
+  const e = entry as PlanningV2PullEntry | undefined;
+  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
+}
+
+/** משיכות complètes dans une cellule (jour + משמרת + עמדה). */
+export function pullEntriesInCell(
+  pulls: PlanningV2PullsMap | null | undefined,
+  dayKey: string,
+  shiftName: string,
+  stationIndex: number,
+): Array<{ key: string; entry: PlanningV2PullEntry }> {
+  if (!pulls) return [];
+  const prefix = `${dayKey}|${shiftName}|${stationIndex}|`;
+  return Object.entries(pulls)
+    .filter(([k, v]) => String(k).startsWith(prefix) && isRealPullEntry(v))
+    .map(([key, entry]) => ({ key, entry: entry as PlanningV2PullEntry }));
+}
+
+/** Supprime les משיכות d'une cellule et retire les noms before/after des שיבוצים. */
+export function stripPullsFromCellForReplacement(
+  base: Record<string, Record<string, string[][]>>,
+  pulls: PlanningV2PullsMap,
+  dayKey: string,
+  shiftName: string,
+  stationIndex: number,
+): { nextBase: Record<string, Record<string, string[][]>>; nextPulls: PlanningV2PullsMap } {
+  const nextPulls = JSON.parse(JSON.stringify(pulls || {})) as PlanningV2PullsMap;
+  const entries = pullEntriesInCell(nextPulls, dayKey, shiftName, stationIndex);
+  for (const { key } of entries) {
+    delete nextPulls[key];
+  }
+
+  const nextBase = JSON.parse(JSON.stringify(base || {})) as Record<string, Record<string, string[][]>>;
+  nextBase[dayKey] = nextBase[dayKey] || {};
+  nextBase[dayKey][shiftName] = Array.isArray(nextBase[dayKey][shiftName]) ? nextBase[dayKey][shiftName] : [];
+  while (nextBase[dayKey][shiftName].length <= stationIndex) nextBase[dayKey][shiftName].push([]);
+  // Remplacement משיכה → une seule personne : on vide la cellule (les noms before/after ne restent pas).
+  nextBase[dayKey][shiftName][stationIndex] = [];
+  return { nextBase, nextPulls };
+}
 
 export function analyzeManualSlotDrop(ctx: {
   site: SiteSummary | null;
@@ -583,6 +633,20 @@ export function analyzeManualSlotDrop(ctx: {
     };
   }
 
+  const pullEntries = pullEntriesInCell(ctx.pulls, ctx.dayKey, ctx.shiftName, ctx.stationIndex);
+  if (pullEntries.length > 0 && !ctx.flags.forceReplacePull) {
+    const moveWithinSamePullCell = !!(
+      ctx.dragSource &&
+      ctx.dragSource.dayKey === ctx.dayKey &&
+      ctx.dragSource.shiftName === ctx.shiftName &&
+      Number(ctx.dragSource.stationIndex) === Number(ctx.stationIndex) &&
+      normName(ctx.dragSource.workerName) === normName(trimmed)
+    );
+    if (!moveWithinSamePullCell) {
+      return { action: "confirm_replace_pull", workerName: trimmed };
+    }
+  }
+
   const stCfg = (ctx.site?.config?.stations as any[])?.[ctx.stationIndex] || null;
   const beforeArr: string[] = Array.from(ctx.base[ctx.dayKey]?.[ctx.shiftName]?.[ctx.stationIndex] || []);
   const roleReqForCell = roleRequirementsForStation(stCfg, ctx.shiftName, ctx.dayKey);
@@ -626,6 +690,7 @@ export function analyzeManualSlotDrop(ctx: {
     slotIndex: ctx.slotIndex,
     workerName: trimmed,
     dragSource: ctx.dragSource,
+    replacePullCell: !!ctx.flags.forceReplacePull,
   });
 
   if (!ctx.flags.forceRules) {
