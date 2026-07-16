@@ -1,0 +1,14 @@
+[Unit]
+Description=Sidour backend watchdog (health + overload)
+After=network.target sidour-backend.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/home/ubuntu/watchdog-backend.sh
+Nice=5
+# Ne jamais bloquer le timer si un restart force trainait
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

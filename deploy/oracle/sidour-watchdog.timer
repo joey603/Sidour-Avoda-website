@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Sidour backend watchdog every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=sidour-watchdog.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

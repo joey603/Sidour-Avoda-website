@@ -1,0 +1,8 @@
+# Snippet recommandé pour /etc/systemd/system/sidour-backend.service
+# (TimeoutStopSec + KillMode pour éviter les restarts bloqués 90s)
+#
+# [Service]
+# TimeoutStopSec=10
+# KillMode=mixed
+# KillSignal=SIGTERM
+# FinalKillSignal=SIGKILL

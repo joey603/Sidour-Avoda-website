@@ -61,8 +61,36 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health():
-        """Sonde légère (chargeurs, k8s, tests de charge) — sans auth ni DB."""
-        return {"status": "ok"}
+        """Sonde légère (chargeurs, k8s, tests de charge) — sans auth ni DB.
+
+        Inclut le dernier statut du watchdog Oracle s'il est présent sur la machine
+        (`/var/lib/sidour/watchdog-status.json`).
+        """
+        watchdog = None
+        status_path = os.environ.get(
+            "SIDOUR_WATCHDOG_STATUS_PATH",
+            "/var/lib/sidour/watchdog-status.json",
+        )
+        try:
+            if os.path.isfile(status_path):
+                import json
+
+                with open(status_path, "r", encoding="utf-8") as fh:
+                    raw = json.load(fh)
+                if isinstance(raw, dict):
+                    watchdog = {
+                        "state": raw.get("state"),
+                        "load1": raw.get("load1"),
+                        "uvicorn_cpu": raw.get("uvicorn_cpu"),
+                        "last_check": raw.get("last_check"),
+                        "last_restart_at": raw.get("last_restart_at"),
+                        "last_reason": raw.get("reason"),
+                        "health_ms": raw.get("health_ms"),
+                        "mem_available_mb": raw.get("mem_available_mb"),
+                    }
+        except Exception:
+            watchdog = None
+        return {"status": "ok", "watchdog": watchdog}
 
     # Routes
     app.include_router(auth_router)
