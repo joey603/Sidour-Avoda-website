@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AnimatedHeroTitle } from "@/components/ui/animated-hero";
 import { ScrollGooeyText } from "@/components/ui/gooey-text-morphing";
 import { ElectricStatsCables } from "@/components/ui/electric-top-light";
+import InstallAppSection from "@/components/install-app-section";
 import {
   useScroll,
   useTransform,
@@ -953,6 +954,9 @@ function LandingPage() {
 
       {/* ══ FEATURES — grille responsive ══════════════════════════════ */}
       {clientReady ? <FeaturesGridSection /> : null}
+
+      {/* ══ INSTALL PWA — mobile + desktop ════════════════════════════ */}
+      {clientReady ? <InstallAppSection /> : null}
 
       {/* ══ CTA — sticky cinématique ══════════════════════════════════ */}
       {clientReady ? <CtaSection /> : null}

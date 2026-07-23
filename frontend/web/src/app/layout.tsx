@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 import AuthSessionVersionGuard from "@/components/auth-session-version-guard";
+import NativeShellProvider from "@/components/native-shell-provider";
 import TopNav from "@/components/top-nav";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -73,6 +74,7 @@ export default function RootLayout({
       >
         {/* Remplit la zone status bar iPhone (batterie / Dynamic Island), au-dessus de la navbar */}
         <div className="app-status-bar-fill" aria-hidden="true" />
+        <NativeShellProvider />
         <AuthSessionVersionGuard />
         <TopNav />
         {children}

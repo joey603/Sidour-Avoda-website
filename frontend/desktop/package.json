@@ -1,0 +1,15 @@
+{
+  "name": "@sidour/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Coquille Tauri 2 (macOS / Windows / Linux) pour גי וואן — charge le frontend Next.js en production",
+  "scripts": {
+    "dev": "node scripts/with-native-url.mjs tauri dev",
+    "build": "node scripts/with-native-url.mjs tauri build",
+    "tauri": "tauri",
+    "set-url": "node scripts/with-native-url.mjs"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}

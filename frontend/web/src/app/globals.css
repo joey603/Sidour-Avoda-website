@@ -304,6 +304,19 @@
     padding-bottom: 1rem;
   }
 }
+
+/* Capacitor / Tauri : même safe-area que PWA standalone */
+html[data-native-shell="1"] #planning-v2-action-bar {
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+}
+html[data-native-shell="1"] #planning-v2-action-bar .planning-v2-action-bar-inner {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+/* Desktop Tauri : pas de home indicator mobile — padding bas plus léger */
+html[data-native-shell-kind="tauri"] #planning-v2-action-bar {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
 @media (max-width: 1023px) {
   #planning-v2-action-bar .planning-v2-action-bar-inner {
     padding-top: 0.875rem;

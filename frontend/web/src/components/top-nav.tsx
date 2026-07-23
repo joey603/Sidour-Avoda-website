@@ -8,19 +8,11 @@ import {
   clearPlanningLocalStorageOnLogout,
   ensurePlanningWeeklyCachePurgeScheduled,
 } from "@/lib/planning-session-cache";
+import { isNativeShellApp } from "@/lib/native-shell";
 // Remplace Image optimisé pour éviter erreurs avec PNG locaux non valides
 import Link from "next/link";
 
 type Role = "worker" | "director";
-
-function isStandaloneApp() {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia("(display-mode: standalone)").matches ||
-    window.matchMedia("(display-mode: fullscreen)").matches ||
-    (window.navigator as Navigator & { standalone?: boolean }).standalone === true
-  );
-}
 
 export default function TopNav() {
   const router = useRouter();
@@ -126,7 +118,7 @@ export default function TopNav() {
     if (!authChecked) return;
     if (!isHomePage) return;
     if (userRole !== "director") return;
-    if (!isStandaloneApp()) return;
+    if (!isNativeShellApp()) return;
     if (typeof window !== "undefined") {
       if (new URLSearchParams(window.location.search).get("landing") === "1") return;
     }

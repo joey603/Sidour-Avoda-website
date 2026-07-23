@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">גי וואן</string>
+    <string name="title_activity_main">גי וואן</string>
+    <string name="package_name">com.giwan.sidour</string>
+    <string name="custom_url_scheme">com.giwan.sidour</string>
+</resources>

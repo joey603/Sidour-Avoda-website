@@ -56,6 +56,8 @@ A comprehensive web-based scheduling and workforce planning application designed
 - **React Hooks** - State management and lifecycle
 - **Sonner** - Toast notifications
 
+**Native shells (same UI):** Capacitor (iOS/Android) + Tauri (desktop) — see [`frontend/NATIVE.md`](frontend/NATIVE.md).
+
 **Key Pages:**
 - **Director Portal:**
   - Dashboard (`/director`)
