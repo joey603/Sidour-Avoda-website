@@ -125,6 +125,7 @@
     min-height: 100%;
     min-height: 100dvh;
     min-height: -webkit-fill-available;
+    background: #ffffff;
   }
   * {
     @apply border-border outline-ring/50;
@@ -135,7 +136,29 @@
     min-height: 100vh;
     min-height: 100dvh;
     min-height: -webkit-fill-available;
+    background: #ffffff;
   }
+  .dark html,
+  .dark body {
+    background: #09090b;
+  }
+}
+
+/* Bande status bar iPhone (batterie / Dynamic Island) — au-dessus de la navbar */
+.app-status-bar-fill {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0px);
+  min-height: env(safe-area-inset-top, 0px);
+  background: #ffffff;
+  pointer-events: none;
+  z-index: 10050;
+}
+
+.dark .app-status-bar-fill {
+  background: #09090b;
 }
 
 /* TipTap editor basic typography (Tailwind preflight resets lists/headings) */
@@ -186,106 +209,57 @@
   height: -webkit-fill-available;
 }
 
-/* Overlay chargement natif/PWA : fond plein écran opaque + animation centrée (iPhone Pro/Plus) */
+/* Overlay chargement : couvre aussi la zone status bar (batterie) au-dessus de la navbar */
 .app-loading-overlay {
+  --loading-content-top: env(safe-area-inset-top, 59px);
+  --loading-content-height: 100dvh;
   position: fixed;
-  top: 0;
+  /* Fallback CSS avant JS : remonte sous la status bar iPhone */
+  top: calc(-1 * max(env(safe-area-inset-top, 0px), 59px) - 24px);
   right: 0;
-  bottom: 0;
+  bottom: auto;
   left: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  z-index: 10060;
   box-sizing: border-box;
   width: 100%;
   min-width: 100%;
   max-width: none;
-  height: 100%;
-  min-height: 100vh;
-  min-height: 100dvh;
-  min-height: 100lvh;
-  min-height: -webkit-fill-available;
+  height: calc(100dvh + max(env(safe-area-inset-top, 0px), 59px) + 64px);
+  min-height: calc(100dvh + max(env(safe-area-inset-top, 0px), 59px) + 64px);
   margin: 0;
   padding: 0;
-  overflow: hidden;
+  /* visible : ne pas clipper la surcouverture status bar */
+  overflow: visible;
   overscroll-behavior: none;
   background: #ffffff;
-  /* Surcouverture encoche / Dynamic Island / home indicator (toutes tailles iPhone) */
-  box-shadow:
-    0 0 0 max(env(safe-area-inset-top, 0px), 80px) #ffffff,
-    0 0 0 max(env(safe-area-inset-bottom, 0px), 48px) #ffffff;
   transform: translate3d(0, 0, 0);
   -webkit-transform: translate3d(0, 0, 0);
 }
 
-.app-loading-overlay::before {
-  content: "";
-  position: absolute;
-  /* Couvre largement au-dessus/dessous du fixed (trou iOS) */
-  top: -160px;
-  right: -40px;
-  bottom: -160px;
-  left: -40px;
-  background: #ffffff;
-  pointer-events: none;
-  z-index: 0;
-}
-
 .app-loading-overlay__content {
-  position: relative;
-  z-index: 1;
+  position: absolute;
+  top: var(--loading-content-top);
+  left: 0;
+  right: 0;
+  height: var(--loading-content-height);
+  min-height: var(--loading-content-height);
   display: flex;
   box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  min-height: 100%;
   margin: 0;
   align-items: center;
   justify-content: center;
-  /* Centre sur l’écran visible (compensé côté overlay JS/CSS pour le trou haut) */
   padding: 0;
 }
 
 .dark .app-loading-overlay {
   background: #09090b;
-  box-shadow:
-    0 0 0 max(env(safe-area-inset-top, 0px), 80px) #09090b,
-    0 0 0 max(env(safe-area-inset-bottom, 0px), 48px) #09090b;
 }
 
-.dark .app-loading-overlay::before {
-  background: #09090b;
-}
-
-/* PWA / plein écran : encore plus de surcouverture safe-area */
 @media (display-mode: standalone), (display-mode: fullscreen) {
   .app-loading-overlay {
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    min-width: 100%;
-    height: 100%;
-    min-height: 100vh;
-    min-height: 100dvh;
-    min-height: 100lvh;
-    min-height: -webkit-fill-available;
-    box-shadow:
-      0 0 0 max(env(safe-area-inset-top, 0px), 120px) #ffffff,
-      0 0 0 max(env(safe-area-inset-bottom, 0px), 80px) #ffffff;
-  }
-
-  .dark .app-loading-overlay {
-    box-shadow:
-      0 0 0 max(env(safe-area-inset-top, 0px), 120px) #09090b,
-      0 0 0 max(env(safe-area-inset-bottom, 0px), 80px) #09090b;
-  }
-
-  .app-loading-overlay::before {
-    top: -200px;
-    bottom: -200px;
+    top: calc(-1 * max(env(safe-area-inset-top, 0px), 59px) - 40px);
+    height: calc(100dvh + max(env(safe-area-inset-top, 0px), 59px) + 96px);
+    min-height: calc(100dvh + max(env(safe-area-inset-top, 0px), 59px) + 96px);
   }
 }
 

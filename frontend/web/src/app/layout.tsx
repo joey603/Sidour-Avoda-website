@@ -70,6 +70,8 @@ export default function RootLayout({
         suppressHydrationWarning
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
+        {/* Remplit la zone status bar iPhone (batterie / Dynamic Island), au-dessus de la navbar */}
+        <div className="app-status-bar-fill" aria-hidden="true" />
         <AuthSessionVersionGuard />
         <TopNav />
         {children}
