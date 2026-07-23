@@ -25,11 +25,8 @@ interface LoadingOverlayProps {
   size?: number;
 }
 
-/**
- * Couvre tout l’écran y compris sous la Dynamic Island (status bar),
- * et centre l’animation sur le viewport visible.
- */
-function useStatusBarCoverOverlayStyle(enabled: boolean) {
+/** Aligne l’overlay sur le viewport (y compris zone sous Dynamic Island avec black-translucent). */
+function useFullViewportOverlayStyle(enabled: boolean) {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
@@ -37,19 +34,8 @@ function useStatusBarCoverOverlayStyle(enabled: boolean) {
     const el = ref.current;
     if (!el || typeof window === "undefined") return;
 
-    const readSafeTop = () => {
-      const probe = document.createElement("div");
-      probe.style.cssText =
-        "position:fixed;top:0;left:0;visibility:hidden;pointer-events:none;height:env(safe-area-inset-top,0px);";
-      document.body.appendChild(probe);
-      const h = probe.getBoundingClientRect().height || 0;
-      probe.remove();
-      return Math.max(h, 59);
-    };
-
     const sync = () => {
       const vv = window.visualViewport;
-      const safeTop = readSafeTop();
       const w = Math.max(
         window.innerWidth || 0,
         document.documentElement?.clientWidth || 0,
@@ -61,7 +47,6 @@ function useStatusBarCoverOverlayStyle(enabled: boolean) {
         vv?.height || 0,
       );
 
-      // Depuis le haut physique de l’écran (sous l’île) jusqu’en bas
       el.style.top = "0px";
       el.style.left = "0px";
       el.style.right = "0px";
@@ -69,7 +54,6 @@ function useStatusBarCoverOverlayStyle(enabled: boolean) {
       el.style.width = `${w}px`;
       el.style.height = `${h}px`;
       el.style.minHeight = `${h}px`;
-      el.style.setProperty("--loading-safe-top", `${safeTop}px`);
     };
 
     sync();
@@ -89,10 +73,10 @@ function useStatusBarCoverOverlayStyle(enabled: boolean) {
   return ref;
 }
 
-/** Overlay plein écran opaque — fond blanc aussi sous la Dynamic Island. */
+/** Overlay plein écran opaque — fond blanc sous la Dynamic Island sans déborder sur la navbar. */
 export function LoadingOverlay({ size = 96 }: LoadingOverlayProps) {
   const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
-  const overlayRef = useStatusBarCoverOverlayStyle(!!portalTarget);
+  const overlayRef = useFullViewportOverlayStyle(!!portalTarget);
 
   useEffect(() => {
     setPortalTarget(document.body);
@@ -106,8 +90,6 @@ export function LoadingOverlay({ size = 96 }: LoadingOverlayProps) {
       aria-live="polite"
       aria-busy="true"
     >
-      {/* Couche dédiée sous la Dynamic Island (au-dessus de tout contenu page) */}
-      <div className="app-loading-overlay__status-bar" aria-hidden="true" />
       <div className="app-loading-overlay__content">
         <LoadingAnimation size={size} />
       </div>

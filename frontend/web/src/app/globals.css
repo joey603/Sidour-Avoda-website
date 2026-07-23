@@ -145,9 +145,9 @@
 }
 
 /*
- * Bande sous Dynamic Island / status bar (batterie).
- * black-translucent + viewport-fit=cover : le web peint derrière l’île.
- * Hauteur mini 59px en standalone (iPhone 14/15/16) si env() tarde à 0.
+ * Bande sous Dynamic Island : hauteur = safe-area exacte seulement
+ * (pas de min 47/59px — ça débordait sur la navbar).
+ * La navbar sticky blanche + pt-safe-area peint aussi cette zone.
  */
 .app-status-bar-fill {
   position: fixed;
@@ -158,28 +158,12 @@
   min-height: env(safe-area-inset-top, 0px);
   background: #ffffff;
   pointer-events: none;
-  z-index: 10050;
+  /* Sous la navbar (z-40) : ne pas recouvrir logo / boutons */
+  z-index: 30;
 }
 
 .dark .app-status-bar-fill {
   background: #09090b;
-}
-
-@media (display-mode: standalone), (display-mode: fullscreen) {
-  .app-status-bar-fill {
-    height: max(env(safe-area-inset-top, 0px), 59px);
-    min-height: max(env(safe-area-inset-top, 0px), 59px);
-  }
-}
-
-/* Safari iOS (pas seulement PWA) : forcer une bande sous l’île */
-@supports (-webkit-touch-callout: none) {
-  @media (max-width: 1024px) {
-    .app-status-bar-fill {
-      height: max(env(safe-area-inset-top, 0px), 47px);
-      min-height: max(env(safe-area-inset-top, 0px), 47px);
-    }
-  }
 }
 
 /* TipTap editor basic typography (Tailwind preflight resets lists/headings) */
@@ -230,9 +214,8 @@
   height: -webkit-fill-available;
 }
 
-/* Overlay chargement : fond blanc edge-to-edge, y compris sous la Dynamic Island */
+/* Overlay chargement : fond blanc edge-to-edge (y compris sous la Dynamic Island) */
 .app-loading-overlay {
-  --loading-safe-top: max(env(safe-area-inset-top, 0px), 59px);
   position: fixed;
   inset: 0;
   z-index: 10060;
@@ -251,21 +234,9 @@
   -webkit-transform: translate3d(0, 0, 0);
 }
 
-.app-loading-overlay__status-bar {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--loading-safe-top);
-  background: #ffffff;
-  pointer-events: none;
-  z-index: 2;
-}
-
 .app-loading-overlay__content {
   position: absolute;
   inset: 0;
-  z-index: 1;
   display: flex;
   box-sizing: border-box;
   align-items: center;
@@ -274,8 +245,7 @@
   padding: 0;
 }
 
-.dark .app-loading-overlay,
-.dark .app-loading-overlay__status-bar {
+.dark .app-loading-overlay {
   background: #09090b;
 }
 
