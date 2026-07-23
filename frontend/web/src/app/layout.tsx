@@ -29,7 +29,8 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "גי וואן",
-    statusBarStyle: "default",
+    /** Permet de peindre sous la Dynamic Island (sinon iOS garde une zone système transparente). */
+    statusBarStyle: "black-translucent",
   },
   formatDetection: {
     telephone: false,
