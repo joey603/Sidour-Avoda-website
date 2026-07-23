@@ -44,6 +44,29 @@ export default function TopNav() {
       setReturnUrl("");
     }
   }, [pathname]);
+
+  /** Hauteur réelle de la nav (safe-area incluse) pour les éléments sticky sous la barre. */
+  useEffect(() => {
+    const syncNavHeight = () => {
+      const navEl = document.getElementById("app-top-nav");
+      if (!navEl) return;
+      const h = navEl.getBoundingClientRect().height;
+      if (h > 0.5) {
+        document.documentElement.style.setProperty("--app-top-nav-height", `${Math.round(h)}px`);
+      }
+    };
+    syncNavHeight();
+    const navEl = document.getElementById("app-top-nav");
+    const ro = navEl ? new ResizeObserver(() => requestAnimationFrame(syncNavHeight)) : null;
+    if (navEl && ro) ro.observe(navEl);
+    window.addEventListener("resize", syncNavHeight);
+    window.addEventListener("orientationchange", syncNavHeight);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("resize", syncNavHeight);
+      window.removeEventListener("orientationchange", syncNavHeight);
+    };
+  }, [pathname, mobileMenuOpen, authChecked, userRole]);
   const authReturnQuery = useMemo(() => (returnUrl ? `?returnUrl=${encodeURIComponent(returnUrl)}` : ""), [returnUrl]);
 
   useEffect(() => {
@@ -355,7 +378,7 @@ export default function TopNav() {
     <>
       <div
         id="app-top-nav"
-        className="sticky top-0 z-[40] w-full border-b border-zinc-200 bg-white pt-[env(safe-area-inset-top,0px)] dark:border-zinc-800 dark:bg-zinc-950"
+        className="sticky top-0 z-[100] w-full border-b border-zinc-200 bg-white pt-[env(safe-area-inset-top,0px)] dark:border-zinc-800 dark:bg-zinc-950"
       >
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 py-3 pr-3 pl-0">
           <div className="flex items-center gap-2">

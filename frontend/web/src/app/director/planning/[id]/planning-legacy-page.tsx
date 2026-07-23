@@ -5263,7 +5263,7 @@ export default function PlanningLegacyPage() {
           </button>
         </div>
           {weekPlanSaveBadgeConfig || (editingSaved && savedWeekPlan?.assignments) ? (
-            <div className="sticky top-2 z-[41] flex w-fit max-w-full flex-wrap items-center gap-1.5">
+            <div className="sticky top-[calc(var(--app-top-nav-height,4.5rem)+0.25rem)] z-[30] flex w-fit max-w-full flex-wrap items-center gap-1.5">
               {editingSaved && savedWeekPlan?.assignments ? (
                 <span className="inline-flex items-center rounded-full border border-sky-400 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-900 dark:border-sky-600 dark:bg-sky-950/50 dark:text-sky-100">
                   ערוך
