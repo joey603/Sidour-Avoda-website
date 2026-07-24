@@ -708,15 +708,24 @@ export function PlanningV2StationWeekGrid({
       <h2 className="text-center text-lg font-semibold">גריד שבועי לפי עמדה</h2>
 
       <div className="space-y-6">
-        {stations.map((st, idx: number) => (
+        {stations.map((st, idx: number) => {
+          const stationZoom = getStationZoom(idx);
+          const isZoomedIn = stationZoom > MIN_STATION_GRID_ZOOM;
+          const zoomBase = stationZoomBaseSizeByIdx[idx];
+          const thinAccentRings = isZoomedIn;
+          return (
           <div
             key={idx}
             className={
               "overflow-hidden rounded-xl border border-zinc-200 p-3 pb-3 dark:border-zinc-800 " +
               (pullsModeStationIdx === idx
-                ? "ring-2 ring-orange-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
+                ? thinAccentRings
+                  ? "ring-1 ring-orange-400 ring-offset-1 ring-offset-white dark:ring-offset-zinc-950"
+                  : "ring-2 ring-orange-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
                 : shiftHoursModeStationIdx === idx
-                  ? "ring-2 ring-yellow-500 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
+                  ? thinAccentRings
+                    ? "ring-1 ring-yellow-500 ring-offset-1 ring-offset-white dark:ring-offset-zinc-950"
+                    : "ring-2 ring-yellow-500 ring-offset-2 ring-offset-white dark:ring-offset-zinc-950"
                   : "")
             }
           >
@@ -807,9 +816,6 @@ export function PlanningV2StationWeekGrid({
               </div>
             </div>
             {(() => {
-              const stationZoom = getStationZoom(idx);
-              const isZoomedIn = stationZoom > MIN_STATION_GRID_ZOOM;
-              const zoomBase = stationZoomBaseSizeByIdx[idx];
               return (
             <div className="relative w-full min-w-0">
               {/*
@@ -1115,7 +1121,11 @@ export function PlanningV2StationWeekGrid({
                                                   ? " border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900 "
                                                   : " bg-white dark:bg-zinc-900 "
                                                 : " border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 ") +
-                                              (pullsActiveHere && isPullable ? " ring-2 ring-orange-400 cursor-pointer" : "") +
+                                              (pullsActiveHere && isPullable
+                                                ? thinAccentRings
+                                                  ? " ring-1 ring-orange-400 cursor-pointer"
+                                                  : " ring-2 ring-orange-400 cursor-pointer"
+                                                : "") +
                                               (!dragNm && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                               (dragNm && emptyOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
                                               (dragNm && hasLinkedConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
@@ -1243,7 +1253,9 @@ export function PlanningV2StationWeekGrid({
                                     const summaryPickActive =
                                       !!summaryHighlightNorm && !!nmKey && nmKey === summaryHighlightNorm;
                                     const pullRel = pullHighlightByNormName.get(normPullWorkerName(nm));
-                                    const pullHighlightRing = pullHighlightRingClass(pullRel);
+                                    const pullHighlightRing = pullHighlightRingClass(pullRel, {
+                                      thin: thinAccentRings,
+                                    });
                                     const pullOrangeOutline =
                                       !summaryPickActive && pullHighlightRing.trim().length > 0;
                                     const expKey = expandedKeyFor(
@@ -1405,7 +1417,9 @@ export function PlanningV2StationWeekGrid({
                                               ? " cursor-pointer"
                                               : "") +
                                             ((hasGuardDisplayOnSlot || shiftHoursActiveHere) && !summaryPickActive
-                                              ? " ring-2 ring-yellow-500"
+                                              ? thinAccentRings
+                                                ? " ring-1 ring-yellow-500"
+                                                : " ring-2 ring-yellow-500"
                                               : "") +
                                             ((!dragNm && isSlotHovered && !summaryPickActive
                                               ? " z-[40] scale-110 ring-2 ring-[#00A8E0] "
@@ -1667,7 +1681,8 @@ export function PlanningV2StationWeekGrid({
               );
             })()}
           </div>
-        ))}
+          );
+        })}
       </div>
       {manualEditable && workers.length > 0 ? (
         <PlanningV2ManualWorkerPalette

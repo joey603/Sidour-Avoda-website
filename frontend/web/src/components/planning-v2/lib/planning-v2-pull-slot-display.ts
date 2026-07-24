@@ -150,9 +150,13 @@ export function slotTimeMetaFromPulls(
 }
 
 /** Anneau orange משיכה (trou, garde avant ou garde après). */
-export function pullHighlightRingClass(kind: "cell" | "before" | "after" | undefined): string {
+export function pullHighlightRingClass(
+  kind: "cell" | "before" | "after" | undefined,
+  opts?: { thin?: boolean },
+): string {
   if (!kind) return "";
-  return " ring-2 ring-orange-400";
+  // En zoom (surtout mobile), ring-2 devient trop épais à cause de CSS zoom.
+  return opts?.thin ? " ring-1 ring-orange-400" : " ring-2 ring-orange-400";
 }
 
 /**
