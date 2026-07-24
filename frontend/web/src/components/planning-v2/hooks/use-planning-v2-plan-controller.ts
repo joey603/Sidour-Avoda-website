@@ -1639,7 +1639,20 @@ export function usePlanningV2PlanController({
         signal: controller.signal,
       });
       if (!resp.ok || !resp.body) {
-        throw new Error(`HTTP ${resp.status}`);
+        let detail = `HTTP ${resp.status}`;
+        if (resp.status === 429) {
+          try {
+            const errBody = (await resp.json()) as { detail?: unknown };
+            const raw = errBody?.detail;
+            detail =
+              typeof raw === "string" && raw.trim()
+                ? raw.trim()
+                : "יצירת תכנון כבר רצה — נסה שוב בעוד רגע.";
+          } catch {
+            detail = "יצירת תכנון כבר רצה — נסה שוב בעוד רגע.";
+          }
+        }
+        throw new Error(detail);
       }
       if (linkedSitesLength > 1) {
         stopRequestWatch = window.setInterval(() => {

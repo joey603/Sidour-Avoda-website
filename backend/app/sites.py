@@ -320,6 +320,40 @@ def _release_generation_slot(token: str | None) -> None:
         )
 
 
+def _preempt_director_generation_slots(director_id: int | None, *, reason: str = "new-request") -> int:
+    """Libère les slots déjà tenus par ce directeur pour qu’une nouvelle génération puisse démarrer.
+
+    Cas typique : abort client / HMR / double-clic — le front relance alors que le slot
+    serveur est encore pris → 429 en boucle. La nouvelle requête remplace l’ancienne.
+    """
+    if director_id is None:
+        return 0
+    did = int(director_id)
+    with _GENERATION_STATE_LOCK:
+        tokens = [
+            token
+            for token, payload in _ACTIVE_GENERATIONS.items()
+            if payload.get("director_id") is not None and int(payload["director_id"]) == did
+        ]
+    released = 0
+    for token in tokens:
+        before = None
+        with _GENERATION_STATE_LOCK:
+            before = _ACTIVE_GENERATIONS.get(token)
+        _release_generation_slot(token)
+        if before is not None:
+            released += 1
+            logger.warning(
+                "[GENERATION][LOCK] preempted token=%s kind=%s director=%s site=%s reason=%s",
+                token,
+                before.get("kind"),
+                before.get("director_id"),
+                before.get("site_id"),
+                reason,
+            )
+    return released
+
+
 @contextmanager
 def _generation_slot_or_wait(
     *,
@@ -5105,13 +5139,17 @@ async def ai_generate_linked_planning_stream(
     )
 
     slot_token = await asyncio.to_thread(
-        _acquire_generation_slot,
-        kind="linked-stream",
-        director_id=int(user.id),
-        site_id=int(site_id),
-        linked=True,
-        generation_id=generation_id,
-        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
+        lambda: (
+            _preempt_director_generation_slots(int(user.id), reason="linked-stream-replace"),
+            _acquire_generation_slot(
+                kind="linked-stream",
+                director_id=int(user.id),
+                site_id=int(site_id),
+                linked=True,
+                generation_id=generation_id,
+                wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
+            ),
+        )[1]
     )
     if slot_token is None:
         raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
@@ -5684,13 +5722,17 @@ async def ai_generate_stream(
     logger.info("[SSE] start generation=%s site=%s time_limit=%s max_nights=%s num_alternatives=%s workers=%d", generation_id, site_id, eff_time, eff_max_nights, eff_num_alts, len(workers))
 
     slot_token = await asyncio.to_thread(
-        _acquire_generation_slot,
-        kind="single-stream",
-        director_id=int(user.id),
-        site_id=int(site_id),
-        linked=False,
-        generation_id=generation_id,
-        wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
+        lambda: (
+            _preempt_director_generation_slots(int(user.id), reason="single-stream-replace"),
+            _acquire_generation_slot(
+                kind="single-stream",
+                director_id=int(user.id),
+                site_id=int(site_id),
+                linked=False,
+                generation_id=generation_id,
+                wait_timeout_seconds=_generation_request_wait_timeout_seconds(),
+            ),
+        )[1]
     )
     if slot_token is None:
         raise HTTPException(status_code=429, detail=_generation_busy_detail(int(user.id)))
