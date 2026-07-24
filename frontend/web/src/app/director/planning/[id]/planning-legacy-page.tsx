@@ -6037,38 +6037,54 @@ export default function PlanningLegacyPage() {
                   <div className="mt-3 text-center">
                     <div className="block text-sm font-semibold mb-1">זמינות לפי יום/משמרת</div>
                     <div className="space-y-2">
-                          <div className="mb-2 flex flex-wrap items-center justify-center gap-4 text-sm">
-                            <label className="inline-flex items-center gap-2 opacity-100">
-                              <input
-                                type="checkbox"
-                                disabled={!workerModalShiftBuckets.morningName}
-                                checked={!!workerModalShiftBuckets.morningName && workerModalBulkSelection.morningAll}
-                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.morningName, e.target.checked)}
-                              />
-                              כל הבוקר
-                            </label>
-                            <label className="inline-flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                disabled={!workerModalShiftBuckets.noonName}
-                                checked={!!workerModalShiftBuckets.noonName && workerModalBulkSelection.noonAll}
-                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.noonName, e.target.checked)}
-                              />
-                              כל הצהריים
-                            </label>
-                            <label className="inline-flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                disabled={!workerModalShiftBuckets.nightName}
-                                checked={!!workerModalShiftBuckets.nightName && workerModalBulkSelection.nightAll}
-                                onChange={(e) => toggleWorkerAvailabilityForAllDays(workerModalShiftBuckets.nightName, e.target.checked)}
-                              />
-                              כל הלילה
-                            </label>
+                          <div className="mb-2 flex flex-wrap items-center justify-center gap-2 text-sm">
+                            <div className="w-10 shrink-0" aria-hidden />
+                            {(
+                              [
+                                {
+                                  key: "morning",
+                                  label: "כל הבוקר",
+                                  shiftName: workerModalShiftBuckets.morningName,
+                                  allSelected: workerModalBulkSelection.morningAll,
+                                },
+                                {
+                                  key: "noon",
+                                  label: "כל הצהריים",
+                                  shiftName: workerModalShiftBuckets.noonName,
+                                  allSelected: workerModalBulkSelection.noonAll,
+                                },
+                                {
+                                  key: "night",
+                                  label: "כל הלילה",
+                                  shiftName: workerModalShiftBuckets.nightName,
+                                  allSelected: workerModalBulkSelection.nightAll,
+                                },
+                              ] as const
+                            ).map((bulk) => {
+                              const enabled = !!bulk.shiftName;
+                              const active = enabled && bulk.allSelected;
+                              return (
+                                <button
+                                  key={bulk.key}
+                                  type="button"
+                                  disabled={!enabled}
+                                  onClick={() => toggleWorkerAvailabilityForAllDays(bulk.shiftName, !active)}
+                                  className={
+                                    "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 " +
+                                    (active
+                                      ? "border-violet-600 bg-violet-600 text-white"
+                                      : "border-violet-300 bg-white text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-zinc-900 dark:text-violet-300 dark:hover:bg-violet-950/40")
+                                  }
+                                  title={active ? "לחץ לביטול לכל הימים" : "לחץ לסימון בכל הימים"}
+                                >
+                                  {bulk.label}
+                                </button>
+                              );
+                            })}
                           </div>
                       {dayDefs.map((d) => (
                         <div key={d.key} className="flex flex-wrap items-center justify-center gap-3 text-sm">
-                          <div className="w-10 text-zinc-600 dark:text-zinc-300">{d.label}</div>
+                          <div className="w-10 shrink-0 text-center text-zinc-600 dark:text-zinc-300">{d.label}</div>
                           {allShiftNames.length === 0 ? (
                             <span className="text-zinc-500">אין משמרות פעילות</span>
                           ) : (

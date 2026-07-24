@@ -120,6 +120,10 @@ class ShiftKindPrefs(BaseModel):
     night: int = Field(default=0, ge=0, le=6)
 
 
+# Jour → noms de משמרות préférées (sous-ensemble de la זמינות). Soft only.
+ShiftSlotPrefs = dict[str, list[str]]
+
+
 class WorkerBase(BaseModel):
     name: str
     max_shifts: int = 5
@@ -132,6 +136,7 @@ class WorkerBase(BaseModel):
 class WorkerCreate(WorkerBase):
     week_iso: str | None = None
     shift_kind_prefs: ShiftKindPrefs | None = None
+    shift_slot_prefs: ShiftSlotPrefs | None = None
 
 
 class WorkerUpdate(BaseModel):
@@ -145,6 +150,7 @@ class WorkerUpdate(BaseModel):
     weekly_availability: dict[str, list[str]] | None = None
     propagate_linked_availability: bool = False
     shift_kind_prefs: ShiftKindPrefs | None = None
+    shift_slot_prefs: ShiftSlotPrefs | None = None
 
 
 class WorkerOut(WorkerBase):
@@ -182,6 +188,7 @@ class WorkerContextOut(BaseModel):
     max_shifts: int = 5
     submitted_for_week: bool = False
     shift_kind_prefs: ShiftKindPrefs | None = None
+    shift_slot_prefs: ShiftSlotPrefs | None = None
 
 
 class WorkerContextUpdatePayload(BaseModel):
@@ -189,6 +196,7 @@ class WorkerContextUpdatePayload(BaseModel):
     availability: dict[str, list[str]] = {}
     answers: dict[str, Any] = {}
     shift_kind_prefs: ShiftKindPrefs | None = None
+    shift_slot_prefs: ShiftSlotPrefs | None = None
 
 
 class CreateWorkerUserRequest(BaseModel):

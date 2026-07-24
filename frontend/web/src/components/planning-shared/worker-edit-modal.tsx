@@ -13,6 +13,9 @@ export type ShiftKindPrefsState = {
   night: number;
 };
 
+/** Jour → משמרות מועדפות (sous-ensemble de la זמינות). Soft only. */
+export type ShiftSlotPrefsState = Record<string, string[]>;
+
 export type WorkerEditModalProps = {
   open: boolean;
   onClose: () => void;
@@ -31,6 +34,9 @@ export type WorkerEditModalProps = {
   workerAvailabilityOverlay?: Record<string, string[]>;
   onToggleAvailability: (dayKey: string, shiftName: string) => void;
   onToggleAvailabilityForAllDays: (shiftName: string | undefined, checked: boolean) => void;
+  /** Cycle זמין → מועדף → off (même logique que רישום זמינות). */
+  shiftSlotPrefs?: ShiftSlotPrefsState;
+  onToggleSlotPreference?: (dayKey: string, shiftName: string) => void;
   workerModalShiftBuckets: {
     morningName?: string;
     noonName?: string;
@@ -77,6 +83,8 @@ export function WorkerEditModal({
   workerAvailabilityOverlay = {},
   onToggleAvailability,
   onToggleAvailabilityForAllDays,
+  shiftSlotPrefs = {},
+  onToggleSlotPreference,
   workerModalShiftBuckets,
   workerModalBulkSelection,
   workerModalQuestionView,
@@ -270,61 +278,92 @@ export function WorkerEditModal({
 
           <div className="mt-3 text-center">
             <div className="mb-1 block text-sm font-semibold">זמינות לפי יום/משמרת</div>
-            <div className="space-y-2">
-              <div className="mb-2 flex flex-wrap items-center justify-center gap-4 text-sm">
-                <label className="inline-flex items-center gap-2 opacity-100">
-                  <input
-                    type="checkbox"
-                    disabled={!workerModalShiftBuckets.morningName}
-                    checked={!!workerModalShiftBuckets.morningName && workerModalBulkSelection.morningAll}
-                    onChange={(e) =>
-                      onToggleAvailabilityForAllDays(workerModalShiftBuckets.morningName, e.target.checked)
-                    }
-                  />
-                  כל הבוקר
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    disabled={!workerModalShiftBuckets.noonName}
-                    checked={!!workerModalShiftBuckets.noonName && workerModalBulkSelection.noonAll}
-                    onChange={(e) =>
-                      onToggleAvailabilityForAllDays(workerModalShiftBuckets.noonName, e.target.checked)
-                    }
-                  />
-                  כל הצהריים
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    disabled={!workerModalShiftBuckets.nightName}
-                    checked={!!workerModalShiftBuckets.nightName && workerModalBulkSelection.nightAll}
-                    onChange={(e) =>
-                      onToggleAvailabilityForAllDays(workerModalShiftBuckets.nightName, e.target.checked)
-                    }
-                  />
-                  כל הלילה
-                </label>
+            <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+              לחיצה על משמרת: זמין → מועדף (כתום) → ביטול. מועדף = העדפה רכה בלבד.
+            </p>
+            <div className="mx-auto inline-flex max-w-full flex-col items-stretch gap-2">
+              <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
+                {/* Même largeur que le label jour (א'/ב'…) pour centrer sur les cases משמרת */}
+                <div className="w-10 shrink-0" aria-hidden />
+                {(
+                  [
+                    {
+                      key: "morning",
+                      label: "כל הבוקר",
+                      shiftName: workerModalShiftBuckets.morningName,
+                      allSelected: workerModalBulkSelection.morningAll,
+                    },
+                    {
+                      key: "noon",
+                      label: "כל הצהריים",
+                      shiftName: workerModalShiftBuckets.noonName,
+                      allSelected: workerModalBulkSelection.noonAll,
+                    },
+                    {
+                      key: "night",
+                      label: "כל הלילה",
+                      shiftName: workerModalShiftBuckets.nightName,
+                      allSelected: workerModalBulkSelection.nightAll,
+                    },
+                  ] as const
+                ).map((bulk) => {
+                  const enabled = !!bulk.shiftName;
+                  const active = enabled && bulk.allSelected;
+                  return (
+                    <button
+                      key={bulk.key}
+                      type="button"
+                      disabled={workerModalSaving || !enabled}
+                      onClick={() => onToggleAvailabilityForAllDays(bulk.shiftName, !active)}
+                      className={
+                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 " +
+                        (active
+                          ? "border-violet-600 bg-violet-600 text-white"
+                          : "border-violet-300 bg-white text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-zinc-900 dark:text-violet-300 dark:hover:bg-violet-950/40")
+                      }
+                      title={active ? "לחץ לביטול לכל הימים" : "לחץ לסימון בכל הימים"}
+                    >
+                      {bulk.label}
+                    </button>
+                  );
+                })}
               </div>
               {dayDefs.map((d) => (
-                <div key={d.key} className="flex flex-wrap items-center justify-center gap-3 text-sm">
-                  <div className="w-10 text-zinc-600 dark:text-zinc-300">{d.label}</div>
+                <div key={d.key} className="flex flex-wrap items-center justify-center gap-2 text-sm">
+                  <div className="w-10 shrink-0 text-center text-zinc-600 dark:text-zinc-300">{d.label}</div>
                   {allShiftNames.length === 0 ? (
                     <span className="text-zinc-500">אין משמרות פעילות</span>
                   ) : (
                     allShiftNames.map((sn) => {
                       const isChecked = (newWorkerAvailability[d.key] || []).includes(sn);
+                      const isPreferred = isChecked && (shiftSlotPrefs[d.key] || []).includes(sn);
                       const isOverlay = ((workerAvailabilityOverlay[d.key] || []) as string[]).includes(sn);
                       return (
-                        <label key={sn} className="inline-flex items-center gap-1">
-                          <input
-                            type="checkbox"
-                            className={isOverlay ? "accent-red-600" : undefined}
-                            checked={isChecked}
-                            onChange={() => onToggleAvailability(d.key, sn)}
-                          />
-                          {sn}
-                        </label>
+                        <button
+                          key={sn}
+                          type="button"
+                          disabled={workerModalSaving}
+                          onClick={() => {
+                            if (typeof onToggleSlotPreference === "function") {
+                              onToggleSlotPreference(d.key, sn);
+                              return;
+                            }
+                            onToggleAvailability(d.key, sn);
+                          }}
+                          className={
+                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 " +
+                            (isPreferred
+                              ? "border-amber-500 bg-amber-500 text-white"
+                              : isChecked
+                              ? isOverlay
+                                ? "border-red-500 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200"
+                                : "border-blue-600 bg-blue-600 text-white"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800")
+                          }
+                          title={isPreferred ? "מועדף" : isChecked ? "זמין" : "לא זמין"}
+                        >
+                          {isPreferred ? `★ ${sn}` : sn}
+                        </button>
                       );
                     })
                   )}

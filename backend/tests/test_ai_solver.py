@@ -227,6 +227,49 @@ def test_solve_schedule_prefers_shift_kind_soft_targets():
     assert "Night" in night_cell
 
 
+def test_solve_schedule_prefers_shift_slot_soft():
+    """Préférence soft sur un créneau précis (ex. matin plutôt qu'après-midi le même jour)."""
+    config = {
+        "stations": [
+            {
+                "name": "Poste A",
+                "perDayCustom": False,
+                "uniformRoles": True,
+                "workers": 1,
+                "days": {"mon": True},
+                "shifts": [
+                    {"name": "06-14", "enabled": True},
+                    {"name": "14-22", "enabled": True},
+                ],
+                "roles": [],
+            }
+        ]
+    }
+    workers = [
+        {
+            "id": 1,
+            "name": "PrefMorning",
+            "max_shifts": 1,
+            "roles": [],
+            "availability": {"mon": ["06-14", "14-22"]},
+            "shift_slot_prefs": {"mon": ["06-14"]},
+        },
+        {
+            "id": 2,
+            "name": "Other",
+            "max_shifts": 1,
+            "roles": [],
+            "availability": {"mon": ["06-14", "14-22"]},
+        },
+    ]
+    result = solve_schedule(config, workers, time_limit_seconds=8, num_alternatives=0)
+    assert result["status"] in ("OPTIMAL", "FEASIBLE")
+    morning_cell = result["assignments"]["mon"]["06-14"][0]
+    noon_cell = result["assignments"]["mon"]["14-22"][0]
+    assert "PrefMorning" in morning_cell
+    assert "Other" in noon_cell
+
+
 def test_solve_schedule_returns_status_string_on_infeasible_model(monkeypatch):
     """Si le solveur renvoie INFEASIBLE, la réponse contient un statut explicite et une grille vide de besoins."""
 

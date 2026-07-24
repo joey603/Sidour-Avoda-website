@@ -12,7 +12,7 @@ import { DAY_DEFS, buildEnabledRoleNameSet } from "../lib/display";
 import { cloneWorkerAvailability } from "../lib/merge-availability";
 import { persistWorkerNameWeeklyOverride } from "../lib/availability-storage";
 import { getWeekKeyISO, isNextWeekDisplayed } from "../lib/week";
-import type { ShiftKindPrefsState } from "@/components/planning-shared/worker-edit-modal";
+import type { ShiftKindPrefsState, ShiftSlotPrefsState } from "@/components/planning-shared/worker-edit-modal";
 
 export type WorkerRowForEditor = PlanningWorker & { availability: WorkerAvailability };
 
@@ -37,6 +37,23 @@ function readShiftKindPrefsFromAnswers(
       night: Math.max(0, Math.min(6, Number(obj.night) || 0)),
     },
   };
+}
+
+function readShiftSlotPrefsFromAnswers(
+  answers: Record<string, unknown> | undefined,
+  weekStart: Date,
+): ShiftSlotPrefsState {
+  const weekKey = getWeekKeyISO(weekStart);
+  const weekBlock = answers && typeof answers === "object" ? (answers[weekKey] as Record<string, unknown> | undefined) : undefined;
+  const raw = weekBlock && typeof weekBlock === "object" ? weekBlock._shift_slot_prefs : null;
+  if (!raw || typeof raw !== "object") return {};
+  const out: ShiftSlotPrefsState = {};
+  for (const [dayKey, shiftsList] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(shiftsList)) continue;
+    const names = shiftsList.map((x) => String(x || "").trim()).filter(Boolean);
+    if (names.length > 0) out[dayKey] = names;
+  }
+  return out;
 }
 
 export function usePlanningV2WorkerModals(
@@ -68,6 +85,7 @@ export function usePlanningV2WorkerModals(
   });
   const [prefsEnabled, setPrefsEnabled] = useState(false);
   const [shiftKindPrefs, setShiftKindPrefs] = useState<ShiftKindPrefsState>({ ...EMPTY_SHIFT_KIND_PREFS });
+  const [shiftSlotPrefs, setShiftSlotPrefs] = useState<ShiftSlotPrefsState>({});
   const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [linkedAvailabilityConfirmSites, setLinkedAvailabilityConfirmSites] = useState<string[] | null>(null);
@@ -179,12 +197,57 @@ export function usePlanningV2WorkerModals(
   const toggleNewAvailability = useCallback((dayKey: string, shift: string) => {
     setNewWorkerAvailability((prev) => {
       const cur = prev[dayKey] || [];
-      return {
-        ...prev,
-        [dayKey]: cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift],
-      };
+      const nextAvail = cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift];
+      return { ...prev, [dayKey]: nextAvail };
+    });
+    // Si on retire la זמינות, retirer aussi la מועדף
+    setShiftSlotPrefs((prev) => {
+      const dayPref = prev[dayKey] || [];
+      if (!dayPref.includes(shift)) return prev;
+      const nextDay = dayPref.filter((s) => s !== shift);
+      const next = { ...prev };
+      if (nextDay.length === 0) delete next[dayKey];
+      else next[dayKey] = nextDay;
+      return next;
     });
   }, []);
+
+  /** Cycle off → זמין → מועדף → off (comme רישום זמינות עובד). */
+  const toggleSlotPreference = useCallback(
+    (dayKey: string, shift: string) => {
+      const dayAvail = newWorkerAvailability[dayKey] || [];
+      const dayPref = shiftSlotPrefs[dayKey] || [];
+      const isAvail = dayAvail.includes(shift);
+      const isPref = dayPref.includes(shift);
+
+      if (!isAvail) {
+        setNewWorkerAvailability((prev) => ({
+          ...prev,
+          [dayKey]: [...(prev[dayKey] || []), shift],
+        }));
+        return;
+      }
+      if (!isPref) {
+        setShiftSlotPrefs((prev) => ({
+          ...prev,
+          [dayKey]: [...(prev[dayKey] || []), shift],
+        }));
+        return;
+      }
+      setNewWorkerAvailability((prev) => ({
+        ...prev,
+        [dayKey]: (prev[dayKey] || []).filter((s) => s !== shift),
+      }));
+      setShiftSlotPrefs((prev) => {
+        const nextDay = (prev[dayKey] || []).filter((s) => s !== shift);
+        const next = { ...prev };
+        if (nextDay.length === 0) delete next[dayKey];
+        else next[dayKey] = nextDay;
+        return next;
+      });
+    },
+    [newWorkerAvailability, shiftSlotPrefs],
+  );
 
   const toggleWorkerAvailabilityForAllDays = useCallback((shiftName?: string, checked?: boolean) => {
     if (!shiftName) return;
@@ -198,6 +261,17 @@ export function usePlanningV2WorkerModals(
       }
       return next;
     });
+    if (!checked) {
+      setShiftSlotPrefs((prev) => {
+        const next = { ...prev };
+        for (const dayDef of DAY_DEFS) {
+          const dayPref = (next[dayDef.key] || []).filter((s) => s !== shiftName);
+          if (dayPref.length === 0) delete next[dayDef.key];
+          else next[dayDef.key] = dayPref;
+        }
+        return next;
+      });
+    }
   }, []);
 
   const closeWorkerEditor = useCallback(() => {
@@ -210,6 +284,7 @@ export function usePlanningV2WorkerModals(
     setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
     setPrefsEnabled(false);
     setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
+    setShiftSlotPrefs({});
   }, []);
 
   const openWorkerEditor = useCallback(
@@ -236,6 +311,7 @@ export function usePlanningV2WorkerModals(
       setNewWorkerAvailability(nextAvailability);
       setPrefsEnabled(loadedPrefs.enabled);
       setShiftKindPrefs(loadedPrefs.prefs);
+      setShiftSlotPrefs(readShiftSlotPrefsFromAnswers(row.answers, weekStart));
       setEditorOpen(true);
     },
     [enabledRoleNameSet, availabilityOverlaysByWorkerName, weekStart],
@@ -287,6 +363,7 @@ export function usePlanningV2WorkerModals(
     setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
     setPrefsEnabled(false);
     setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
+    setShiftSlotPrefs({});
     setEditorOpen(false);
     setExistingPickerOpen(false);
     setCreateStepOpen(true);
@@ -358,6 +435,7 @@ export function usePlanningV2WorkerModals(
         setNewWorkerAvailability({ ...EMPTY_WORKER_AVAILABILITY });
         setPrefsEnabled(false);
         setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
+        setShiftSlotPrefs({});
         setEditorOpen(true);
         if (userCreated) {
           toast.success("עובד נוצר בהצלחה!");
@@ -450,6 +528,12 @@ export function usePlanningV2WorkerModals(
                 night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
               }
             : null;
+          const slotPrefsPayload: ShiftSlotPrefsState = {};
+          for (const [dayKey, prefShifts] of Object.entries(shiftSlotPrefs || {})) {
+            const avail = new Set(newWorkerAvailability[dayKey] || []);
+            const cleaned = (prefShifts || []).filter((s) => avail.has(s));
+            if (cleaned.length > 0) slotPrefsPayload[dayKey] = cleaned;
+          }
           const updated = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers/${editingWorkerId}`, {
             method: "PUT",
             body: JSON.stringify({
@@ -460,6 +544,7 @@ export function usePlanningV2WorkerModals(
               weekly_availability: newWorkerAvailability,
               propagate_linked_availability: propagateLinkedAvailability,
               shift_kind_prefs: prefsPayload,
+              shift_slot_prefs: slotPrefsPayload,
             }),
           });
           void updated;
@@ -488,6 +573,12 @@ export function usePlanningV2WorkerModals(
             night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
           }
         : null;
+      const slotPrefsPayload: ShiftSlotPrefsState = {};
+      for (const [dayKey, prefShifts] of Object.entries(shiftSlotPrefs || {})) {
+        const avail = new Set(newWorkerAvailability[dayKey] || []);
+        const cleaned = (prefShifts || []).filter((s) => avail.has(s));
+        if (cleaned.length > 0) slotPrefsPayload[dayKey] = cleaned;
+      }
       const result = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers`, {
         method: "POST",
         body: JSON.stringify({
@@ -498,6 +589,7 @@ export function usePlanningV2WorkerModals(
           availability: availabilityForProfile,
           week_iso: getWeekKeyISO(weekStart),
           shift_kind_prefs: prefsPayload,
+          shift_slot_prefs: slotPrefsPayload,
         }),
       });
       void result;
@@ -526,6 +618,7 @@ export function usePlanningV2WorkerModals(
     prefsEnabled,
     reloadWorkers,
     shiftKindPrefs,
+    shiftSlotPrefs,
     site?.name,
     siteId,
     weekStart,
@@ -593,6 +686,8 @@ export function usePlanningV2WorkerModals(
       newWorkerAvailability,
       onToggleAvailability: toggleNewAvailability,
       onToggleAvailabilityForAllDays: toggleWorkerAvailabilityForAllDays,
+      shiftSlotPrefs,
+      onToggleSlotPreference: toggleSlotPreference,
       workerModalShiftBuckets,
       workerModalBulkSelection,
       workerModalQuestionView,
@@ -609,6 +704,7 @@ export function usePlanningV2WorkerModals(
           originalAvailability ||
           EMPTY_WORKER_AVAILABILITY;
         setNewWorkerAvailability(cloneWorkerAvailability(base));
+        setShiftSlotPrefs(readShiftSlotPrefsFromAnswers(editingWorkerResolved?.answers, weekStart));
         toast.info("הזמינות חזרה להגדרת העובד מהמערכת");
       },
       showDeleteButton: !!editingWorkerId,

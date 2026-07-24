@@ -306,6 +306,7 @@ def get_worker_context(
     max_shifts_candidates: list[int] = []
     submitted_for_week = False
     shift_kind_prefs: ShiftKindPrefs | None = None
+    shift_slot_prefs: dict[str, list[str]] | None = None
 
     for row in rows:
         site = sites_by_id_active.get(int(row.site_id))
@@ -376,6 +377,21 @@ def get_worker_context(
                     )
                 except (TypeError, ValueError):
                     shift_kind_prefs = None
+        if shift_slot_prefs is None and isinstance(week_answers, dict):
+            raw_slots = week_answers.get("_shift_slot_prefs")
+            if isinstance(raw_slots, dict):
+                cleaned_slots: dict[str, list[str]] = {}
+                for day_key, shifts_list in raw_slots.items():
+                    day = str(day_key or "").strip().lower()
+                    if day not in ("sun", "mon", "tue", "wed", "thu", "fri", "sat"):
+                        continue
+                    if not isinstance(shifts_list, list):
+                        continue
+                    names = [str(x).strip() for x in shifts_list if str(x or "").strip()]
+                    if names:
+                        cleaned_slots[day] = names
+                if cleaned_slots:
+                    shift_slot_prefs = cleaned_slots
 
     return WorkerContextOut(
         worker_name=user.full_name or "",
@@ -412,6 +428,7 @@ def get_worker_context(
         max_shifts=min(max_shifts_candidates) if max_shifts_candidates else 5,
         submitted_for_week=submitted_for_week,
         shift_kind_prefs=shift_kind_prefs,
+        shift_slot_prefs=shift_slot_prefs,
     )
 
 
@@ -472,6 +489,19 @@ def save_worker_context(
                 "noon": max(0, min(6, int(payload.shift_kind_prefs.noon))),
                 "night": max(0, min(6, int(payload.shift_kind_prefs.night))),
             }
+        if payload.shift_slot_prefs is not None:
+            cleaned_slots: dict[str, list[str]] = {}
+            for day_key, shifts_list in (payload.shift_slot_prefs or {}).items():
+                day = str(day_key or "").strip().lower()
+                if day not in ("sun", "mon", "tue", "wed", "thu", "fri", "sat"):
+                    continue
+                if not isinstance(shifts_list, list):
+                    continue
+                names = [str(x).strip() for x in shifts_list if str(x or "").strip()]
+                if names:
+                    cleaned_slots[day] = names
+            if cleaned_slots:
+                answers_data["_shift_slot_prefs"] = cleaned_slots
         if wk:
             base = row.answers if isinstance(row.answers, dict) else {}
             next_answers = dict(base)

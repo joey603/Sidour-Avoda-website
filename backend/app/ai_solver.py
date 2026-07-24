@@ -67,6 +67,49 @@ def _shift_kind_pref_penalty(
     return sum(devs) if devs else 0
 
 
+def _shift_slot_pref_hits(
+    model: cp_model.CpModel,
+    x: Dict[Tuple[int, int, int, int], cp_model.IntVar],
+    workers: List[dict],
+    W: List[int],
+    days: List[str],
+    shifts: List[str],
+    T: List[int],
+    *,
+    var_prefix: str = "ssp",
+) -> Any:
+    """Soft : récompense les affectations sur créneaux jour×משמרת préférés.
+
+    `shift_slot_prefs` = {dayKey: [shiftName, ...]}. Soft only — ne force rien.
+    Retourne la somme des hits (à maximiser), ou 0 si aucune préférence.
+    """
+    day_index = {d: i for i, d in enumerate(days)}
+    shift_index = {s: i for i, s in enumerate(shifts)}
+    hit_lits: List[cp_model.IntVar] = []
+    for w in W:
+        prefs = workers[w].get("shift_slot_prefs")
+        if not isinstance(prefs, dict):
+            continue
+        for day_key, shift_names in prefs.items():
+            d = day_index.get(str(day_key or "").strip().lower())
+            if d is None:
+                continue
+            if not isinstance(shift_names, list):
+                continue
+            for raw_name in shift_names:
+                s = shift_index.get(str(raw_name or "").strip())
+                if s is None:
+                    continue
+                # Un hit si le worker est assigné à ce (jour, shift) sur au moins un poste.
+                lits = [x[(w, d, s, t)] for t in T if (w, d, s, t) in x]
+                if not lits:
+                    continue
+                hit = model.NewBoolVar(f"{var_prefix}_hit_w{w}_d{d}_s{s}")
+                model.AddMaxEquality(hit, lits)
+                hit_lits.append(hit)
+    return sum(hit_lits) if hit_lits else 0
+
+
 def order_days(days: List[DayKey]) -> List[DayKey]:
     ref = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
     return [d for d in ref if d in set(days)]
@@ -707,10 +750,14 @@ def solve_schedule(
     skp_penalty = _shift_kind_pref_penalty(
         model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="skp",
     )
+    # Soft prefs créneaux précis (jour×משמרת) — sous les volumes kind
+    ssp_hits = _shift_slot_pref_hits(
+        model, x, workers, W, days, shifts, T, var_prefix="ssp",
+    )
 
     # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls,
-    # then avoid morning+night pairs when possible, then shift-kind prefs
-    # Weights: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs >> kind prefs
+    # then avoid morning+night pairs when possible, then shift-kind prefs, then slot prefs
+    # Weights: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs >> kind prefs >> slot prefs
     model.Maximize(
         1000000 * coverage
         - 10000 * max_dev
@@ -719,6 +766,7 @@ def solve_schedule(
         - 5 * mn_penalty
         - 5 * nm_penalty
         - 3 * skp_penalty
+        + 2 * ssp_hits
     )
 
     solver = cp_model.CpSolver()
@@ -1880,6 +1928,9 @@ def solve_schedule_stream(
     skp_penalty = _shift_kind_pref_penalty(
         model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="s_skp",
     )
+    ssp_hits = _shift_slot_pref_hits(
+        model, x, workers, W, days, shifts, T, var_prefix="s_ssp",
+    )
 
     model.Maximize(
         1000000 * coverage
@@ -1889,6 +1940,7 @@ def solve_schedule_stream(
         - 5 * mn_penalty
         - 5 * nm_penalty
         - 3 * skp_penalty
+        + 2 * ssp_hits
     )
 
     solver = cp_model.CpSolver()

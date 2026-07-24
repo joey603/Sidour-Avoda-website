@@ -581,6 +581,33 @@ def _normalize_shift_kind_prefs(raw: object | None) -> dict[str, int] | None:
     return out if out else None
 
 
+_WEEK_DAY_KEYS_FOR_PREFS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+
+def _normalize_shift_slot_prefs(raw: object | None) -> dict[str, list[str]] | None:
+    """Normalise {day: [shiftName,...]} — créneaux préférés (soft). None si absent/vide."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, list[str]] = {}
+    for day_key, shifts_list in raw.items():
+        day = str(day_key or "").strip().lower()
+        if day not in _WEEK_DAY_KEYS_FOR_PREFS:
+            continue
+        if not isinstance(shifts_list, list):
+            continue
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in shifts_list:
+            name = str(item or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cleaned.append(name)
+        if cleaned:
+            out[day] = cleaned
+    return out if out else None
+
+
 def _shift_kind_prefs_from_answers(row: SiteWorker, week_iso: str | None) -> dict[str, int] | None:
     """Préférences soft stockées dans answers[week]._shift_kind_prefs (soumission זמינות)."""
     if not week_iso:
@@ -590,6 +617,17 @@ def _shift_kind_prefs_from_answers(row: SiteWorker, week_iso: str | None) -> dic
     if not isinstance(week_block, dict):
         return None
     return _normalize_shift_kind_prefs(week_block.get("_shift_kind_prefs"))
+
+
+def _shift_slot_prefs_from_answers(row: SiteWorker, week_iso: str | None) -> dict[str, list[str]] | None:
+    """Préférences soft jour×משמרת dans answers[week]._shift_slot_prefs."""
+    if not week_iso:
+        return None
+    answers = row.answers if isinstance(row.answers, dict) else {}
+    week_block = answers.get(week_iso)
+    if not isinstance(week_block, dict):
+        return None
+    return _normalize_shift_slot_prefs(week_block.get("_shift_slot_prefs"))
 
 
 def _apply_shift_kind_prefs_to_answers(
@@ -616,6 +654,27 @@ def _apply_shift_kind_prefs_to_answers(
         week_block.pop("_shift_kind_prefs", None)
     else:
         week_block["_shift_kind_prefs"] = normalized
+    base[wk] = week_block
+    row.answers = base
+    flag_modified(row, "answers")
+
+
+def _apply_shift_slot_prefs_to_answers(
+    row: SiteWorker,
+    week_iso: str,
+    prefs: object | None,
+) -> None:
+    """Écrit / efface answers[week]._shift_slot_prefs."""
+    wk = (week_iso or "").strip()
+    if not wk:
+        return
+    base = dict(row.answers) if isinstance(row.answers, dict) else {}
+    week_block = dict(base.get(wk)) if isinstance(base.get(wk), dict) else {}
+    normalized = _normalize_shift_slot_prefs(prefs if isinstance(prefs, dict) else None)
+    if normalized is None:
+        week_block.pop("_shift_slot_prefs", None)
+    else:
+        week_block["_shift_slot_prefs"] = normalized
     base[wk] = week_block
     row.answers = base
     flag_modified(row, "answers")
@@ -683,6 +742,13 @@ def _build_solver_workers(
             prefs = _shift_kind_prefs_from_answers(r, week_iso)
         if prefs is not None:
             wd["shift_kind_prefs"] = prefs
+        slot_prefs = None
+        if isinstance(ovr, dict):
+            slot_prefs = _normalize_shift_slot_prefs(ovr.get("_shift_slot_prefs"))
+        if slot_prefs is None:
+            slot_prefs = _shift_slot_prefs_from_answers(r, week_iso)
+        if slot_prefs is not None:
+            wd["shift_slot_prefs"] = slot_prefs
         workers.append(wd)
     return workers
 
@@ -1714,6 +1780,7 @@ def _build_multi_site_generation_context(
             "max_shifts": [],
             "availability": None,
             "shift_kind_prefs": None,
+            "shift_slot_prefs": None,
         })
         site_id = int(row.site_id)
         group["site_ids"].add(site_id)
@@ -1730,6 +1797,14 @@ def _build_multi_site_generation_context(
                     prefs = _normalize_shift_kind_prefs(root_ovr.get("_shift_kind_prefs"))
             if prefs is not None:
                 group["shift_kind_prefs"] = prefs
+        if group.get("shift_slot_prefs") is None:
+            slot_prefs = _shift_slot_prefs_from_answers(row, week_iso)
+            if slot_prefs is None and site_id == int(root_site_id):
+                root_ovr = current_site_overrides.get(row.name)
+                if isinstance(root_ovr, dict):
+                    slot_prefs = _normalize_shift_slot_prefs(root_ovr.get("_shift_slot_prefs"))
+            if slot_prefs is not None:
+                group["shift_slot_prefs"] = slot_prefs
         site_weekly_overrides = weekly_overrides_by_site.get(site_id, {})
         override = None
         if site_id == int(root_site_id):
@@ -1819,6 +1894,8 @@ def _build_multi_site_generation_context(
         }
         if isinstance(group.get("shift_kind_prefs"), dict):
             cw["shift_kind_prefs"] = group["shift_kind_prefs"]
+        if isinstance(group.get("shift_slot_prefs"), dict):
+            cw["shift_slot_prefs"] = group["shift_slot_prefs"]
         combined_workers.append(cw)
 
     fixed_assignments_by_site: dict[int, dict[str, dict[str, list[list[str]]]]] = {}
@@ -4384,6 +4461,12 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                 _validate_week_iso(payload.week_iso),
                 payload.shift_kind_prefs.model_dump(),
             )
+        if payload.week_iso and payload.shift_slot_prefs is not None:
+            _apply_shift_slot_prefs_to_answers(
+                w,
+                _validate_week_iso(payload.week_iso),
+                payload.shift_slot_prefs,
+            )
         db.commit()
         db.refresh(w)
         logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
@@ -4618,8 +4701,15 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
             if payload.shift_kind_prefs is not None
             else None
         )
+        slot_prefs_payload = (
+            payload.shift_slot_prefs
+            if payload.shift_slot_prefs is not None
+            else None
+        )
         for prefs_row in prefs_rows:
             _apply_shift_kind_prefs_to_answers(prefs_row, prefs_wk, prefs_payload)
+            if "shift_slot_prefs" in payload.model_fields_set:
+                _apply_shift_slot_prefs_to_answers(prefs_row, prefs_wk, slot_prefs_payload)
 
     if w.user_id:
         linked_rows_for_return = linked_rows_for_return or db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()

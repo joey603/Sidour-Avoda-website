@@ -29,6 +29,8 @@ type ShiftKindPrefs = {
   noon: number;
   night: number;
 };
+/** Jour → משמרות מועדפות (sous-ensemble de la זמינות). Soft only. */
+type ShiftSlotPrefs = Record<string, string[]>;
 type WorkerContextResponse = {
   worker_name: string;
   sites: Array<{ id: number; name: string; site_deleted?: boolean; removed_by_planning?: boolean }>;
@@ -40,6 +42,7 @@ type WorkerContextResponse = {
   answers: WorkerContextAnswers | Record<string, AnswerValue>;
   submitted_for_week?: boolean;
   shift_kind_prefs?: ShiftKindPrefs | null;
+  shift_slot_prefs?: ShiftSlotPrefs | null;
 };
 type LocalWorkerContextCache = {
   availability?: Record<string, string[]>;
@@ -51,6 +54,7 @@ type LocalWorkerContextCache = {
   siteName?: string;
   shiftKindPrefs?: ShiftKindPrefs | null;
   prefsEnabled?: boolean;
+  shiftSlotPrefs?: ShiftSlotPrefs | null;
 };
 
 type WeekRange = {
@@ -124,6 +128,7 @@ export default function WorkerAvailabilityPage() {
     noon: 0,
     night: 0,
   });
+  const [shiftSlotPrefs, setShiftSlotPrefs] = useState<ShiftSlotPrefs>({});
   const nextWeekStart = targetWeek.start;
   const nextWeekEnd = targetWeek.end;
 
@@ -134,6 +139,7 @@ export default function WorkerAvailabilityPage() {
     setMaxShifts(5);
     setPrefsEnabled(false);
     setShiftKindPrefs({ morning: 0, noon: 0, night: 0 });
+    setShiftSlotPrefs({});
     setSuccess(false);
     setIsEditing(false);
     setHasBeenSaved(false);
@@ -179,6 +185,9 @@ export default function WorkerAvailabilityPage() {
                 noon: Math.max(0, Math.min(6, Number(parsed.shiftKindPrefs.noon) || 0)),
                 night: Math.max(0, Math.min(6, Number(parsed.shiftKindPrefs.night) || 0)),
               });
+            }
+            if (parsed.shiftSlotPrefs && typeof parsed.shiftSlotPrefs === "object") {
+              setShiftSlotPrefs(parsed.shiftSlotPrefs);
             }
           } else {
             setAvailability(parsed as WorkerAvailability);
@@ -241,6 +250,12 @@ export default function WorkerAvailabilityPage() {
           setShiftKindPrefs({ morning: 0, noon: 0, night: 0 });
         }
 
+        if (submitted && workerData.shift_slot_prefs && typeof workerData.shift_slot_prefs === "object") {
+          setShiftSlotPrefs(workerData.shift_slot_prefs);
+        } else {
+          setShiftSlotPrefs({});
+        }
+
         if (submitted && workerData.answers && typeof workerData.answers === "object") {
           if ("general" in workerData.answers || "perDay" in workerData.answers) {
             const answers = workerData.answers as WorkerContextAnswers;
@@ -282,6 +297,7 @@ export default function WorkerAvailabilityPage() {
               : "",
           prefsEnabled: submitted && !!workerData.shift_kind_prefs,
           shiftKindPrefs: submitted ? workerData.shift_kind_prefs || null : null,
+          shiftSlotPrefs: submitted ? workerData.shift_slot_prefs || {} : {},
         }));
       }
     } catch (e: unknown) {
@@ -368,14 +384,38 @@ export default function WorkerAvailabilityPage() {
     { key: "sat", label: "ש'" },
   ];
 
+  /** Cycle: off → זמין → מועדף → off. Soft only pour מועדף. */
   function toggleAvailability(dayKey: string, shiftName: string) {
-    setAvailability((prev) => {
-      const dayShifts = prev[dayKey] || [];
-      const hasShift = dayShifts.includes(shiftName);
-      return {
+    const dayAvail = availability[dayKey] || [];
+    const dayPref = shiftSlotPrefs[dayKey] || [];
+    const isAvail = dayAvail.includes(shiftName);
+    const isPref = dayPref.includes(shiftName);
+
+    if (!isAvail) {
+      setAvailability((prev) => ({
         ...prev,
-        [dayKey]: hasShift ? dayShifts.filter((s) => s !== shiftName) : [...dayShifts, shiftName],
-      };
+        [dayKey]: [...(prev[dayKey] || []), shiftName],
+      }));
+      return;
+    }
+    if (!isPref) {
+      setShiftSlotPrefs((prev) => ({
+        ...prev,
+        [dayKey]: [...(prev[dayKey] || []), shiftName],
+      }));
+      return;
+    }
+    // preferred → off
+    setAvailability((prev) => ({
+      ...prev,
+      [dayKey]: (prev[dayKey] || []).filter((s) => s !== shiftName),
+    }));
+    setShiftSlotPrefs((prev) => {
+      const nextDay = (prev[dayKey] || []).filter((s) => s !== shiftName);
+      const next = { ...prev };
+      if (nextDay.length === 0) delete next[dayKey];
+      else next[dayKey] = nextDay;
+      return next;
     });
   }
 
@@ -470,6 +510,13 @@ export default function WorkerAvailabilityPage() {
             night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
           }
         : null;
+      // Ne garder que les מועדף encore présents dans la זמינות
+      const slotPrefsPayload: ShiftSlotPrefs = {};
+      for (const [dayKey, prefShifts] of Object.entries(shiftSlotPrefs || {})) {
+        const avail = new Set(availability[dayKey] || []);
+        const kept = (prefShifts || []).filter((s) => avail.has(s));
+        if (kept.length > 0) slotPrefsPayload[dayKey] = kept;
+      }
       await apiFetch(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
         headers: {
@@ -480,6 +527,7 @@ export default function WorkerAvailabilityPage() {
           availability: availability,
           answers: { general: answersGeneral, perDay: answersPerDay },
           shift_kind_prefs: prefsPayload,
+          shift_slot_prefs: slotPrefsPayload,
         }),
       });
       
@@ -495,6 +543,7 @@ export default function WorkerAvailabilityPage() {
         siteName,
         prefsEnabled,
         shiftKindPrefs: prefsPayload,
+        shiftSlotPrefs: slotPrefsPayload,
       }));
       
       setSuccess(true);
@@ -699,9 +748,26 @@ export default function WorkerAvailabilityPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                     זמינות שבועית
                   </label>
+                  <p className="mb-3 text-xs text-zinc-500 dark:text-zinc-400">
+                    לחיצה: זמין → מועדף (כתום) → ביטול. מועדף = העדפה רכה בלבד אם אפשר.
+                  </p>
+                  <div className="mb-3 flex flex-wrap items-center gap-3 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3 w-3 rounded-sm bg-zinc-200 dark:bg-zinc-700" />
+                      לא זמין
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3 w-3 rounded-sm bg-blue-600" />
+                      זמין
+                    </span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-block h-3 w-3 rounded-sm bg-amber-500" />
+                      מועדף
+                    </span>
+                  </div>
                   <div className="space-y-4">
                     {dayDefs.map((day) => (
                       <div key={day.key} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
@@ -718,6 +784,7 @@ export default function WorkerAvailabilityPage() {
                         <div className="grid grid-cols-2 gap-2">
                           {sortShifts(shifts).map((shift) => {
                             const isSelected = (availability[day.key] || []).includes(shift);
+                            const isPreferred = isSelected && (shiftSlotPrefs[day.key] || []).includes(shift);
                             return (
                               <button
                                 key={shift}
@@ -725,12 +792,15 @@ export default function WorkerAvailabilityPage() {
                                 onClick={() => toggleAvailability(day.key, shift)}
                                 disabled={onlyArchivedSites || submitting || (success && isEditing)}
                                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                                  isSelected
+                                  isPreferred
+                                    ? "bg-amber-500 text-white hover:bg-amber-600"
+                                    : isSelected
                                     ? "bg-blue-600 text-white hover:bg-blue-700"
                                     : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                                 } disabled:opacity-60 disabled:cursor-not-allowed`}
+                                title={isPreferred ? "מועדף — לחץ לביטול" : isSelected ? "זמין — לחץ להעדפה" : "לחץ לסימון זמין"}
                               >
-                                {shift}
+                                {isPreferred ? `★ ${shift}` : shift}
                               </button>
                             );
                           })}
