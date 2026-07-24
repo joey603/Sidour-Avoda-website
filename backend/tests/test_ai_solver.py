@@ -183,6 +183,50 @@ def test_solve_schedule_respects_role_requirement_on_shift():
     assert "Carol" in out_ok["assignments"]["sun"]["06-14"][0]
 
 
+def test_solve_schedule_prefers_shift_kind_soft_targets():
+    """Préférences soft matin/nuit : sans casser la couverture, l’algo suit les volumes demandés."""
+    config = {
+        "stations": [
+            {
+                "name": "Poste A",
+                "perDayCustom": False,
+                "uniformRoles": True,
+                "workers": 1,
+                "days": {"sun": True},
+                "shifts": [
+                    {"name": "06-14", "enabled": True},
+                    {"name": "22-06", "enabled": True},
+                ],
+                "roles": [],
+            }
+        ]
+    }
+    workers = [
+        {
+            "id": 1,
+            "name": "Morn",
+            "max_shifts": 2,
+            "roles": [],
+            "availability": {"sun": ["06-14", "22-06"]},
+            "shift_kind_prefs": {"morning": 1, "noon": 0, "night": 0},
+        },
+        {
+            "id": 2,
+            "name": "Night",
+            "max_shifts": 2,
+            "roles": [],
+            "availability": {"sun": ["06-14", "22-06"]},
+            "shift_kind_prefs": {"morning": 0, "noon": 0, "night": 1},
+        },
+    ]
+    result = solve_schedule(config, workers, time_limit_seconds=8, num_alternatives=0)
+    assert result["status"] in ("OPTIMAL", "FEASIBLE")
+    morning_cell = result["assignments"]["sun"]["06-14"][0]
+    night_cell = result["assignments"]["sun"]["22-06"][0]
+    assert "Morn" in morning_cell
+    assert "Night" in night_cell
+
+
 def test_solve_schedule_returns_status_string_on_infeasible_model(monkeypatch):
     """Si le solveur renvoie INFEASIBLE, la réponse contient un statut explicite et une grille vide de besoins."""
 

@@ -535,6 +535,92 @@ def _serialize_auto_planning_config(row: DirectorAutoPlanningConfig | None) -> A
 _WEEK_DAY_KEYS = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
 
 
+def _site_max_nights_per_worker(config: dict | None, fallback: int = 3) -> int:
+    """Max nuits / employé / semaine depuis site.config (défaut 3, borné 0..7)."""
+    raw = (config or {}).get("max_nights_per_worker")
+    if raw is None:
+        raw = (config or {}).get("maxNightsPerWorker")
+    try:
+        return max(0, min(7, int(raw if raw is not None else fallback)))
+    except (TypeError, ValueError):
+        return max(0, min(7, int(fallback)))
+
+
+def _resolve_max_nights_per_worker(
+    site_config: dict | None,
+    *,
+    payload_value: int | None = None,
+    query_value: int | None = None,
+) -> int:
+    """Query > body explicite > config site > 3."""
+    if query_value is not None:
+        try:
+            return max(0, min(7, int(query_value)))
+        except (TypeError, ValueError):
+            pass
+    if payload_value is not None:
+        try:
+            return max(0, min(7, int(payload_value)))
+        except (TypeError, ValueError):
+            pass
+    return _site_max_nights_per_worker(site_config)
+
+
+def _normalize_shift_kind_prefs(raw: object | None) -> dict[str, int] | None:
+    """Normalise {morning,noon,night} → ints 0..6. None si absent / invalide."""
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, int] = {}
+    for key in ("morning", "noon", "night"):
+        if key not in raw:
+            continue
+        try:
+            out[key] = max(0, min(6, int(raw.get(key) or 0)))
+        except (TypeError, ValueError):
+            out[key] = 0
+    return out if out else None
+
+
+def _shift_kind_prefs_from_answers(row: SiteWorker, week_iso: str | None) -> dict[str, int] | None:
+    """Préférences soft stockées dans answers[week]._shift_kind_prefs (soumission זמינות)."""
+    if not week_iso:
+        return None
+    answers = row.answers if isinstance(row.answers, dict) else {}
+    week_block = answers.get(week_iso)
+    if not isinstance(week_block, dict):
+        return None
+    return _normalize_shift_kind_prefs(week_block.get("_shift_kind_prefs"))
+
+
+def _apply_shift_kind_prefs_to_answers(
+    row: SiteWorker,
+    week_iso: str,
+    prefs: object | None,
+) -> None:
+    """Écrit / efface answers[week]._shift_kind_prefs (directeur ou employé)."""
+    wk = (week_iso or "").strip()
+    if not wk:
+        return
+    base = dict(row.answers) if isinstance(row.answers, dict) else {}
+    week_block = dict(base.get(wk)) if isinstance(base.get(wk), dict) else {}
+    normalized = _normalize_shift_kind_prefs(prefs if isinstance(prefs, dict) else (
+        {
+            "morning": getattr(prefs, "morning", 0),
+            "noon": getattr(prefs, "noon", 0),
+            "night": getattr(prefs, "night", 0),
+        }
+        if prefs is not None
+        else None
+    ))
+    if normalized is None:
+        week_block.pop("_shift_kind_prefs", None)
+    else:
+        week_block["_shift_kind_prefs"] = normalized
+    base[wk] = week_block
+    row.answers = base
+    flag_modified(row, "answers")
+
+
 def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, list[str]], list[int], bool]:
     """Extrait {jour: [משמרות]} et indices עמדה depuis l’override hebdo (_stations)."""
     if not isinstance(ovr, dict):
@@ -560,7 +646,11 @@ def _weekly_override_avail_and_stations(ovr: dict | None) -> tuple[dict[str, lis
     return avail, station_allow, has_station_override
 
 
-def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, dict[str, list[str]]] | None) -> list[dict]:
+def _build_solver_workers(
+    rows: list[SiteWorker],
+    weekly_overrides: dict[str, dict[str, list[str]]] | None,
+    week_iso: str | None = None,
+) -> list[dict]:
     overrides = weekly_overrides or {}
     workers: list[dict] = []
     for r in rows:
@@ -585,6 +675,14 @@ def _build_solver_workers(rows: list[SiteWorker], weekly_overrides: dict[str, di
         }
         if station_allow:
             wd["allowed_station_indices"] = sorted({i for i in station_allow if i >= 0})
+        # Soft prefs: override hebdo éventuel, sinon answers[week]
+        prefs = None
+        if isinstance(ovr, dict):
+            prefs = _normalize_shift_kind_prefs(ovr.get("_shift_kind_prefs"))
+        if prefs is None:
+            prefs = _shift_kind_prefs_from_answers(r, week_iso)
+        if prefs is not None:
+            wd["shift_kind_prefs"] = prefs
         workers.append(wd)
     return workers
 
@@ -995,7 +1093,9 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
         if not isinstance(per_shift, list) or station_idx >= len(per_shift):
             return []
         raw = per_shift[station_idx]
-        return [_norm_name_local(x) for x in raw] if isinstance(raw, list) else []
+        if not isinstance(raw, list):
+            return []
+        return [nm for x in raw if (nm := _norm_name_local(x))]
 
     def set_cell_names(day_key: str, shift_name: str, station_idx: int, names: list[str]) -> None:
         assignments.setdefault(day_key, {})
@@ -1613,6 +1713,7 @@ def _build_multi_site_generation_context(
             "roles": set(),
             "max_shifts": [],
             "availability": None,
+            "shift_kind_prefs": None,
         })
         site_id = int(row.site_id)
         group["site_ids"].add(site_id)
@@ -1620,6 +1721,15 @@ def _build_multi_site_generation_context(
         group["max_shifts"].append(int(row.max_shifts or 5))
         for role_name in (row.roles or []):
             group["roles"].add(_site_role_key(site_id, str(role_name)))
+        # Soft prefs (ne touche pas multi-site / תפקידים) — première valeur non nulle
+        if group.get("shift_kind_prefs") is None:
+            prefs = _shift_kind_prefs_from_answers(row, week_iso)
+            if prefs is None and site_id == int(root_site_id):
+                root_ovr = current_site_overrides.get(row.name)
+                if isinstance(root_ovr, dict):
+                    prefs = _normalize_shift_kind_prefs(root_ovr.get("_shift_kind_prefs"))
+            if prefs is not None:
+                group["shift_kind_prefs"] = prefs
         site_weekly_overrides = weekly_overrides_by_site.get(site_id, {})
         override = None
         if site_id == int(root_site_id):
@@ -1699,14 +1809,17 @@ def _build_multi_site_generation_context(
                     break
             if st_indices:
                 site_limits.append({"station_indices": st_indices, "max": site_row_max})
-        combined_workers.append({
+        cw: dict = {
             "id": idx + 1,
             "name": group["solver_name"],
             "max_shifts": global_max,
             "roles": sorted(group["roles"]),
             "availability": group["availability"] or {},
             "site_limits": site_limits,
-        })
+        }
+        if isinstance(group.get("shift_kind_prefs"), dict):
+            cw["shift_kind_prefs"] = group["shift_kind_prefs"]
+        combined_workers.append(cw)
 
     fixed_assignments_by_site: dict[int, dict[str, dict[str, list[list[str]]]]] = {}
     for site_id in connected_site_ids:
@@ -2159,11 +2272,13 @@ def _generate_multi_site_memory_plans(
         fixed_assignments=fixed_assignments,
     )
 
+    root_site = (context.get("sites_by_id") or {}).get(int(root_site_id))
+    root_config = (root_site.config if root_site else None) or {}
     result = solve_schedule(
         context["combined_config"],
         context["combined_workers"],
         time_limit_seconds=int(time_limit_seconds or 20),
-        max_nights_per_worker=3,
+        max_nights_per_worker=_site_max_nights_per_worker(root_config),
         num_alternatives=num_alternatives,
         fixed_assignments=context["combined_fixed"],
         exclude_days=exclude_days,
@@ -2335,31 +2450,16 @@ def _sanitize_pulls_map(pulls: dict | None) -> dict:
 
 
 def _matches_pulls_limit(pulls: dict | None, pulls_limit: int | None, require_pull: bool = False) -> bool:
+    """Accepte tant que count ≤ limite (0 inclus).
+
+    משיכות = plafond « עד N », pas une obligation d’en avoir au moins une : un planning
+    déjà complet sans trou ne doit pas être rejeté.
+    """
+    _ = require_pull  # compat API : anciennement exigé ≥1 pull
     count = _pulls_count(pulls)
-    if require_pull and count <= 0:
-        return False
     if pulls_limit is None:
         return True
     return count <= int(pulls_limit)
-
-
-def _site_plans_have_required_pulls(
-    site_plans: dict[str, dict] | None,
-    pulls_limits_by_site: dict[int, int | None] | None = None,
-) -> bool:
-    if not isinstance(site_plans, dict) or not site_plans:
-        return False
-    total = 0
-    for site_key, site_plan in site_plans.items():
-        try:
-            current_site_id = int(site_key)
-        except Exception:
-            current_site_id = 0
-        if pulls_limits_by_site is not None and current_site_id not in pulls_limits_by_site:
-            continue
-        pulls_value = site_plan.get("pulls") if isinstance(site_plan, dict) else {}
-        total += _pulls_count(pulls_value if isinstance(pulls_value, dict) else {})
-    return total > 0
 
 
 def _planning_limit_error_detail(pulls_limit: int) -> str:
@@ -2446,7 +2546,7 @@ def _generate_director_week_plan_payload(
         .first()
     )
     weekly_overrides = (weekly_row.availability or {}) if weekly_row else {}
-    workers = _build_solver_workers(rows, weekly_overrides)
+    workers = _build_solver_workers(rows, weekly_overrides, week_iso=week_iso)
     start_dt = datetime.fromisoformat(week_iso)
     end_dt = start_dt + timedelta(days=6)
 
@@ -2528,7 +2628,7 @@ def _generate_director_week_plan_payload(
         site.config or {},
         workers,
         time_limit_seconds=auto_pulls_time_limit if auto_pulls_enabled else 25,
-        max_nights_per_worker=3,
+        max_nights_per_worker=_site_max_nights_per_worker(site.config),
         num_alternatives=auto_pulls_num_alts if auto_pulls_enabled else 1,
         fixed_assignments=None,
         exclude_days=None,
@@ -2581,8 +2681,6 @@ def _generate_director_week_plan_payload(
     for idx, candidate in enumerate(candidate_assignments):
         candidate_payload = make_payload(candidate)
         candidate_payload = _apply_auto_pulls_to_payload(site, rows, candidate_payload, pulls_limit=pulls_limit)
-        if _pulls_count(candidate_payload.get("pulls") if isinstance(candidate_payload.get("pulls"), dict) else {}) <= 0:
-            continue
         candidate_key = _single_site_candidate_sort_key(
             site,
             candidate_payload.get("assignments") if isinstance(candidate_payload.get("assignments"), dict) else {},
@@ -4280,6 +4378,12 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             for linked_row in linked_rows:
                 linked_row.max_shifts = payload.max_shifts
         _copy_weekly_availability_from_linked_sites(w)
+        if payload.week_iso and payload.shift_kind_prefs is not None:
+            _apply_shift_kind_prefs_to_answers(
+                w,
+                _validate_week_iso(payload.week_iso),
+                payload.shift_kind_prefs.model_dump(),
+            )
         db.commit()
         db.refresh(w)
         logger.info(f"[create-worker] Created SiteWorker '{payload.name}' (id={w.id}) for site {site_id}, linked to User id={w.user_id}")
@@ -4490,6 +4594,33 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
                 weekly_row = SiteWeeklyAvailability(site_id=target_site_id, week_iso=wk, availability=data, updated_at=now)
                 db.add(weekly_row)
                 weekly_row_by_site_id[target_site_id] = weekly_row
+
+    # Préférences soft matin/midi/nuit (même semaine que la זמינות directeur)
+    if payload.week_iso:
+        prefs_wk = _validate_week_iso(payload.week_iso)
+        prefs_rows: list[SiteWorker] = [w]
+        if payload.propagate_linked_availability:
+            if linked_rows_for_return is None:
+                if w.user_id:
+                    linked_rows_for_return = db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
+                else:
+                    linked_site_ids_tmp = _linked_site_ids_for_worker(db, user.id, w)
+                    linked_rows_for_return = (
+                        db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids_tmp)).all()
+                    )
+            prefs_rows = [
+                linked_row
+                for linked_row in (linked_rows_for_return or [])
+                if _worker_identity_key(linked_row) == _worker_identity_key(w)
+            ] or [w]
+        prefs_payload = (
+            payload.shift_kind_prefs.model_dump()
+            if payload.shift_kind_prefs is not None
+            else None
+        )
+        for prefs_row in prefs_rows:
+            _apply_shift_kind_prefs_to_answers(prefs_row, prefs_wk, prefs_payload)
+
     if w.user_id:
         linked_rows_for_return = linked_rows_for_return or db.query(SiteWorker).filter(SiteWorker.user_id == w.user_id).all()
         for linked_row in linked_rows_for_return:
@@ -4733,7 +4864,6 @@ def ai_generate_linked_planning(
             accepted_indices: list[int] = []
             for candidate_idx in range(candidate_count):
                 matches_all_sites = True
-                candidate_total_pulls = 0
                 for site_key, site_plan in site_plans.items():
                     current_site_id = int(site_key)
                     if candidate_idx == 0:
@@ -4741,8 +4871,6 @@ def ai_generate_linked_planning(
                     else:
                         alt_pulls_list = site_plan.get("alternative_pulls") or []
                         candidate_pulls = (alt_pulls_list[candidate_idx - 1] or {}) if candidate_idx - 1 < len(alt_pulls_list) else None
-                    if pulls_limits_by_site is None or current_site_id in pulls_limits_by_site:
-                        candidate_total_pulls += _pulls_count(candidate_pulls if isinstance(candidate_pulls, dict) else {})
                     if not _site_pulls_limit_matches(
                         current_site_id,
                         candidate_pulls if isinstance(candidate_pulls, dict) else {},
@@ -4751,7 +4879,7 @@ def ai_generate_linked_planning(
                     ):
                         matches_all_sites = False
                         break
-                if matches_all_sites and candidate_total_pulls > 0:
+                if matches_all_sites:
                     accepted_indices.append(candidate_idx)
             if not accepted_indices:
                 raise HTTPException(
@@ -4830,7 +4958,15 @@ async def ai_generate_linked_planning_stream(
         raise HTTPException(status_code=404, detail="Site introuvable")
 
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 20))
-    eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
+    try:
+        q_nights_parsed = int(q_max_nights_per_worker) if q_max_nights_per_worker is not None else None
+    except (TypeError, ValueError):
+        q_nights_parsed = None
+    eff_max_nights = _resolve_max_nights_per_worker(
+        site.config,
+        payload_value=payload.max_nights_per_worker if payload else None,
+        query_value=q_nights_parsed,
+    )
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 40))
     if payload and payload.auto_pulls_enabled:
         eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
@@ -5060,18 +5196,14 @@ async def ai_generate_linked_planning_stream(
                                     )
                                     for site_key, site_plan in plans
                                 )
-                                has_required_pull = _site_plans_have_required_pulls(
-                                    split_site_plans,
-                                    pulls_limits_by_site=eff_pulls_limits_by_site or None,
-                                )
-                                if not pulls_limit_matches or not has_required_pull:
+                                if not pulls_limit_matches:
                                     rejected_candidates += 1
                                     _enqueue({
                                         "type": "pulls_debug",
                                         "item_type": item_type,
                                         "item_index": item.get("index"),
                                         "accepted": False,
-                                        "reason": "no_pulls" if pulls_limit_matches else "pulls_count_mismatch",
+                                        "reason": "pulls_count_mismatch",
                                         "linked": True,
                                         "requested_pulls": eff_pulls_limit,
                                         "pulls_limits_by_site": eff_pulls_limits_by_site or None,
@@ -5259,11 +5391,11 @@ def ai_generate_planning(
     ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
-    workers = _build_solver_workers(rows, overrides)
+    workers = _build_solver_workers(rows, overrides, week_iso=week_for_rows)
     logger.info(f"[AI-GEN] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
     for w in workers:
         avail_count = sum(len(shifts) for shifts in w['availability'].values())
-        logger.info(f"[AI-GEN] Worker {w['name']}: availability keys={len(w['availability'])}, total shifts={avail_count}, max_shifts={w['max_shifts']}, roles={w['roles']}")
+        logger.info(f"[AI-GEN] Worker {w['name']}: availability keys={len(w['availability'])}, total shifts={avail_count}, max_shifts={w['max_shifts']}, roles={w['roles']}, shift_kind_prefs={w.get('shift_kind_prefs')}")
     if not workers:
         # Return empty structure with days/shifts from config mapping
         from .ai_solver import build_capacities_from_config
@@ -5288,7 +5420,10 @@ def ai_generate_planning(
             site.config or {},
             workers,
             time_limit_seconds=_clamp_generation_budget(int(payload.time_limit_seconds or 12), int(payload.num_alternatives or 20), linked=False)[0],
-            max_nights_per_worker=int(payload.max_nights_per_worker or 3),
+            max_nights_per_worker=_resolve_max_nights_per_worker(
+                site.config,
+                payload_value=payload.max_nights_per_worker,
+            ),
             num_alternatives=_clamp_generation_budget(int(payload.time_limit_seconds or 12), int(payload.num_alternatives or 20), linked=False)[1],
             fixed_assignments=payload.fixed_assignments or None,
             exclude_days=(payload.exclude_days or None),
@@ -5320,7 +5455,7 @@ def ai_generate_planning(
         candidate_pairs: list[tuple[dict, dict]] = []
         base_assignments = base_payload.get("assignments") or {}
         base_pulls = base_payload.get("pulls") or {}
-        if _matches_pulls_limit(base_pulls, payload.pulls_limit, require_pull=True):
+        if _matches_pulls_limit(base_pulls, payload.pulls_limit):
             candidate_pairs.append((base_assignments, base_pulls))
         for alt in (result.get("alternatives") or []):
             if not isinstance(alt, dict):
@@ -5334,7 +5469,7 @@ def ai_generate_planning(
             )
             current_alt_assignments = alt_payload.get("assignments") or {}
             current_alt_pulls = alt_payload.get("pulls") or {}
-            if _matches_pulls_limit(current_alt_pulls, payload.pulls_limit, require_pull=True):
+            if _matches_pulls_limit(current_alt_pulls, payload.pulls_limit):
                 candidate_pairs.append((current_alt_assignments, current_alt_pulls))
         if not candidate_pairs:
             raise HTTPException(status_code=422, detail=_planning_limit_error_detail_for_request(pulls_limit=payload.pulls_limit))
@@ -5429,7 +5564,7 @@ async def ai_generate_stream(
     ]
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
-    workers = _build_solver_workers(rows, overrides)
+    workers = _build_solver_workers(rows, overrides, week_iso=week_for_rows)
     logger.info("[SSE] loaded workers=%d for site=%s", len(workers), site_id)
     workers_without_availability = [
         str(w.get("name") or "")
@@ -5439,9 +5574,17 @@ async def ai_generate_stream(
     if workers_without_availability:
         logger.warning("[SSE] workers without availability site=%s count=%d names=%s", site_id, len(workers_without_availability), workers_without_availability)
 
-    # Choose effective parameters (query overrides body if provided)
+    # Choose effective parameters (query > body > config site)
     eff_time = int(q_time_limit_seconds if q_time_limit_seconds is not None else (payload.time_limit_seconds or 10))
-    eff_max_nights = int(q_max_nights_per_worker if q_max_nights_per_worker is not None else (payload.max_nights_per_worker or 3))
+    try:
+        q_nights_parsed = int(q_max_nights_per_worker) if q_max_nights_per_worker is not None else None
+    except (TypeError, ValueError):
+        q_nights_parsed = None
+    eff_max_nights = _resolve_max_nights_per_worker(
+        site.config,
+        payload_value=payload.max_nights_per_worker,
+        query_value=q_nights_parsed,
+    )
     eff_num_alts = int(q_num_alternatives if q_num_alternatives is not None else (payload.num_alternatives or 20))
     if payload.auto_pulls_enabled:
         eff_time, eff_num_alts = _boost_generation_budget_for_pulls(eff_time, eff_num_alts)
@@ -5561,7 +5704,6 @@ async def ai_generate_stream(
                             if not _matches_pulls_limit(
                                 transformed_pulls,
                                 eff_pulls_limit,
-                                require_pull=True,
                             ):
                                 rejected_candidates += 1
                                 _enqueue({

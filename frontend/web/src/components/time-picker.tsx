@@ -101,7 +101,7 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
         portalEl &&
         createPortal(
           <div
-            className="fixed inset-0 z-[100] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
+            className="fixed inset-0 z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
             onClick={(e) => {
               if (Date.now() - openedAtRef.current < 400) return;
               if (e.target === e.currentTarget) setShowPopup(false);

@@ -1683,7 +1683,7 @@ export default function SitesList() {
       </div>
       {siteDeleteConfirm ? (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4"
           dir="rtl"
           role="presentation"
           onClick={() => setSiteDeleteConfirm(null)}
@@ -1725,7 +1725,7 @@ export default function SitesList() {
       ) : null}
       {sitesListMultiDialog ? (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4"
           dir="rtl"
           onClick={() => setSitesListMultiDialog(null)}
         >
@@ -1813,7 +1813,7 @@ export default function SitesList() {
         </div>
       ) : null}
       {autoPlanningModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 md:items-center md:p-6" onClick={() => setAutoPlanningModalOpen(false)}>
+        <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/45 p-3 md:items-center md:p-6" onClick={() => setAutoPlanningModalOpen(false)}>
           <div
             className="flex max-h-[88dvh] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}

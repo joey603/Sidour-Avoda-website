@@ -318,7 +318,7 @@ export function PlanningV2OptionalMessages({
       </div>
 
       {isAddMessageOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeMessageModal}>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4" onClick={closeMessageModal}>
           <div
             className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}

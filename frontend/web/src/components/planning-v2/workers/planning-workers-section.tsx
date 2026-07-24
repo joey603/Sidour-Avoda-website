@@ -190,7 +190,7 @@ export function PlanningWorkersSection({
       <FilterWorkersAnswersModal {...modals.filterModalProps} />
       <LinkedAvailabilityConfirmDialog {...modals.linkedDialogProps} />
       {modals.pendingInviteModalProps.open ? (
-        <div className="fixed inset-0 z-[80] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[11000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-center">
               <h3 className="text-lg font-semibold">אישור עובד חדש</h3>

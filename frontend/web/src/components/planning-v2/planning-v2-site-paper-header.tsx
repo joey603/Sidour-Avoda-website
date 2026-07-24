@@ -134,7 +134,7 @@ export function PlanningV2SitePaperHeader({
       </div>
 
       {workerInviteLinkDialog ? (
-        <div className="fixed inset-0 z-[84] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-center">
               <h3 className="text-lg font-semibold">העתק את הלינק לעובד</h3>

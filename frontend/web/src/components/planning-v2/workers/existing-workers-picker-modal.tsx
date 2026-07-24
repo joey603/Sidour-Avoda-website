@@ -188,7 +188,7 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="flex h-[72vh] h-[72dvh] w-full max-w-3xl min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[34rem]">
         <div className="border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">

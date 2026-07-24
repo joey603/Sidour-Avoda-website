@@ -22,7 +22,7 @@ export function PlanningV2ManualConfirmDialog({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-[60] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="manual-confirm-title"

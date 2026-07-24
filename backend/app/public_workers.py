@@ -9,6 +9,7 @@ from .schemas import (
     SiteMessageOut,
     WorkerContextOut,
     WorkerContextUpdatePayload,
+    ShiftKindPrefs,
     WorkerInviteValidationOut,
     WorkerInviteRegistrationPayload,
     WorkerInviteRegistrationOut,
@@ -304,6 +305,7 @@ def get_worker_context(
     merged_answers_per_day: dict[str, dict[str, object]] = {}
     max_shifts_candidates: list[int] = []
     submitted_for_week = False
+    shift_kind_prefs: ShiftKindPrefs | None = None
 
     for row in rows:
         site = sites_by_id_active.get(int(row.site_id))
@@ -363,6 +365,17 @@ def get_worker_context(
                 if not isinstance(value, dict):
                     continue
                 merged_answers_per_day[f"site:{row.site_id}:{key}"] = {str(k): v for k, v in value.items()}
+        if shift_kind_prefs is None and isinstance(week_answers, dict):
+            raw_prefs = week_answers.get("_shift_kind_prefs")
+            if isinstance(raw_prefs, dict):
+                try:
+                    shift_kind_prefs = ShiftKindPrefs(
+                        morning=max(0, min(6, int(raw_prefs.get("morning") or 0))),
+                        noon=max(0, min(6, int(raw_prefs.get("noon") or 0))),
+                        night=max(0, min(6, int(raw_prefs.get("night") or 0))),
+                    )
+                except (TypeError, ValueError):
+                    shift_kind_prefs = None
 
     return WorkerContextOut(
         worker_name=user.full_name or "",
@@ -398,6 +411,7 @@ def get_worker_context(
         answers={"general": merged_answers_general, "perDay": merged_answers_per_day},
         max_shifts=min(max_shifts_candidates) if max_shifts_candidates else 5,
         submitted_for_week=submitted_for_week,
+        shift_kind_prefs=shift_kind_prefs,
     )
 
 
@@ -452,6 +466,12 @@ def save_worker_context(
         answers_data = {"general": site_general, "perDay": site_per_day}
         if payload.availability and isinstance(payload.availability, dict):
             answers_data["availability"] = payload.availability
+        if payload.shift_kind_prefs is not None:
+            answers_data["_shift_kind_prefs"] = {
+                "morning": max(0, min(6, int(payload.shift_kind_prefs.morning))),
+                "noon": max(0, min(6, int(payload.shift_kind_prefs.noon))),
+                "night": max(0, min(6, int(payload.shift_kind_prefs.night))),
+            }
         if wk:
             base = row.answers if isinstance(row.answers, dict) else {}
             next_answers = dict(base)

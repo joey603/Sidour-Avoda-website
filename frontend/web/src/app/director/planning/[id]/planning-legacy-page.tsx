@@ -5379,7 +5379,7 @@ export default function PlanningLegacyPage() {
           </div>
         ) : null}
         {workerInviteLinkDialog ? (
-          <div className="fixed inset-0 z-[84] flex items-center justify-center bg-black/40 p-4">
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-lg rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
               <div className="space-y-2 text-center">
                 <h3 className="text-lg font-semibold">העתק את הלינק לעובד</h3>
@@ -5414,7 +5414,7 @@ export default function PlanningLegacyPage() {
           </div>
         ) : null}
         {pendingInviteWorker ? (
-          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4">
+          <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/40 p-4">
             <div className="w-full max-w-md rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
               <div className="space-y-2 text-center">
                 <h3 className="text-lg font-semibold">אישור עובד חדש</h3>
@@ -12478,8 +12478,8 @@ export default function PlanningLegacyPage() {
           </div>
       )}
       {linkedAvailabilityConfirmSites && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900 text-center">
+        <div className="fixed inset-0 z-[11000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-sm">
               {`העובד משויך גם לאתרים נוספים: ${linkedAvailabilityConfirmSites.join(", ")}.`}
               <br />
@@ -12507,10 +12507,10 @@ export default function PlanningLegacyPage() {
                 }}
               >
                 כן
-                  </button>
-                </div>
-      </div>
+              </button>
+            </div>
           </div>
+        </div>
       )}
     </div>
   );

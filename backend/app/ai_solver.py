@@ -20,6 +20,53 @@ def _solver_num_search_workers() -> int:
     return max(1, min(env_value, 4))
 
 
+def _shift_kind_pref_penalty(
+    model: cp_model.CpModel,
+    x: Dict[Tuple[int, int, int, int], cp_model.IntVar],
+    workers: List[dict],
+    W: List[int],
+    D: List[int],
+    T: List[int],
+    morning_indices: List[int],
+    noon_indices: List[int],
+    night_indices: List[int],
+    *,
+    var_prefix: str = "skp",
+) -> Any:
+    """Soft |assigned_kind - target| pour shift_kind_prefs (matin/midi/nuit).
+
+    Ne modifie aucune contrainte hard (disponibilité, multi-site, תפקידים).
+    Retourne 0 si aucune préférence n'est définie.
+    """
+    kind_indices = {
+        "morning": morning_indices,
+        "noon": noon_indices,
+        "night": night_indices,
+    }
+    max_assign = max(1, len(D) * max(1, max(len(morning_indices), len(noon_indices), len(night_indices), 1)) * max(1, len(T)))
+    devs: List[cp_model.IntVar] = []
+    for w in W:
+        prefs = workers[w].get("shift_kind_prefs")
+        if not isinstance(prefs, dict):
+            continue
+        for kind, indices in kind_indices.items():
+            if kind not in prefs or not indices:
+                continue
+            try:
+                target = max(0, min(6, int(prefs.get(kind) or 0)))
+            except (TypeError, ValueError):
+                continue
+            assigned = model.NewIntVar(0, max_assign, f"{var_prefix}_cnt_w{w}_{kind}")
+            model.Add(assigned == sum(x[(w, d, s, t)] for d in D for s in indices for t in T))
+            over = model.NewIntVar(0, max_assign, f"{var_prefix}_over_w{w}_{kind}")
+            under = model.NewIntVar(0, max_assign, f"{var_prefix}_under_w{w}_{kind}")
+            model.Add(assigned - target == over - under)
+            dev = model.NewIntVar(0, max_assign, f"{var_prefix}_dev_w{w}_{kind}")
+            model.Add(dev == over + under)
+            devs.append(dev)
+    return sum(devs) if devs else 0
+
+
 def order_days(days: List[DayKey]) -> List[DayKey]:
     ref = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
     return [d for d in ref if d in set(days)]
@@ -656,11 +703,23 @@ def solve_schedule(
     # Soft penalty for morning+night same day pairs (very small weight)
     mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
     nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
+    # Soft prefs volumes matin/midi/nuit (sous mn/nm — ne prime pas sur תפקידים / multi-site)
+    skp_penalty = _shift_kind_pref_penalty(
+        model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="skp",
+    )
 
     # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls,
-    # then avoid morning+night pairs when possible
-    # Weights chosen to keep lexicographic-like priority: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall - 5 * mn_penalty - 5 * nm_penalty)
+    # then avoid morning+night pairs when possible, then shift-kind prefs
+    # Weights: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs >> kind prefs
+    model.Maximize(
+        1000000 * coverage
+        - 10000 * max_dev
+        - 100 * sum(fairness_terms)
+        - 10 * total_role_shortfall
+        - 5 * mn_penalty
+        - 5 * nm_penalty
+        - 3 * skp_penalty
+    )
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
@@ -1818,8 +1877,19 @@ def solve_schedule_stream(
                     noon_next_morning_pairs.append(both2)
     mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
     nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
+    skp_penalty = _shift_kind_pref_penalty(
+        model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="s_skp",
+    )
 
-    model.Maximize(1000000 * coverage - 10000 * max_dev - 100 * sum(fairness_terms) - 10 * total_role_shortfall - 5 * mn_penalty - 5 * nm_penalty)
+    model.Maximize(
+        1000000 * coverage
+        - 10000 * max_dev
+        - 100 * sum(fairness_terms)
+        - 10 * total_role_shortfall
+        - 5 * mn_penalty
+        - 5 * nm_penalty
+        - 3 * skp_penalty
+    )
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)

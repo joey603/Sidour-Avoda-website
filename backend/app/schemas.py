@@ -113,6 +113,13 @@ class SiteUpdate(BaseModel):
     config: dict | None = None
 
 
+class ShiftKindPrefs(BaseModel):
+    """Préférences soft de volumes par type de משמרת (בוקר / צהריים / לילה)."""
+    morning: int = Field(default=0, ge=0, le=6)
+    noon: int = Field(default=0, ge=0, le=6)
+    night: int = Field(default=0, ge=0, le=6)
+
+
 class WorkerBase(BaseModel):
     name: str
     max_shifts: int = 5
@@ -124,6 +131,7 @@ class WorkerBase(BaseModel):
 
 class WorkerCreate(WorkerBase):
     week_iso: str | None = None
+    shift_kind_prefs: ShiftKindPrefs | None = None
 
 
 class WorkerUpdate(BaseModel):
@@ -136,6 +144,7 @@ class WorkerUpdate(BaseModel):
     week_iso: str | None = None
     weekly_availability: dict[str, list[str]] | None = None
     propagate_linked_availability: bool = False
+    shift_kind_prefs: ShiftKindPrefs | None = None
 
 
 class WorkerOut(WorkerBase):
@@ -172,12 +181,14 @@ class WorkerContextOut(BaseModel):
     answers: dict[str, Any] = {}
     max_shifts: int = 5
     submitted_for_week: bool = False
+    shift_kind_prefs: ShiftKindPrefs | None = None
 
 
 class WorkerContextUpdatePayload(BaseModel):
     max_shifts: int = 5
     availability: dict[str, list[str]] = {}
     answers: dict[str, Any] = {}
+    shift_kind_prefs: ShiftKindPrefs | None = None
 
 
 class CreateWorkerUserRequest(BaseModel):
@@ -239,7 +250,8 @@ class WeekPlanPayload(BaseModel):
 class AIPlanningRequest(BaseModel):
     week_iso: str | None = None
     time_limit_seconds: int | None = 10
-    max_nights_per_worker: int | None = 3
+    # None = utiliser site.config.max_nights_per_worker (défaut 3)
+    max_nights_per_worker: int | None = None
     num_alternatives: int | None = 20
     auto_pulls_enabled: bool = False
     pulls_limit: int | None = Field(default=None, ge=1)

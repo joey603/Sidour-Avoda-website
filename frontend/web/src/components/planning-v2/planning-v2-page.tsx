@@ -585,13 +585,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       // Persister l’index חלופה avant le remount (comme legacy navigate-before-push).
       const mem = readLinkedPlansFromMemory(weekStart);
       if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-        const nextIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
+        const uiIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
+        const memIdx = Math.max(0, Number(mem.activeAltIndex || 0));
+        // Si l’UI n’a pas encore rattrapé la mémoire, ne pas rétrograder l’index partagé.
+        const nextIdx = uiIdx < memIdx && plan.alternativeCount <= memIdx ? memIdx : uiIdx;
         saveLinkedPlansToMemory(weekStart, mem.plansBySite, nextIdx);
       }
       setMultiSiteNavigationLoading(true);
       router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
     },
-    [router, isoWeek, weekStart, plan.selectedAlternativeIndex],
+    [router, isoWeek, weekStart, plan.alternativeCount, plan.selectedAlternativeIndex],
   );
 
   const handleManualSlotDrop = useCallback(
@@ -1299,20 +1302,20 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (!navigationMemorySnapshot.hasCurrentPlan) return;
     const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
     const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
-    // Attendre que les variantes locales rattrapent la mémoire (ou dépassent la cible).
-    if (plan.alternativeCount <= targetIdx) {
-      if (memoryCount <= 0 || plan.alternativeCount < memoryCount) return;
+    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
+    // Attendre que les variantes réellement chargées rattrapent la cible mémoire.
+    if (loadedVariantCount <= targetIdx) {
+      if (memoryCount <= 0 || loadedVariantCount < memoryCount) return;
     }
-    const appliedIdx = Math.min(targetIdx, Math.max(0, plan.alternativeCount - 1));
-    if (plan.selectedAlternativeIndex === appliedIdx) return;
-    plan.setSelectedAlternativeIndex(appliedIdx);
+    if (plan.selectedAlternativeIndex === targetIdx) return;
+    plan.setSelectedAlternativeIndex(targetIdx);
   }, [
     protectOfficialSavedPlan,
     multiSiteNavigationLoading,
     navigationMemorySnapshot.hasCurrentPlan,
     navigationMemorySnapshot.activeIdx,
     navigationMemorySnapshot.currentPlanAlternativeCount,
-    plan.alternativeCount,
+    plan.assignmentVariants,
     plan.selectedAlternativeIndex,
     plan.setSelectedAlternativeIndex,
   ]);
@@ -1423,15 +1426,25 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const currentSiteKey = String(siteId);
     const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
     const activeIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
-    if (inAppMultiSiteNavigation && activeIdx !== memoryActiveIdx) {
-      return;
+    // Pendant « פתח אתר » / réhydratation : ne jamais écraser l’index partagé ni clear le flag
+    // (sinon un clamp transitoire vers חלופה 1 réécrit activeAltIndex=0 en session).
+    if (inAppMultiSiteNavigation || multiSiteNavigationLoading) {
+      if (activeIdx !== memoryActiveIdx) return;
+      if (plan.alternativeCount <= memoryActiveIdx) return;
     }
-    if (inAppMultiSiteNavigation && activeIdx === memoryActiveIdx) {
-      clearMultiSiteNavigationInApp();
+    // Ne pas rétrograder l’index mémoire tant que les variantes locales n’ont pas rattrapé.
+    if (activeIdx < memoryActiveIdx && plan.alternativeCount <= memoryActiveIdx) {
+      return;
     }
     const displayedAssignments = plan.displayAssignments;
     const displayedPulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
     if (!assignmentsNonEmpty(displayedAssignments ?? null)) return;
+    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
+    // Variantes pas encore réhydratées : displayAssignments peut encore être la חלופה 1
+    // alors que selectedAlternativeIndex pointe déjà vers 12 — ne pas écraser la mémoire.
+    if (activeIdx > 0 && loadedVariantCount <= activeIdx) {
+      return;
+    }
     const currentPlan = {
       ...(nextPlans[currentSiteKey] || {}),
     } as LinkedSitePlan;
@@ -1490,8 +1503,22 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     nextPlans[currentSiteKey] = currentPlan;
     lastCurrentSiteMemorySyncRef.current = renderSnapshot;
-    saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
-  });
+    // Préserver le max(mémoire, UI) pour ne jamais perdre l’index partagé au retour de site.
+    const idxToPersist = Math.max(activeIdx, memoryActiveIdx);
+    saveLinkedPlansToMemory(weekStart, nextPlans, idxToPersist);
+  }, [
+    linkedSites.length,
+    multiSiteNavigationLoading,
+    plan.alternativeCount,
+    plan.assignmentVariants,
+    plan.displayAssignments,
+    plan.displayPulls,
+    plan.generationRunning,
+    plan.selectedAlternativeIndex,
+    protectOfficialSavedPlan,
+    siteId,
+    weekStart,
+  ]);
 
   const linkedSitesRailData = useMemo(() => {
     if (linkedSites.length <= 1) return [];
@@ -1706,19 +1733,23 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const targetAlternativeIndex = navigationMemorySnapshot.activeIdx;
     const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
     const hasDisplayablePlan = assignmentsNonEmpty(plan.displayAssignments);
+    // Compter les variantes réellement chargées (pas alternativeCount « mémoire » gonflé).
+    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
     const variantsCaughtUp =
-      plan.alternativeCount > targetAlternativeIndex ||
-      (memoryCount > 0 && plan.alternativeCount >= memoryCount);
+      loadedVariantCount > targetAlternativeIndex ||
+      (memoryCount > 0 && loadedVariantCount >= memoryCount);
     const appliedTarget =
-      plan.alternativeCount > 0
-        ? Math.min(targetAlternativeIndex, plan.alternativeCount - 1)
+      loadedVariantCount > 0
+        ? Math.min(targetAlternativeIndex, loadedVariantCount - 1)
         : targetAlternativeIndex;
     // Exiger la vraie חלופה partagée — pas Math.min(target, count-1) seul qui
     // validait à tort חלופה 1 tant que le plan n’était pas réhydraté.
     const alternativesReady =
       hasDisplayablePlan &&
       variantsCaughtUp &&
-      plan.selectedAlternativeIndex === appliedTarget;
+      loadedVariantCount > targetAlternativeIndex &&
+      plan.selectedAlternativeIndex === targetAlternativeIndex &&
+      appliedTarget === targetAlternativeIndex;
     if (!alternativesReady) return;
     setMultiSiteNavigationLoading(false);
     clearMultiSiteNavigationInApp();
@@ -1728,7 +1759,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workersLoading,
     weekPlanLoading,
     navigationMemorySnapshot,
-    plan.alternativeCount,
+    plan.assignmentVariants,
     plan.displayAssignments,
     plan.selectedAlternativeIndex,
   ]);
@@ -2366,7 +2397,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       {visualizationOpen ? (
         <div
           className={
-            "fixed inset-0 z-[80] overflow-hidden bg-zinc-950/40 backdrop-blur-[2px] transition-opacity duration-300 ease-out motion-reduce:transition-none dark:bg-black/60 " +
+            "fixed inset-0 z-[200] overflow-hidden bg-zinc-950/40 backdrop-blur-[2px] transition-opacity duration-300 ease-out motion-reduce:transition-none dark:bg-black/60 " +
             (fullscreenReveal ? "opacity-100" : "opacity-0")
           }
           aria-modal="true"
@@ -2431,7 +2462,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         }}
       />
       {pullScopeDialog ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-base font-semibold">
               {pullScopeDialog.kind === "guard_hours"

@@ -1681,7 +1681,7 @@ export function PlanningV2StationWeekGrid({
         />
       ) : null}
       {pullsEditor ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setPullsEditor(null)}>
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4" onClick={() => setPullsEditor(null)}>
           <div
             className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
@@ -1893,7 +1893,7 @@ export function PlanningV2StationWeekGrid({
       ) : null}
       {shiftHoursEditor ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setShiftHoursEditor(null)}
         >
           <div
@@ -1997,7 +1997,7 @@ export function PlanningV2StationWeekGrid({
       ) : null}
       {shiftHoursOorConfirm && shiftHoursEditor ? (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setShiftHoursOorConfirm(false)}
         >
           <div

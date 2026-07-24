@@ -80,6 +80,7 @@ export default function NewSitePage() {
   const [loading, setLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [questions, setQuestions] = useState<SiteQuestion[]>([]);
+  const [maxNightsPerWorker, setMaxNightsPerWorker] = useState<number>(3);
 
   function newId(): string {
     try {
@@ -107,6 +108,7 @@ export default function NewSitePage() {
           config: {
             stations,
             questions,
+            max_nights_per_worker: Math.max(0, Math.min(7, Math.trunc(maxNightsPerWorker))),
           },
         }),
       });
@@ -190,6 +192,21 @@ export default function NewSitePage() {
                 min={0}
                 max={20}
                 className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="block text-sm font-semibold">מקסימום משמרות לילה לעובד בשבוע</label>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                כמה לילות לכל היותר ניתן לשבץ לעובד אחד בשבוע (ברירת מחדל: 3)
+              </p>
+              <NumberPicker
+                value={maxNightsPerWorker}
+                onChange={(n) => setMaxNightsPerWorker(Math.max(0, Math.min(7, n)))}
+                min={0}
+                max={7}
+                inputAriaLabel="מקסימום משמרות לילה לעובד"
+                title="בחר מספר — מקסימום לילות"
+                className="w-full max-w-xs rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 outline-none ring-0 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
               />
             </div>
           </section>

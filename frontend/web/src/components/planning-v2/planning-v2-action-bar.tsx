@@ -380,7 +380,7 @@ export function PlanningV2ActionBar({
   return (
     <>
       {showModeSwitchDialog && (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-center text-sm">
               {modeSwitchTarget === "manual"
@@ -433,7 +433,7 @@ export function PlanningV2ActionBar({
       )}
 
       {showDeleteConfirm ? (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-sm">למחוק את התכנון השמור לשבוע זה?</div>
             <div className="flex items-center justify-center gap-2">
@@ -459,7 +459,7 @@ export function PlanningV2ActionBar({
       ) : null}
 
       {showPastDaysDialog ? (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-center text-sm">
               {`כבר עברו ${pendingExcludeDays.length} ימים בשבוע זה. להתעלם מהימים שעברו (להשאיר אותם ריקים)?`}
@@ -506,7 +506,7 @@ export function PlanningV2ActionBar({
       ) : null}
 
       {showExistingAssignmentsDialog ? (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="mb-3 text-sm">
               התכנית מכילה שיבוצים קיימים.
@@ -560,7 +560,7 @@ export function PlanningV2ActionBar({
         </div>
       ) : null}
       {multiSitePlanActionDialog ? (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-right">
               <div className="text-base font-semibold">
@@ -608,7 +608,7 @@ export function PlanningV2ActionBar({
         </div>
       ) : null}
       {generatePullScopeDialog ? (
-        <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-right">
               <div className="text-base font-semibold">משיכות באתרים מקושרים</div>

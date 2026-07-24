@@ -57,9 +57,9 @@ function pullsCount(value: unknown): number {
   return Object.keys(value as Record<string, unknown>).length;
 }
 
-function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null, requirePull = false): boolean {
+/** מגבלת משיכות = plafond « עד N » (0 inclus). Ne pas exiger au moins une משיכה. */
+function pullsMatchRequestedCount(pulls: unknown, requestedCount: number | null): boolean {
   const count = pullsCount(pulls);
-  if (requirePull && count <= 0) return false;
   if (requestedCount == null) return true;
   return count <= requestedCount;
 }
@@ -69,18 +69,13 @@ function linkedPlansMatchRequestedPulls(
   siteId: string,
   requestedCount: number | null,
   pullsScope?: "current_only" | "all_sites",
-  requirePull = false,
 ): boolean {
   if (!plans || typeof plans !== "object") return false;
   if (pullsScope === "current_only") {
-    return pullsMatchRequestedCount(plans[String(siteId)]?.pulls, requestedCount, requirePull);
+    return pullsMatchRequestedCount(plans[String(siteId)]?.pulls, requestedCount);
   }
   const entries = Object.values(plans);
-  return (
-    entries.length > 0 &&
-    entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount)) &&
-    (!requirePull || entries.some((plan) => pullsCount(plan?.pulls) > 0))
-  );
+  return entries.length > 0 && entries.every((plan) => pullsMatchRequestedCount(plan?.pulls, requestedCount));
 }
 
 function logPlanningV2PullCandidate(params: {
@@ -765,6 +760,8 @@ export function usePlanningV2PlanController({
   /** סנכרון isManual מהשרת פעם אחת אחרי טעינת weekPlan לשבוע (לא בכל refetch — שומר על ידני / אפס גריד). */
   const planLoadedForManualRef = useRef(false);
 
+  // Reset drafts seulement au changement de site / semaine — pas quand linkedSitesLength
+  // passe de 0→N (sinon on efface une réhydratation mémoire déjà faite au retour multi-sites).
   useEffect(() => {
     setDraftAssignments(null);
     setDraftPulls(null);
@@ -774,6 +771,7 @@ export function usePlanningV2PlanController({
       ? Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0))
       : 0;
     setSelectedAlternativeIndex(preservedAltIndex);
+    userPickedAltIndexRef.current = preservedAltIndex;
     setMoreAlternativesAvailable(true);
     planLoadedForManualRef.current = false;
     seenAlternativeSnapshotsRef.current = new Set();
@@ -781,7 +779,17 @@ export function usePlanningV2PlanController({
     bestGeneratedHoleScoreRef.current = null;
     appendUniqueCountRef.current = 0;
     lastAlternativeSnapshotRef.current = "";
-  }, [linkedSitesLength, protectOfficialSavedPlan, siteId, weekIso, weekStart]);
+  }, [protectOfficialSavedPlan, siteId, weekIso, weekStart]);
+
+  // Quand les sites liés arrivent après le 1er rendu, resynchroniser l’index partagé
+  // sans vider les drafts / alternatives déjà réhydratés.
+  useEffect(() => {
+    if (linkedSitesLength <= 1) return;
+    if (protectOfficialSavedPlan) return;
+    const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
+    setSelectedAlternativeIndex((prev) => (prev === memIdx ? prev : memIdx));
+    userPickedAltIndexRef.current = memIdx;
+  }, [linkedSitesLength, protectOfficialSavedPlan, weekStart]);
 
   useEffect(() => {
     if (!protectOfficialSavedPlan) return;
@@ -852,7 +860,9 @@ export function usePlanningV2PlanController({
       const shouldHydrateFromMemory =
         !hasAuthoritativeLocalPlan ||
         memoryAlternativeCount > localAlternativeCount ||
-        appliedActiveIdx >= Math.max(1, localAlternativeCount);
+        appliedActiveIdx >= Math.max(1, localAlternativeCount) ||
+        // Index partagé hors portée locale (retour A←B) : forcer la mémoire.
+        (linkedSitesLength > 1 && appliedActiveIdx > 0 && appliedActiveIdx >= localAlternativeCount);
       // En multi-site, la mémoire session sert à partager l’index d’alternative et les autres sites.
       // Si la mémoire est plus riche (plus d’alternatives, ou index actif hors portée locale),
       // il faut quand même la réhydrater pour préserver exactement la même חלופה après navigation.
@@ -993,8 +1003,38 @@ export function usePlanningV2PlanController({
 
   const alternativeCount = useMemo(() => {
     if (replaceGenerationUiClear && generationRunning && !draftAssignments) return 0;
-    return assignmentVariants.length;
-  }, [replaceGenerationUiClear, generationRunning, draftAssignments, assignmentVariants.length]);
+    const localCount = assignmentVariants.length;
+    if (linkedSitesLength <= 1) return localCount;
+    // Pendant la réhydratation multi-sites, garder le total mémoire pour que
+    // « 12/30 » ne redevienne pas « 1/1 » puis « 1/30 » au retour sur un site.
+    const mem = readLinkedPlansFromMemory(weekStart);
+    const sitePlan = mem?.plansBySite?.[String(siteId)];
+    if (!sitePlan) return localCount;
+    const stopLimit =
+      stopVisibleAlternativeCountRef.current ??
+      readLinkedGenerationStopVisibleCountFromSession(weekIso);
+    const hasBase = assignmentsNonEmpty(
+      (sitePlan.assignments as Record<string, Record<string, string[][]>> | null | undefined) ?? null,
+    );
+    const memAlts = Array.isArray(sitePlan.alternatives) ? sitePlan.alternatives : [];
+    const visibleMemAlts =
+      stopLimit == null ? memAlts : memAlts.slice(0, Math.max(0, stopLimit - 1));
+    const memoryCount =
+      (hasBase ? 1 : 0) +
+      visibleMemAlts.filter((asg) =>
+        assignmentsNonEmpty((asg as Record<string, Record<string, string[][]>> | null | undefined) ?? null),
+      ).length;
+    return Math.max(localCount, memoryCount);
+  }, [
+    replaceGenerationUiClear,
+    generationRunning,
+    draftAssignments,
+    assignmentVariants.length,
+    linkedSitesLength,
+    siteId,
+    weekIso,
+    weekStart,
+  ]);
 
   /** Débloqué seulement après יצירת תכנון dans cet onglet (session), ou pendant la génération SSE. */
   const alternativesUnlocked = useMemo(() => {
@@ -1035,11 +1075,32 @@ export function usePlanningV2PlanController({
     weekStart,
   ]);
 
+  /**
+   * Index « affiché » dans les variantes déjà chargées.
+   * En multi-site, on conserve l’index demandé (mémoire / navigation) même si les variantes
+   * ne sont pas encore réhydratées — sinon l’UI et la sync mémoire retombent sur חלופה 1.
+   */
   const safeAlternativeIndex = useMemo(() => {
+    const requested = Math.max(0, selectedAlternativeIndex);
+    const len = assignmentVariants.length;
+    if (len <= 0) return requested;
+    if (requested < len) return requested;
+    if (linkedSitesLength > 1) {
+      if (readMultiSiteNavigationInApp()) return requested;
+      const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
+      if (memIdx === requested || (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === requested)) {
+        return requested;
+      }
+    }
+    return Math.max(0, len - 1);
+  }, [assignmentVariants.length, linkedSitesLength, selectedAlternativeIndex, weekStart]);
+
+  /** Index réellement adressable dans assignmentVariants (pour la grille). */
+  const displayAlternativeIndex = useMemo(() => {
     const len = assignmentVariants.length;
     if (len <= 0) return 0;
     return Math.min(Math.max(0, selectedAlternativeIndex), len - 1);
-  }, [selectedAlternativeIndex, assignmentVariants.length]);
+  }, [assignmentVariants.length, selectedAlternativeIndex]);
 
   useEffect(() => {
     // Pendant la génération SSE, `alternativeCount` bouge à chaque événement — ne pas resynchroniser
@@ -1049,15 +1110,19 @@ export function usePlanningV2PlanController({
     // Multi-site: si l’index mémoire (ex. חלופה 19) dépasse encore assignmentVariants
     // (plan pas entièrement réhydraté), ne pas écraser vers 0 — sinon la navigation
     // « פתח אתר » se fige sur חלופה 1.
-    if (selectedAlternativeIndex > safeAlternativeIndex) {
+    if (selectedAlternativeIndex > displayAlternativeIndex) {
       if (readMultiSiteNavigationInApp()) return;
       if (linkedSitesLength > 1) {
         const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
         if (memIdx === selectedAlternativeIndex) return;
+        if (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === selectedAlternativeIndex) {
+          return;
+        }
       }
     }
     setSelectedAlternativeIndex(safeAlternativeIndex);
   }, [
+    displayAlternativeIndex,
     generationRunning,
     linkedSitesLength,
     safeAlternativeIndex,
@@ -1067,13 +1132,13 @@ export function usePlanningV2PlanController({
 
   const displayAssignments = useMemo(() => {
     if (assignmentVariants.length === 0) return null;
-    return assignmentVariants[safeAlternativeIndex] || assignmentVariants[0] || null;
-  }, [assignmentVariants, safeAlternativeIndex]);
+    return assignmentVariants[displayAlternativeIndex] || assignmentVariants[0] || null;
+  }, [assignmentVariants, displayAlternativeIndex]);
 
   const displayPulls = useMemo((): PlanningV2PullsMap | null | undefined => {
     if (pullVariants.length === 0) return undefined;
-    return pullVariants[safeAlternativeIndex] || pullVariants[0] || {};
-  }, [pullVariants, safeAlternativeIndex]);
+    return pullVariants[displayAlternativeIndex] || pullVariants[0] || {};
+  }, [pullVariants, displayAlternativeIndex]);
 
   const stopGeneration = useCallback(() => {
     userStoppedGenerationRef.current = true;
@@ -1303,7 +1368,6 @@ export function usePlanningV2PlanController({
     const weekly_availability = weeklyAvailabilityMapFromRows(workerRowsForTable);
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
     const requestedPullsCount = typeof pulls_limit === "number" ? pulls_limit : null;
-    const requireGeneratedPull = autoPullsEnabled;
     const pulls_limits_by_site =
       linkedSitesLength > 1 && autoPullsEnabled && options?.pullsScope === "current_only"
         ? Object.fromEntries(
@@ -1670,14 +1734,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
             logPlanningV2PullCandidate({
               itemType: "base",
               appendMode,
@@ -1787,14 +1851,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
             logPlanningV2PullCandidate({
               itemType: "base",
               appendMode,
@@ -1973,14 +2037,14 @@ export function usePlanningV2PlanController({
               pullsScope: options?.pullsScope,
               plans,
             });
-            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope, requireGeneratedPull)) {
+            if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, options?.pullsScope)) {
               return false;
             }
             const holeScore = linkedPlansHoleScore(plans, siteId, site);
             if (shouldRejectForHoleScore(holeScore, "alternative", evt.index, evt.generation_id)) {
               return false;
             }
-          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount, requireGeneratedPull)) {
+          } else if (!linked && !pullsMatchRequestedCount(evt.pulls, requestedPullsCount)) {
             logPlanningV2PullCandidate({
               itemType: "alternative",
               appendMode,

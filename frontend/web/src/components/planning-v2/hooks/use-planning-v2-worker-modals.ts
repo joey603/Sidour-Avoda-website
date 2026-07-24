@@ -12,8 +12,32 @@ import { DAY_DEFS, buildEnabledRoleNameSet } from "../lib/display";
 import { cloneWorkerAvailability } from "../lib/merge-availability";
 import { persistWorkerNameWeeklyOverride } from "../lib/availability-storage";
 import { getWeekKeyISO, isNextWeekDisplayed } from "../lib/week";
+import type { ShiftKindPrefsState } from "@/components/planning-shared/worker-edit-modal";
 
 export type WorkerRowForEditor = PlanningWorker & { availability: WorkerAvailability };
+
+const EMPTY_SHIFT_KIND_PREFS: ShiftKindPrefsState = { morning: 0, noon: 0, night: 0 };
+
+function readShiftKindPrefsFromAnswers(
+  answers: Record<string, unknown> | undefined,
+  weekStart: Date,
+): { enabled: boolean; prefs: ShiftKindPrefsState } {
+  const weekKey = getWeekKeyISO(weekStart);
+  const weekBlock = answers && typeof answers === "object" ? (answers[weekKey] as Record<string, unknown> | undefined) : undefined;
+  const raw = weekBlock && typeof weekBlock === "object" ? weekBlock._shift_kind_prefs : null;
+  if (!raw || typeof raw !== "object") {
+    return { enabled: false, prefs: { ...EMPTY_SHIFT_KIND_PREFS } };
+  }
+  const obj = raw as Record<string, unknown>;
+  return {
+    enabled: true,
+    prefs: {
+      morning: Math.max(0, Math.min(6, Number(obj.morning) || 0)),
+      noon: Math.max(0, Math.min(6, Number(obj.noon) || 0)),
+      night: Math.max(0, Math.min(6, Number(obj.night) || 0)),
+    },
+  };
+}
 
 export function usePlanningV2WorkerModals(
   siteId: string,
@@ -42,6 +66,8 @@ export function usePlanningV2WorkerModals(
   const [originalAvailability, setOriginalAvailability] = useState<WorkerAvailability>({
     ...EMPTY_WORKER_AVAILABILITY,
   });
+  const [prefsEnabled, setPrefsEnabled] = useState(false);
+  const [shiftKindPrefs, setShiftKindPrefs] = useState<ShiftKindPrefsState>({ ...EMPTY_SHIFT_KIND_PREFS });
   const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [linkedAvailabilityConfirmSites, setLinkedAvailabilityConfirmSites] = useState<string[] | null>(null);
@@ -182,6 +208,8 @@ export function usePlanningV2WorkerModals(
     setNewWorkerRoles([]);
     setNewWorkerAvailability({ ...EMPTY_WORKER_AVAILABILITY });
     setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
+    setPrefsEnabled(false);
+    setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
   }, []);
 
   const openWorkerEditor = useCallback(
@@ -199,15 +227,18 @@ export function usePlanningV2WorkerModals(
         const merged = new Set<string>([...(nextAvailability[k] || []), ...((overlay[k] || []) as string[])]);
         nextAvailability[k] = Array.from(merged);
       }
+      const loadedPrefs = readShiftKindPrefsFromAnswers(row.answers, weekStart);
       setEditingWorkerId(row.id);
       setNewWorkerName(row.name);
       setNewWorkerMax(row.maxShifts);
       setNewWorkerRoles((row.roles || []).filter((rn) => enabledRoleNameSet.has(String(rn || "").trim())));
       setOriginalAvailability(cloneWorkerAvailability(nextAvailability));
       setNewWorkerAvailability(nextAvailability);
+      setPrefsEnabled(loadedPrefs.enabled);
+      setShiftKindPrefs(loadedPrefs.prefs);
       setEditorOpen(true);
     },
-    [enabledRoleNameSet, availabilityOverlaysByWorkerName],
+    [enabledRoleNameSet, availabilityOverlaysByWorkerName, weekStart],
   );
 
   const approvePendingInviteWorker = useCallback(async () => {
@@ -254,6 +285,8 @@ export function usePlanningV2WorkerModals(
     setNewWorkerRoles([]);
     setNewWorkerAvailability({ ...EMPTY_WORKER_AVAILABILITY });
     setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
+    setPrefsEnabled(false);
+    setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
     setEditorOpen(false);
     setExistingPickerOpen(false);
     setCreateStepOpen(true);
@@ -323,6 +356,8 @@ export function usePlanningV2WorkerModals(
         setNewWorkerRoles([]);
         setOriginalAvailability({ ...EMPTY_WORKER_AVAILABILITY });
         setNewWorkerAvailability({ ...EMPTY_WORKER_AVAILABILITY });
+        setPrefsEnabled(false);
+        setShiftKindPrefs({ ...EMPTY_SHIFT_KIND_PREFS });
         setEditorOpen(true);
         if (userCreated) {
           toast.success("עובד נוצר בהצלחה!");
@@ -408,6 +443,13 @@ export function usePlanningV2WorkerModals(
         const linkedOtherSiteNames = linkedSiteNames.filter((n) => String(n) !== String(site?.name || ""));
 
         const submitEditedWorker = async (propagateLinkedAvailability: boolean) => {
+          const prefsPayload = prefsEnabled
+            ? {
+                morning: Math.max(0, Math.min(6, shiftKindPrefs.morning || 0)),
+                noon: Math.max(0, Math.min(6, shiftKindPrefs.noon || 0)),
+                night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
+              }
+            : null;
           const updated = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers/${editingWorkerId}`, {
             method: "PUT",
             body: JSON.stringify({
@@ -417,6 +459,7 @@ export function usePlanningV2WorkerModals(
               week_iso: getWeekKeyISO(weekStart),
               weekly_availability: newWorkerAvailability,
               propagate_linked_availability: propagateLinkedAvailability,
+              shift_kind_prefs: prefsPayload,
             }),
           });
           void updated;
@@ -438,6 +481,13 @@ export function usePlanningV2WorkerModals(
       }
 
       const { _stations: _newWorkerStations, ...availabilityForProfile } = newWorkerAvailability;
+      const prefsPayload = prefsEnabled
+        ? {
+            morning: Math.max(0, Math.min(6, shiftKindPrefs.morning || 0)),
+            noon: Math.max(0, Math.min(6, shiftKindPrefs.noon || 0)),
+            night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
+          }
+        : null;
       const result = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers`, {
         method: "POST",
         body: JSON.stringify({
@@ -447,6 +497,7 @@ export function usePlanningV2WorkerModals(
           roles: newWorkerRoles,
           availability: availabilityForProfile,
           week_iso: getWeekKeyISO(weekStart),
+          shift_kind_prefs: prefsPayload,
         }),
       });
       void result;
@@ -472,7 +523,9 @@ export function usePlanningV2WorkerModals(
     newWorkerRoles,
     onWorkerModalSavingChange,
     originalAvailability,
+    prefsEnabled,
     reloadWorkers,
+    shiftKindPrefs,
     site?.name,
     siteId,
     weekStart,
@@ -565,6 +618,10 @@ export function usePlanningV2WorkerModals(
       onSave: handleSaveWorker,
       stationPickerOptions,
       onToggleStation: toggleWorkerStation,
+      prefsEnabled,
+      onPrefsEnabledChange: setPrefsEnabled,
+      shiftKindPrefs,
+      onShiftKindPrefsChange: setShiftKindPrefs,
     },
     linkedDialogProps: {
       open: !!linkedAvailabilityConfirmSites && linkedAvailabilityConfirmSites.length > 0,

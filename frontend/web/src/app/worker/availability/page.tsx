@@ -6,6 +6,8 @@ import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import LoadingAnimation from "@/components/loading-animation";
+import NumberPicker from "@/components/number-picker";
+import FormSwitch from "@/components/ui/form-switch";
 
 type WorkerAvailability = Record<string, string[]>; // key: day key (sun..sat) -> enabled shift names
 type QuestionType = "text" | "dropdown" | "yesno" | "slider";
@@ -22,6 +24,11 @@ type WorkerContextAnswers = {
   general?: Record<string, AnswerValue>;
   perDay?: Record<string, Record<string, AnswerValue>>;
 };
+type ShiftKindPrefs = {
+  morning: number;
+  noon: number;
+  night: number;
+};
 type WorkerContextResponse = {
   worker_name: string;
   sites: Array<{ id: number; name: string; site_deleted?: boolean; removed_by_planning?: boolean }>;
@@ -32,6 +39,7 @@ type WorkerContextResponse = {
   availability: Record<string, string[]>;
   answers: WorkerContextAnswers | Record<string, AnswerValue>;
   submitted_for_week?: boolean;
+  shift_kind_prefs?: ShiftKindPrefs | null;
 };
 type LocalWorkerContextCache = {
   availability?: Record<string, string[]>;
@@ -41,6 +49,8 @@ type LocalWorkerContextCache = {
   shifts?: string[];
   questions?: SiteQuestion[];
   siteName?: string;
+  shiftKindPrefs?: ShiftKindPrefs | null;
+  prefsEnabled?: boolean;
 };
 
 type WeekRange = {
@@ -107,6 +117,13 @@ export default function WorkerAvailabilityPage() {
   const [hasBeenSaved, setHasBeenSaved] = useState(false); // Pour savoir si on a déjà sauvegardé
   const [targetWeek, setTargetWeek] = useState<WeekRange>(() => calculateNextWeek());
   const [maxShifts, setMaxShifts] = useState<number>(5);
+  /** Préférences soft matin/midi/nuit — désactivées = l’algo n’en tient pas compte. */
+  const [prefsEnabled, setPrefsEnabled] = useState(false);
+  const [shiftKindPrefs, setShiftKindPrefs] = useState<ShiftKindPrefs>({
+    morning: 0,
+    noon: 0,
+    night: 0,
+  });
   const nextWeekStart = targetWeek.start;
   const nextWeekEnd = targetWeek.end;
 
@@ -115,6 +132,8 @@ export default function WorkerAvailabilityPage() {
     setAnswersGeneral({});
     setAnswersPerDay({});
     setMaxShifts(5);
+    setPrefsEnabled(false);
+    setShiftKindPrefs({ morning: 0, noon: 0, night: 0 });
     setSuccess(false);
     setIsEditing(false);
     setHasBeenSaved(false);
@@ -152,6 +171,14 @@ export default function WorkerAvailabilityPage() {
                 setAnswersGeneral(parsed.answers as Record<string, AnswerValue>);
                 setAnswersPerDay({});
               }
+            }
+            if (parsed.prefsEnabled && parsed.shiftKindPrefs && typeof parsed.shiftKindPrefs === "object") {
+              setPrefsEnabled(true);
+              setShiftKindPrefs({
+                morning: Math.max(0, Math.min(6, Number(parsed.shiftKindPrefs.morning) || 0)),
+                noon: Math.max(0, Math.min(6, Number(parsed.shiftKindPrefs.noon) || 0)),
+                night: Math.max(0, Math.min(6, Number(parsed.shiftKindPrefs.night) || 0)),
+              });
             }
           } else {
             setAvailability(parsed as WorkerAvailability);
@@ -202,6 +229,18 @@ export default function WorkerAvailabilityPage() {
           setMaxShifts(workerData.max_shifts);
         }
 
+        if (submitted && workerData.shift_kind_prefs && typeof workerData.shift_kind_prefs === "object") {
+          setPrefsEnabled(true);
+          setShiftKindPrefs({
+            morning: Math.max(0, Math.min(6, Number(workerData.shift_kind_prefs.morning) || 0)),
+            noon: Math.max(0, Math.min(6, Number(workerData.shift_kind_prefs.noon) || 0)),
+            night: Math.max(0, Math.min(6, Number(workerData.shift_kind_prefs.night) || 0)),
+          });
+        } else {
+          setPrefsEnabled(false);
+          setShiftKindPrefs({ morning: 0, noon: 0, night: 0 });
+        }
+
         if (submitted && workerData.answers && typeof workerData.answers === "object") {
           if ("general" in workerData.answers || "perDay" in workerData.answers) {
             const answers = workerData.answers as WorkerContextAnswers;
@@ -241,6 +280,8 @@ export default function WorkerAvailabilityPage() {
               : activeSites.length > 1
               ? `${activeSites.length} אתרים מחוברים`
               : "",
+          prefsEnabled: submitted && !!workerData.shift_kind_prefs,
+          shiftKindPrefs: submitted ? workerData.shift_kind_prefs || null : null,
         }));
       }
     } catch (e: unknown) {
@@ -422,6 +463,13 @@ export default function WorkerAvailabilityPage() {
         return;
       }
       const weekKeyISO = getWeekKeyISO(nextWeekStart);
+      const prefsPayload = prefsEnabled
+        ? {
+            morning: Math.max(0, Math.min(6, shiftKindPrefs.morning || 0)),
+            noon: Math.max(0, Math.min(6, shiftKindPrefs.noon || 0)),
+            night: Math.max(0, Math.min(6, shiftKindPrefs.night || 0)),
+          }
+        : null;
       await apiFetch(`/public/sites/worker-context?week_key=${encodeURIComponent(weekKeyISO)}`, {
         method: "POST",
         headers: {
@@ -431,6 +479,7 @@ export default function WorkerAvailabilityPage() {
           max_shifts: maxShifts,
           availability: availability,
           answers: { general: answersGeneral, perDay: answersPerDay },
+          shift_kind_prefs: prefsPayload,
         }),
       });
       
@@ -444,6 +493,8 @@ export default function WorkerAvailabilityPage() {
         shifts,
         questions: siteQuestions,
         siteName,
+        prefsEnabled,
+        shiftKindPrefs: prefsPayload,
       }));
       
       setSuccess(true);
@@ -588,6 +639,63 @@ export default function WorkerAvailabilityPage() {
                     disabled={onlyArchivedSites || submitting || (success && isEditing)}
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 disabled:opacity-60"
                   />
+                </div>
+
+                <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                        העדפות משמרות (אופציונלי)
+                      </label>
+                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                        כמה בוקר / צהריים / לילה תרצה בשבוע — האלגוריתם ינסה להתאים
+                      </p>
+                    </div>
+                    <FormSwitch
+                      checked={prefsEnabled}
+                      onCheckedChange={setPrefsEnabled}
+                      disabled={onlyArchivedSites || submitting || (success && isEditing)}
+                      aria-label="הפעל העדפות משמרות"
+                    />
+                  </div>
+                  {prefsEnabled && (
+                    <div className="mt-4 grid grid-cols-3 gap-3">
+                      {(
+                        [
+                          { key: "morning" as const, label: "בוקר" },
+                          { key: "noon" as const, label: "צהריים" },
+                          { key: "night" as const, label: "לילה" },
+                        ] as const
+                      ).map(({ key, label }) => (
+                        <div key={key}>
+                          <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                            {label}
+                          </label>
+                          <NumberPicker
+                            value={shiftKindPrefs[key]}
+                            onChange={(value) =>
+                              setShiftKindPrefs((prev) => ({
+                                ...prev,
+                                [key]: Math.max(0, Math.min(6, value)),
+                              }))
+                            }
+                            min={0}
+                            max={6}
+                            disabled={onlyArchivedSites || submitting || (success && isEditing)}
+                            inputAriaLabel={`העדפת ${label}`}
+                            title={`בחר מספר — ${label}`}
+                            className="w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm text-zinc-900 outline-none focus:border-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 disabled:opacity-60"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {prefsEnabled &&
+                    shiftKindPrefs.morning + shiftKindPrefs.noon + shiftKindPrefs.night > maxShifts && (
+                      <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+                        סכום ההעדפות גבוה ממספר המשמרות המקסימלי ({maxShifts}) — האלגוריתם ינסה להתקרב ככל האפשר.
+                      </p>
+                    )}
                 </div>
 
                 <div>

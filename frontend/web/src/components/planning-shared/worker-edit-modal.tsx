@@ -2,9 +2,16 @@
 
 import Link from "next/link";
 import NumberPicker from "@/components/number-picker";
+import FormSwitch from "@/components/ui/form-switch";
 import type { WorkerModalQuestionView } from "./worker-modal-question-view";
 
 export type DayDef = { key: string; label: string };
+
+export type ShiftKindPrefsState = {
+  morning: number;
+  noon: number;
+  night: number;
+};
 
 export type WorkerEditModalProps = {
   open: boolean;
@@ -45,6 +52,11 @@ export type WorkerEditModalProps = {
   /** Plusieurs עמדות sur ce site — sélection des postes autorisés pour la semaine. */
   stationPickerOptions?: { index: number; label: string }[];
   onToggleStation?: (stationIndex: number, checked: boolean) => void;
+  /** Préférences soft בוקר / צהריים / לילה (même logique que רישום זמינות עובד). */
+  prefsEnabled?: boolean;
+  onPrefsEnabledChange?: (enabled: boolean) => void;
+  shiftKindPrefs?: ShiftKindPrefsState;
+  onShiftKindPrefsChange?: (prefs: ShiftKindPrefsState) => void;
 };
 
 export function WorkerEditModal({
@@ -77,6 +89,10 @@ export function WorkerEditModal({
   onSave,
   stationPickerOptions = [],
   onToggleStation,
+  prefsEnabled = false,
+  onPrefsEnabledChange,
+  shiftKindPrefs = { morning: 0, noon: 0, night: 0 },
+  onShiftKindPrefsChange,
 }: WorkerEditModalProps) {
   if (!open) return null;
 
@@ -192,6 +208,63 @@ export function WorkerEditModal({
                   );
                 })}
               </div>
+            </div>
+          ) : null}
+
+          {typeof onPrefsEnabledChange === "function" && typeof onShiftKindPrefsChange === "function" ? (
+            <div className="mt-3 rounded-md border border-zinc-200 p-3 text-center dark:border-zinc-700">
+              <div className="flex flex-wrap items-start justify-center gap-3">
+                <div className="min-w-0 flex-1 text-center md:text-right">
+                  <div className="text-sm font-semibold">העדפות משמרות (אופציונלי)</div>
+                  <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    כמה בוקר / צהריים / לילה — האלגוריתם ינסה להתאים
+                  </p>
+                </div>
+                <FormSwitch
+                  checked={prefsEnabled}
+                  onCheckedChange={onPrefsEnabledChange}
+                  disabled={workerModalSaving}
+                  aria-label="הפעל העדפות משמרות"
+                />
+              </div>
+              {prefsEnabled ? (
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { key: "morning" as const, label: "בוקר" },
+                      { key: "noon" as const, label: "צהריים" },
+                      { key: "night" as const, label: "לילה" },
+                    ] as const
+                  ).map(({ key, label }) => (
+                    <div key={key}>
+                      <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                        {label}
+                      </label>
+                      <NumberPicker
+                        value={shiftKindPrefs[key]}
+                        onChange={(value) =>
+                          onShiftKindPrefsChange({
+                            ...shiftKindPrefs,
+                            [key]: Math.max(0, Math.min(6, value)),
+                          })
+                        }
+                        min={0}
+                        max={6}
+                        disabled={workerModalSaving}
+                        inputAriaLabel={`העדפת ${label}`}
+                        title={`בחר מספר — ${label}`}
+                        className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-base text-zinc-900 outline-none ring-0 focus:border-zinc-400 md:text-sm dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {prefsEnabled &&
+              shiftKindPrefs.morning + shiftKindPrefs.noon + shiftKindPrefs.night > newWorkerMax ? (
+                <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">
+                  סכום ההעדפות גבוה ממקס&apos; המשמרות ({newWorkerMax}) — האלגוריתם יתקרב ככל האפשר.
+                </p>
+              ) : null}
             </div>
           ) : null}
 

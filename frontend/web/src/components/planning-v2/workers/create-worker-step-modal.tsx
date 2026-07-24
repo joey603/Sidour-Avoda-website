@@ -40,7 +40,7 @@ export function CreateWorkerStepModal({
   const digits = String(phone || "").replace(/\D/g, "").slice(0, 10);
 
   return (
-    <div className="fixed inset-0 z-50 flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
         <div className="relative mb-3 flex items-center justify-center">
           <h3 className="text-center text-lg font-semibold">יצירת עובד חדש</h3>
