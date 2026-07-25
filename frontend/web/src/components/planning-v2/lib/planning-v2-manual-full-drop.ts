@@ -548,6 +548,33 @@ export function pullEntriesInCell(
     .map(([key, entry]) => ({ key, entry: entry as PlanningV2PullEntry }));
 }
 
+const PULL_EDIT_ONLY_VIA_POPUP_MSG = "שינוי משיכה אפשרי רק דרך חלון המשיכות.";
+
+/** L’עובד participe à une משיכה (before/after), éventuellement limité à une עמדה. */
+export function workerParticipatesInPull(
+  pulls: PlanningV2PullsMap | null | undefined,
+  workerName: string,
+  stationIndex?: number,
+): boolean {
+  const nm = normName(workerName);
+  if (!nm || !pulls) return false;
+  for (const [k, v] of Object.entries(pulls)) {
+    if (!isRealPullEntry(v)) continue;
+    if (stationIndex != null) {
+      const parts = String(k || "").split("|");
+      if (Number(parts[2]) !== Number(stationIndex)) continue;
+    }
+    const e = v as PlanningV2PullEntry;
+    if (normName(String(e?.before?.name || "")) === nm) return true;
+    if (normName(String(e?.after?.name || "")) === nm) return true;
+  }
+  return false;
+}
+
+export function pullEditOnlyViaPopupMessage(): string {
+  return PULL_EDIT_ONLY_VIA_POPUP_MSG;
+}
+
 /** Supprime les משיכות d'une cellule et retire les noms before/after des שיבוצים. */
 export function stripPullsFromCellForReplacement(
   base: Record<string, Record<string, string[][]>>,
@@ -634,17 +661,17 @@ export function analyzeManualSlotDrop(ctx: {
   }
 
   const pullEntries = pullEntriesInCell(ctx.pulls, ctx.dayKey, ctx.shiftName, ctx.stationIndex);
-  if (pullEntries.length > 0 && !ctx.flags.forceReplacePull) {
-    const moveWithinSamePullCell = !!(
-      ctx.dragSource &&
-      ctx.dragSource.dayKey === ctx.dayKey &&
-      ctx.dragSource.shiftName === ctx.shiftName &&
-      Number(ctx.dragSource.stationIndex) === Number(ctx.stationIndex) &&
-      normName(ctx.dragSource.workerName) === normName(trimmed)
-    );
-    if (!moveWithinSamePullCell) {
-      return { action: "confirm_replace_pull", workerName: trimmed };
-    }
+  if (pullEntries.length > 0) {
+    return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
+  }
+  if (ctx.dragSource && workerParticipatesInPull(ctx.pulls, ctx.dragSource.workerName)) {
+    return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
+  }
+  const targetSlotWorker = String(
+    (ctx.base[ctx.dayKey]?.[ctx.shiftName]?.[ctx.stationIndex] || [])[ctx.slotIndex] || "",
+  ).trim();
+  if (targetSlotWorker && workerParticipatesInPull(ctx.pulls, targetSlotWorker, ctx.stationIndex)) {
+    return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
   }
 
   const stCfg = (ctx.site?.config?.stations as any[])?.[ctx.stationIndex] || null;

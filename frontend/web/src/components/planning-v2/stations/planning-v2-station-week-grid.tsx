@@ -66,7 +66,10 @@ import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
 import {
   canHighlightManualDropTarget,
   getLinkedSiteConflictReason,
+  pullEditOnlyViaPopupMessage,
+  pullEntriesInCell,
   workerHasRole,
+  workerParticipatesInPull,
 } from "../lib/planning-v2-manual-full-drop";
 import {
   alignNamesToRoleSlots,
@@ -504,9 +507,12 @@ export function PlanningV2StationWeekGrid({
     if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
   }, [shiftHoursEditor]);
 
-  // Quitter משיכה / שינוי שעות (ex. début de drag) → fermer les modales associées
+  // Quitter le mode משיכה → fermer la modale (mais autoriser l’ouverture hors mode, en manuel).
+  const prevPullsModeStationIdxRef = useRef(pullsModeStationIdx);
   useEffect(() => {
-    if (pullsModeStationIdx == null) setPullsEditor(null);
+    const prev = prevPullsModeStationIdxRef.current;
+    prevPullsModeStationIdxRef.current = pullsModeStationIdx;
+    if (prev != null && pullsModeStationIdx == null) setPullsEditor(null);
   }, [pullsModeStationIdx]);
   useEffect(() => {
     if (isSavedMode && !editingSaved) setPullsEditor(null);
@@ -621,6 +627,31 @@ export function PlanningV2StationWeekGrid({
     const trimmed = name.trim();
     if (!trimmed || !onManualSlotDrop) return;
     const src = sourceFromData || dragSourceRef.current;
+    const pullsMap = (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null;
+    if (pullEntriesInCell(pullsMap, dayKey, shiftName, stationIndex).length > 0) {
+      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+      didDropRef.current = true;
+      setHoverSlotKey(null);
+      onDraggingWorkerChange?.(null);
+      dragSourceRef.current = null;
+      return;
+    }
+    const targetNm = String(
+      (assignments && typeof assignments === "object"
+        ? assignments?.[dayKey]?.[shiftName]?.[stationIndex]?.[slotIndex]
+        : "") || "",
+    ).trim();
+    if (
+      (src && workerParticipatesInPull(pullsMap, src.workerName)) ||
+      (targetNm && workerParticipatesInPull(pullsMap, targetNm, stationIndex))
+    ) {
+      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+      didDropRef.current = true;
+      setHoverSlotKey(null);
+      onDraggingWorkerChange?.(null);
+      dragSourceRef.current = null;
+      return;
+    }
     didDropRef.current = true;
     setHoverSlotKey(null);
     onDraggingWorkerChange?.(null);
@@ -638,22 +669,6 @@ export function PlanningV2StationWeekGrid({
     });
   };
 
-  const onChipDragEnd = () => {
-    const src = dragSourceRef.current;
-    const shouldClearFromSource =
-      manualEditable &&
-      !!src &&
-      !didDropRef.current &&
-      typeof onManualSlotDragOutside === "function";
-    dragSourceRef.current = null;
-    didDropRef.current = false;
-    setHoverSlotKey(null);
-    onDraggingWorkerChange?.(null);
-    if (shouldClearFromSource && src) {
-      void Promise.resolve(onManualSlotDragOutside(src));
-    }
-  };
-
   const trySlotClickAssign = (
     dayKey: string,
     shiftName: string,
@@ -662,7 +677,20 @@ export function PlanningV2StationWeekGrid({
   ) => {
     const dragNm = (draggingWorkerName || "").trim();
     if (!dragNm || !manualEditable || !onManualSlotDrop) return;
-    setHoverSlotKey(null);
+    const pullsMap = (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null;
+    if (pullEntriesInCell(pullsMap, dayKey, shiftName, stationIndex).length > 0) {
+      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+      return;
+    }
+    const targetNm = String(
+      (assignments && typeof assignments === "object"
+        ? assignments?.[dayKey]?.[shiftName]?.[stationIndex]?.[slotIndex]
+        : "") || "",
+    ).trim();
+    if (targetNm && workerParticipatesInPull(pullsMap, targetNm, stationIndex)) {
+      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+      return;
+    }
     void Promise.resolve(
       onManualSlotDrop({
         dayKey,
@@ -670,9 +698,29 @@ export function PlanningV2StationWeekGrid({
         stationIndex,
         slotIndex,
         workerName: dragNm,
-        dragSource: selectedWorkerSource ?? null,
+        dragSource: selectedWorkerSource || null,
       }),
     );
+  };
+
+  const onChipDragEnd = () => {
+    const src = dragSourceRef.current;
+    const shouldClearFromSource =
+      manualEditable &&
+      !!src &&
+      !didDropRef.current &&
+      typeof onManualSlotDragOutside === "function" &&
+      !workerParticipatesInPull(
+        (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null,
+        src.workerName,
+      );
+    dragSourceRef.current = null;
+    didDropRef.current = false;
+    setHoverSlotKey(null);
+    onDraggingWorkerChange?.(null);
+    if (shouldClearFromSource && src) {
+      void Promise.resolve(onManualSlotDragOutside(src));
+    }
   };
 
   const today0 = new Date();
@@ -917,9 +965,6 @@ export function PlanningV2StationWeekGrid({
                           const isPastDay = dateCell < today0;
                           const pullsActiveHere = pullsModeStationIdx === idx;
                           const shiftHoursActiveHere = shiftHoursModeStationIdx === idx;
-                          // Drag autorisé même en mode משיכה / שינוי שעות (le drag désactive le mode).
-                          const dndHere =
-                            manualEditable && typeof onManualSlotDrop === "function";
                           const cellRaw = mergeCellRawWithPulls(
                             assignmentsSafe,
                             pulls || null,
@@ -932,6 +977,13 @@ export function PlanningV2StationWeekGrid({
                             .filter(Boolean);
                           const showCell = activeDay && required > 0;
                           const pullsInCell = countPullEntriesInCell(pulls || null, d.key, sn, idx);
+                          const cellLockedByPull = pullsInCell > 0;
+                          // Drag autorisé même en mode משיכה / שינוי שעות (le drag désactive le mode),
+                          // sauf vers une cellule déjà en משיכה (édition uniquement via popup).
+                          const dndHere =
+                            manualEditable &&
+                            typeof onManualSlotDrop === "function" &&
+                            !cellLockedByPull;
                           const assignedCount = Math.max(0, assignedNamesNonEmpty.length - pullsInCell);
                           const pullRoleMap = buildPullRoleMapForCell(pulls || null, d.key, sn, idx);
                           const baseRoleDisplay = computeRoleDisplayForCell(
@@ -1063,6 +1115,12 @@ export function PlanningV2StationWeekGrid({
                                           }
                                           onClick={() => {
                                             if (pullsActiveHere || shiftHoursActiveHere) return;
+                                            if (cellLockedByPull) {
+                                              toast.error("לא ניתן לשבץ", {
+                                                description: pullEditOnlyViaPopupMessage(),
+                                              });
+                                              return;
+                                            }
                                             trySlotClickAssign(d.key, sn, idx, slotIdx);
                                           }}
                                           onDragEnter={
@@ -1303,6 +1361,31 @@ export function PlanningV2StationWeekGrid({
                                         }
                                       }
                                     }
+                                    // Clic sur bulle orange adjacente (before/after) hors cellule trou.
+                                    if (!existingPull && pullRel) {
+                                      for (const [k, entry] of Object.entries(pullsMap)) {
+                                        const parts = String(k || "").split("|");
+                                        if (parts.length < 4 || Number(parts[2]) !== Number(idx)) continue;
+                                        if (!isRealPullEntry(entry)) continue;
+                                        const b = String(entry?.before?.name || "").trim();
+                                        const a = String(entry?.after?.name || "").trim();
+                                        if (pullRel === "before" && b === nm) {
+                                          resolvedPullKey = String(k);
+                                          existingPull = entry;
+                                          break;
+                                        }
+                                        if (pullRel === "after" && a === nm) {
+                                          resolvedPullKey = String(k);
+                                          existingPull = entry;
+                                          break;
+                                        }
+                                        if (pullRel === "cell" && (b === nm || a === nm)) {
+                                          resolvedPullKey = String(k);
+                                          existingPull = entry;
+                                          break;
+                                        }
+                                      }
+                                    }
                                     const hasPullOnSlot =
                                       !!String(existingPull?.before?.name || "").trim() ||
                                       !!String(existingPull?.after?.name || "").trim();
@@ -1385,12 +1468,25 @@ export function PlanningV2StationWeekGrid({
                                           data-sname={sn}
                                           data-stidx={idx}
                                           data-slotidx={slotIdx}
-                                          draggable={dndHere}
-                                          onDragStart={(e) => dndHere && onWorkerDragStart(e, nm)}
+                                          draggable={dndHere && !hasPullOnSlot && !pullRel}
+                                          onDragStart={(e) => {
+                                            if (!dndHere || hasPullOnSlot || pullRel) {
+                                              e.preventDefault();
+                                              if (hasPullOnSlot || pullRel) {
+                                                toast.error("לא ניתן לשבץ", {
+                                                  description: pullEditOnlyViaPopupMessage(),
+                                                });
+                                              }
+                                              return;
+                                            }
+                                            onWorkerDragStart(e, nm);
+                                          }}
                                           onDragEnd={onChipDragEnd}
                                           className={
                                             "relative inline-flex min-h-6 w-auto max-w-[6rem] min-w-0 select-none flex-col items-center overflow-hidden rounded-full border px-1 py-0.5 shadow-sm transition-[max-width,transform] duration-200 ease-out md:min-h-9 md:w-full md:max-w-[6rem] md:px-3 md:py-1 md:group-hover/slot:max-w-[18rem] md:group-hover/slot:z-30 md:focus:max-w-[18rem] md:focus:z-30 focus:outline-none " +
-                                            (dndHere ? "cursor-grab active:cursor-grabbing " : "cursor-default ") +
+                                            (dndHere && !hasPullOnSlot && !pullRel
+                                              ? "cursor-grab active:cursor-grabbing "
+                                              : "cursor-default ") +
                                             (manualEditable && !pullsActiveHere && !shiftHoursActiveHere
                                               ? "cursor-pointer "
                                               : "") +
@@ -1482,6 +1578,83 @@ export function PlanningV2StationWeekGrid({
                                               });
                                               return;
                                             }
+                                            // משיכה déjà affectée : ouvrir la popup même hors mode משיכות
+                                            // (manuel ou automatique ; bloqué seulement en שמור sans עריכה via blockPullBubble).
+                                            if (hasPullOnSlot && !shiftHoursActiveHere) {
+                                              e.stopPropagation();
+                                              const pullKey = resolvedPullKey || slotPullKey;
+                                              const pullParts = String(pullKey).split("|");
+                                              const holeDayKey = String(pullParts[0] || d.key);
+                                              const holeShiftName = String(pullParts[1] || sn);
+                                              const holeStationIdx = Number(pullParts[2]);
+                                              const holeStIdx = Number.isFinite(holeStationIdx) ? holeStationIdx : idx;
+                                              const holeDayIdx = DAY_COLS.findIndex((c) => c.key === holeDayKey);
+                                              const holeShiftIdx = shiftNamesAll.indexOf(holeShiftName);
+                                              const holePrevRef =
+                                                holeDayIdx < 0 || holeShiftIdx < 0
+                                                  ? null
+                                                  : holeDayIdx === 0 && holeShiftIdx === 0
+                                                    ? null
+                                                    : holeShiftIdx === 0
+                                                      ? { dayIdx: holeDayIdx - 1, shiftIdx: shiftNamesAll.length - 1 }
+                                                      : { dayIdx: holeDayIdx, shiftIdx: holeShiftIdx - 1 };
+                                              const holeNextRef =
+                                                holeDayIdx < 0 || holeShiftIdx < 0
+                                                  ? null
+                                                  : holeDayIdx === DAY_COLS.length - 1 &&
+                                                      holeShiftIdx === shiftNamesAll.length - 1
+                                                    ? null
+                                                    : holeShiftIdx === shiftNamesAll.length - 1
+                                                      ? { dayIdx: holeDayIdx + 1, shiftIdx: 0 }
+                                                      : { dayIdx: holeDayIdx, shiftIdx: holeShiftIdx + 1 };
+                                              const used = new Set<string>();
+                                              const prefix = `${holeDayKey}|${holeShiftName}|${holeStIdx}|`;
+                                              Object.entries(pulls || {}).forEach(([k, v]) => {
+                                                if (!String(k).startsWith(prefix) || String(k) === pullKey) return;
+                                                const pe = v as { before?: { name?: string }; after?: { name?: string } };
+                                                const b = String(pe?.before?.name || "").trim();
+                                                const a = String(pe?.after?.name || "").trim();
+                                                if (b) used.add(b);
+                                                if (a) used.add(a);
+                                              });
+                                              const beforeName = String(existingPull?.before?.name || "").trim();
+                                              const afterName = String(existingPull?.after?.name || "").trim();
+                                              const prevDayKey = holePrevRef ? DAY_COLS[holePrevRef.dayIdx].key : "";
+                                              const nextDayKey = holeNextRef ? DAY_COLS[holeNextRef.dayIdx].key : "";
+                                              const prevShift = holePrevRef ? shiftNamesAll[holePrevRef.shiftIdx] : "";
+                                              const nextShift = holeNextRef ? shiftNamesAll[holeNextRef.shiftIdx] : "";
+                                              let beforeOptions = holePrevRef
+                                                ? planningCellNames(assignmentsSafe?.[prevDayKey]?.[prevShift]?.[holeStIdx]).filter((x) => !used.has(x))
+                                                : [];
+                                              let afterOptions = holeNextRef
+                                                ? planningCellNames(assignmentsSafe?.[nextDayKey]?.[nextShift]?.[holeStIdx]).filter((x) => !used.has(x))
+                                                : [];
+                                              if (beforeName && !beforeOptions.includes(beforeName)) beforeOptions = [beforeName, ...beforeOptions];
+                                              if (afterName && !afterOptions.includes(afterName)) afterOptions = [afterName, ...afterOptions];
+                                              const holeSt = stations[holeStIdx] || st;
+                                              const hours = hoursFromConfig(holeSt, holeShiftName) || hoursOf(holeShiftName);
+                                              const parsed = parseHoursRange(hours);
+                                              const holeRequired = getRequiredFor(holeSt, holeShiftName, holeDayKey);
+                                              setPullsEditor({
+                                                key: pullKey,
+                                                dayKey: holeDayKey,
+                                                shiftName: holeShiftName,
+                                                stationIdx: holeStIdx,
+                                                required: holeRequired,
+                                                shiftStart: parsed?.start || "00:00",
+                                                shiftEnd: parsed?.end || "23:59",
+                                                roleName: null,
+                                                beforeOptions,
+                                                afterOptions,
+                                                beforeName: beforeName || String(beforeOptions[0] || "").trim(),
+                                                afterName: afterName || String(afterOptions[0] || "").trim(),
+                                                beforeStart: String(existingPull?.before?.start || "00:00"),
+                                                beforeEnd: String(existingPull?.before?.end || "00:00"),
+                                                afterStart: String(existingPull?.after?.start || "00:00"),
+                                                afterEnd: String(existingPull?.after?.end || "00:00"),
+                                              });
+                                              return;
+                                            }
                                             if (
                                               manualEditable &&
                                               !pullsActiveHere &&
@@ -1504,51 +1677,6 @@ export function PlanningV2StationWeekGrid({
                                                 return;
                                               }
                                             }
-                                            if (!hasPullOnSlot) return;
-                                            const used = new Set<string>();
-                                            const prefix = `${d.key}|${sn}|${idx}|`;
-                                            Object.entries(pulls || {}).forEach(([k, v]) => {
-                                              if (!String(k).startsWith(prefix) || String(k) === resolvedPullKey) return;
-                                              const e = v as { before?: { name?: string }; after?: { name?: string } };
-                                              const b = String(e?.before?.name || "").trim();
-                                              const a = String(e?.after?.name || "").trim();
-                                              if (b) used.add(b);
-                                              if (a) used.add(a);
-                                            });
-                                            const beforeName = String(existingPull?.before?.name || "").trim();
-                                            const afterName = String(existingPull?.after?.name || "").trim();
-                                            const prevDayKey = prevRef ? DAY_COLS[prevRef.dayIdx].key : "";
-                                            const nextDayKey = nextRef ? DAY_COLS[nextRef.dayIdx].key : "";
-                                            const prevShift = prevRef ? shiftNamesAll[prevRef.shiftIdx] : "";
-                                            const nextShift = nextRef ? shiftNamesAll[nextRef.shiftIdx] : "";
-                                            let beforeOptions = prevRef
-                                              ? planningCellNames(assignmentsSafe?.[prevDayKey]?.[prevShift]?.[idx]).filter((x) => !used.has(x))
-                                              : [];
-                                            let afterOptions = nextRef
-                                              ? planningCellNames(assignmentsSafe?.[nextDayKey]?.[nextShift]?.[idx]).filter((x) => !used.has(x))
-                                              : [];
-                                            if (beforeName && !beforeOptions.includes(beforeName)) beforeOptions = [beforeName, ...beforeOptions];
-                                            if (afterName && !afterOptions.includes(afterName)) afterOptions = [afterName, ...afterOptions];
-                                            const hours = hoursFromConfig(st, sn) || hoursOf(sn);
-                                            const parsed = parseHoursRange(hours);
-                                            setPullsEditor({
-                                              key: resolvedPullKey || slotPullKey,
-                                              dayKey: d.key,
-                                              shiftName: sn,
-                                              stationIdx: idx,
-                                              required,
-                                              shiftStart: parsed?.start || "00:00",
-                                              shiftEnd: parsed?.end || "23:59",
-                                              roleName: null,
-                                              beforeOptions,
-                                              afterOptions,
-                                              beforeName: beforeName || String(beforeOptions[0] || "").trim(),
-                                              afterName: afterName || String(afterOptions[0] || "").trim(),
-                                              beforeStart: String(existingPull?.before?.start || "00:00"),
-                                              beforeEnd: String(existingPull?.before?.end || "00:00"),
-                                              afterStart: String(existingPull?.after?.start || "00:00"),
-                                              afterEnd: String(existingPull?.after?.end || "00:00"),
-                                            });
                                           }}
                                         >
                                           <span className="flex w-full min-w-0 flex-1 flex-col items-center overflow-hidden text-center leading-tight">

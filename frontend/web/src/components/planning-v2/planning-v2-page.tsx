@@ -25,7 +25,7 @@ import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { usePlanningV2PlanController } from "./hooks/use-planning-v2-plan-controller";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
 import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
-import { analyzeManualSlotDrop, stripPullsFromCellForReplacement, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
+import { analyzeManualSlotDrop, pullEditOnlyViaPopupMessage, workerParticipatesInPull, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
 import type { PlanningV2PullEntry, PlanningV2PullsMap, WorkerAvailability } from "./types";
@@ -738,24 +738,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           continue;
         }
         if (r.action === "confirm_replace_pull") {
-          const ok = await waitManualConfirm(
-            "משיכה",
-            `בתא זה קיימת משיכה. להחליף את המשיכה בעובד "${r.workerName}"?`,
-          );
-          if (!ok) return;
-          const baseNow = plan.getLatestAssignmentBase();
-          const pullsNow = (plan.displayPulls || {}) as PlanningV2PullsMap;
-          const { nextBase, nextPulls } = stripPullsFromCellForReplacement(
-            baseNow,
-            pullsNow,
-            p.dayKey,
-            p.shiftName,
-            p.stationIndex,
-          );
-          plan.commitDraftPulls(nextPulls);
-          plan.commitDraftAssignments(nextBase);
-          flags = { ...flags, forceReplacePull: true };
-          continue;
+          toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+          return;
         }
       }
       toast.error("שגיאה", { description: "יותר מדי שלבי אישור — נסה שוב." });
@@ -767,6 +751,10 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     (dragSource: ManualDragSource) => {
       const src = dragSource;
       if (!src) return;
+      if (workerParticipatesInPull(plan.displayPulls ?? null, src.workerName)) {
+        toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+        return;
+      }
       const base = plan.getLatestAssignmentBase();
       const row = base[src.dayKey]?.[src.shiftName]?.[src.stationIndex];
       if (!Array.isArray(row)) return;
