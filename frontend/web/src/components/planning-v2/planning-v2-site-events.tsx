@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import LoadingAnimation from "@/components/loading-animation";
+import TimePicker from "@/components/time-picker";
 import { addDays, formatHebDate, getWeekKeyISO } from "./lib/week";
 import { DAY_COLS } from "./lib/station-grid-helpers";
 import type { PlanningWorker, SiteEvent } from "./types";
@@ -73,6 +74,16 @@ export function PlanningV2SiteEvents({
   const [isListOpen, setIsListOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<EventDraft>(EMPTY_DRAFT);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [datePickerMonth, setDatePickerMonth] = useState(
+    () => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1),
+  );
+  const [workerPickerDateIso, setWorkerPickerDateIso] = useState<string | null>(null);
+  const [workerConflict, setWorkerConflict] = useState<{
+    workerId: number;
+    targetDateIso: string;
+    otherDateIsos: string[];
+  } | null>(null);
 
   const weekDates = useMemo(() => weekIsoDates(weekStart), [weekStart]);
   const wk = useMemo(() => getWeekKeyISO(weekStart), [weekStart]);
@@ -138,8 +149,26 @@ export function PlanningV2SiteEvents({
 
   function closeEditor() {
     setIsEditorOpen(false);
+    setIsDatePickerOpen(false);
+    setWorkerPickerDateIso(null);
+    setWorkerConflict(null);
     setEditingId(null);
     setDraft(EMPTY_DRAFT);
+  }
+
+  function openDatePicker() {
+    setDatePickerMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
+    setIsDatePickerOpen(true);
+  }
+
+  function pickCustomDate(date: Date) {
+    const iso = getWeekKeyISO(date);
+    if (draft.dates.includes(iso)) {
+      toggleDate(iso);
+    } else {
+      addCustomDate(iso);
+    }
+    setIsDatePickerOpen(false);
   }
 
   function toggleDate(iso: string) {
@@ -169,6 +198,13 @@ export function PlanningV2SiteEvents({
     });
   }
 
+  function otherDatesForWorker(workerId: number, exceptDateIso: string): string[] {
+    return draft.dates.filter((iso) => {
+      if (iso === exceptDateIso) return false;
+      return (draft.assignments[iso] || []).includes(workerId);
+    });
+  }
+
   function toggleWorker(dateIso: string, workerId: number) {
     setDraft((prev) => {
       const cur = prev.assignments[dateIso] || [];
@@ -178,6 +214,49 @@ export function PlanningV2SiteEvents({
         assignments: { ...prev.assignments, [dateIso]: next },
       };
     });
+  }
+
+  function handleWorkerPick(dateIso: string, workerId: number) {
+    const onThisDate = (draft.assignments[dateIso] || []).includes(workerId);
+    if (onThisDate) {
+      toggleWorker(dateIso, workerId);
+      return;
+    }
+    const otherDateIsos = otherDatesForWorker(workerId, dateIso);
+    if (otherDateIsos.length > 0) {
+      setWorkerConflict({ workerId, targetDateIso: dateIso, otherDateIsos });
+      return;
+    }
+    toggleWorker(dateIso, workerId);
+  }
+
+  function applyWorkerReplaceDate() {
+    if (!workerConflict) return;
+    const { workerId, targetDateIso, otherDateIsos } = workerConflict;
+    setDraft((prev) => {
+      const assignments = { ...prev.assignments };
+      for (const iso of otherDateIsos) {
+        assignments[iso] = (assignments[iso] || []).filter((id) => id !== workerId);
+      }
+      const cur = assignments[targetDateIso] || [];
+      assignments[targetDateIso] = cur.includes(workerId) ? cur : [...cur, workerId];
+      return { ...prev, assignments };
+    });
+    setWorkerConflict(null);
+  }
+
+  function applyWorkerKeepBothDates() {
+    if (!workerConflict) return;
+    const { workerId, targetDateIso } = workerConflict;
+    setDraft((prev) => {
+      const cur = prev.assignments[targetDateIso] || [];
+      if (cur.includes(workerId)) return prev;
+      return {
+        ...prev,
+        assignments: { ...prev.assignments, [targetDateIso]: [...cur, workerId] },
+      };
+    });
+    setWorkerConflict(null);
   }
 
   async function saveEvent() {
@@ -408,19 +487,19 @@ export function PlanningV2SiteEvents({
             <div className="mb-3 grid grid-cols-2 gap-3">
               <label className="block text-sm">
                 <span className="mb-1 block font-medium">שעת התחלה (אופציונלי)</span>
-                <input
-                  type="time"
+                <TimePicker
                   value={draft.start_time}
-                  onChange={(e) => setDraft((p) => ({ ...p, start_time: e.target.value }))}
+                  onChange={(v) => setDraft((p) => ({ ...p, start_time: v }))}
+                  dir="ltr"
                   className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
               <label className="block text-sm">
                 <span className="mb-1 block font-medium">שעת סיום (אופציונלי)</span>
-                <input
-                  type="time"
+                <TimePicker
                   value={draft.end_time}
-                  onChange={(e) => setDraft((p) => ({ ...p, end_time: e.target.value }))}
+                  onChange={(v) => setDraft((p) => ({ ...p, end_time: v }))}
+                  dir="ltr"
                   className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
                 />
               </label>
@@ -428,7 +507,7 @@ export function PlanningV2SiteEvents({
 
             <div className="mb-3">
               <div className="mb-1 text-sm font-medium">תאריכים</div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap justify-center gap-2">
                 {weekDates.map((iso, i) => {
                   const active = draft.dates.includes(iso);
                   return (
@@ -448,21 +527,17 @@ export function PlanningV2SiteEvents({
                   );
                 })}
               </div>
-              <div className="mt-2 flex items-center gap-2">
-                <input
-                  type="date"
-                  id="event-extra-date"
-                  className="rounded-md border px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                />
+              <div className="mt-2 flex justify-center">
                 <button
                   type="button"
-                  className="rounded-md border px-2 py-1 text-xs dark:border-zinc-700"
-                  onClick={() => {
-                    const el = document.getElementById("event-extra-date") as HTMLInputElement | null;
-                    if (el?.value) addCustomDate(el.value);
-                  }}
+                  onClick={openDatePicker}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#722F37] px-2.5 py-1.5 text-xs font-medium text-[#722F37] hover:bg-[#722F37]/10 dark:border-[#722F37] dark:text-[#722F37] dark:hover:bg-[#722F37]/20"
                 >
-                  הוסף תאריך
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+                    <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
+                    <path d="M7 14h5v5H7z" />
+                  </svg>
+                  הוסף תאריך מלוח שנה
                 </button>
               </div>
               {draft.dates.filter((d) => !weekDates.includes(d)).length > 0 ? (
@@ -488,38 +563,44 @@ export function PlanningV2SiteEvents({
               {draft.dates.length === 0 ? (
                 <div className="text-sm text-zinc-500">בחר תאריכים כדי לשייך עובדים</div>
               ) : (
-                <div className="max-h-48 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-zinc-200 p-2 dark:border-zinc-700">
-                  {draft.dates.map((iso) => (
-                    <div key={iso} className="rounded-md border p-2 dark:border-zinc-700">
-                      <div className="mb-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
-                        {dayLabelForIso(weekStart, iso)} · {formatHebDate(new Date(`${iso}T00:00:00`))}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {workers.length === 0 ? (
-                          <span className="text-xs text-zinc-500">אין עובדים באתר</span>
-                        ) : (
-                          workers.map((w) => {
-                            const active = (draft.assignments[iso] || []).includes(w.id);
-                            return (
+                <div className="max-h-56 space-y-3 overflow-y-auto overscroll-contain rounded-md border border-zinc-200 p-2 dark:border-zinc-700">
+                  {draft.dates.map((iso) => {
+                    const selectedIds = draft.assignments[iso] || [];
+                    return (
+                      <div key={iso} className="rounded-md border p-2 dark:border-zinc-700">
+                        <div className="mb-2 text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                          {dayLabelForIso(weekStart, iso)} · {formatHebDate(new Date(`${iso}T00:00:00`))}
+                        </div>
+                        {selectedIds.length > 0 ? (
+                          <div className="mb-2 flex flex-wrap justify-center gap-2">
+                            {selectedIds.map((wid) => (
                               <button
-                                key={w.id}
+                                key={wid}
                                 type="button"
-                                onClick={() => toggleWorker(iso, w.id)}
-                                className={
-                                  "rounded-md border px-2 py-1 text-xs " +
-                                  (active
-                                    ? "border-[#722F37] bg-[#722F37] text-white"
-                                    : "border-zinc-300 dark:border-zinc-700")
-                                }
+                                onClick={() => toggleWorker(iso, wid)}
+                                className="rounded-md border border-[#722F37] bg-[#722F37] px-2 py-1 text-xs text-white"
+                                title="הסר עובד"
                               >
-                                {w.name}
+                                {workerNameById(workers, wid)} ×
                               </button>
-                            );
-                          })
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="mb-2 text-center text-xs text-zinc-500">לא נבחרו עובדים</div>
                         )}
+                        <div className="flex justify-center">
+                          <button
+                            type="button"
+                            disabled={workers.length === 0}
+                            onClick={() => setWorkerPickerDateIso(iso)}
+                            className="inline-flex items-center gap-1.5 rounded-md border border-[#722F37] px-2.5 py-1.5 text-xs font-medium text-[#722F37] hover:bg-[#722F37]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            בחר עובד
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -540,6 +621,247 @@ export function PlanningV2SiteEvents({
                 disabled={saving}
               >
                 {saving ? "שומר…" : "אישור"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDatePickerOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setIsDatePickerOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border bg-white p-5 shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">בחר תאריך</h3>
+              <button
+                type="button"
+                onClick={() => setIsDatePickerOpen(false)}
+                className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                aria-label="סגור"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+              </button>
+            </div>
+            <div className="mb-4 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextMonth = new Date(datePickerMonth);
+                  nextMonth.setMonth(nextMonth.getMonth() + 1);
+                  setDatePickerMonth(nextMonth);
+                }}
+                className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                aria-label="חודש הבא"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6z" />
+                </svg>
+              </button>
+              <span className="text-lg font-medium">
+                {new Intl.DateTimeFormat("he-IL", { month: "long", year: "numeric" }).format(datePickerMonth)}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const prevMonth = new Date(datePickerMonth);
+                  prevMonth.setMonth(prevMonth.getMonth() - 1);
+                  setDatePickerMonth(prevMonth);
+                }}
+                className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                aria-label="חודש קודם"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+                </svg>
+              </button>
+            </div>
+            <div className="mb-2 grid grid-cols-7 gap-1">
+              {["א", "ב", "ג", "ד", "ה", "ו", "ש"].map((day) => (
+                <div key={day} className="p-2 text-center text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                  {day}
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {(() => {
+                const year = datePickerMonth.getFullYear();
+                const month = datePickerMonth.getMonth();
+                const firstDay = new Date(year, month, 1);
+                const startDate = new Date(firstDay);
+                startDate.setDate(startDate.getDate() - firstDay.getDay());
+                const days: ReactElement[] = [];
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const selectedSet = new Set(draft.dates);
+
+                for (let i = 0; i < 42; i++) {
+                  const date = new Date(startDate);
+                  date.setDate(startDate.getDate() + i);
+                  date.setHours(0, 0, 0, 0);
+                  const iso = getWeekKeyISO(date);
+                  const isCurrentMonth = date.getMonth() === month;
+                  const isToday = date.getTime() === today.getTime();
+                  const isSelected = selectedSet.has(iso);
+                  const isWeekDate = weekDates.includes(iso);
+
+                  days.push(
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => pickCustomDate(date)}
+                      className={[
+                        "relative flex flex-col items-center rounded p-2 text-sm",
+                        !isCurrentMonth ? "text-zinc-300 dark:text-zinc-600" : "",
+                        isSelected ? "bg-[#722F37] font-semibold text-white" : "",
+                        isToday && !isSelected ? "border border-[#722F37]" : "",
+                        isWeekDate && isCurrentMonth && !isSelected && !isToday
+                          ? "bg-[#722F37]/15"
+                          : "",
+                        isCurrentMonth && !isSelected ? "text-zinc-700 dark:text-zinc-300" : "",
+                        "hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                      ].join(" ")}
+                    >
+                      <span>{date.getDate()}</span>
+                    </button>,
+                  );
+                }
+                return days;
+              })()}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workerPickerDateIso ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => {
+            if (workerConflict) return;
+            setWorkerPickerDateIso(null);
+          }}
+        >
+          <div
+            className="flex max-h-[85vh] w-full max-w-md flex-col rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between border-b px-4 py-3 dark:border-zinc-800">
+              <div>
+                <h3 className="text-lg font-semibold">בחר עובד</h3>
+                <div className="text-xs text-zinc-500">
+                  {dayLabelForIso(weekStart, workerPickerDateIso)} ·{" "}
+                  {formatHebDate(new Date(`${workerPickerDateIso}T00:00:00`))}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWorkerPickerDateIso(null)}
+                className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                aria-label="סגור"
+              >
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                  <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                </svg>
+              </button>
+            </div>
+            <div className="max-h-[17.5rem] min-h-0 overflow-y-auto overscroll-contain p-3">
+              {workers.length === 0 ? (
+                <div className="py-6 text-center text-sm text-zinc-500">אין עובדים באתר</div>
+              ) : (
+                <div className="space-y-1.5">
+                  {workers.map((w) => {
+                    const active = (draft.assignments[workerPickerDateIso] || []).includes(w.id);
+                    const otherDates = otherDatesForWorker(w.id, workerPickerDateIso);
+                    const assignedElsewhere = !active && otherDates.length > 0;
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => handleWorkerPick(workerPickerDateIso, w.id)}
+                        className={
+                          "flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm text-right " +
+                          (active
+                            ? "border-[#722F37] bg-[#722F37] text-white"
+                            : assignedElsewhere
+                              ? "border-zinc-200 bg-zinc-100 text-zinc-400 opacity-60 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-zinc-500"
+                              : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
+                        }
+                      >
+                        <span>{w.name}</span>
+                        {active ? <span aria-hidden>✓</span> : null}
+                        {assignedElsewhere ? (
+                          <span className="text-[10px] text-zinc-400">משובץ בתאריך אחר</span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 justify-end border-t px-4 py-3 dark:border-zinc-800">
+              <button
+                type="button"
+                className="rounded-md bg-[#722F37] px-4 py-2 text-sm text-white"
+                onClick={() => setWorkerPickerDateIso(null)}
+              >
+                אישור
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {workerConflict ? (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setWorkerConflict(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border bg-white p-4 shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 text-lg font-semibold text-[#722F37]">שים לב</div>
+            <p className="mb-2 text-sm text-zinc-700 dark:text-zinc-200">
+              עובד זה כבר שובץ לאירוע זה בתאריך אחר
+              {workerConflict.otherDateIsos.length === 1
+                ? ` (${formatHebDate(new Date(`${workerConflict.otherDateIsos[0]}T00:00:00`))})`
+                : ""}
+              .
+            </p>
+            <p className="mb-4 text-xs text-zinc-500">
+              {workerNameById(workers, workerConflict.workerId)} · תאריך נבחר:{" "}
+              {formatHebDate(new Date(`${workerConflict.targetDateIso}T00:00:00`))}
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-[#722F37] px-3 py-2 text-sm text-white"
+                onClick={applyWorkerReplaceDate}
+              >
+                החלף את התאריך בתאריך זה
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-[#722F37] px-3 py-2 text-sm font-medium text-[#722F37]"
+                onClick={applyWorkerKeepBothDates}
+              >
+                שייך לשני התאריכים
+              </button>
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700"
+                onClick={() => setWorkerConflict(null)}
+              >
+                ביטול
               </button>
             </div>
           </div>
