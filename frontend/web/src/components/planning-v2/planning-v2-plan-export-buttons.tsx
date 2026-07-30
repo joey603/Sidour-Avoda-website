@@ -312,7 +312,7 @@ export function PlanningV2PlanExportButtons({
 
   return (
     <>
-      <div className="mt-4 flex w-full flex-wrap items-center justify-start gap-2" dir="ltr">
+      <div className="mt-4 flex w-full flex-wrap items-start justify-start gap-2 sm:items-center" dir="ltr">
         <button
           type="button"
           onClick={onOpenVisualization}
@@ -353,7 +353,7 @@ export function PlanningV2PlanExportButtons({
           type="button"
           onClick={() => void handleExportScreenshot()}
           disabled={screenshotExporting || !canVisualize}
-          className={btnClass}
+          className={btnClass + " max-sm:hidden"}
           title="צילום מסך של הסידור השבועי (PNG, מימדים קבועים וחדים)"
           aria-label="צילום מסך"
         >
@@ -363,22 +363,37 @@ export function PlanningV2PlanExportButtons({
           {screenshotExporting ? "מכין תצוגה…" : "צילום"}
         </button>
 
-        <button
-          type="button"
-          onClick={() => {
-            clearPhotoPreview();
-            setMonthPhotoOpen(true);
-          }}
-          disabled={monthPhotoExporting}
-          className={btnClass + " ml-auto"}
-          title="צילום של כל השבועות השמורים בחודש (כולל אירועים)"
-          aria-label="צילום חודש"
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-            <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2zM7 12h5v5H7v-5z" />
-          </svg>
-          צילום חודש
-        </button>
+        <div className="ml-auto flex flex-col items-end gap-2">
+          <button
+            type="button"
+            onClick={() => void handleExportScreenshot()}
+            disabled={screenshotExporting || !canVisualize}
+            className={btnClass + " sm:hidden"}
+            title="צילום מסך של הסידור השבועי (PNG, מימדים קבועים וחדים)"
+            aria-label="צילום מסך"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z" />
+            </svg>
+            {screenshotExporting ? "מכין תצוגה…" : "צילום"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              clearPhotoPreview();
+              setMonthPhotoOpen(true);
+            }}
+            disabled={monthPhotoExporting}
+            className={btnClass}
+            title="צילום של כל השבועות השמורים בחודש (כולל אירועים)"
+            aria-label="צילום חודש"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2zM7 12h5v5H7v-5z" />
+            </svg>
+            צילום חודש
+          </button>
+        </div>
       </div>
 
       {monthPhotoOpen ? (
