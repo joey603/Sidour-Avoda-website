@@ -312,63 +312,51 @@ export function PlanningV2PlanExportButtons({
 
   return (
     <>
-      <div className="mt-4 flex w-full flex-wrap items-start justify-start gap-2 sm:items-center" dir="ltr">
-        <button
-          type="button"
-          onClick={onOpenVisualization}
-          disabled={!canVisualize}
-          className={btnClass}
-          title={canVisualize ? "פתיחת תצוגת מסך מלא לגריד ולסיכום" : "אין תכנון להצגה"}
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-            <path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 15h2v3h3v2H4v-5zm14 3v-3h2v5h-5v-2h3z" />
-          </svg>
-          תצוגה מלאה
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleExportPdf()}
-          disabled={pdfExporting || !canVisualize}
-          className={btnClass}
-          title={canVisualize ? "אותו תוכן כמו ב-CSV — PDF עם גופן עברי (ללא html2canvas)" : "אין תכנון לייצוא"}
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm2-2h8v-2H8v2zm0-4h8v-2H8v2zm0-4h5V8H8v2z" />
-          </svg>
-          {pdfExporting ? "מייצא…" : "ייצוא PDF"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleExportExcel()}
-          disabled={excelExporting || !canVisualize}
-          className={btnClass}
-          title="קובץ Excel בפורמט סידור שבועי (צבעים, מ/עד, סיכום עובדים)"
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-            <path d="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5 5-5-5 1.41-1.41L11 12.67V3h2v9.67z" />
-          </svg>
-          {excelExporting ? "מייצא…" : "ייצוא Excel"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleExportScreenshot()}
-          disabled={screenshotExporting || !canVisualize}
-          className={btnClass + " max-sm:hidden"}
-          title="צילום מסך של הסידור השבועי (PNG, מימדים קבועים וחדים)"
-          aria-label="צילום מסך"
-        >
-          <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-            <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z" />
-          </svg>
-          {screenshotExporting ? "מכין תצוגה…" : "צילום"}
-        </button>
-
-        <div className="ml-auto flex flex-col items-end gap-2">
+      <div className="mt-4 flex w-full flex-col items-start gap-2" dir="ltr">
+        <div className="flex flex-wrap items-center justify-start gap-2">
+          <button
+            type="button"
+            onClick={onOpenVisualization}
+            disabled={!canVisualize}
+            className={btnClass}
+            title={canVisualize ? "פתיחת תצוגת מסך מלא לגריד ולסיכום" : "אין תכנון להצגה"}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M4 9V4h5v2H6v3H4zm10-5h6v6h-2V6h-4V4zM4 15h2v3h3v2H4v-5zm14 3v-3h2v5h-5v-2h3z" />
+            </svg>
+            תצוגה מלאה
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportPdf()}
+            disabled={pdfExporting || !canVisualize}
+            className={btnClass}
+            title={canVisualize ? "אותו תוכן כמו ב-CSV — PDF עם גופן עברי (ללא html2canvas)" : "אין תכנון לייצוא"}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm2-2h8v-2H8v2zm0-4h8v-2H8v2zm0-4h5V8H8v2z" />
+            </svg>
+            {pdfExporting ? "מייצא…" : "ייצוא PDF"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleExportExcel()}
+            disabled={excelExporting || !canVisualize}
+            className={btnClass}
+            title="קובץ Excel בפורמט סידור שבועי (צבעים, מ/עד, סיכום עובדים)"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5 5-5-5 1.41-1.41L11 12.67V3h2v9.67z" />
+            </svg>
+            {excelExporting ? "מייצא…" : "ייצוא Excel"}
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center justify-start gap-2">
           <button
             type="button"
             onClick={() => void handleExportScreenshot()}
             disabled={screenshotExporting || !canVisualize}
-            className={btnClass + " sm:hidden"}
+            className={btnClass}
             title="צילום מסך של הסידור השבועי (PNG, מימדים קבועים וחדים)"
             aria-label="צילום מסך"
           >
