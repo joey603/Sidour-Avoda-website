@@ -42,3 +42,44 @@ export function addDays(base: Date, days: number): Date {
 export function formatHebDate(d: Date): string {
   return d.toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
+
+export const HEBREW_MONTH_NAMES = [
+  "ינואר",
+  "פברואר",
+  "מרץ",
+  "אפריל",
+  "מאי",
+  "יוני",
+  "יולי",
+  "אוגוסט",
+  "ספטמבר",
+  "אוקטובר",
+  "נובמבר",
+  "דצמבר",
+] as const;
+
+/** Dimanche (début de semaine planning) ≤ date. */
+export function sundayOnOrBefore(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+/** Tous les dimanches de semaines qui intersectent le mois civil (0–11). */
+export function weekStartsIntersectingMonth(year: number, monthIndex: number): Date[] {
+  const first = new Date(year, monthIndex, 1);
+  first.setHours(0, 0, 0, 0);
+  const last = new Date(year, monthIndex + 1, 0);
+  last.setHours(0, 0, 0, 0);
+  let cur = sundayOnOrBefore(first);
+  const out: Date[] = [];
+  while (cur.getTime() <= last.getTime()) {
+    const weekEnd = addDays(cur, 6);
+    if (weekEnd.getTime() >= first.getTime() && cur.getTime() <= last.getTime()) {
+      out.push(new Date(cur));
+    }
+    cur = addDays(cur, 7);
+  }
+  return out;
+}

@@ -4,7 +4,7 @@ import {
   countAssignmentsPerWorkerName,
   subtractPullExtrasFromWorkerCounts,
 } from "./assignments-summary-math";
-import { addDays } from "./week";
+import { addDays, HEBREW_MONTH_NAMES } from "./week";
 import {
   DAY_COLS,
   getRequiredFor,
@@ -392,11 +392,8 @@ function buildStationScheduleHtml(
 </div>`;
 }
 
-/**
- * Capture PNG du planning au format סידור שבועי (mêmes règles que l'export Excel).
- * Cadre collé au contenu (pas de grand fond blanc), tableaux centrés dans une petite marge.
- */
-export async function generatePlanningScheduleScreenshotPng(params: ExportParams): Promise<Blob> {
+/** HTML d’une semaine (stations + מאבטח + אירועים) — réutilisé par capture semaine / mois. */
+export function buildPlanningScheduleWeekSectionsHtml(params: ExportParams): string {
   const { siteLabel, weekStart, workers, assignments, pulls, site, events } = params;
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
@@ -414,7 +411,7 @@ export async function generatePlanningScheduleScreenshotPng(params: ExportParams
         }))
       : [{ st: {}, idx: 0, name: siteLabel }];
 
-  const sections = stationsToWrite
+  return stationsToWrite
     .map(({ st, idx, name }) => {
       const title =
         stationsToWrite.length > 1
@@ -434,7 +431,9 @@ export async function generatePlanningScheduleScreenshotPng(params: ExportParams
       )}</div></div>`;
     })
     .join('<div style="height:12px;"></div>');
+}
 
+async function captureHtmlToPngBlob(innerHtml: string): Promise<Blob> {
   const host = document.createElement("div");
   host.setAttribute("data-planning-screenshot", "1");
   host.style.cssText = [
@@ -446,12 +445,11 @@ export async function generatePlanningScheduleScreenshotPng(params: ExportParams
     "z-index:-1",
     "pointer-events:none",
   ].join(";");
-  host.innerHTML = `<div style="display:inline-block;width:max-content;background:#ffffff;padding:${SCREENSHOT_PAD_PX}px;box-sizing:border-box;">${sections}</div>`;
+  host.innerHTML = `<div style="display:inline-block;width:max-content;background:#ffffff;padding:${SCREENSHOT_PAD_PX}px;box-sizing:border-box;">${innerHtml}</div>`;
   document.body.appendChild(host);
 
   const target = host.firstElementChild as HTMLElement;
   try {
-    // Laisser le layout se stabiliser avant capture.
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
     const width = Math.ceil(Math.max(target.scrollWidth, target.offsetWidth));
     const height = Math.ceil(Math.max(target.scrollHeight, target.offsetHeight));
@@ -473,4 +471,52 @@ export async function generatePlanningScheduleScreenshotPng(params: ExportParams
   } finally {
     host.remove();
   }
+}
+
+/**
+ * Capture PNG du planning au format סידור שבועי (mêmes règles que l'export Excel).
+ * Cadre collé au contenu (pas de grand fond blanc), tableaux centrés dans une petite marge.
+ */
+export async function generatePlanningScheduleScreenshotPng(params: ExportParams): Promise<Blob> {
+  return captureHtmlToPngBlob(buildPlanningScheduleWeekSectionsHtml(params));
+}
+
+export type MonthWeekScreenshotInput = ExportParams & {
+  /** Libellé affiché au-dessus de la semaine. */
+  weekLabel?: string;
+};
+
+/**
+ * Photo d’un mois entier : empile les tableaux hebdomadaires (avec אירועים à côté de מאבטח).
+ */
+export async function generatePlanningMonthScreenshotPng(params: {
+  siteLabel: string;
+  year: number;
+  monthIndex: number;
+  weeks: MonthWeekScreenshotInput[];
+}): Promise<Blob> {
+  const { siteLabel, year, monthIndex, weeks } = params;
+  const monthTitle = `${HEBREW_MONTH_NAMES[monthIndex] || ""} ${year}`.trim();
+  const header = `<div style="font-family:Arial,sans-serif;font-size:18px;font-weight:bold;text-align:center;margin:0 0 14px;">סידור חודשי - ${escapeHtml(
+    siteLabel,
+  )} · ${escapeHtml(monthTitle)}</div>`;
+
+  const weekBlocks = (weeks || [])
+    .map((week) => {
+      const label =
+        week.weekLabel ||
+        `שבוע מתאריך ${formatDateDdMmYy(week.weekStart)}`;
+      const body = buildPlanningScheduleWeekSectionsHtml(week);
+      return `<div style="width:max-content;margin:0 auto 18px;">
+  <div style="font-family:Arial,sans-serif;font-size:14px;font-weight:bold;text-align:center;margin:0 0 8px;">${escapeHtml(label)}</div>
+  ${body}
+</div>`;
+    })
+    .join("");
+
+  if (!weekBlocks) {
+    throw new Error("אין שבועות לייצוא בחודש זה");
+  }
+
+  return captureHtmlToPngBlob(`${header}${weekBlocks}`);
 }
