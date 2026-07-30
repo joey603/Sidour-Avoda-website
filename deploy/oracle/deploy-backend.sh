@@ -44,6 +44,68 @@ python3 -m py_compile \
   "$BACKEND_DIR/app/schemas.py" \
   "$BACKEND_DIR/app/models.py"
 
+echo "==> Alembic upgrade (head) avec fallback stamp si schéma déjà présent"
+cd "$BACKEND_DIR"
+export SERVICE_NAME
+python3 <<'PY'
+import os, re, subprocess, sys
+
+unit = subprocess.check_output(["sudo", "systemctl", "cat", os.environ.get("SERVICE_NAME", "sidour-backend")], text=True)
+env = os.environ.copy()
+for line in unit.splitlines():
+    s = line.strip()
+    if not s.startswith("Environment="):
+        continue
+    rest = s[len("Environment="):]
+    if rest.startswith('"') and rest.endswith('"'):
+        rest = rest[1:-1]
+    if "=" not in rest:
+        continue
+    k, v = rest.split("=", 1)
+    env[k] = v
+
+if not env.get("DATABASE_URL"):
+    print("WARN: DATABASE_URL absent du unit systemd — skip alembic pré-restart", file=sys.stderr)
+    sys.exit(0)
+
+def run(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, env=env)
+
+r = run([".venv/bin/alembic", "upgrade", "head"])
+sys.stdout.write(r.stdout or "")
+sys.stderr.write(r.stderr or "")
+if r.returncode == 0:
+    print("alembic: already at head or upgraded OK")
+    sys.exit(0)
+
+combined = f"{r.stdout}\n{r.stderr}".lower()
+if "already exists" not in combined and "duplicate" not in combined:
+    print("alembic upgrade failed", file=sys.stderr)
+    sys.exit(r.returncode)
+
+print("alembic: schema exists without version — stamp base then upgrade")
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+# Ensure env.py / Settings see DATABASE_URL
+for k in ("DATABASE_URL", "JWT_SECRET"):
+    if k in env:
+        os.environ[k] = env[k]
+
+cfg = Config("alembic.ini")
+script = ScriptDirectory.from_config(cfg)
+for base in script.get_bases() or []:
+    r2 = run([".venv/bin/alembic", "stamp", base])
+    sys.stdout.write(r2.stdout or "")
+    sys.stderr.write(r2.stderr or "")
+    if r2.returncode != 0:
+        sys.exit(r2.returncode)
+r3 = run([".venv/bin/alembic", "upgrade", "head"])
+sys.stdout.write(r3.stdout or "")
+sys.stderr.write(r3.stderr or "")
+sys.exit(r3.returncode)
+PY
+
 echo "==> Restart forcé $SERVICE_NAME"
 # Évite le hang de systemctl restart si uvicorn est gelé
 sudo systemctl kill -s SIGKILL "$SERVICE_NAME" 2>/dev/null || true

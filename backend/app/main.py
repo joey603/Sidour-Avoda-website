@@ -24,8 +24,33 @@ _ALEMBIC_INI = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
 
 
 def _run_migrations() -> None:
+    """Applique Alembic jusqu'à head.
+
+    Sur Neon/prod le schéma peut déjà exister sans ligne `alembic_version`
+    (création historique hors Alembic). Dans ce cas `upgrade` échoue sur
+    DuplicateObject : on stamp la révision racine puis on rejoue jusqu'à head.
+    """
     cfg = AlembicConfig(_ALEMBIC_INI)
-    alembic_command.upgrade(cfg, "head")
+    try:
+        alembic_command.upgrade(cfg, "head")
+        return
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "already exists" not in msg and "duplicate" not in msg:
+            raise
+        logger.warning(
+            "Alembic upgrade blocked by existing schema (%s); stamping base then upgrading to head",
+            type(exc).__name__,
+        )
+        from alembic.script import ScriptDirectory
+
+        script = ScriptDirectory.from_config(cfg)
+        bases = list(script.get_bases() or [])
+        if not bases:
+            raise
+        for base in bases:
+            alembic_command.stamp(cfg, base)
+        alembic_command.upgrade(cfg, "head")
 
 
 def create_app() -> FastAPI:
