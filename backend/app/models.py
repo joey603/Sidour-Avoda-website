@@ -140,6 +140,23 @@ class SiteMessage(Base):
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
+class SiteEvent(Base):
+    __tablename__ = "site_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Optional HH:MM schedule
+    start_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    end_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    # list[str] of YYYY-MM-DD
+    dates_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    # { "YYYY-MM-DD": [worker_id, ...] }
+    assignments_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
 class WorkerInviteToken(Base):
     __tablename__ = "worker_invite_tokens"
 

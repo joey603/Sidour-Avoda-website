@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "./types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "./types";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
 import { buildDistinctWorkerColorMap } from "./lib/worker-name-chip-color";
 import { getWeekKeyISO } from "./lib/week";
@@ -21,6 +21,7 @@ type PlanningV2PlanExportButtonsProps = {
   assignments: Record<string, Record<string, string[][]>> | null | undefined;
   pulls?: PlanningV2PullsMap | null;
   assignmentVariants?: Array<Record<string, Record<string, string[][]>>> | null;
+  events?: SiteEvent[] | null;
   onOpenVisualization?: () => void;
 };
 
@@ -32,6 +33,7 @@ export function PlanningV2PlanExportButtons({
   assignments,
   pulls,
   assignmentVariants,
+  events = [],
   onOpenVisualization,
 }: PlanningV2PlanExportButtonsProps) {
   const [pdfExporting, setPdfExporting] = useState(false);
@@ -60,6 +62,7 @@ export function PlanningV2PlanExportButtons({
         pulls: pulls ?? null,
         site,
         nameColorMap,
+        events,
       });
       const blob = await generatePlanningPdfBlob(tableData);
       triggerDownloadBlob(filename, blob);
@@ -69,7 +72,7 @@ export function PlanningV2PlanExportButtons({
     } finally {
       setPdfExporting(false);
     }
-  }, [site, siteId, weekStart, workers, assignments, pulls, nameColorMap]);
+  }, [site, siteId, weekStart, workers, assignments, pulls, nameColorMap, events]);
 
   const handleExportExcel = useCallback(async () => {
     const label = safePlanningExportFilePart(site?.name || siteId);
@@ -86,6 +89,7 @@ export function PlanningV2PlanExportButtons({
         assignments,
         pulls: pulls ?? null,
         site,
+        events,
       });
       triggerDownloadBlob(filename, blob);
     } catch (e: unknown) {
@@ -94,7 +98,7 @@ export function PlanningV2PlanExportButtons({
     } finally {
       setExcelExporting(false);
     }
-  }, [site, siteId, weekStart, workers, assignments, pulls]);
+  }, [site, siteId, weekStart, workers, assignments, pulls, events]);
 
   const handleExportScreenshot = useCallback(async () => {
     const label = safePlanningExportFilePart(site?.name || siteId);
@@ -111,6 +115,7 @@ export function PlanningV2PlanExportButtons({
         assignments,
         pulls: pulls ?? null,
         site,
+        events,
       });
       triggerDownloadBlob(filename, blob);
     } catch (e: unknown) {
@@ -119,7 +124,7 @@ export function PlanningV2PlanExportButtons({
     } finally {
       setScreenshotExporting(false);
     }
-  }, [site, siteId, weekStart, workers, assignments, pulls]);
+  }, [site, siteId, weekStart, workers, assignments, pulls, events]);
 
   return (
     <div className="mt-4 flex w-full flex-wrap items-center justify-start gap-2" dir="ltr">

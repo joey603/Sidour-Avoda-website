@@ -97,5 +97,37 @@ export async function generatePlanningPdfBlob(data: PlanningExportTableData): Pr
     pageBreak: "auto",
   });
 
+  let y = (docExt.lastAutoTable?.finalY ?? afterSummary + 14) + 10;
+  for (const ev of data.eventTables || []) {
+    if (y > doc.internal.pageSize.getHeight() - 40) {
+      doc.addPage();
+      y = margin;
+    }
+    const head = [`${ev.title} — ${ev.dayLabel}`];
+    const body = (ev.workerNames.length ? ev.workerNames : ["—"]).map((nm) => [nm]);
+    autoTable(doc, {
+      startY: y,
+      head: [head],
+      body,
+      styles: {
+        font: FONT_NAME,
+        fontSize: 9,
+        cellPadding: 1.5,
+        halign: "center",
+        valign: "middle",
+        textColor: [24, 24, 27],
+      },
+      headStyles: {
+        fillColor: [114, 47, 55],
+        textColor: [255, 255, 255],
+        font: FONT_NAME,
+        fontStyle: "normal",
+      },
+      margin: { left: margin, right: margin },
+      tableWidth: 70,
+    });
+    y = (docExt.lastAutoTable?.finalY ?? y) + 8;
+  }
+
   return doc.output("blob");
 }

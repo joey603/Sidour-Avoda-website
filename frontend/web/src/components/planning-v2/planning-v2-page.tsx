@@ -15,7 +15,17 @@ import { usePlanningV2SiteWorkers } from "./hooks/use-planning-v2-site-workers";
 import { usePlanningV2WeekPlan, type V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
 import { PlanningV2AssignmentsSummary } from "./planning-v2-assignments-summary";
 import { PlanningV2OptionalMessages } from "./planning-v2-optional-messages";
+import { PlanningV2SiteEvents } from "./planning-v2-site-events";
 import { PlanningV2PlanExportButtons } from "./planning-v2-plan-export-buttons";
+import {
+  buildEventAvailabilityLocks,
+  countEventAssignmentsPerWorkerName,
+  isShiftLockedByEvent,
+  locksForWorkerName,
+  stripEventLocksFromAvailabilityMap,
+} from "./lib/event-availability-locks";
+import type { PlanningV2PullEntry, PlanningV2PullsMap, SiteEvent, WorkerAvailability } from "./types";
+import { EMPTY_WORKER_AVAILABILITY } from "./lib/constants";
 import { PlanningV2FullscreenVisualization } from "./planning-v2-fullscreen-visualization";
 import { PlanningV2ActionBar } from "./planning-v2-action-bar";
 import { PlanningV2StationWeekGrid } from "./stations/planning-v2-station-week-grid";
@@ -28,8 +38,6 @@ import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-n
 import { analyzeManualSlotDrop, pullEditOnlyViaPopupMessage, workerParticipatesInPull, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
-import type { PlanningV2PullEntry, PlanningV2PullsMap, WorkerAvailability } from "./types";
-import { EMPTY_WORKER_AVAILABILITY } from "./lib/constants";
 import { getRequiredFor } from "./lib/station-grid-helpers";
 import { getWeekKeyISO } from "./lib/week";
 import { computeLinkedSiteHoleEntries } from "./lib/linked-site-holes";
@@ -218,6 +226,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   );
   const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
+  const [weekSiteEvents, setWeekSiteEvents] = useState<SiteEvent[]>([]);
   const [summaryFilterState, setSummaryFilterState] = useState<{
     indices: number[];
     hasActiveFilters: boolean;
@@ -236,6 +245,21 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     resolve: (scope: "current_only" | "all_sites" | null) => void;
   } | null>(null);
 
+  const eventLocksByWorkerId = useMemo(
+    () =>
+      buildEventAvailabilityLocks({
+        events: weekSiteEvents,
+        weekStart,
+        site,
+      }),
+    [weekSiteEvents, weekStart, site],
+  );
+
+  const eventAssignmentCountsByName = useMemo(
+    () => countEventAssignmentsPerWorkerName(weekSiteEvents, weekStart, workers),
+    [weekSiteEvents, weekStart, workers],
+  );
+
   const plan = usePlanningV2PlanController({
     siteId,
     weekStart,
@@ -249,6 +273,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     linkedSitesLength: linkedSites.length,
     weekPurgeSiteIds,
     getVisibleAlternativeCount,
+    eventLocksByWorkerId,
   });
 
   const hasOfficialSavedWeekPlan =
@@ -451,8 +476,11 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       }
       o[nm] = merged;
     }
-    return o;
-  }, [workerRowsForTable, availabilityOverlays]);
+    return stripEventLocksFromAvailabilityMap(o, eventLocksByWorkerId, workers) as Record<
+      string,
+      WorkerAvailability
+    >;
+  }, [workerRowsForTable, availabilityOverlays, eventLocksByWorkerId, workers]);
 
   const assignmentHighlightBase = useMemo(() => plan.getLatestAssignmentBase(), [plan.displayAssignments, plan.getLatestAssignmentBase]);
   const workerColorMap = useMemo(() => {
@@ -606,6 +634,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       workerName: string;
       dragSource: ManualDragSource | null;
     }) => {
+      if (
+        isShiftLockedByEvent(
+          locksForWorkerName(eventLocksByWorkerId, workers, p.workerName),
+          p.dayKey,
+          p.shiftName,
+        )
+      ) {
+        toast.error("לא ניתן לשבץ", { description: "העובד משובץ לאירוע בזמן זה (לא ניתן לשינוי)." });
+        return;
+      }
       let flags: ManualDropFlags = {};
       for (let guard = 0; guard < 12; guard++) {
         const base = plan.getLatestAssignmentBase();
@@ -624,6 +662,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           dragSource: p.dragSource,
           flags,
           pulls: plan.displayPulls ?? null,
+          eventAssignmentCount: eventAssignmentCountsByName.get(String(p.workerName || "").trim()) || 0,
         });
         if (r.action === "block") {
           toast.error("לא ניתן לשבץ", { description: r.message });
@@ -744,7 +783,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       }
       toast.error("שגיאה", { description: "יותר מדי שלבי אישור — נסה שוב." });
     },
-    [site, siteId, weekStart, workers, availabilityByWorkerName, plan, waitManualConfirm, workerRowsForTable],
+    [site, siteId, weekStart, workers, availabilityByWorkerName, plan, waitManualConfirm, workerRowsForTable, eventLocksByWorkerId, eventAssignmentCountsByName],
   );
 
   const handleManualSlotDragOutside = useCallback(
@@ -1902,6 +1941,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         generationRunning={plan.generationRunning}
         highlightedWorkerName={summaryHighlightWorkerName}
         onHighlightWorkerToggle={handleSummaryHighlightToggle}
+        eventAssignmentCountsByName={eventAssignmentCountsByName}
       />
     </div>
   ), [
@@ -2273,8 +2313,16 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             selectedWorkerFromGrid={!!manualSelectSource}
             onWorkerSelectToggle={manualEditable ? handleWorkerSelectToggle : undefined}
             readOnly={siteIsArchived}
+            eventLocksByWorkerId={eventLocksByWorkerId}
           />
           {!visualizationOpen ? renderPlanningVisualizationContent() : null}
+          <PlanningV2SiteEvents
+            siteId={siteId}
+            weekStart={weekStart}
+            workers={workers}
+            readOnly={siteIsArchived}
+            onEventsChange={setWeekSiteEvents}
+          />
           <PlanningV2OptionalMessages siteId={siteId} weekStart={weekStart} readOnly={siteIsArchived} />
           <PlanningV2PlanExportButtons
             siteId={siteId}
@@ -2284,6 +2332,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             assignments={plan.displayAssignments}
             pulls={plan.displayPulls}
             assignmentVariants={plan.assignmentVariants}
+            events={weekSiteEvents}
             onOpenVisualization={() => setVisualizationOpen(true)}
           />
         </PlanningV2MainPaper>

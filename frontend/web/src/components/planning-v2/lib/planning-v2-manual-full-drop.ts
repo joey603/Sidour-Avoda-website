@@ -614,6 +614,8 @@ export function analyzeManualSlotDrop(ctx: {
   flags: ManualDropFlags;
   /** משיכות du site courant — pour le comptage max משמרות (comme le סיכום). */
   pulls?: PlanningV2PullsMap | null;
+  /** Nombre d'אירועים déjà comptés comme gardes pour cet עובד (semaine). */
+  eventAssignmentCount?: number;
 }): ManualSlotDropAnalysis {
   const trimmed = String(ctx.workerName || "").trim();
   if (!trimmed) return { action: "block", message: "לא נבחר עובד" };
@@ -740,6 +742,7 @@ export function analyzeManualSlotDrop(ctx: {
         ctx.weekStart,
         next,
         ctx.pulls ?? null,
+        ctx.eventAssignmentCount,
       );
       if (total > Math.trunc(maxShifts)) {
         console.warn("[planning-v2][multi-site][max-shifts][manual-drop] assignment exceeds worker max_shifts", {

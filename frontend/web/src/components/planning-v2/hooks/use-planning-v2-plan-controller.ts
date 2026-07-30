@@ -14,6 +14,7 @@ import {
   persistWeekPlanToApi,
 } from "../lib/week-plan-persist";
 import { weeklyAvailabilityMapFromRows } from "../lib/weekly-availability-for-ai";
+import { stripEventLocksFromAvailabilityMap } from "../lib/event-availability-locks";
 import { getWeekKeyISO } from "../lib/week";
 import {
   buildPersistableLinkedPlans,
@@ -168,6 +169,8 @@ type PlanControllerArgs = {
   /** Sites du groupe (courant + liés) pour purger les טיוטות auto issues d’une ריצה depuis la liste sites. */
   weekPurgeSiteIds: number[];
   getVisibleAlternativeCount?: () => number;
+  /** Verrous אירועים à retirer de la זמינות envoyée à l’IA. */
+  eventLocksByWorkerId?: Record<number, Record<string, string[]>>;
 };
 
 type DraftAlternative = { assignments: Record<string, Record<string, string[][]>>; pulls: PlanningV2PullsMap };
@@ -600,6 +603,7 @@ export function usePlanningV2PlanController({
   linkedSitesLength,
   weekPurgeSiteIds,
   getVisibleAlternativeCount,
+  eventLocksByWorkerId = {},
 }: PlanControllerArgs) {
   type GenerateOptions = {
     excludeDays?: string[];
@@ -1365,7 +1369,11 @@ export function usePlanningV2PlanController({
       fixedAssignments ? (JSON.parse(JSON.stringify(fixedAssignments)) as Record<string, Record<string, string[][]>>) : null,
     );
 
-    const weekly_availability = weeklyAvailabilityMapFromRows(workerRowsForTable);
+    const weekly_availability = stripEventLocksFromAvailabilityMap(
+      weeklyAvailabilityMapFromRows(workerRowsForTable),
+      eventLocksByWorkerId,
+      workers,
+    );
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
     const requestedPullsCount = typeof pulls_limit === "number" ? pulls_limit : null;
     const pulls_limits_by_site =

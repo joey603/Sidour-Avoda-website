@@ -56,6 +56,8 @@ export function workerAdjustedWeeklyTotalAcrossLinkedSites(
   weekStart: Date,
   nextAssignmentsCurrentSite: Record<string, Record<string, string[][]>>,
   pullsCurrentSite: PlanningV2PullsMap | null | undefined,
+  /** Crédits אירוע (chaque date = 1 garde) à ajouter au total. */
+  eventAssignmentExtra?: number,
 ): number {
   const trimmed = String(workerName || "").trim();
   if (!trimmed) return 0;
@@ -69,7 +71,9 @@ export function workerAdjustedWeeklyTotalAcrossLinkedSites(
 
   let total = countForSite(nextAssignmentsCurrentSite, pullsCurrentSite ?? null);
 
-  if (!w || !Array.isArray(w.linkedSiteIds) || w.linkedSiteIds.length <= 1) return total;
+  if (!w || !Array.isArray(w.linkedSiteIds) || w.linkedSiteIds.length <= 1) {
+    return total + Math.max(0, Math.trunc(Number(eventAssignmentExtra || 0)));
+  }
 
   const mem = readLinkedPlansFromMemory(weekStart);
   const activeIdx = Math.max(0, Math.trunc(Number(mem?.activeAltIndex || 0)));
@@ -83,7 +87,7 @@ export function workerAdjustedWeeklyTotalAcrossLinkedSites(
     const pls = resolvePullsForSharedAlternative(sitePlan, activeIdx) as PlanningV2PullsMap | undefined;
     total += countForSite(asg || {}, pls ?? null);
   }
-  return total;
+  return total + Math.max(0, Math.trunc(Number(eventAssignmentExtra || 0)));
 }
 
 export function colorIdentityForWorker(worker: PlanningWorker): string {

@@ -64,6 +64,7 @@ export function usePlanningV2WorkerModals(
   availabilityOverlaysByWorkerName: Record<string, Record<string, string[]>>,
   reloadWorkers: (opts?: { silent?: boolean }) => void | Promise<void>,
   onWorkerModalSavingChange?: (saving: boolean) => void,
+  eventLocksByWorkerId: Record<number, Record<string, string[]>> = {},
 ) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [questionFilters, setQuestionFilters] = useState<Record<string, string | undefined>>({});
@@ -194,27 +195,42 @@ export function usePlanningV2WorkerModals(
 
   const currentWeekWorkersForEditor = useMemo(() => workers, [workers]);
 
-  const toggleNewAvailability = useCallback((dayKey: string, shift: string) => {
-    setNewWorkerAvailability((prev) => {
-      const cur = prev[dayKey] || [];
-      const nextAvail = cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift];
-      return { ...prev, [dayKey]: nextAvail };
-    });
-    // Si on retire la זמינות, retirer aussi la מועדף
-    setShiftSlotPrefs((prev) => {
-      const dayPref = prev[dayKey] || [];
-      if (!dayPref.includes(shift)) return prev;
-      const nextDay = dayPref.filter((s) => s !== shift);
-      const next = { ...prev };
-      if (nextDay.length === 0) delete next[dayKey];
-      else next[dayKey] = nextDay;
-      return next;
-    });
-  }, []);
+  const editingWorkerEventLocks = useMemo(() => {
+    if (!editingWorkerId) return {} as Record<string, string[]>;
+    return eventLocksByWorkerId[editingWorkerId] || {};
+  }, [editingWorkerId, eventLocksByWorkerId]);
+
+  const isEventLockedSlot = useCallback(
+    (dayKey: string, shift: string) => (editingWorkerEventLocks[dayKey] || []).includes(shift),
+    [editingWorkerEventLocks],
+  );
+
+  const toggleNewAvailability = useCallback(
+    (dayKey: string, shift: string) => {
+      if (isEventLockedSlot(dayKey, shift)) return;
+      setNewWorkerAvailability((prev) => {
+        const cur = prev[dayKey] || [];
+        const nextAvail = cur.includes(shift) ? cur.filter((s) => s !== shift) : [...cur, shift];
+        return { ...prev, [dayKey]: nextAvail };
+      });
+      // Si on retire la זמינות, retirer aussi la מועדף
+      setShiftSlotPrefs((prev) => {
+        const dayPref = prev[dayKey] || [];
+        if (!dayPref.includes(shift)) return prev;
+        const nextDay = dayPref.filter((s) => s !== shift);
+        const next = { ...prev };
+        if (nextDay.length === 0) delete next[dayKey];
+        else next[dayKey] = nextDay;
+        return next;
+      });
+    },
+    [isEventLockedSlot],
+  );
 
   /** Cycle off → זמין → מועדף → off (comme רישום זמינות עובד). */
   const toggleSlotPreference = useCallback(
     (dayKey: string, shift: string) => {
+      if (isEventLockedSlot(dayKey, shift)) return;
       const dayAvail = newWorkerAvailability[dayKey] || [];
       const dayPref = shiftSlotPrefs[dayKey] || [];
       const isAvail = dayAvail.includes(shift);
@@ -246,7 +262,7 @@ export function usePlanningV2WorkerModals(
         return next;
       });
     },
-    [newWorkerAvailability, shiftSlotPrefs],
+    [isEventLockedSlot, newWorkerAvailability, shiftSlotPrefs],
   );
 
   const toggleWorkerAvailabilityForAllDays = useCallback((shiftName?: string, checked?: boolean) => {
@@ -254,6 +270,7 @@ export function usePlanningV2WorkerModals(
     setNewWorkerAvailability((prev) => {
       const next: WorkerAvailability = { ...prev };
       for (const dayDef of DAY_DEFS) {
+        if (isEventLockedSlot(dayDef.key, shiftName)) continue;
         const currentValues = new Set(next[dayDef.key] || []);
         if (checked) currentValues.add(shiftName);
         else currentValues.delete(shiftName);
@@ -265,6 +282,7 @@ export function usePlanningV2WorkerModals(
       setShiftSlotPrefs((prev) => {
         const next = { ...prev };
         for (const dayDef of DAY_DEFS) {
+          if (isEventLockedSlot(dayDef.key, shiftName)) continue;
           const dayPref = (next[dayDef.key] || []).filter((s) => s !== shiftName);
           if (dayPref.length === 0) delete next[dayDef.key];
           else next[dayDef.key] = dayPref;
@@ -272,7 +290,7 @@ export function usePlanningV2WorkerModals(
         return next;
       });
     }
-  }, []);
+  }, [isEventLockedSlot]);
 
   const closeWorkerEditor = useCallback(() => {
     setEditorOpen(false);
@@ -695,6 +713,7 @@ export function usePlanningV2WorkerModals(
         (availabilityOverlaysByWorkerName[String(editingWorkerResolved?.name || newWorkerName || "").trim()] as
           | Record<string, string[]>
           | undefined) || {},
+      eventAvailabilityLocks: editingWorkerEventLocks,
       showRestoreAvailabilityButton: isNextWeekDisplayed(weekStart),
       onRestoreAvailability: () => {
         // Restaurer depuis la disponibilité "source worker" (menu עובדים),

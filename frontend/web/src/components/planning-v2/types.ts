@@ -47,3 +47,16 @@ export type PlanningV2PullEntry = {
 };
 
 export type PlanningV2PullsMap = Record<string, PlanningV2PullEntry>;
+
+/** אירוע אתר — affectations travailleurs par date. */
+export type SiteEvent = {
+  id: number;
+  site_id: number;
+  title: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  dates: string[];
+  assignments: Record<string, number[]>;
+  created_at: number;
+  updated_at: number;
+};

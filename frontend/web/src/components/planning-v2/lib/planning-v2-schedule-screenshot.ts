@@ -1,5 +1,5 @@
 import { toPng } from "html-to-image";
-import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "../types";
 import {
   countAssignmentsPerWorkerName,
   subtractPullExtrasFromWorkerCounts,
@@ -19,6 +19,8 @@ import {
   pullExtendedHoursForAdjacentRole,
   slotTimeMetaFromPulls,
 } from "./planning-v2-pull-slot-display";
+import { buildEventExportOccurrences, buildEventTablesHtml } from "./event-export-tables";
+import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
 
 const GREEN = "#548235";
 const BLUE = "#5B9BD5";
@@ -180,9 +182,17 @@ function buildSummaryRows(
   workers: PlanningWorker[],
   assignments: Record<string, Record<string, string[][]>> | null | undefined,
   pulls: PlanningV2PullsMap | null | undefined,
+  events?: SiteEvent[] | null,
+  weekStart?: Date,
 ): Array<[string, number]> {
   const plan = assignments ?? {};
-  const counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  let counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  if (events && weekStart) {
+    counts = addEventCountsToAssignmentCounts(
+      counts,
+      countEventAssignmentsPerWorkerName(events, weekStart, workers),
+    );
+  }
   workers.forEach((w) => {
     const n = String(w.name || "").trim();
     if (n && !counts.has(n)) counts.set(n, 0);
@@ -208,6 +218,7 @@ type ExportParams = {
   assignments: Record<string, Record<string, string[][]>> | null | undefined;
   pulls: PlanningV2PullsMap | null | undefined;
   site: SiteSummary | null;
+  events?: SiteEvent[] | null;
 };
 
 function buildStationScheduleHtml(
@@ -220,6 +231,7 @@ function buildStationScheduleHtml(
   stationIdx: number,
   shiftNamesAll: string[],
   summary: Array<[string, number]>,
+  eventsHtml = "",
 ): string {
   const enabledShifts = shiftNamesAll.filter((sn) => isShiftEnabledForStation(st, sn));
   const dayCols = DAY_COLS.length * 2;
@@ -366,14 +378,17 @@ function buildStationScheduleHtml(
     </tr>
     ${shiftBlocks}
   </table>
-  <table dir="rtl" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:${WHITE};width:auto;flex:0 0 auto;">
-    <tr>
-      <td style="${CELL}background:${YELLOW};width:28px;"></td>
-      <td style="${CELL}background:${YELLOW};">מאבטח</td>
-      <td style="${CELL}background:${YELLOW};width:36px;"></td>
-    </tr>
-    ${legendRows}
-  </table>
+  <div style="display:flex;flex-direction:column;align-items:stretch;gap:8px;flex:0 0 auto;">
+    <table dir="rtl" cellspacing="0" cellpadding="0" style="border-collapse:collapse;background:${WHITE};width:auto;">
+      <tr>
+        <td style="${CELL}background:${YELLOW};width:28px;"></td>
+        <td style="${CELL}background:${YELLOW};">מאבטח</td>
+        <td style="${CELL}background:${YELLOW};width:36px;"></td>
+      </tr>
+      ${legendRows}
+    </table>
+    ${eventsHtml}
+  </div>
 </div>`;
 }
 
@@ -382,10 +397,13 @@ function buildStationScheduleHtml(
  * Cadre collé au contenu (pas de grand fond blanc), tableaux centrés dans une petite marge.
  */
 export async function generatePlanningScheduleScreenshotPng(params: ExportParams): Promise<Blob> {
-  const { siteLabel, weekStart, workers, assignments, pulls, site } = params;
+  const { siteLabel, weekStart, workers, assignments, pulls, site, events } = params;
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
-  const summary = buildSummaryRows(workers, assignments, pulls);
+  const summary = buildSummaryRows(workers, assignments, pulls, events, weekStart);
+  const eventHtml = buildEventTablesHtml(
+    buildEventExportOccurrences({ events, weekStart, workers }),
+  );
 
   const stationsToWrite =
     stations.length > 0
@@ -412,6 +430,7 @@ export async function generatePlanningScheduleScreenshotPng(params: ExportParams
         idx,
         shiftNamesAll,
         summary,
+        eventHtml,
       )}</div></div>`;
     })
     .join('<div style="height:12px;"></div>');

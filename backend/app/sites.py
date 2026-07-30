@@ -15,7 +15,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 
 from .deps import require_role, get_db
-from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole, DirectorAutoPlanningConfig
+from .models import Site, SiteAssignment, SiteWorker, SiteMessage, SiteEvent, SiteWeeklyAvailability, SiteWeekPlan, User, UserRole, DirectorAutoPlanningConfig
 from .schemas import (
     SiteCreate,
     SiteOut,
@@ -35,6 +35,9 @@ from .schemas import (
     SiteMessageCreate,
     SiteMessageUpdate,
     SiteMessageOut,
+    SiteEventCreate,
+    SiteEventUpdate,
+    SiteEventOut,
     WorkerInviteLinkOut,
 )
 from .ai_solver import solve_schedule, solve_schedule_stream
@@ -785,6 +788,282 @@ def _build_solver_workers(
             wd["shift_slot_prefs"] = slot_prefs
         workers.append(wd)
     return workers
+
+
+def _shift_order_index(shift_name: str) -> int:
+    if _is_morning_shift_name(shift_name):
+        return 0
+    if _is_noon_shift_name(shift_name):
+        return 1
+    if _is_night_shift_name(shift_name):
+        return 2
+    return 3
+
+
+def _site_shift_names_ordered(config: dict | None) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for st in ((config or {}).get("stations") or []):
+        if not isinstance(st, dict):
+            continue
+        for sh in (st.get("shifts") or []):
+            if not isinstance(sh, dict):
+                continue
+            nm = str(sh.get("name") or "").strip()
+            if nm and nm not in seen:
+                seen.add(nm)
+                names.append(nm)
+        for day_cfg in (st.get("dayOverrides") or {}).values():
+            if not isinstance(day_cfg, dict):
+                continue
+            for sh in (day_cfg.get("shifts") or []):
+                if not isinstance(sh, dict):
+                    continue
+                nm = str(sh.get("name") or "").strip()
+                if nm and nm not in seen:
+                    seen.add(nm)
+                    names.append(nm)
+    return sorted(names, key=_shift_order_index)
+
+
+def _hm_to_minutes(value: str | None) -> int | None:
+    raw = str(value or "").strip()
+    m = re.match(r"^(\d{1,2}):(\d{2})$", raw)
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if hh > 23 or mm > 59:
+        return None
+    return hh * 60 + mm
+
+
+def _shift_start_minutes(config: dict | None, shift_name: str) -> int | None:
+    for st in ((config or {}).get("stations") or []):
+        if not isinstance(st, dict):
+            continue
+        hours = _hours_from_config(st, shift_name, "sun") or _hours_of(shift_name)
+        parsed = _parse_hours_range(hours)
+        if parsed:
+            return _to_minutes(parsed[0])
+    hours = _hours_of(shift_name)
+    parsed = _parse_hours_range(hours)
+    return _to_minutes(parsed[0]) if parsed else None
+
+
+def _week_iso_dates(week_iso: str) -> list[str]:
+    start = datetime.strptime(week_iso, "%Y-%m-%d").date()
+    return [(start + timedelta(days=i)).isoformat() for i in range(7)]
+
+
+def _date_iso_to_day_key(week_iso: str, date_iso: str) -> str | None:
+    dates = _week_iso_dates(week_iso)
+    try:
+        idx = dates.index(date_iso)
+    except ValueError:
+        return None
+    return _WEEK_DAY_KEYS[idx] if 0 <= idx < len(_WEEK_DAY_KEYS) else None
+
+
+def _add_event_lock(
+    out: dict[int, dict[str, list[str]]],
+    worker_id: int,
+    day_key: str,
+    shift_name: str,
+) -> None:
+    if not day_key or not shift_name:
+        return
+    by_day = out.setdefault(int(worker_id), {})
+    cur = by_day.setdefault(day_key, [])
+    if shift_name not in cur:
+        cur.append(shift_name)
+
+
+def _compute_site_event_availability_locks(
+    db: Session,
+    site_id: int,
+    week_iso: str,
+    config: dict | None,
+) -> dict[int, dict[str, list[str]]]:
+    """Créneaux indisponibles (אירועים) : jour + garde précédente + règle 8h."""
+    shifts = _site_shift_names_ordered(config)
+    if not shifts:
+        return {}
+    week_dates = set(_week_iso_dates(week_iso))
+    rows = (
+        db.query(SiteEvent)
+        .filter(SiteEvent.site_id == int(site_id))
+        .all()
+    )
+    out: dict[int, dict[str, list[str]]] = {}
+    last_shift = shifts[-1]
+    for ev in rows:
+        dates = ev.dates_json if isinstance(ev.dates_json, list) else []
+        assignments = ev.assignments_json if isinstance(ev.assignments_json, dict) else {}
+        start_min = _hm_to_minutes(ev.start_time)
+        end_min = _hm_to_minutes(ev.end_time)
+        for date_iso in dates:
+            date_s = str(date_iso or "").strip()
+            if date_s not in week_dates:
+                continue
+            day_key = _date_iso_to_day_key(week_iso, date_s)
+            if not day_key:
+                continue
+            worker_ids = assignments.get(date_s) or []
+            if not isinstance(worker_ids, list):
+                continue
+            for wid_raw in worker_ids:
+                try:
+                    wid = int(wid_raw)
+                except Exception:
+                    continue
+                if wid <= 0:
+                    continue
+                for sn in shifts:
+                    _add_event_lock(out, wid, day_key, sn)
+                event_shift_idx = 0
+                if start_min is not None:
+                    found = next(
+                        (
+                            i
+                            for i, sn in enumerate(shifts)
+                            if (_shift_start_minutes(config, sn) is not None)
+                            and (_shift_start_minutes(config, sn) or 0) >= start_min
+                        ),
+                        -1,
+                    )
+                    event_shift_idx = found if found >= 0 else 0
+                if event_shift_idx == 0:
+                    day_idx = _WEEK_DAY_KEYS.index(day_key) if day_key in _WEEK_DAY_KEYS else -1
+                    if day_idx > 0 and last_shift:
+                        _add_event_lock(out, wid, _WEEK_DAY_KEYS[day_idx - 1], last_shift)
+                else:
+                    _add_event_lock(out, wid, day_key, shifts[event_shift_idx - 1])
+                if end_min is not None:
+                    for sn in shifts:
+                        s = _shift_start_minutes(config, sn)
+                        if s is None:
+                            continue
+                        gap = s - end_min
+                        if gap < 0:
+                            gap += 24 * 60
+                        if 0 < gap < 8 * 60:
+                            _add_event_lock(out, wid, day_key, sn)
+    return out
+
+
+def _strip_event_locks_from_solver_workers(
+    workers: list[dict],
+    locks_by_worker_id: dict[int, dict[str, list[str]]],
+) -> list[dict]:
+    if not locks_by_worker_id:
+        return workers
+    for w in workers:
+        try:
+            wid = int(w.get("id") or 0)
+        except Exception:
+            continue
+        locks = locks_by_worker_id.get(wid) or {}
+        if not locks:
+            continue
+        avail = dict(w.get("availability") or {})
+        for day_key, locked_shifts in locks.items():
+            locked = set(locked_shifts or [])
+            cur = list(avail.get(day_key) or [])
+            avail[day_key] = [sn for sn in cur if sn not in locked]
+        w["availability"] = avail
+    return workers
+
+
+def _count_site_event_assignments_by_worker_id(
+    db: Session,
+    site_id: int,
+    week_iso: str,
+) -> dict[int, int]:
+    """Nombre d'affectations אירוע (= gardes) par worker_id pour la semaine."""
+    week_dates = set(_week_iso_dates(week_iso))
+    rows = db.query(SiteEvent).filter(SiteEvent.site_id == int(site_id)).all()
+    counts: dict[int, int] = {}
+    for ev in rows:
+        dates = ev.dates_json if isinstance(ev.dates_json, list) else []
+        assignments = ev.assignments_json if isinstance(ev.assignments_json, dict) else {}
+        for date_iso in dates:
+            date_s = str(date_iso or "").strip()
+            if date_s not in week_dates:
+                continue
+            worker_ids = assignments.get(date_s) or []
+            if not isinstance(worker_ids, list):
+                continue
+            for wid_raw in worker_ids:
+                try:
+                    wid = int(wid_raw)
+                except Exception:
+                    continue
+                if wid <= 0:
+                    continue
+                counts[wid] = counts.get(wid, 0) + 1
+    return counts
+
+
+def _apply_site_event_shift_credits_to_solver_workers(
+    workers: list[dict],
+    event_counts_by_worker_id: dict[int, int],
+) -> list[dict]:
+    """Chaque אירוע compte comme 1 garde : réduit max_shifts du solveur."""
+    if not event_counts_by_worker_id:
+        return workers
+    for w in workers:
+        try:
+            wid = int(w.get("id") or 0)
+        except Exception:
+            continue
+        n = int(event_counts_by_worker_id.get(wid) or 0)
+        if n <= 0:
+            continue
+        try:
+            mx = int(w.get("max_shifts") or 5)
+        except Exception:
+            mx = 5
+        w["max_shifts"] = max(0, mx - n)
+    return workers
+
+
+def _apply_site_event_locks_to_solver_workers(
+    db: Session,
+    site_id: int,
+    week_iso: str,
+    config: dict | None,
+    workers: list[dict],
+) -> list[dict]:
+    locks = _compute_site_event_availability_locks(db, site_id, week_iso, config)
+    workers = _strip_event_locks_from_solver_workers(workers, locks)
+    event_counts = _count_site_event_assignments_by_worker_id(db, site_id, week_iso)
+    return _apply_site_event_shift_credits_to_solver_workers(workers, event_counts)
+
+
+def _strip_event_locks_from_availability_by_name(
+    availability_by_name: dict[str, dict],
+    locks_by_worker_id: dict[int, dict[str, list[str]]],
+    name_to_worker_id: dict[str, int],
+) -> dict[str, dict]:
+    if not locks_by_worker_id or not availability_by_name:
+        return availability_by_name
+    out: dict[str, dict] = {}
+    for name, avail in availability_by_name.items():
+        wid = name_to_worker_id.get(str(name or "").strip())
+        locks = locks_by_worker_id.get(int(wid)) if wid else None
+        if not isinstance(avail, dict) or not locks:
+            out[name] = avail
+            continue
+        next_avail = dict(avail)
+        for day_key, locked_shifts in locks.items():
+            if day_key.startswith("_"):
+                continue
+            locked = set(locked_shifts or [])
+            cur = next_avail.get(day_key)
+            if isinstance(cur, list):
+                next_avail[day_key] = [sn for sn in cur if sn not in locked]
+        out[name] = next_avail
+    return out
 
 
 def _build_worker_snapshots(rows: list[SiteWorker]) -> list[dict]:
@@ -1932,6 +2211,82 @@ def _build_multi_site_generation_context(
             cw["shift_slot_prefs"] = group["shift_slot_prefs"]
         combined_workers.append(cw)
 
+    # אירועים : retirer les créneaux verrouillés (union multi-sites) de la זמינות du solveur
+    # et réduire max_shifts (chaque אירוע = 1 garde / שיבוץ).
+    identity_event_locks: dict[str, dict[str, set[str]]] = {}
+    identity_event_counts: dict[str, int] = {}
+    identity_event_counts_by_site: dict[str, dict[int, int]] = {}
+    for sid in connected_site_ids:
+        site_obj = sites_by_id.get(int(sid))
+        site_locks = _compute_site_event_availability_locks(
+            db, int(sid), week_iso, (site_obj.config if site_obj else None) or {}
+        )
+        site_counts = _count_site_event_assignments_by_worker_id(db, int(sid), week_iso)
+        for row in rows:
+            if int(row.site_id) != int(sid):
+                continue
+            key = _worker_identity_key(row)
+            wlocks = site_locks.get(int(row.id)) or {}
+            if wlocks:
+                bucket = identity_event_locks.setdefault(key, {})
+                for day_key, shift_list in wlocks.items():
+                    bucket.setdefault(str(day_key), set()).update(str(s) for s in (shift_list or []))
+            n = int(site_counts.get(int(row.id)) or 0)
+            if n > 0:
+                identity_event_counts[key] = identity_event_counts.get(key, 0) + n
+                by_site = identity_event_counts_by_site.setdefault(key, {})
+                by_site[int(sid)] = by_site.get(int(sid), 0) + n
+    if identity_event_locks:
+        for cw in combined_workers:
+            nm = str(cw.get("name") or "")
+            key = nm[len("worker::") :] if nm.startswith("worker::") else nm
+            locks = identity_event_locks.get(key) or {}
+            if not locks:
+                continue
+            avail = dict(cw.get("availability") or {})
+            for day_key, locked_shifts in locks.items():
+                cur = list(avail.get(day_key) or [])
+                avail[day_key] = [sn for sn in cur if sn not in locked_shifts]
+            cw["availability"] = avail
+    if identity_event_counts:
+        # Rebuild site_id lookup from station_map indices already on each cw site_limits
+        for cw in combined_workers:
+            nm = str(cw.get("name") or "")
+            key = nm[len("worker::") :] if nm.startswith("worker::") else nm
+            total_events = int(identity_event_counts.get(key) or 0)
+            if total_events <= 0:
+                continue
+            try:
+                mx = int(cw.get("max_shifts") or 5)
+            except Exception:
+                mx = 5
+            cw["max_shifts"] = max(0, mx - total_events)
+            by_site = identity_event_counts_by_site.get(key) or {}
+            limits = cw.get("site_limits")
+            if isinstance(limits, list) and by_site:
+                # site_limits entries don't carry site_id — rebuild from group site_ids via station indices
+                for lim in limits:
+                    if not isinstance(lim, dict):
+                        continue
+                    st_indices = lim.get("station_indices") or []
+                    if not st_indices:
+                        continue
+                    # find site for first station index
+                    first_idx = int(st_indices[0]) if st_indices else -1
+                    sid_for_lim = None
+                    if 0 <= first_idx < len(station_map):
+                        sid_for_lim = int(station_map[first_idx].get("site_id"))
+                    if sid_for_lim is None:
+                        continue
+                    n_site = int(by_site.get(sid_for_lim) or 0)
+                    if n_site <= 0:
+                        continue
+                    try:
+                        lim_max = int(lim.get("max") or 5)
+                    except Exception:
+                        lim_max = 5
+                    lim["max"] = max(0, lim_max - n_site)
+
     fixed_assignments_by_site: dict[int, dict[str, dict[str, list[list[str]]]]] = {}
     for site_id in connected_site_ids:
         if int(site_id) == int(root_site_id):
@@ -2658,6 +3013,9 @@ def _generate_director_week_plan_payload(
     )
     weekly_overrides = (weekly_row.availability or {}) if weekly_row else {}
     workers = _build_solver_workers(rows, weekly_overrides, week_iso=week_iso)
+    workers = _apply_site_event_locks_to_solver_workers(
+        db, int(site.id), week_iso, site.config or {}, workers
+    )
     start_dt = datetime.fromisoformat(week_iso)
     end_dt = start_dt + timedelta(days=6)
 
@@ -3750,6 +4108,211 @@ def delete_site_message(
     if not msg or msg.site_id != site_id:
         raise HTTPException(status_code=404, detail="Message introuvable")
     db.delete(msg)
+    db.commit()
+    return Response(status_code=204)
+
+
+_TIME_HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def _normalize_hhmm(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    m = _TIME_HHMM_RE.match(raw)
+    if not m:
+        raise HTTPException(status_code=400, detail="horaire invalide (HH:MM)")
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
+
+
+def _normalize_event_dates(dates: list[str] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for d in dates or []:
+        iso = _validate_week_iso(str(d or "").strip())
+        if iso in seen:
+            continue
+        seen.add(iso)
+        out.append(iso)
+    out.sort()
+    if not out:
+        raise HTTPException(status_code=400, detail="au moins une date est requise")
+    return out
+
+
+def _normalize_event_assignments(
+    assignments: dict[str, list[int]] | None,
+    dates: list[str],
+    site_id: int,
+    db: Session,
+) -> dict[str, list[int]]:
+    date_set = set(dates)
+    site_worker_ids = {
+        int(w.id)
+        for w in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all()
+    }
+    out: dict[str, list[int]] = {}
+    for day, worker_ids in (assignments or {}).items():
+        day_iso = _validate_week_iso(str(day or "").strip())
+        if day_iso not in date_set:
+            continue
+        cleaned: list[int] = []
+        seen: set[int] = set()
+        for wid in worker_ids or []:
+            try:
+                wid_i = int(wid)
+            except Exception:
+                continue
+            if wid_i not in site_worker_ids or wid_i in seen:
+                continue
+            seen.add(wid_i)
+            cleaned.append(wid_i)
+        out[day_iso] = cleaned
+    for d in dates:
+        out.setdefault(d, [])
+    return out
+
+
+def _site_event_to_out(row: SiteEvent) -> SiteEventOut:
+    dates = row.dates_json if isinstance(row.dates_json, list) else []
+    assignments = row.assignments_json if isinstance(row.assignments_json, dict) else {}
+    return SiteEventOut(
+        id=row.id,
+        site_id=row.site_id,
+        title=row.title,
+        start_time=row.start_time,
+        end_time=row.end_time,
+        dates=[str(d) for d in dates],
+        assignments={
+            str(k): [int(x) for x in (v or []) if x is not None]
+            for k, v in assignments.items()
+        },
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _week_date_set(week_iso: str) -> set[str]:
+    start = datetime.strptime(week_iso, "%Y-%m-%d").date()
+    return {(start + timedelta(days=i)).isoformat() for i in range(7)}
+
+
+def _event_intersects_week(row: SiteEvent, week_dates: set[str]) -> bool:
+    dates = row.dates_json if isinstance(row.dates_json, list) else []
+    return any(str(d) in week_dates for d in dates)
+
+
+@router.get("/{site_id}/events", response_model=list[SiteEventOut])
+def list_site_events(
+    site_id: int,
+    week: str | None = Query(None, description="YYYY-MM-DD (week start); omit for all events"),
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_ownership_or_404(db, site_id, user.id)
+    rows = (
+        db.query(SiteEvent)
+        .filter(SiteEvent.site_id == site_id)
+        .order_by(SiteEvent.created_at.asc(), SiteEvent.id.asc())
+        .all()
+    )
+    if week:
+        wk = _validate_week_iso(week)
+        week_dates = _week_date_set(wk)
+        rows = [r for r in rows if _event_intersects_week(r, week_dates)]
+    return [_site_event_to_out(r) for r in rows]
+
+
+@router.post("/{site_id}/events", response_model=SiteEventOut, status_code=201)
+def create_site_event(
+    site_id: int,
+    payload: SiteEventCreate,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="titre requis")
+    dates = _normalize_event_dates(payload.dates)
+    start_time = _normalize_hhmm(payload.start_time)
+    end_time = _normalize_hhmm(payload.end_time)
+    assignments = _normalize_event_assignments(payload.assignments, dates, site_id, db)
+    now = _now_ms()
+    row = SiteEvent(
+        site_id=site_id,
+        title=title,
+        start_time=start_time,
+        end_time=end_time,
+        dates_json=dates,
+        assignments_json=assignments,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _site_event_to_out(row)
+
+
+@router.patch("/{site_id}/events/{event_id}", response_model=SiteEventOut)
+def update_site_event(
+    site_id: int,
+    event_id: int,
+    payload: SiteEventUpdate,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    row = db.get(SiteEvent, event_id)
+    if not row or row.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+
+    if payload.title is not None:
+        title = payload.title.strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="titre requis")
+        row.title = title
+
+    if "start_time" in payload.model_fields_set:
+        row.start_time = _normalize_hhmm(payload.start_time)
+    if "end_time" in payload.model_fields_set:
+        row.end_time = _normalize_hhmm(payload.end_time)
+
+    dates = list(row.dates_json) if isinstance(row.dates_json, list) else []
+    if payload.dates is not None:
+        dates = _normalize_event_dates(payload.dates)
+        row.dates_json = dates
+
+    if payload.assignments is not None or payload.dates is not None:
+        current_assignments = (
+            row.assignments_json if isinstance(row.assignments_json, dict) else {}
+        )
+        next_assignments = payload.assignments if payload.assignments is not None else current_assignments
+        row.assignments_json = _normalize_event_assignments(
+            next_assignments, dates, site_id, db
+        )
+
+    row.updated_at = _now_ms()
+    db.commit()
+    db.refresh(row)
+    return _site_event_to_out(row)
+
+
+@router.delete("/{site_id}/events/{event_id}", status_code=204)
+def delete_site_event(
+    site_id: int,
+    event_id: int,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    _director_site_or_404(db, site_id, user.id)
+    row = db.get(SiteEvent, event_id)
+    if not row or row.site_id != site_id:
+        raise HTTPException(status_code=404, detail="Événement introuvable")
+    db.delete(row)
     db.commit()
     return Response(status_code=204)
 
@@ -5520,6 +6083,9 @@ def ai_generate_planning(
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[AI-GEN] Weekly availability overrides: {list(overrides.keys())}")
     workers = _build_solver_workers(rows, overrides, week_iso=week_for_rows)
+    workers = _apply_site_event_locks_to_solver_workers(
+        db, site_id, week_for_rows, site.config or {}, workers
+    )
     logger.info(f"[AI-GEN] Loaded {len(workers)} workers: {[w['name'] for w in workers]}")
     for w in workers:
         avail_count = sum(len(shifts) for shifts in w['availability'].values())
@@ -5693,6 +6259,9 @@ async def ai_generate_stream(
     overrides = (payload.weekly_availability or {}) if payload else {}
     logger.info(f"[SSE] Weekly availability overrides: {list(overrides.keys())}")
     workers = _build_solver_workers(rows, overrides, week_iso=week_for_rows)
+    workers = _apply_site_event_locks_to_solver_workers(
+        db, site_id, week_for_rows, site.config or {}, workers
+    )
     logger.info("[SSE] loaded workers=%d for site=%s", len(workers), site_id)
     workers_without_availability = [
         str(w.get("name") or "")

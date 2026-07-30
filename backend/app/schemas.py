@@ -320,3 +320,41 @@ class SiteMessageOut(BaseModel):
     class Config:
         from_attributes = True
 
+
+class SiteEventBase(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    start_time: str | None = Field(default=None, max_length=5, description="HH:MM optional")
+    end_time: str | None = Field(default=None, max_length=5, description="HH:MM optional")
+    dates: list[str] = Field(default_factory=list, description="YYYY-MM-DD dates")
+    assignments: dict[str, list[int]] = Field(
+        default_factory=dict,
+        description='{ "YYYY-MM-DD": [worker_id, ...] }',
+    )
+
+
+class SiteEventCreate(SiteEventBase):
+    pass
+
+
+class SiteEventUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    start_time: str | None = None
+    end_time: str | None = None
+    dates: list[str] | None = None
+    assignments: dict[str, list[int]] | None = None
+
+
+class SiteEventOut(BaseModel):
+    id: int
+    site_id: int
+    title: str
+    start_time: str | None = None
+    end_time: str | None = None
+    dates: list[str] = Field(default_factory=list)
+    assignments: dict[str, list[int]] = Field(default_factory=dict)
+    created_at: int
+    updated_at: int
+
+    class Config:
+        from_attributes = True
+

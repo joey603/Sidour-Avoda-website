@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "../types";
 import {
   countAssignmentsPerWorkerName,
   subtractPullExtrasFromWorkerCounts,
@@ -19,6 +19,8 @@ import {
   pullExtendedHoursForAdjacentRole,
   slotTimeMetaFromPulls,
 } from "./planning-v2-pull-slot-display";
+import { buildEventExportOccurrences, EVENT_BORDEAUX } from "./event-export-tables";
+import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
 
 const GREEN = "548235";
 const BLUE = "5B9BD5";
@@ -27,6 +29,7 @@ const YELLOW = "FFFF00";
 const BLACK = "000000";
 const GRAY = "D9D9D9";
 const WHITE = "FFFFFF";
+const BORDEAUX = EVENT_BORDEAUX;
 const THIN_BLACK = { style: "thin" as const, color: { argb: "FF000000" } };
 
 const DAY_FULL_HE: Record<string, string> = {
@@ -199,9 +202,17 @@ function buildSummaryRows(
   workers: PlanningWorker[],
   assignments: Record<string, Record<string, string[][]>> | null | undefined,
   pulls: PlanningV2PullsMap | null | undefined,
+  events?: SiteEvent[] | null,
+  weekStart?: Date,
 ): Array<[string, number]> {
   const plan = assignments ?? {};
-  const counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  let counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  if (events && weekStart) {
+    counts = addEventCountsToAssignmentCounts(
+      counts,
+      countEventAssignmentsPerWorkerName(events, weekStart, workers),
+    );
+  }
   workers.forEach((w) => {
     const n = String(w.name || "").trim();
     if (n && !counts.has(n)) counts.set(n, 0);
@@ -235,6 +246,7 @@ type ExportParams = {
   assignments: Record<string, Record<string, string[][]>> | null | undefined;
   pulls: PlanningV2PullsMap | null | undefined;
   site: SiteSummary | null;
+  events?: SiteEvent[] | null;
 };
 
 /**
@@ -244,14 +256,14 @@ type ExportParams = {
  * légende עובדים à droite.
  */
 export async function generatePlanningExcelBlob(params: ExportParams): Promise<Blob> {
-  const { siteLabel, weekStart, workers, assignments, pulls, site } = params;
+  const { siteLabel, weekStart, workers, assignments, pulls, site, events } = params;
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Sidour Avoda";
   workbook.created = new Date();
 
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
-  const summary = buildSummaryRows(workers, assignments, pulls);
+  const summary = buildSummaryRows(workers, assignments, pulls, events, weekStart);
 
   const stationsToWrite =
     stations.length > 0
@@ -594,6 +606,42 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
     // Dernier mot : lignes de garde (même vides) gardent leur hauteur.
     for (const [r, h] of scheduleRowMinHeight) {
       ws.getRow(r).height = h;
+    }
+
+    // Tableaux אירועים juste sous מאבטח (mêmes colonnes légende)
+    const eventOccs = buildEventExportOccurrences({ events, weekStart, workers });
+    if (eventOccs.length > 0) {
+      let evRow = 2 + summary.length + 1; // 1 ligne vide sous la dernière ligne מאבטח
+      for (const occ of eventOccs) {
+        ws.mergeCells(evRow, legendIdxCol, evRow, legendCountCol);
+        const merged = ws.getCell(evRow, legendIdxCol);
+        merged.value = `${occ.title} · ${occ.dayLabel} ${occ.dateLabel}`;
+        applyFill(merged, BORDEAUX);
+        styleCenter(merged, { bold: true, size: 10, color: WHITE });
+        applyBorder(ws.getCell(evRow, legendIdxCol));
+        applyBorder(ws.getCell(evRow, legendNameCol));
+        applyBorder(ws.getCell(evRow, legendCountCol));
+        applyFill(ws.getCell(evRow, legendNameCol), BORDEAUX);
+        applyFill(ws.getCell(evRow, legendCountCol), BORDEAUX);
+        ws.getRow(evRow).height = LEGEND_ROW_HEIGHT;
+        evRow += 1;
+        const names = occ.workerNames.length ? occ.workerNames : ["—"];
+        for (const nm of names) {
+          ws.mergeCells(evRow, legendIdxCol, evRow, legendCountCol);
+          const nameCell = ws.getCell(evRow, legendIdxCol);
+          nameCell.value = nm;
+          applyFill(nameCell, WHITE);
+          styleCenter(nameCell, { size: 10, color: "000000" });
+          applyBorder(ws.getCell(evRow, legendIdxCol));
+          applyBorder(ws.getCell(evRow, legendNameCol));
+          applyBorder(ws.getCell(evRow, legendCountCol));
+          applyFill(ws.getCell(evRow, legendNameCol), WHITE);
+          applyFill(ws.getCell(evRow, legendCountCol), WHITE);
+          ws.getRow(evRow).height = LEGEND_ROW_HEIGHT;
+          evRow += 1;
+        }
+        evRow += 1; // gap between events
+      }
     }
   }
 

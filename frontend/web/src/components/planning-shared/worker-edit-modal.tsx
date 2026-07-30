@@ -32,6 +32,8 @@ export type WorkerEditModalProps = {
   allShiftNames: string[];
   newWorkerAvailability: Record<string, string[]> & { _stations?: string[] };
   workerAvailabilityOverlay?: Record<string, string[]>;
+  /** Cases verrouillées par אירוע (bordeaux, non cliquables). */
+  eventAvailabilityLocks?: Record<string, string[]>;
   onToggleAvailability: (dayKey: string, shiftName: string) => void;
   onToggleAvailabilityForAllDays: (shiftName: string | undefined, checked: boolean) => void;
   /** Cycle זמין → מועדף → off (même logique que רישום זמינות). */
@@ -81,6 +83,7 @@ export function WorkerEditModal({
   allShiftNames,
   newWorkerAvailability,
   workerAvailabilityOverlay = {},
+  eventAvailabilityLocks = {},
   onToggleAvailability,
   onToggleAvailabilityForAllDays,
   shiftSlotPrefs = {},
@@ -338,12 +341,14 @@ export function WorkerEditModal({
                       const isChecked = (newWorkerAvailability[d.key] || []).includes(sn);
                       const isPreferred = isChecked && (shiftSlotPrefs[d.key] || []).includes(sn);
                       const isOverlay = ((workerAvailabilityOverlay[d.key] || []) as string[]).includes(sn);
+                      const isEventLocked = (eventAvailabilityLocks[d.key] || []).includes(sn);
                       return (
                         <button
                           key={sn}
                           type="button"
-                          disabled={workerModalSaving}
+                          disabled={workerModalSaving || isEventLocked}
                           onClick={() => {
+                            if (isEventLocked) return;
                             if (typeof onToggleSlotPreference === "function") {
                               onToggleSlotPreference(d.key, sn);
                               return;
@@ -351,18 +356,29 @@ export function WorkerEditModal({
                             onToggleAvailability(d.key, sn);
                           }}
                           className={
-                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 " +
-                            (isPreferred
+                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors " +
+                            (isEventLocked
+                              ? "cursor-not-allowed border-[#722F37] bg-[#722F37] text-white disabled:opacity-100"
+                              : "disabled:opacity-60 " +
+                                (isPreferred
                               ? "border-amber-500 bg-amber-500 text-white"
                               : isChecked
                               ? isOverlay
                                 ? "border-red-500 bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200"
                                 : "border-blue-600 bg-blue-600 text-white"
-                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800")
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"))
                           }
-                          title={isPreferred ? "מועדף" : isChecked ? "זמין" : "לא זמין"}
+                          title={
+                            isEventLocked
+                              ? "משובץ לאירוע"
+                              : isPreferred
+                                ? "מועדף"
+                                : isChecked
+                                  ? "זמין"
+                                  : "לא זמין"
+                          }
                         >
-                          {isPreferred ? `★ ${sn}` : sn}
+                          {isEventLocked ? sn : isPreferred ? `★ ${sn}` : sn}
                         </button>
                       );
                     })

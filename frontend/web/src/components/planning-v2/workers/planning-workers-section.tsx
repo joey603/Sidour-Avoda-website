@@ -42,6 +42,8 @@ type PlanningWorkersSectionProps = {
   readOnly?: boolean;
   /** Pendant שמור זמינות : masquer l’overlay flou directeur. */
   onWorkerModalSavingChange?: (saving: boolean) => void;
+  /** Verrous אירועים (bordeaux) sur זמינות. */
+  eventLocksByWorkerId?: Record<number, Record<string, string[]>>;
 };
 
 export function PlanningWorkersSection({
@@ -62,6 +64,7 @@ export function PlanningWorkersSection({
   onWorkerSelectToggle,
   readOnly = false,
   onWorkerModalSavingChange,
+  eventLocksByWorkerId = {},
 }: PlanningWorkersSectionProps) {
   const modals = usePlanningV2WorkerModals(
     siteId,
@@ -80,6 +83,7 @@ export function PlanningWorkersSection({
       onWorkersChanged();
     },
     onWorkerModalSavingChange,
+    eventLocksByWorkerId,
   );
 
   const [workerListSearch, setWorkerListSearch] = useState("");

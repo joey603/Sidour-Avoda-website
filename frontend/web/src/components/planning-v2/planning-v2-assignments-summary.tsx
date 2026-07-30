@@ -137,6 +137,8 @@ type PlanningV2AssignmentsSummaryProps = {
   /** Aligné avec la surbrillance dans גריד שבועי לפי עמדה. */
   highlightedWorkerName?: string | null;
   onHighlightWorkerToggle?: (workerName: string) => void;
+  /** Compteurs אירוע (chaque date = 1 שיבוץ) à ajouter au סיכום. */
+  eventAssignmentCountsByName?: Map<string, number>;
 };
 
 type MultiSiteMaxShiftOverage = {
@@ -164,6 +166,7 @@ export function PlanningV2AssignmentsSummary({
   generationRunning = false,
   highlightedWorkerName = null,
   onHighlightWorkerToggle,
+  eventAssignmentCountsByName,
 }: PlanningV2AssignmentsSummaryProps) {
   const { linkedSites } = usePlanningV2LinkedSites(siteId, weekStart);
   const showMultiSiteTotalColumn = linkedSites.length > 1;
@@ -638,6 +641,12 @@ export function PlanningV2AssignmentsSummary({
     const plan = assignments ?? {};
     const counts = countAssignmentsPerWorkerName(plan);
     const countsAdjusted = subtractPullExtrasFromWorkerCounts(counts, pulls ?? null);
+    if (eventAssignmentCountsByName) {
+      for (const [nm, n] of eventAssignmentCountsByName) {
+        if (!n) continue;
+        countsAdjusted.set(nm, (countsAdjusted.get(nm) || 0) + n);
+      }
+    }
     workers.forEach((w) => {
       const n = String(w.name || "").trim();
       if (n && !countsAdjusted.has(n)) countsAdjusted.set(n, 0);
@@ -657,7 +666,7 @@ export function PlanningV2AssignmentsSummary({
     const tr = sumTotalRequiredFromAssignments(stations, plan);
     const ta = Array.from(countsAdjusted.values()).reduce((a, b) => a + b, 0);
     return { items: sorted, totalRequired: tr, totalAssigned: ta };
-  }, [assignments, workers, stations, pulls]);
+  }, [assignments, workers, stations, pulls, eventAssignmentCountsByName]);
 
   const visibleCountsWithPulls = useMemo(
     () => countVisibleAssignmentsWithPulls(assignments ?? {}, pulls ?? null),

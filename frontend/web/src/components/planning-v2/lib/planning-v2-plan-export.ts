@@ -1,4 +1,4 @@
-import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
+import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "../types";
 import {
   countAssignmentsPerWorkerName,
   subtractPullExtrasFromWorkerCounts,
@@ -15,6 +15,8 @@ import {
 } from "./station-grid-helpers";
 import { slotTimeMetaFromPulls, buildPullHighlightKindByNormName } from "./planning-v2-pull-slot-display";
 import { workerNameChipColor } from "./worker-name-chip-color";
+import { buildEventExportOccurrences } from "./event-export-tables";
+import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
 
 function normName(s: string): string {
   return String(s || "")
@@ -131,9 +133,17 @@ function buildSummaryRows(
   workers: PlanningWorker[],
   assignments: Record<string, Record<string, string[][]>> | null | undefined,
   pulls: PlanningV2PullsMap | null | undefined,
+  events?: SiteEvent[] | null,
+  weekStart?: Date,
 ): Array<[string, number]> {
   const plan = assignments ?? {};
-  const counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  let counts = subtractPullExtrasFromWorkerCounts(countAssignmentsPerWorkerName(plan), pulls ?? null);
+  if (events && weekStart) {
+    counts = addEventCountsToAssignmentCounts(
+      counts,
+      countEventAssignmentsPerWorkerName(events, weekStart, workers),
+    );
+  }
   workers.forEach((w) => {
     const n = String(w.name || "").trim();
     if (n && !counts.has(n)) counts.set(n, 0);
@@ -167,6 +177,7 @@ export type PlanningExportTableData = {
   summaryRows: string[][];
   detailHeaders: string[];
   detailRows: string[][];
+  eventTables?: Array<{ title: string; dayLabel: string; workerNames: string[] }>;
 };
 
 /** מבנה טבלאות זהה ל-CSV — משמש גם PDF (ללא html2canvas). */
@@ -178,9 +189,10 @@ export function buildPlanningExportTableData(params: {
   pulls: PlanningV2PullsMap | null | undefined;
   site: SiteSummary | null;
   nameColorMap: Map<string, { bg: string; border: string; text: string }>;
+  events?: SiteEvent[] | null;
 }): PlanningExportTableData {
-  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap } = params;
-  const rows = buildSummaryRows(workers, assignments, pulls);
+  const { siteLabel, weekStart, workers, assignments, pulls, site, nameColorMap, events } = params;
+  const rows = buildSummaryRows(workers, assignments, pulls, events, weekStart);
   const stations = (site?.config?.stations || []) as unknown[];
   const shiftNamesAll = shiftNamesFromSite(site);
 
@@ -239,6 +251,11 @@ export function buildPlanningExportTableData(params: {
     summaryRows,
     detailHeaders,
     detailRows,
+    eventTables: buildEventExportOccurrences({ events, weekStart, workers }).map((occ) => ({
+      title: occ.title,
+      dayLabel: `${occ.dayLabel} ${occ.dateLabel}`,
+      workerNames: occ.workerNames,
+    })),
   };
 }
 
