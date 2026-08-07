@@ -10,6 +10,11 @@ import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
 import { availabilityStorageKey, readWeeklyAvailabilityForSiteWeek } from "../lib/availability-storage";
 import { mergeWorkerAvailability } from "../lib/merge-availability";
 import {
+  getCachedWeekWorkers,
+  prefetchAdjacentWeeks,
+  setCachedWeekWorkers,
+} from "../lib/week-nav-cache";
+import {
   defaultPlanningWeekStart,
   getWeekKeyISO,
   parseWeekQueryParam,
@@ -65,12 +70,24 @@ export function usePlanningV2SiteWorkers(siteId: string) {
 
   const [site, setSite] = useState<SiteSummary | null>(null);
   const [siteLoading, setSiteLoading] = useState(true);
-  const [workers, setWorkers] = useState<PlanningWorker[]>([]);
-  const [workersLoading, setWorkersLoading] = useState(true);
+  const initialWeekIso = getWeekKeyISO(weekFromUrl ?? defaultPlanningWeekStart());
+  const initialWorkersCache = getCachedWeekWorkers(siteId, initialWeekIso);
+  const [workers, setWorkers] = useState<PlanningWorker[]>(() => initialWorkersCache?.workers ?? []);
+  const [workersLoading, setWorkersLoading] = useState(() => !initialWorkersCache);
   const loadReq = useRef(0);
   /** Disponibilités / demandes par nom — aligné sur `loadWeeklyAvailability` dans planning/[id]. */
-  const [weeklyAvailability, setWeeklyAvailability] = useState<Record<string, WorkerAvailability>>({});
+  const [weeklyAvailability, setWeeklyAvailability] = useState<Record<string, WorkerAvailability>>(
+    () => initialWorkersCache?.weeklyAvailability ?? {},
+  );
   const weeklyAvailReq = useRef(0);
+  const hasLoadedWorkersOnceRef = useRef(!!initialWorkersCache);
+  const hasLoadedAvailOnceRef = useRef(!!initialWorkersCache);
+  const prevWorkersWeekIsoRef = useRef<string | null>(initialWeekIso);
+  const prevAvailWeekIsoRef = useRef<string | null>(initialWeekIso);
+  const weeklyAvailabilityRef = useRef(weeklyAvailability);
+  const workersRef = useRef(workers);
+  weeklyAvailabilityRef.current = weeklyAvailability;
+  workersRef.current = workers;
 
   const reloadSite = useCallback(async () => {
     const id = Number(siteId);
@@ -101,9 +118,19 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       return;
     }
     const req = ++loadReq.current;
-    if (!silent) setWorkersLoading(true);
+    const wk = getWeekKeyISO(weekStart);
+    if (silent) {
+      const cached = getCachedWeekWorkers(siteId, wk);
+      if (cached) {
+        setWorkers(cached.workers.filter((w) => isWorkerVisibleForSelectedWeek(w, weekStart)));
+        if (Object.keys(cached.weeklyAvailability).length > 0) {
+          setWeeklyAvailability(cached.weeklyAvailability);
+        }
+      }
+    } else {
+      setWorkersLoading(true);
+    }
     try {
-      const wk = getWeekKeyISO(weekStart);
       const list = await apiFetch<Record<string, unknown>[]>(
         `/director/sites/${siteId}/workers?week=${encodeURIComponent(wk)}`,
         {
@@ -112,26 +139,40 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       );
       if (req !== loadReq.current) return;
       const mapped = (list || []).map((row) => mapApiWorker(row));
-      setWorkers(mapped.filter((w) => isWorkerVisibleForSelectedWeek(w, weekStart)));
+      const visible = mapped.filter((w) => isWorkerVisibleForSelectedWeek(w, weekStart));
+      setWorkers(visible);
+      const cachedAvail =
+        getCachedWeekWorkers(siteId, wk)?.weeklyAvailability ?? weeklyAvailabilityRef.current;
+      setCachedWeekWorkers(siteId, wk, visible, cachedAvail);
+      prefetchAdjacentWeeks(siteId, weekStart, site?.next_week_saved_plan_status?.scope ?? null);
     } catch (e: unknown) {
       if (req !== loadReq.current) return;
       const msg = e instanceof Error ? e.message : "נסה שוב מאוחר יותר.";
       toast.error("שגיאה בטעינת עובדים", { description: msg });
       setWorkers([]);
     } finally {
-      if (req === loadReq.current && !silent) setWorkersLoading(false);
+      // Toujours couper le loading si c’est la requête courante (un reload silent
+      // peut remplacer un premier chargement non-silent et sinon l’overlay reste coincé).
+      if (req === loadReq.current) setWorkersLoading(false);
     }
-  }, [siteId, weekStart]);
+  }, [siteId, weekStart, site?.next_week_saved_plan_status?.scope]);
 
-  const reloadWeeklyAvailability = useCallback(async () => {
+  const reloadWeeklyAvailability = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) {
       setWeeklyAvailability({});
       return;
     }
     const req = ++weeklyAvailReq.current;
+    const wk = getWeekKeyISO(weekStart);
+    if (silent) {
+      const cached = getCachedWeekWorkers(siteId, wk);
+      if (cached && Object.keys(cached.weeklyAvailability).length > 0) {
+        setWeeklyAvailability(cached.weeklyAvailability);
+      }
+    }
     try {
-      const wk = getWeekKeyISO(weekStart);
       const fromApi = await apiFetch<Record<string, WorkerAvailability>>(
         `/director/sites/${siteId}/weekly-availability?week=${encodeURIComponent(wk)}`,
         {
@@ -142,6 +183,8 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       const normalized =
         fromApi && typeof fromApi === "object" ? (fromApi as Record<string, WorkerAvailability>) : {};
       setWeeklyAvailability(normalized);
+      const cachedWorkers = getCachedWeekWorkers(siteId, wk)?.workers ?? workersRef.current;
+      setCachedWeekWorkers(siteId, wk, cachedWorkers, normalized);
       try {
         localStorage.setItem(availabilityStorageKey(siteId, weekStart), JSON.stringify(normalized));
       } catch {
@@ -158,12 +201,23 @@ export function usePlanningV2SiteWorkers(siteId: string) {
   }, [reloadSite]);
 
   useEffect(() => {
-    void reloadWorkers();
-  }, [reloadWorkers]);
+    const wk = getWeekKeyISO(weekStart);
+    const weekChanged = prevWorkersWeekIsoRef.current != null && prevWorkersWeekIsoRef.current !== wk;
+    prevWorkersWeekIsoRef.current = wk;
+    // Animation au changement de semaine ; silent seulement pour un refresh même semaine.
+    const silent = hasLoadedWorkersOnceRef.current && !weekChanged;
+    hasLoadedWorkersOnceRef.current = true;
+    void reloadWorkers({ silent });
+  }, [reloadWorkers, weekStart]);
 
   useEffect(() => {
-    void reloadWeeklyAvailability();
-  }, [reloadWeeklyAvailability]);
+    const wk = getWeekKeyISO(weekStart);
+    const weekChanged = prevAvailWeekIsoRef.current != null && prevAvailWeekIsoRef.current !== wk;
+    prevAvailWeekIsoRef.current = wk;
+    const silent = hasLoadedAvailOnceRef.current && !weekChanged;
+    hasLoadedAvailOnceRef.current = true;
+    void reloadWeeklyAvailability({ silent });
+  }, [reloadWeeklyAvailability, weekStart]);
 
   const workerRowsForTable = useMemo(() => {
     return workers.map((worker) => ({

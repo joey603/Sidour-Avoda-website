@@ -446,7 +446,7 @@ export function PlanningV2SiteEvents({
                       <div className="flex shrink-0 gap-2">
                         <button
                           type="button"
-                          className="rounded-md border border-[#722F37] px-2 py-1 text-xs text-[#722F37]"
+                          className="rounded-md border border-[#00A8E0] px-2 py-1 text-xs text-[#00A8E0]"
                           onClick={() => openEdit(ev)}
                         >
                           ערוך
@@ -524,7 +524,7 @@ export function PlanningV2SiteEvents({
                       className={
                         "rounded-md border px-2 py-1 text-xs " +
                         (active
-                          ? "border-[#722F37] bg-[#722F37] text-white"
+                          ? "border-[#00A8E0] bg-[#00A8E0] text-white"
                           : "border-zinc-300 dark:border-zinc-700")
                       }
                     >
@@ -537,7 +537,7 @@ export function PlanningV2SiteEvents({
                 <button
                   type="button"
                   onClick={openDatePicker}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-[#722F37] px-2.5 py-1.5 text-xs font-medium text-[#722F37] hover:bg-[#722F37]/10 dark:border-[#722F37] dark:text-[#722F37] dark:hover:bg-[#722F37]/20"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-[#00A8E0] px-2.5 py-1.5 text-xs font-medium text-[#00A8E0] hover:bg-[#00A8E0]/10 dark:border-[#00A8E0] dark:text-[#00A8E0] dark:hover:bg-[#00A8E0]/20"
                 >
                   <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
                     <path d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.11 0-1.99.9-1.99 2L3 20c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V10h14v10zm0-12H5V6h14v2z" />
@@ -555,7 +555,7 @@ export function PlanningV2SiteEvents({
                         key={iso}
                         type="button"
                         onClick={() => toggleDate(iso)}
-                        className="rounded-md border border-[#722F37] bg-[#722F37] px-2 py-1 text-xs text-white"
+                        className="rounded-md border border-[#00A8E0] bg-[#00A8E0] px-2 py-1 text-xs text-white"
                       >
                         {formatHebDate(new Date(`${iso}T00:00:00`))} ×
                       </button>
@@ -584,7 +584,7 @@ export function PlanningV2SiteEvents({
                                 key={wid}
                                 type="button"
                                 onClick={() => toggleWorker(iso, wid)}
-                                className="rounded-md border border-[#722F37] bg-[#722F37] px-2 py-1 text-xs text-white"
+                                className="rounded-md border border-[#00A8E0] bg-[#00A8E0] px-2 py-1 text-xs text-white"
                                 title="הסר עובד"
                               >
                                 {workerNameById(workers, wid)} ×
@@ -599,7 +599,7 @@ export function PlanningV2SiteEvents({
                             type="button"
                             disabled={workers.length === 0}
                             onClick={() => setWorkerPickerDateIso(iso)}
-                            className="inline-flex items-center gap-1.5 rounded-md border border-[#722F37] px-2.5 py-1.5 text-xs font-medium text-[#722F37] hover:bg-[#722F37]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 rounded-md border border-[#00A8E0] px-2.5 py-1.5 text-xs font-medium text-[#00A8E0] hover:bg-[#00A8E0]/10 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             בחר עובד
                           </button>
@@ -726,10 +726,10 @@ export function PlanningV2SiteEvents({
                       className={[
                         "relative flex flex-col items-center rounded p-2 text-sm",
                         !isCurrentMonth ? "text-zinc-300 dark:text-zinc-600" : "",
-                        isSelected ? "bg-[#722F37] font-semibold text-white" : "",
-                        isToday && !isSelected ? "border border-[#722F37]" : "",
+                        isSelected ? "bg-[#00A8E0] font-semibold text-white" : "",
+                        isToday && !isSelected ? "border border-[#00A8E0]" : "",
                         isWeekDate && isCurrentMonth && !isSelected && !isToday
-                          ? "bg-[#722F37]/15"
+                          ? "bg-[#00A8E0]/15"
                           : "",
                         isCurrentMonth && !isSelected ? "text-zinc-700 dark:text-zinc-300" : "",
                         "hover:bg-zinc-100 dark:hover:bg-zinc-800",
@@ -795,7 +795,7 @@ export function PlanningV2SiteEvents({
                         className={
                           "flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm text-right " +
                           (active
-                            ? "border-[#722F37] bg-[#722F37] text-white"
+                            ? "border-[#00A8E0] bg-[#00A8E0] text-white"
                             : assignedElsewhere
                               ? "border-zinc-200 bg-zinc-100 text-zinc-400 opacity-60 dark:border-zinc-800 dark:bg-zinc-950/60 dark:text-zinc-500"
                               : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800")
@@ -815,7 +815,7 @@ export function PlanningV2SiteEvents({
             <div className="flex shrink-0 justify-end border-t px-4 py-3 dark:border-zinc-800">
               <button
                 type="button"
-                className="rounded-md bg-[#722F37] px-4 py-2 text-sm text-white"
+                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white"
                 onClick={() => setWorkerPickerDateIso(null)}
               >
                 אישור
@@ -835,7 +835,7 @@ export function PlanningV2SiteEvents({
             dir="rtl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-2 text-lg font-semibold text-[#722F37]">שים לב</div>
+            <div className="mb-2 text-lg font-semibold text-[#00A8E0]">שים לב</div>
             <p className="mb-2 text-sm text-zinc-700 dark:text-zinc-200">
               עובד זה כבר שובץ לאירוע זה בתאריך אחר
               {workerConflict.otherDateIsos.length === 1
@@ -850,14 +850,14 @@ export function PlanningV2SiteEvents({
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                className="rounded-md bg-[#722F37] px-3 py-2 text-sm text-white"
+                className="rounded-md bg-[#00A8E0] px-3 py-2 text-sm text-white"
                 onClick={applyWorkerReplaceDate}
               >
                 החלף את התאריך בתאריך זה
               </button>
               <button
                 type="button"
-                className="rounded-md border border-[#722F37] px-3 py-2 text-sm font-medium text-[#722F37]"
+                className="rounded-md border border-[#00A8E0] px-3 py-2 text-sm font-medium text-[#00A8E0]"
                 onClick={applyWorkerKeepBothDates}
               >
                 שייך לשני התאריכים

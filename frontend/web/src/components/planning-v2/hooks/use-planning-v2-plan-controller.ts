@@ -774,6 +774,18 @@ export function usePlanningV2PlanController({
   // Reset drafts seulement au changement de site / semaine — pas quand linkedSitesLength
   // passe de 0→N (sinon on efface une réhydratation mémoire déjà faite au retour multi-sites).
   useEffect(() => {
+    try {
+      abortRef.current?.abort();
+    } catch {
+      /* ignore */
+    }
+    abortRef.current = null;
+    genBusyRef.current = false;
+    generationIdRef.current = null;
+    userStoppedGenerationRef.current = false;
+    setGenerationRunning(false);
+    setSharedLinkedGenerationRunning(false);
+    setReplaceGenerationUiClear(false);
     setDraftAssignments(null);
     setDraftPulls(null);
     setDraftAlternatives([]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { getWeekKeyISO } from "../lib/week";
 
@@ -27,15 +27,18 @@ function sortLinkedSitesForDisplay(rows: LinkedSiteRow[]): LinkedSiteRow[] {
 export function usePlanningV2LinkedSites(siteId: string, weekStart: Date) {
   const [linkedSites, setLinkedSites] = useState<LinkedSiteRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const hasLoadedOnceRef = useRef(false);
+  const prevWeekIsoRef = useRef<string | null>(getWeekKeyISO(weekStart));
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     const id = Number(siteId);
     if (!Number.isFinite(id) || id <= 0) {
       setLinkedSites([]);
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const wk = getWeekKeyISO(weekStart);
       const list = await apiFetch<LinkedSiteRow[]>(
@@ -53,8 +56,13 @@ export function usePlanningV2LinkedSites(siteId: string, weekStart: Date) {
   }, [siteId, weekStart]);
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    const wk = getWeekKeyISO(weekStart);
+    const weekChanged = prevWeekIsoRef.current != null && prevWeekIsoRef.current !== wk;
+    prevWeekIsoRef.current = wk;
+    const silent = hasLoadedOnceRef.current && !weekChanged;
+    hasLoadedOnceRef.current = true;
+    void reload({ silent });
+  }, [reload, weekStart]);
 
   return { linkedSites, linkedSitesLoading: loading, reloadLinkedSites: reload };
 }

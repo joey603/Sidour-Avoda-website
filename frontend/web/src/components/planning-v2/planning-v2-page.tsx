@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
@@ -286,6 +286,18 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       setEditingSavedGenerationStarted(false);
     }
   }, [editingSaved]);
+
+  /** Changement de semaine sans remount : reset modes édition / outils locaux. */
+  useEffect(() => {
+    setEditingSaved(false);
+    setEditingSavedGenerationStarted(false);
+    setPullsModeStationIdx(null);
+    setShiftHoursModeStationIdx(null);
+    setManualDragWorkerName(null);
+    setManualSelectSource(null);
+    setSummaryHighlightWorkerName(null);
+    setWeekSiteEvents([]);
+  }, [weekStart]);
 
   /** חלופות : piloté par l’état des variantes, pas par le contenu affiché momentanément dans la grille. */
   const alternativesUiEnabled = useMemo(
@@ -1800,7 +1812,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const showPlanningLoadingOverlay =
     !workerModalSaving &&
     !plan.generationRunning &&
-    (siteLoading ||
+    // Ne pas bloquer sur siteLoading si le site est déjà connu (changement de semaine soft).
+    ((siteLoading && !site) ||
       workersLoading ||
       (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
       // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
@@ -2592,9 +2605,7 @@ export function PlanningV2Page() {
   return <PlanningWeekShell siteId={siteId} />;
 }
 
-/** מפתח URL (?week=) + אתר — איפוס מצב עריכה בעת החלפת שבוע בלי useEffect. */
+/** Remount seulement au changement d’אתר — la semaine soft-reload sans cold start. */
 function PlanningWeekShell({ siteId }: { siteId: string }) {
-  const searchParams = useSearchParams();
-  const weekQ = searchParams.get("week") || "default";
-  return <PlanningV2PageInner key={`${siteId}-${weekQ}`} siteId={siteId} />;
+  return <PlanningV2PageInner key={siteId} siteId={siteId} />;
 }
