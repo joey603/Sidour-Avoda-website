@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { AUTH_SESSION_CHANGED_EVENT, fetchMe, logout } from "@/lib/auth";
+import { AUTH_SESSION_CHANGED_EVENT, fetchMe, logout, peekCachedMe } from "@/lib/auth";
 import {
   clearPlanningCreatPlanSessionStorageOnLogout,
   clearPlanningLocalStorageOnLogout,
@@ -63,10 +63,16 @@ export default function TopNav() {
 
   useEffect(() => {
     let cancelled = false;
-    async function refreshAuthState() {
-      setAuthChecked(false);
+    async function refreshAuthState(opts?: { force?: boolean }) {
+      const cached = peekCachedMe();
+      if (cached && !opts?.force) {
+        setUserRole(cached.role);
+        setAuthChecked(true);
+      } else if (!cached) {
+        setAuthChecked(false);
+      }
       try {
-        const me = await fetchMe();
+        const me = await fetchMe(opts);
         if (cancelled) return;
         if (me) {
           setUserRole(me.role);
@@ -82,7 +88,7 @@ export default function TopNav() {
 
     void refreshAuthState();
     const onAuthChanged = () => {
-      void refreshAuthState();
+      void refreshAuthState({ force: true });
     };
     if (typeof window !== "undefined") {
       window.addEventListener(AUTH_SESSION_CHANGED_EVENT, onAuthChanged);

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { fetchMe } from "@/lib/auth";
+import { fetchMe, peekCachedMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { LoadingOverlay } from "@/components/loading-animation";
 
@@ -79,9 +79,26 @@ export default function DirectorDashboard() {
     let cancelled = false;
     (async () => {
       try {
+        const cached = peekCachedMe();
+        if (cached?.role === "director") {
+          if (!cancelled) {
+            setName(cached.full_name);
+            setDirectorCode(String(cached.director_code ?? cached.directorCode ?? ""));
+            setLoading(false);
+          }
+        } else if (cached?.role === "worker") {
+          router.replace("/worker");
+          return;
+        }
         const me = await fetchMe();
-        if (!me) { router.replace("/login/director"); return; }
-        if (me.role !== "director") { router.replace("/worker"); return; }
+        if (!me) {
+          router.replace("/login/director");
+          return;
+        }
+        if (me.role !== "director") {
+          router.replace("/worker");
+          return;
+        }
         if (!cancelled) {
           setName(me.full_name);
           setDirectorCode(String((me as Record<string, unknown>)?.director_code ?? ""));
@@ -90,7 +107,9 @@ export default function DirectorDashboard() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   useEffect(() => {

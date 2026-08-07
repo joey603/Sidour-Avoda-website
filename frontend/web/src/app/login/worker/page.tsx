@@ -104,7 +104,7 @@ function WorkerLoginInner() {
           },
         },
       );
-      const me = await fetchMe();
+      const me = await fetchMe({ force: true });
       if (me?.role !== "worker") {
         await logout();
         setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");

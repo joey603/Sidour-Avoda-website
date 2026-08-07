@@ -77,7 +77,7 @@ function DirectorLoginInner() {
           },
         },
       );
-      const me = await fetchMe();
+      const me = await fetchMe({ force: true });
       if (me?.role !== "director") {
         await logout();
         setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
