@@ -36,6 +36,13 @@ import { resolveMaxShifts } from "@/lib/max-shifts";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
 const VISIBLE_ALTERNATIVES_BATCH_SIZE = 500;
+/** Silence totale sans plan accepté (CP-SAT peut mettre longtemps avant la 1ère vague). */
+const GENERATION_ACCEPTED_IDLE_CLOSE_MS = 180_000;
+/** Déjà des חלופות visibles, plus aucune nouvelle → arrêter יוצר/stop. */
+const GENERATION_PLATEAU_IDLE_CLOSE_MS = 15_000;
+/** Rejets SSE répétés sans nouvelle חלופה visible → l’utilisateur voit que c’est fini. */
+const GENERATION_STAGNANT_NOISE_IDLE_MS = 8_000;
+const GENERATION_STAGNANT_NOISE_EVENTS = 15;
 const GENERATION_SEARCH_NUM_ALTERNATIVES = 20000;
 const MULTI_SITE_GENERATION_NUM_ALTERNATIVES = GENERATION_SEARCH_NUM_ALTERNATIVES;
 const MULTI_SITE_GENERATION_TIME_LIMIT_SECONDS = 120;
@@ -1357,7 +1364,7 @@ export function usePlanningV2PlanController({
       if (purgeIds.length > 0) {
         try {
           await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
-          await reloadWeekPlan();
+          await reloadWeekPlan({ silent: true });
         } catch {
           /* ignore */
         }
@@ -1430,17 +1437,30 @@ export function usePlanningV2PlanController({
     let stopped = false;
     let batchTargetReached = false;
     let serverExhaustedAlternatives = false;
+    let lastAcceptedPlanAt = Date.now();
+    let stagnantNoiseEvents = 0;
     const visibleAlternativeCountAtStart = Math.max(0, Number(getVisibleAlternativeCount?.() || 0));
     const finishGenerationVisualState = () => {
       if (generationVisualFinished) return;
       generationVisualFinished = true;
-      setGenerationRunning(false);
-      setReplaceGenerationUiClear(false);
+      // flushSync : sinon יוצר/stop restent visibles pendant les startTransition des חלופות.
+      flushSync(() => {
+        setGenerationRunning(false);
+        setReplaceGenerationUiClear(false);
+        setSharedLinkedGenerationRunning(false);
+      });
       abortRef.current = null;
       if (linkedSitesLength > 1) {
         writeLinkedGenerationRunningToSession(weekIso, false);
+        writeLinkedGenerationStopRequestToSession(weekIso, false);
       }
-      setSharedLinkedGenerationRunning(false);
+    };
+    const markAcceptedPlan = () => {
+      lastAcceptedPlanAt = Date.now();
+      stagnantNoiseEvents = 0;
+    };
+    const markStagnantNoise = () => {
+      stagnantNoiseEvents += 1;
     };
     const scheduleAlternativesFlush = () => {
       if (alternativesFlushRafRef.current != null) return;
@@ -1471,6 +1491,7 @@ export function usePlanningV2PlanController({
       if (batchCount < VISIBLE_ALTERNATIVES_BATCH_SIZE) return false;
       batchTargetReached = true;
       stopped = true;
+      finishGenerationVisualState();
       try {
         controller.abort();
       } catch {
@@ -1690,15 +1711,22 @@ export function usePlanningV2PlanController({
           /* ignore */
         }
       }, 130000);
-      let lastSseEventAt = Date.now();
-      // Génération volontairement élargie: laisser le backend chercher longtemps entre deux alternatives valides.
-      const idleCloseMs = 10 * 60 * 1000;
+      // Sans nouveau plan accepté : couper יוצר/stop (le SSE peut encore spammer pulls_debug).
       idleWatch = window.setInterval(() => {
         if (stopped) return;
         if (!sawGeneratedPlan) return;
-        if (Date.now() - lastSseEventAt < idleCloseMs) return;
+        const idleMs = Date.now() - lastAcceptedPlanAt;
+        const hadAlternatives =
+          appendUniqueCountRef.current > 0 || (draftAlternativesRef.current?.length || 0) > 0;
+        const silenceLimit = hadAlternatives ? GENERATION_PLATEAU_IDLE_CLOSE_MS : GENERATION_ACCEPTED_IDLE_CLOSE_MS;
+        const exhaustedBySilence = idleMs >= silenceLimit;
+        // Beaucoup de rejets SSE sans nouvelle חלופה visible → fin perçue plus tôt.
+        const exhaustedByNoise =
+          idleMs >= GENERATION_STAGNANT_NOISE_IDLE_MS && stagnantNoiseEvents >= GENERATION_STAGNANT_NOISE_EVENTS;
+        if (!exhaustedBySilence && !exhaustedByNoise) return;
         idleAutoClosed = true;
         stopped = true;
+        finishGenerationVisualState();
         try {
           controller.abort();
         } catch {
@@ -1726,6 +1754,7 @@ export function usePlanningV2PlanController({
             }
           }
           stopped = true;
+          finishGenerationVisualState();
           return true;
         }
         const evtGenerationId =
@@ -1739,7 +1768,8 @@ export function usePlanningV2PlanController({
             return false;
           }
         }
-        lastSseEventAt = Date.now();
+        // Compte tout événement non suivi d’un markAcceptedPlan (rejets, pulls_debug, etc.).
+        markStagnantNoise();
         if (evt.type === "base" && !appendMode) {
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
@@ -1803,6 +1833,7 @@ export function usePlanningV2PlanController({
           setReplaceGenerationUiClear(false);
           sawGeneratedPlan = true;
           sawPlanToPersist = true;
+          markAcceptedPlan();
           if (linked && evt.site_plans && typeof evt.site_plans === "object") {
             const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
             const existing = readLinkedPlansFromMemory(weekStart);
@@ -1998,12 +2029,16 @@ export function usePlanningV2PlanController({
                 );
                 if (afterCurrentAltCount > beforeCurrentAltCount) {
                   appendUniqueCountRef.current += 1;
+                  markAcceptedPlan();
                   if (appendMode) {
                     setMoreAlternativesAvailable(true);
                   }
                 }
                 scheduleAlternativesFlush();
-                if (stopWhenBatchTargetReached()) return true;
+                if (stopWhenBatchTargetReached()) {
+                  finishGenerationVisualState();
+                  return true;
+                }
               }
               if (dedupeAlternatives && linkedSnap) {
                 seenLinkedAlternativeSnapshotsRef.current.add(linkedSnap);
@@ -2035,11 +2070,15 @@ export function usePlanningV2PlanController({
               { assignments: altAssignments, pulls: altPulls },
             ];
             appendUniqueCountRef.current += 1;
+            markAcceptedPlan();
             if (appendMode) {
               setMoreAlternativesAvailable(true);
             }
             scheduleAlternativesFlush();
-            if (stopWhenBatchTargetReached()) return true;
+            if (stopWhenBatchTargetReached()) {
+              finishGenerationVisualState();
+              return true;
+            }
           }
           return false;
         }
@@ -2209,6 +2248,7 @@ export function usePlanningV2PlanController({
                 );
                 if (afterCurrentAltCount > beforeCurrentAltCount) {
                   appendUniqueCountRef.current += 1;
+                  markAcceptedPlan();
                   if (appendMode) {
                     setMoreAlternativesAvailable(true);
                   }
@@ -2249,6 +2289,7 @@ export function usePlanningV2PlanController({
             };
             draftAlternativesRef.current = nextDraftAlternatives;
             appendUniqueCountRef.current += 1;
+            markAcceptedPlan();
             if (appendMode) {
               setMoreAlternativesAvailable(true);
             }
@@ -2327,6 +2368,8 @@ export function usePlanningV2PlanController({
           finishGenerationVisualState();
           toast.error("יצירת תכנון נכשלה", { description: "לא התקבלו תוצאות מהשרת." });
         } else {
+          // Arrêt manuel : masquer immédiatement יוצר... / stop rouge (persist peut encore tourner).
+          finishGenerationVisualState();
           toast.message("יצירת התכנון הופסקה");
         }
       } else {
@@ -2334,6 +2377,8 @@ export function usePlanningV2PlanController({
         toast.error("יצירת תכנון נכשלה", { description: String((e as Error)?.message || "") });
       }
     } finally {
+      // Couper l'UI génération tout de suite (avant persist/reload, qui peuvent prendre du temps).
+      finishGenerationVisualState();
       if (idleWatch) {
         window.clearInterval(idleWatch);
       }
@@ -2395,6 +2440,7 @@ export function usePlanningV2PlanController({
         }
       }
       setGenerationRunning(false);
+      setSharedLinkedGenerationRunning(false);
       setReplaceGenerationUiClear(false);
       if (linkedSitesLength > 1) {
         writeLinkedGenerationRunningToSession(weekIso, false);

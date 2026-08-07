@@ -1799,6 +1799,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   const showPlanningLoadingOverlay =
     !workerModalSaving &&
+    !plan.generationRunning &&
     (siteLoading ||
       workersLoading ||
       (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||

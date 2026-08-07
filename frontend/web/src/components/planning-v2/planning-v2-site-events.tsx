@@ -353,7 +353,7 @@ export function PlanningV2SiteEvents({
               className={
                 readOnly
                   ? "inline-flex cursor-not-allowed items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
-                  : "inline-flex items-center gap-2 rounded-md border border-[#722F37] px-3 py-2 text-sm text-[#722F37] hover:bg-[#722F37]/10 dark:border-[#a85a62] dark:text-[#d4a0a6] dark:hover:bg-[#722F37]/20"
+                  : "inline-flex items-center gap-2 rounded-md border border-green-600 px-3 py-2 text-sm text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30"
               }
               onClick={() => {
                 if (readOnly) return;
@@ -614,7 +614,7 @@ export function PlanningV2SiteEvents({
             <div className="flex justify-end gap-2">
               <button
                 type="button"
-                className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700"
+                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 onClick={closeEditor}
                 disabled={saving}
               >
@@ -622,7 +622,7 @@ export function PlanningV2SiteEvents({
               </button>
               <button
                 type="button"
-                className="rounded-md bg-[#722F37] px-3 py-2 text-sm text-white disabled:opacity-60"
+                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6] disabled:opacity-60"
                 onClick={() => void saveEvent()}
                 disabled={saving}
               >

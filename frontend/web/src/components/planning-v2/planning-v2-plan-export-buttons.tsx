@@ -312,7 +312,7 @@ export function PlanningV2PlanExportButtons({
 
   return (
     <>
-      <div className="mt-4 flex w-full flex-col items-start gap-2" dir="ltr">
+      <div className="mt-4 flex w-full flex-col items-start gap-2 md:flex-row md:items-center md:justify-between" dir="ltr">
         <div className="flex flex-wrap items-center justify-start gap-2">
           <button
             type="button"
@@ -351,7 +351,7 @@ export function PlanningV2PlanExportButtons({
             {excelExporting ? "מייצא…" : "ייצוא Excel"}
           </button>
         </div>
-        <div className="flex flex-wrap items-center justify-start gap-2">
+        <div className="flex flex-wrap items-center justify-start gap-2 md:ms-auto">
           <button
             type="button"
             onClick={() => void handleExportScreenshot()}
