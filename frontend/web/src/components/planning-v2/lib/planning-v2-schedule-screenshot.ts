@@ -5,6 +5,7 @@ import {
   subtractPullExtrasFromWorkerCounts,
 } from "./assignments-summary-math";
 import { addDays, HEBREW_MONTH_NAMES } from "./week";
+import { computeWorkerHoursTotals, mergeWorkerHoursTotals } from "./salary-calculator";
 import {
   DAY_COLS,
   getRequiredFor,
@@ -488,6 +489,7 @@ export type MonthWeekScreenshotInput = ExportParams & {
 
 /**
  * Photo d’un mois entier : empile les tableaux hebdomadaires (avec אירועים à côté de מאבטח).
+ * En bas : total d’heures par travailleur pour le mois.
  */
 export async function generatePlanningMonthScreenshotPng(params: {
   siteLabel: string;
@@ -518,5 +520,54 @@ export async function generatePlanningMonthScreenshotPng(params: {
     throw new Error("אין שבועות לייצוא בחודש זה");
   }
 
-  return captureHtmlToPngBlob(`${header}${weekBlocks}`);
+  const hoursLists = (weeks || []).map((week) =>
+    computeWorkerHoursTotals({
+      weekStart: week.weekStart,
+      site: week.site,
+      assignments: week.assignments,
+      pulls: week.pulls ?? null,
+      clipToMonth: { year, monthIndex },
+    }),
+  );
+  const hoursTotals = mergeWorkerHoursTotals(hoursLists);
+  const hoursFooter =
+    hoursTotals.length === 0
+      ? ""
+      : `<div style="width:max-content;min-width:280px;margin:8px auto 0;font-family:Arial,sans-serif;direction:rtl;">
+  <div style="font-size:14px;font-weight:bold;text-align:center;margin:0 0 8px;">סה״כ שעות לחודש — לפי עובד</div>
+  <table style="border-collapse:collapse;width:100%;font-size:13px;">
+    <thead>
+      <tr>
+        <th style="border:1px solid #333;padding:6px 10px;background:#f3f4f6;text-align:right;">עובד</th>
+        <th style="border:1px solid #333;padding:6px 10px;background:#f3f4f6;text-align:center;min-width:72px;">שעות</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${hoursTotals
+        .map(
+          (row) => `<tr>
+        <td style="border:1px solid #333;padding:5px 10px;text-align:right;">${escapeHtml(row.workerName)}</td>
+        <td style="border:1px solid #333;padding:5px 10px;text-align:center;font-variant-numeric:tabular-nums;">${formatHoursHe(row.hours)}</td>
+      </tr>`,
+        )
+        .join("")}
+      <tr>
+        <td style="border:1px solid #333;padding:6px 10px;text-align:right;font-weight:bold;background:#f9fafb;">סה״כ</td>
+        <td style="border:1px solid #333;padding:6px 10px;text-align:center;font-weight:bold;background:#f9fafb;font-variant-numeric:tabular-nums;">${formatHoursHe(
+          hoursTotals.reduce((s, r) => s + r.hours, 0),
+        )}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>`;
+
+  return captureHtmlToPngBlob(`${header}${weekBlocks}${hoursFooter}`);
+}
+
+function formatHoursHe(n: number): string {
+  const rounded = Math.round(n * 100) / 100;
+  return rounded.toLocaleString("he-IL", {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 1,
+    maximumFractionDigits: 2,
+  });
 }

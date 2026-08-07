@@ -518,3 +518,64 @@ export function mergeSalaryReports(
     totalHours: Math.round(lines.reduce((s, l) => s + l.totalHours, 0) * 100) / 100,
   };
 }
+
+export type WorkerHoursTotal = { workerName: string; hours: number };
+
+/**
+ * Total d’heures travaillées par employé (segments planning + משיכות).
+ * Optionnellement borné au mois civil (pour סידור חודשי).
+ */
+export function computeWorkerHoursTotals(args: {
+  weekStart: Date;
+  site: SiteSummary | null;
+  assignments: Record<string, Record<string, string[][]>> | null | undefined;
+  pulls?: PlanningV2PullsMap | null;
+  clipToMonth?: { year: number; monthIndex: number };
+}): WorkerHoursTotal[] {
+  const segments = collectSegmentsForWeek(
+    args.weekStart,
+    args.site,
+    args.assignments,
+    args.pulls || null,
+  );
+  let rangeStart = Number.NEGATIVE_INFINITY;
+  let rangeEnd = Number.POSITIVE_INFINITY;
+  if (args.clipToMonth) {
+    const { year, monthIndex } = args.clipToMonth;
+    rangeStart = new Date(year, monthIndex, 1, 0, 0, 0, 0).getTime();
+    rangeEnd = new Date(year, monthIndex + 1, 1, 0, 0, 0, 0).getTime();
+  }
+
+  const byName = new Map<string, number>();
+  for (const seg of segments) {
+    const start = Math.max(seg.startMs, rangeStart);
+    const end = Math.min(seg.endMs, rangeEnd);
+    if (!(end > start)) continue;
+    const hours = (end - start) / (60 * 60 * 1000);
+    byName.set(seg.workerName, (byName.get(seg.workerName) || 0) + hours);
+  }
+
+  return Array.from(byName.entries())
+    .map(([workerName, hours]) => ({
+      workerName,
+      hours: Math.round(hours * 100) / 100,
+    }))
+    .filter((x) => x.hours > 0)
+    .sort((a, b) => a.workerName.localeCompare(b.workerName, "he"));
+}
+
+export function mergeWorkerHoursTotals(lists: WorkerHoursTotal[][]): WorkerHoursTotal[] {
+  const byName = new Map<string, number>();
+  for (const list of lists) {
+    for (const row of list) {
+      byName.set(row.workerName, (byName.get(row.workerName) || 0) + row.hours);
+    }
+  }
+  return Array.from(byName.entries())
+    .map(([workerName, hours]) => ({
+      workerName,
+      hours: Math.round(hours * 100) / 100,
+    }))
+    .filter((x) => x.hours > 0)
+    .sort((a, b) => a.workerName.localeCompare(b.workerName, "he"));
+}
