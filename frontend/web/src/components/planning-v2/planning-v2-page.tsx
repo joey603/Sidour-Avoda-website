@@ -790,7 +790,13 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     (dragSource: ManualDragSource) => {
       const src = dragSource;
       if (!src) return;
-      if (workerParticipatesInPull(plan.displayPulls ?? null, src.workerName)) {
+      if (
+        workerParticipatesInPull(plan.displayPulls ?? null, src.workerName, {
+          dayKey: src.dayKey,
+          shiftName: src.shiftName,
+          stationIndex: src.stationIndex,
+        })
+      ) {
         toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
         return;
       }

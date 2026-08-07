@@ -642,8 +642,18 @@ export function PlanningV2StationWeekGrid({
         : "") || "",
     ).trim();
     if (
-      (src && workerParticipatesInPull(pullsMap, src.workerName)) ||
-      (targetNm && workerParticipatesInPull(pullsMap, targetNm, stationIndex))
+      (src &&
+        workerParticipatesInPull(pullsMap, src.workerName, {
+          dayKey: src.dayKey,
+          shiftName: src.shiftName,
+          stationIndex: src.stationIndex,
+        })) ||
+      (targetNm &&
+        workerParticipatesInPull(pullsMap, targetNm, {
+          dayKey,
+          shiftName,
+          stationIndex,
+        }))
     ) {
       toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
       didDropRef.current = true;
@@ -687,7 +697,14 @@ export function PlanningV2StationWeekGrid({
         ? assignments?.[dayKey]?.[shiftName]?.[stationIndex]?.[slotIndex]
         : "") || "",
     ).trim();
-    if (targetNm && workerParticipatesInPull(pullsMap, targetNm, stationIndex)) {
+    if (
+      targetNm &&
+      workerParticipatesInPull(pullsMap, targetNm, {
+        dayKey,
+        shiftName,
+        stationIndex,
+      })
+    ) {
       toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
       return;
     }
@@ -713,6 +730,11 @@ export function PlanningV2StationWeekGrid({
       !workerParticipatesInPull(
         (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null,
         src.workerName,
+        {
+          dayKey: src.dayKey,
+          shiftName: src.shiftName,
+          stationIndex: src.stationIndex,
+        },
       );
     dragSourceRef.current = null;
     didDropRef.current = false;

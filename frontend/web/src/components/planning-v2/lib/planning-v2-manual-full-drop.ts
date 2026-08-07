@@ -550,20 +550,31 @@ export function pullEntriesInCell(
 
 const PULL_EDIT_ONLY_VIA_POPUP_MSG = "שינוי משיכה אפשרי רק דרך חלון המשיכות.";
 
-/** L’עובד participe à une משיכה (before/after), éventuellement limité à une עמדה. */
+export type WorkerPullScope = {
+  /** Limite à une עמדה (index). */
+  stationIndex?: number;
+  /** Limite au jour de la cellule concernée (sinon toute la semaine). */
+  dayKey?: string;
+  /** Limite à la משמרת de la cellule concernée. */
+  shiftName?: string;
+};
+
+/** L’עובד participe à une משיכה (before/after), éventuellement limité à une cellule jour/משמרת/עמדה. */
 export function workerParticipatesInPull(
   pulls: PlanningV2PullsMap | null | undefined,
   workerName: string,
-  stationIndex?: number,
+  scope?: number | WorkerPullScope,
 ): boolean {
   const nm = normName(workerName);
   if (!nm || !pulls) return false;
+  const opts: WorkerPullScope =
+    typeof scope === "number" ? { stationIndex: scope } : scope || {};
   for (const [k, v] of Object.entries(pulls)) {
     if (!isRealPullEntry(v)) continue;
-    if (stationIndex != null) {
-      const parts = String(k || "").split("|");
-      if (Number(parts[2]) !== Number(stationIndex)) continue;
-    }
+    const parts = String(k || "").split("|");
+    if (opts.stationIndex != null && Number(parts[2]) !== Number(opts.stationIndex)) continue;
+    if (opts.dayKey != null && String(parts[0] || "") !== String(opts.dayKey)) continue;
+    if (opts.shiftName != null && String(parts[1] || "") !== String(opts.shiftName)) continue;
     const e = v as PlanningV2PullEntry;
     if (normName(String(e?.before?.name || "")) === nm) return true;
     if (normName(String(e?.after?.name || "")) === nm) return true;
@@ -666,13 +677,27 @@ export function analyzeManualSlotDrop(ctx: {
   if (pullEntries.length > 0) {
     return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
   }
-  if (ctx.dragSource && workerParticipatesInPull(ctx.pulls, ctx.dragSource.workerName)) {
+  if (
+    ctx.dragSource &&
+    workerParticipatesInPull(ctx.pulls, ctx.dragSource.workerName, {
+      dayKey: ctx.dragSource.dayKey,
+      shiftName: ctx.dragSource.shiftName,
+      stationIndex: ctx.dragSource.stationIndex,
+    })
+  ) {
     return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
   }
   const targetSlotWorker = String(
     (ctx.base[ctx.dayKey]?.[ctx.shiftName]?.[ctx.stationIndex] || [])[ctx.slotIndex] || "",
   ).trim();
-  if (targetSlotWorker && workerParticipatesInPull(ctx.pulls, targetSlotWorker, ctx.stationIndex)) {
+  if (
+    targetSlotWorker &&
+    workerParticipatesInPull(ctx.pulls, targetSlotWorker, {
+      dayKey: ctx.dayKey,
+      shiftName: ctx.shiftName,
+      stationIndex: ctx.stationIndex,
+    })
+  ) {
     return { action: "block", message: PULL_EDIT_ONLY_VIA_POPUP_MSG };
   }
 
