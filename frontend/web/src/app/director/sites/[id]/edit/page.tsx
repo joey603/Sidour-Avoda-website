@@ -7,6 +7,16 @@ import { apiFetch } from "@/lib/api";
 import TimePicker from "@/components/time-picker";
 import NumberPicker from "@/components/number-picker";
 import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation";
+import {
+  collectSalaryRoleNames,
+  DEFAULT_SITE_SALARY_CONFIG,
+  isSalaryOnlyRoleName,
+  normalizeSiteSalaryConfig,
+  SALARY_NO_ROLE_LABEL,
+  type SiteSalaryConfig,
+} from "@/components/planning-v2/lib/site-salary-config";
+
+const SALARY_PERCENT_OPTIONS = [100, 125, 150];
 
 export default function EditSitePage() {
   const router = useRouter();
@@ -66,6 +76,8 @@ export default function EditSitePage() {
   const [questions, setQuestions] = useState<SiteQuestion[]>([]);
   /** Max לילות לעובד בשבוע — défaut 3 (contrainte hard du solveur). */
   const [maxNightsPerWorker, setMaxNightsPerWorker] = useState<number>(3);
+  const [salary, setSalary] = useState<SiteSalaryConfig>(() => ({ ...DEFAULT_SITE_SALARY_CONFIG }));
+  const [siteWorkers, setSiteWorkers] = useState<{ id: number; name: string }[]>([]);
 
   function newId(): string {
     try {
@@ -111,6 +123,23 @@ export default function EditSitePage() {
         setMaxNightsPerWorker(
           Number.isFinite(parsedNights) ? Math.max(0, Math.min(7, Math.trunc(parsedNights))) : 3,
         );
+        setSalary(normalizeSiteSalaryConfig(site?.config?.salary));
+        try {
+          const list = await apiFetch<any[]>(`/director/sites/${params.id}/workers`, {
+            cache: "no-store" as any,
+          });
+          const mapped = (Array.isArray(list) ? list : [])
+            .filter((w) => !w?.pending_approval && !w?.pendingApproval)
+            .map((w) => ({
+              id: Number(w?.id),
+              name: String(w?.name || "").trim(),
+            }))
+            .filter((w) => Number.isFinite(w.id) && w.id > 0 && !!w.name)
+            .sort((a, b) => a.name.localeCompare(b.name, "he"));
+          setSiteWorkers(mapped);
+        } catch {
+          setSiteWorkers([]);
+        }
       } catch (e) {
         setError("שגיאה בטעינת אתר");
       } finally {
@@ -132,6 +161,7 @@ export default function EditSitePage() {
             stations,
             questions,
             max_nights_per_worker: Math.max(0, Math.min(7, Math.trunc(maxNightsPerWorker))),
+            salary: normalizeSiteSalaryConfig(salary),
           },
         }),
       });
@@ -222,6 +252,7 @@ export default function EditSitePage() {
               />
             </div>
           </section>
+
 
           {stations.length > 0 && (
             <section className="space-y-3">
@@ -328,6 +359,12 @@ export default function EditSitePage() {
                                 const value = typeof window !== "undefined" ? window.prompt("שם תפקיד") : null;
                                 const trimmed = (value || "").trim();
                                 if (!trimmed) return;
+                                if (isSalaryOnlyRoleName(trimmed)) {
+                                  window.alert(
+                                    `«${SALARY_NO_ROLE_LABEL}» מיועד לחישוב משכורת בלבד ואינו תפקיד בתכנון.`,
+                                  );
+                                  return;
+                                }
                                 setStations((prev) => prev.map((x, i) => (i === idx ? {
                                   ...x,
                                   roles: [...x.roles, { name: trimmed, enabled: false, count: 0 }],
@@ -1095,6 +1132,582 @@ export default function EditSitePage() {
                   </div>
                 ))}
               </div>
+            )}
+          </section>
+
+          <section className="space-y-3 rounded-md border p-3 dark:border-zinc-700">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-semibold">חישוב משכורת (ברוטו)</h2>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  כשמופעל — מופיעים בתכנון הכפתורים «משכורת» / «משכורת חודש». כבוי — הכפתורים מוסתרים
+                  וההגדרות למטה לא בשימוש.
+                </p>
+              </div>
+              <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+                <span className="font-medium text-zinc-600 dark:text-zinc-300">
+                  {salary.enabled ? "מופעל" : "כבוי"}
+                </span>
+                <span className="relative inline-block h-5 w-9">
+                  <input
+                    type="checkbox"
+                    checked={salary.enabled}
+                    onChange={(e) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        enabled: e.target.checked,
+                      }))
+                    }
+                    className="peer sr-only"
+                    aria-label="הפעל או כבה חישוב משכורת"
+                  />
+                  <span className="absolute inset-0 rounded-full bg-zinc-300 transition-colors peer-checked:bg-[#00A8E0] dark:bg-zinc-600" />
+                  <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform translate-x-4 peer-checked:translate-x-0" />
+                </span>
+              </label>
+            </div>
+            {salary.enabled ? (
+            <>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              תעריף שעתי, שעות נוספות לפי חוק (ברירת מחדל: שעה 9 ו־10 ב־125%, משעה 11 ב־150%), שישי/שבת,
+              יום טוב ו־ימי חג לאומיים (עצמאות, זיכרון…). לא חול המועד.
+            </p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold">שכר שעתי בסיסי (₪)</label>
+                <NumberPicker
+                  value={salary.defaultHourlyRate}
+                  onChange={(n) =>
+                    setSalary((prev) => ({
+                      ...prev,
+                      defaultHourlyRate: Math.max(0, n),
+                    }))
+                  }
+                  mode="type"
+                  min={0}
+                  max={9999}
+                  step={0.01}
+                  placeholder="לדוגמה 40"
+                  inputAriaLabel="שכר שעתי בסיסי"
+                  title="הזן שכר שעתי בסיסי"
+                  popupTitle="הזן שכר שעתי"
+                  className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-sm font-semibold">אחוז שבת / ימי חג</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberPicker
+                    value={salary.weekendPremiumPercent}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        weekendPremiumPercent: n,
+                      }))
+                    }
+                    allowedOptions={SALARY_PERCENT_OPTIONS}
+                    min={100}
+                    max={150}
+                    title="אחוז ו׳–א׳"
+                    inputAriaLabel="אחוז שבת"
+                    className="w-full rounded-md border px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                  <NumberPicker
+                    value={salary.yomTovPremiumPercent}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        yomTovPremiumPercent: n,
+                      }))
+                    }
+                    allowedOptions={SALARY_PERCENT_OPTIONS}
+                    min={100}
+                    max={150}
+                    title="אחוז ימי חג"
+                    inputAriaLabel="אחוז ימי חג"
+                    className="w-full rounded-md border px-3 py-2 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                </div>
+                <p className="text-[11px] text-zinc-500">
+                  שמאל: שבת · ימין: יום טוב + חגים לאומיים (עצמאות, זיכרון…) — לא חול המועד
+                </p>
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <label className="block text-sm font-semibold">חלון שבת (ו׳ → א׳)</label>
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span>מ־ו׳</span>
+                  <NumberPicker
+                    value={salary.weekendStartHour}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        weekendStartHour: Math.max(0, Math.min(23, n)),
+                      }))
+                    }
+                    min={0}
+                    max={23}
+                    step={1}
+                    inputAriaLabel="שעת התחלת שבת ביום ו׳"
+                    title="שעת התחלה ביום ו׳"
+                    className="w-20 rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                  <span>:00 עד א׳</span>
+                  <NumberPicker
+                    value={salary.weekendEndHour}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        weekendEndHour: Math.max(0, Math.min(23, n)),
+                      }))
+                    }
+                    min={0}
+                    max={23}
+                    step={1}
+                    inputAriaLabel="שעת סיום שבת ביום א׳"
+                    title="שעת סיום ביום א׳"
+                    className="w-20 rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                  <span>:00</span>
+                </div>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <label className="block text-sm font-semibold">שעות נוספות (לפי מספר השעה ביום)</label>
+                <p className="text-[11px] text-zinc-500">
+                  שעות 1–8 = 100%. כאן מגדירים את האחוז לשעה ה־9, ה־10, ומשעה ה־11 ואילך.
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <label className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700">
+                    <div className="font-medium">שעה 9</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs text-zinc-500">אחוז</span>
+                      <NumberPicker
+                        value={salary.otHour9Percent}
+                        onChange={(n) =>
+                          setSalary((prev) => ({
+                            ...prev,
+                            otHour9Percent: n,
+                          }))
+                        }
+                        allowedOptions={SALARY_PERCENT_OPTIONS}
+                        min={100}
+                        max={150}
+                        inputAriaLabel="אחוז שעה 9"
+                        title="אחוז לשעה 9"
+                        className="w-full rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                      />
+                      <span className="text-xs text-zinc-500">%</span>
+                    </div>
+                  </label>
+                  <label className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700">
+                    <div className="font-medium">שעה 10</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs text-zinc-500">אחוז</span>
+                      <NumberPicker
+                        value={salary.otHour10Percent}
+                        onChange={(n) =>
+                          setSalary((prev) => ({
+                            ...prev,
+                            otHour10Percent: n,
+                          }))
+                        }
+                        allowedOptions={SALARY_PERCENT_OPTIONS}
+                        min={100}
+                        max={150}
+                        inputAriaLabel="אחוז שעה 10"
+                        title="אחוז לשעה 10"
+                        className="w-full rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                      />
+                      <span className="text-xs text-zinc-500">%</span>
+                    </div>
+                  </label>
+                  <label className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700">
+                    <div className="font-medium">שעה 11+</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="text-xs text-zinc-500">אחוז</span>
+                      <NumberPicker
+                        value={salary.otHour11Percent}
+                        onChange={(n) =>
+                          setSalary((prev) => ({
+                            ...prev,
+                            otHour11Percent: n,
+                          }))
+                        }
+                        allowedOptions={SALARY_PERCENT_OPTIONS}
+                        min={100}
+                        max={150}
+                        inputAriaLabel="אחוז שעה 11+"
+                        title="אחוז משעה 11"
+                        className="w-full rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                      />
+                      <span className="text-xs text-zinc-500">%</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-semibold">שכר שעתי + מענק לפי תפקיד</label>
+              <p className="text-[11px] text-zinc-500">
+                אם לעובד יש כמה תפקידים — נלקחים התעריף והמענק הגבוהים ביותר. המענק החודשי מתווסף
+                ב־«משכורת חודש» בלבד. «{SALARY_NO_ROLE_LABEL}» מיועד רק לחישוב משכורת לעובדים בלי
+                תפקיד — לא מופיע כתפקיד בתכנון.
+              </p>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-zinc-500">מענק חודשי ברירת מחדל</span>
+                <NumberPicker
+                  value={salary.defaultMonthlyBonus}
+                  onChange={(n) =>
+                    setSalary((prev) => ({
+                      ...prev,
+                      defaultMonthlyBonus: Math.max(0, n),
+                    }))
+                  }
+                  min={0}
+                  max={20000}
+                  step={50}
+                  placeholder="0"
+                  inputAriaLabel="מענק חודשי ברירת מחדל"
+                  title="בחר מענק חודשי"
+                  className="w-28 rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                />
+                <span className="text-xs text-zinc-500">₪ / חודש</span>
+              </div>
+              <div className="space-y-2">
+                {collectSalaryRoleNames({ stations }).map((roleName) => (
+                  <div
+                    key={roleName}
+                    className={[
+                      "flex flex-wrap items-center gap-2 rounded-md border px-2 py-1.5",
+                      isSalaryOnlyRoleName(roleName)
+                        ? "border-dashed border-[#00A8E0]/50 bg-[#00A8E0]/5 dark:border-[#00A8E0]/40"
+                        : "border-zinc-100 dark:border-zinc-800",
+                    ].join(" ")}
+                  >
+                    <span className="min-w-[5.5rem] text-sm font-medium">
+                      {roleName}
+                      {isSalaryOnlyRoleName(roleName) ? (
+                        <span className="mr-1 text-[10px] font-normal text-zinc-500"> (משכורת בלבד)</span>
+                      ) : null}
+                    </span>
+                    <NumberPicker
+                      value={salary.ratesByRole[roleName] ?? 0}
+                      onChange={(n) => {
+                        setSalary((prev) => {
+                          const next = { ...prev.ratesByRole };
+                          if (n <= 0) delete next[roleName];
+                          else next[roleName] = n;
+                          return { ...prev, ratesByRole: next };
+                        });
+                      }}
+                      mode="type"
+                      min={0}
+                      max={9999}
+                      step={0.01}
+                      placeholder="שעתי"
+                      inputAriaLabel={`שכר שעתי ${roleName}`}
+                      title={`הזן שכר שעתי — ${roleName}`}
+                      popupTitle={`הזן שכר שעתי — ${roleName}`}
+                      className="w-28 rounded-md border px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                    />
+                    <span className="text-xs text-zinc-500">₪/שעה</span>
+                    <NumberPicker
+                      value={salary.monthlyBonusByRole[roleName] ?? 0}
+                      onChange={(n) => {
+                        setSalary((prev) => {
+                          const next = { ...prev.monthlyBonusByRole };
+                          if (n <= 0) delete next[roleName];
+                          else next[roleName] = n;
+                          return { ...prev, monthlyBonusByRole: next };
+                        });
+                      }}
+                      min={0}
+                      max={20000}
+                      step={50}
+                      placeholder="מענק"
+                      inputAriaLabel={`מענק ${roleName}`}
+                      title={`מענק חודשי — ${roleName}`}
+                      className="w-28 rounded-md border px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-950"
+                    />
+                    <span className="text-xs text-zinc-500">מענק ₪/חודש</span>
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-700">
+                <div className="text-sm font-medium">למי להחיל מענק חודשי?</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        monthlyBonusAllWorkers: true,
+                        monthlyBonusWorkerIds: [],
+                        monthlyBonusWorkerNames: [],
+                      }))
+                    }
+                    className={[
+                      "rounded-md border px-3 py-1.5 text-sm",
+                      salary.monthlyBonusAllWorkers
+                        ? "border-[#00A8E0] bg-[#00A8E0]/10 text-[#0077a3]"
+                        : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900",
+                    ].join(" ")}
+                  >
+                    כל העובדים
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        monthlyBonusAllWorkers: false,
+                      }))
+                    }
+                    className={[
+                      "rounded-md border px-3 py-1.5 text-sm",
+                      !salary.monthlyBonusAllWorkers
+                        ? "border-[#00A8E0] bg-[#00A8E0]/10 text-[#0077a3]"
+                        : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900",
+                    ].join(" ")}
+                  >
+                    עובדים נבחרים בלבד
+                  </button>
+                </div>
+                {!salary.monthlyBonusAllWorkers ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-zinc-500">
+                      סמנו את העובדים שיקבלו מענק
+                      {salary.monthlyBonusWorkerIds.length > 0
+                        ? ` (${salary.monthlyBonusWorkerIds.length} נבחרו)`
+                        : " — אף אחד לא נבחר עדיין"}
+                      . הסכום לפי התפקיד / ברירת המחדל למעלה.
+                    </p>
+                    {siteWorkers.length === 0 ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                        לא נמצאו עובדים באתר. הוסיפו עובדים בתכנון ואז חזרו לכאן.
+                      </p>
+                    ) : (
+                      <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
+                        {siteWorkers.map((w) => {
+                          const checked = salary.monthlyBonusWorkerIds.includes(w.id);
+                          return (
+                            <label
+                              key={w.id}
+                              className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  const on = e.target.checked;
+                                  setSalary((prev) => {
+                                    const ids = new Set(prev.monthlyBonusWorkerIds);
+                                    const names = new Set(prev.monthlyBonusWorkerNames);
+                                    if (on) {
+                                      ids.add(w.id);
+                                      names.add(w.name);
+                                    } else {
+                                      ids.delete(w.id);
+                                      names.delete(w.name);
+                                    }
+                                    return {
+                                      ...prev,
+                                      monthlyBonusAllWorkers: false,
+                                      monthlyBonusWorkerIds: Array.from(ids),
+                                      monthlyBonusWorkerNames: Array.from(names),
+                                    };
+                                  });
+                                }}
+                                className="h-4 w-4 accent-[#00A8E0]"
+                              />
+                              <span>{w.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t pt-3 dark:border-zinc-800">
+              <label className="block text-sm font-semibold">נסיעות (לפי משמרת / שמירה)</label>
+              <p className="text-[11px] text-zinc-500">
+                תוספת לכל משמרת שבה העובד עובד — סכום קבוע או שעות שכר ב־100% בלבד (בלי אחוזי שבת /
+                שעות נוספות). שעות הנסיעות לא נספרות כזמן עבודה. אפשר להחיל על כל העובדים או רק על
+                נבחרים.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { id: "none", label: "ללא" },
+                    { id: "fixed", label: "סכום קבוע למשמרת" },
+                    { id: "hours", label: "שעות שכר למשמרת" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setSalary((prev) => ({ ...prev, travelMode: opt.id }))}
+                    className={[
+                      "rounded-md border px-3 py-1.5 text-sm",
+                      salary.travelMode === opt.id
+                        ? "border-[#00A8E0] bg-[#00A8E0]/10 text-[#0077a3]"
+                        : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900",
+                    ].join(" ")}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {salary.travelMode === "fixed" ? (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span>סכום למשמרת</span>
+                  <NumberPicker
+                    value={salary.travelFixedPerShift}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        travelFixedPerShift: Math.max(0, n),
+                      }))
+                    }
+                    min={0}
+                    max={500}
+                    step={5}
+                    inputAriaLabel="סכום נסיעות למשמרת"
+                    title="סכום נסיעות למשמרת"
+                    className="w-28 rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                  <span className="text-xs text-zinc-500">₪</span>
+                </div>
+              ) : null}
+              {salary.travelMode === "hours" ? (
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span>שעות שכר למשמרת</span>
+                  <NumberPicker
+                    value={salary.travelHoursPerShift}
+                    onChange={(n) =>
+                      setSalary((prev) => ({
+                        ...prev,
+                        travelHoursPerShift: Math.max(0, n),
+                      }))
+                    }
+                    min={0}
+                    max={8}
+                    step={0.25}
+                    inputAriaLabel="שעות נסיעות למשמרת"
+                    title="שעות שכר למשמרת"
+                    className="w-28 rounded-md border px-2 py-1 dark:border-zinc-700 dark:bg-zinc-950"
+                  />
+                  <span className="text-xs text-zinc-500">
+                    × תעריף שעתי של העובד (100%, בלי אחוזים)
+                  </span>
+                </div>
+              ) : null}
+              {salary.travelMode !== "none" ? (
+                <div className="space-y-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-700">
+                  <div className="text-sm font-medium">למי להחיל נסיעות?</div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSalary((prev) => ({
+                          ...prev,
+                          travelAllWorkers: true,
+                          travelWorkerIds: [],
+                          travelWorkerNames: [],
+                        }))
+                      }
+                      className={[
+                        "rounded-md border px-3 py-1.5 text-sm",
+                        salary.travelAllWorkers
+                          ? "border-[#00A8E0] bg-[#00A8E0]/10 text-[#0077a3]"
+                          : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900",
+                      ].join(" ")}
+                    >
+                      כל העובדים
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSalary((prev) => ({
+                          ...prev,
+                          travelAllWorkers: false,
+                        }))
+                      }
+                      className={[
+                        "rounded-md border px-3 py-1.5 text-sm",
+                        !salary.travelAllWorkers
+                          ? "border-[#00A8E0] bg-[#00A8E0]/10 text-[#0077a3]"
+                          : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-900",
+                      ].join(" ")}
+                    >
+                      עובדים נבחרים בלבד
+                    </button>
+                  </div>
+                  {!salary.travelAllWorkers ? (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-zinc-500">
+                        סמנו את העובדים שיקבלו נסיעות
+                        {salary.travelWorkerIds.length > 0
+                          ? ` (${salary.travelWorkerIds.length} נבחרו)`
+                          : " — אף אחד לא נבחר עדיין"}
+                        .
+                      </p>
+                      {siteWorkers.length === 0 ? (
+                        <p className="text-xs text-amber-700 dark:text-amber-300">
+                          לא נמצאו עובדים באתר. הוסיפו עובדים בתכנון ואז חזרו לכאן.
+                        </p>
+                      ) : (
+                        <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-zinc-100 p-2 dark:border-zinc-800">
+                          {siteWorkers.map((w) => {
+                            const checked = salary.travelWorkerIds.includes(w.id);
+                            return (
+                              <label
+                                key={w.id}
+                                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-900"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const on = e.target.checked;
+                                    setSalary((prev) => {
+                                      const ids = new Set(prev.travelWorkerIds);
+                                      const names = new Set(prev.travelWorkerNames);
+                                      if (on) {
+                                        ids.add(w.id);
+                                        names.add(w.name);
+                                      } else {
+                                        ids.delete(w.id);
+                                        names.delete(w.name);
+                                      }
+                                      return {
+                                        ...prev,
+                                        travelAllWorkers: false,
+                                        travelWorkerIds: Array.from(ids),
+                                        travelWorkerNames: Array.from(names),
+                                      };
+                                    });
+                                  }}
+                                  className="h-4 w-4 accent-[#00A8E0]"
+                                />
+                                <span>{w.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            </>
+            ) : (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                הפעילו את חישוב המשכורת כדי להגדיר תעריפים ולהציג את כפתורי «משכורת» בתכנון.
+              </p>
             )}
           </section>
 

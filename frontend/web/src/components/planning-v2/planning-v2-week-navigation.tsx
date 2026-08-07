@@ -1,8 +1,9 @@
 "use client";
 
-import { type ReactElement, useEffect, useState } from "react";
+import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { addDays, formatHebDate, getWeekKeyISO } from "./lib/week";
+import { getJewishHolidaysForMonth } from "./lib/jewish-holidays";
 
 type PlanningV2WeekNavigationProps = {
   siteId: string;
@@ -20,6 +21,18 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
   useEffect(() => {
     setCalendarMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1));
   }, [weekStart]);
+
+  const monthHolidays = useMemo(
+    () => getJewishHolidaysForMonth(calendarMonth.getFullYear(), calendarMonth.getMonth()),
+    [calendarMonth],
+  );
+  const holidayByIso = useMemo(() => {
+    const map = new Map<string, { title: string; isPremiumHoliday: boolean }>();
+    for (const h of monthHolidays) {
+      map.set(h.iso, { title: h.title, isPremiumHoliday: h.isPremiumHoliday });
+    }
+    return map;
+  }, [monthHolidays]);
 
   function updateWeekStart(nextWeekStart: Date) {
     const normalized = new Date(nextWeekStart);
@@ -242,11 +255,14 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
                   wk.setHours(0, 0, 0, 0);
                   const isCurrentWeek = weekStartForDate.getTime() === wk.getTime();
                   const hasPlan = hasSavedPlan(date);
+                  const dayIso = iso(date);
+                  const holiday = holidayByIso.get(dayIso);
 
                   days.push(
                     <button
                       key={i}
                       type="button"
+                      title={holiday?.title || undefined}
                       onClick={() => {
                         const selectedWeekStart = new Date(date);
                         selectedWeekStart.setDate(date.getDate() - date.getDay());
@@ -262,12 +278,25 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
                         isCurrentWeek && isCurrentMonth && !isToday
                           ? "border border-[#00A8E0] bg-[#00A8E0]/20"
                           : "",
+                        holiday?.isPremiumHoliday && isCurrentMonth && !isToday
+                          ? "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
+                          : "",
+                        holiday && !holiday.isPremiumHoliday && isCurrentMonth && !isToday
+                          ? "ring-1 ring-amber-300/70 dark:ring-amber-700/70"
+                          : "",
                         isWeekStart && isCurrentMonth ? "font-semibold" : "",
-                        isCurrentMonth && !isToday && !isCurrentWeek ? "text-zinc-700 dark:text-zinc-300" : "",
+                        isCurrentMonth && !isToday && !isCurrentWeek && !holiday
+                          ? "text-zinc-700 dark:text-zinc-300"
+                          : "",
                         "hover:bg-zinc-100 dark:hover:bg-zinc-800",
                       ].join(" ")}
                     >
                       <span>{date.getDate()}</span>
+                      {holiday ? (
+                        <span className="mt-0.5 max-w-full truncate px-0.5 text-[8px] leading-tight opacity-90">
+                          {holiday.title}
+                        </span>
+                      ) : null}
                       {hasPlan ? <span className="absolute bottom-0.5 h-1 w-1 rounded-full bg-red-500" /> : null}
                     </button>,
                   );
@@ -275,6 +304,12 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
                 return days;
               })()}
             </div>
+            {monthHolidays.length > 0 ? (
+              <p className="mt-3 text-[11px] text-zinc-500">
+                צהוב = יום טוב + ימי חג לאומיים (עצמאות, זיכרון…) — 150% במשכורת. חול המועד /
+                ל״ג בעומר וכד׳ — לא.
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

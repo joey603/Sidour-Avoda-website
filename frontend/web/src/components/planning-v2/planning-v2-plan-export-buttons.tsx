@@ -19,6 +19,13 @@ import {
   triggerDownloadBlob,
 } from "./lib/planning-v2-plan-export";
 import type { MonthWeekScreenshotInput } from "./lib/planning-v2-schedule-screenshot";
+import {
+  computeSalaryReportForWeek,
+  mergeSalaryReports,
+  type SalaryReport,
+} from "./lib/salary-calculator";
+import { isSiteSalaryEnabled } from "./lib/site-salary-config";
+import { PlanningV2SalaryReportModal } from "./planning-v2-salary-report-modal";
 
 type PlanningV2PlanExportButtonsProps = {
   siteId: string;
@@ -88,6 +95,16 @@ export function PlanningV2PlanExportButtons({
   const [selectedYear, setSelectedYear] = useState(() => weekStart.getFullYear());
   const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => weekStart.getMonth());
   const [monthPhotoExporting, setMonthPhotoExporting] = useState(false);
+  const [salaryOpen, setSalaryOpen] = useState(false);
+  const [salaryTitle, setSalaryTitle] = useState("משכורת");
+  const [salaryLoading, setSalaryLoading] = useState(false);
+  const [salaryError, setSalaryError] = useState<string | null>(null);
+  const salaryFeatureEnabled = useMemo(
+    () => isSiteSalaryEnabled((site?.config as Record<string, unknown> | undefined) || null),
+    [site?.config],
+  );
+  const [salaryReport, setSalaryReport] = useState<SalaryReport | null>(null);
+  const [salaryMonthOpen, setSalaryMonthOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState<{
     blob: Blob;
     url: string;
@@ -310,6 +327,72 @@ export function PlanningV2PlanExportButtons({
 
   const selectedMonthLabel = `${HEBREW_MONTH_NAMES[selectedMonthIndex] || ""} ${selectedYear}`;
 
+  const handleSalaryWeek = useCallback(() => {
+    setSalaryTitle("משכורת שבוע");
+    setSalaryError(null);
+    setSalaryLoading(false);
+    try {
+      const report = computeSalaryReportForWeek({
+        weekStart,
+        site,
+        workers,
+        assignments,
+        pulls,
+      });
+      setSalaryReport(report);
+      setSalaryOpen(true);
+    } catch (e: unknown) {
+      setSalaryError(String((e as Error)?.message || "חישוב נכשל"));
+      setSalaryReport(null);
+      setSalaryOpen(true);
+    }
+  }, [assignments, pulls, site, weekStart, workers]);
+
+  const handleSalaryMonth = useCallback(async () => {
+    setSalaryMonthOpen(false);
+    setSalaryTitle(`משכורת חודש · ${HEBREW_MONTH_NAMES[selectedMonthIndex] || ""} ${selectedYear}`);
+    setSalaryError(null);
+    setSalaryLoading(true);
+    setSalaryReport(null);
+    setSalaryOpen(true);
+    try {
+      const weekStarts = weekStartsIntersectingMonth(selectedYear, selectedMonthIndex);
+      const reports: SalaryReport[] = [];
+      for (const ws of weekStarts) {
+        const weekIso = getWeekKeyISO(ws);
+        const plan = await fetchWeekPlanPreferred(siteId, weekIso);
+        if (!plan?.assignments) continue;
+        reports.push(
+          computeSalaryReportForWeek({
+            weekStart: ws,
+            site,
+            workers,
+            assignments: plan.assignments,
+            pulls: plan.pulls || null,
+            periodLabel: weekIso,
+          }),
+        );
+      }
+      if (reports.length === 0) {
+        setSalaryError("לא נמצא תכנון שמור לחודש זה");
+        setSalaryReport(null);
+      } else {
+        setSalaryReport(
+          mergeSalaryReports(
+            reports,
+            `${HEBREW_MONTH_NAMES[selectedMonthIndex] || ""} ${selectedYear}`,
+            { applyMonthlyBonus: true },
+          ),
+        );
+      }
+    } catch (e: unknown) {
+      setSalaryError(String((e as Error)?.message || "חישוב נכשל"));
+      setSalaryReport(null);
+    } finally {
+      setSalaryLoading(false);
+    }
+  }, [selectedMonthIndex, selectedYear, site, siteId, workers]);
+
   return (
     <>
       <div className="mt-4 flex w-full flex-col items-start gap-2 md:flex-row md:items-center md:justify-between" dir="ltr">
@@ -381,8 +464,108 @@ export function PlanningV2PlanExportButtons({
             </svg>
             צילום חודש
           </button>
+          {salaryFeatureEnabled ? (
+            <>
+              <button
+                type="button"
+                onClick={() => handleSalaryWeek()}
+                disabled={!canVisualize}
+                className={btnClass}
+                title="חישוב משכורת ברוטו לשבוע לפי הגדרות האתר (שעות נוספות / שבת / חג)"
+                aria-label="משכורת"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+                  <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c2.03-.39 3.7-1.61 3.7-3.7 0-2.58-2.23-3.56-4.8-4.25z" />
+                </svg>
+                משכורת
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearPhotoPreview();
+                  setSalaryMonthOpen(true);
+                }}
+                className={btnClass}
+                title="חישוב משכורת ברוטו לחודש לפי כל השבועות השמורים"
+                aria-label="משכורת חודש"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+                  <path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z" />
+                </svg>
+                משכורת חודש
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
+
+      {salaryFeatureEnabled ? (
+      <PlanningV2SalaryReportModal
+        open={salaryOpen}
+        title={salaryTitle}
+        report={salaryReport}
+        loading={salaryLoading}
+        error={salaryError}
+        onClose={() => {
+          if (salaryLoading) return;
+          setSalaryOpen(false);
+        }}
+      />
+      ) : null}
+
+      {salaryFeatureEnabled && salaryMonthOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSalaryMonthOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border bg-white p-4 shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+            dir="rtl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 text-lg font-semibold">משכורת חודש</div>
+            <label className="mb-1 block text-sm font-medium">חודש</label>
+            <div className="mb-4 flex gap-2">
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                value={selectedMonthIndex}
+                onChange={(e) => setSelectedMonthIndex(Number(e.target.value))}
+              >
+                {HEBREW_MONTH_NAMES.map((label, idx) => (
+                  <option key={label} value={idx}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                className="w-28 rounded-md border px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value) || selectedYear)}
+              />
+            </div>
+            <p className="mb-4 text-xs text-zinc-500">
+              יחושב ברוטו לפי כל השבועות עם תכנון שמור בחודש, לפי תעריפים והגדרות שעות נוספות/שבת/חג באתר.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700"
+                onClick={() => setSalaryMonthOpen(false)}
+              >
+                ביטול
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
+                onClick={() => void handleSalaryMonth()}
+              >
+                חשב
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {monthPhotoOpen ? (
         <div
