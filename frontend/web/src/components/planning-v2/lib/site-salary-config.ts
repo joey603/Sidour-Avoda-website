@@ -137,12 +137,12 @@ function normalizeNameList(raw: unknown): string[] {
   return out;
 }
 
-const SALARY_PERCENT_CHOICES = [100, 125, 150] as const;
+const SALARY_PERCENT_CHOICES: number[] = [100, 125, 150];
 
 function snapSalaryPercent(v: unknown, fallback: number): number {
   const n = Number(v);
   const base = Number.isFinite(n) ? n : fallback;
-  let best = SALARY_PERCENT_CHOICES[0];
+  let best = SALARY_PERCENT_CHOICES[0] ?? 100;
   let bestDist = Math.abs(best - base);
   for (const x of SALARY_PERCENT_CHOICES) {
     const d = Math.abs(x - base);

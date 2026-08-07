@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useIntentionalPress } from "./use-intentional-press";
 
 interface TimePickerProps {
   value: string; // Format HH:MM
@@ -53,7 +54,7 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
     setShowPopup(false);
   };
 
-  const openPopup = () => {
+  const openPopup = useCallback(() => {
     if (disabled) return;
     openedAtRef.current = Date.now();
     if (value) {
@@ -64,7 +65,9 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
       }
     }
     setShowPopup(true);
-  };
+  }, [disabled, value]);
+
+  const press = useIntentionalPress(openPopup, disabled);
 
   const hours = Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, "0"));
   const minutes = Array.from({ length: 60 }, (_, i) => i.toString().padStart(2, "0"));
@@ -76,22 +79,7 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
         value={value || ""}
         readOnly
         disabled={disabled}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          openPopup();
-        }}
-        onClick={() => {
-          if (disabled) return;
-          openPopup();
-        }}
-        onKeyDown={(e) => {
-          if (disabled) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            openPopup();
-          }
-        }}
+        {...press}
         className={`${className} min-h-10 cursor-pointer touch-manipulation`}
         dir={dir}
         inputMode="none"

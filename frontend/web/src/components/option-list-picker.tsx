@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useIntentionalPress } from "./use-intentional-press";
 
 export interface OptionListItem {
   value: string;
@@ -64,12 +65,14 @@ export default function OptionListPicker({
     setShowPopup(false);
   };
 
-  const openPopup = () => {
+  const openPopup = useCallback(() => {
     if (disabled) return;
     openedAtRef.current = Date.now();
     setSelectedValue(value);
     setShowPopup(true);
-  };
+  }, [disabled, value]);
+
+  const press = useIntentionalPress(openPopup, disabled);
 
   return (
     <>
@@ -78,22 +81,7 @@ export default function OptionListPicker({
         value={displayLabel}
         readOnly
         disabled={disabled}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          openPopup();
-        }}
-        onClick={() => {
-          if (disabled) return;
-          openPopup();
-        }}
-        onKeyDown={(e) => {
-          if (disabled) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            openPopup();
-          }
-        }}
+        {...press}
         className={`${className} min-h-10 cursor-pointer touch-manipulation`}
         inputMode="none"
         aria-haspopup="dialog"

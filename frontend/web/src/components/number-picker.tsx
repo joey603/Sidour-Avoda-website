@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useIntentionalPress } from "./use-intentional-press";
 
 interface NumberPickerProps {
   value: number;
@@ -125,28 +126,30 @@ export default function NumberPicker({
     }
   }, [showPopup]);
 
-  const snapToAllowed = (numValue: number): number => {
-    if (discrete && discrete.length > 0) {
-      if (discrete.includes(numValue)) return numValue;
-      let best = discrete[0];
-      let bestDist = Math.abs(best - numValue);
-      for (const x of discrete) {
-        const d = Math.abs(x - numValue);
-        if (d < bestDist || (d === bestDist && x < best)) {
-          best = x;
-          bestDist = d;
+  const snapToAllowed = useCallback(
+    (numValue: number): number => {
+      if (discrete && discrete.length > 0) {
+        if (discrete.includes(numValue)) return numValue;
+        let best = discrete[0];
+        let bestDist = Math.abs(best - numValue);
+        for (const x of discrete) {
+          const d = Math.abs(x - numValue);
+          if (d < bestDist || (d === bestDist && x < best)) {
+            best = x;
+            bestDist = d;
+          }
         }
+        return best;
       }
-      return best;
-    }
-    const clamped = Math.max(min, Math.min(max, numValue));
-    // En mode saisie : pas de snap agressif au step (garder ce que l’utilisateur tape, borné)
-    if (isTypeMode) {
-      const d = stepDecimals(step > 0 ? step : 0.01);
-      return Number(clamped.toFixed(Math.max(d, 2)));
-    }
-    return roundToStep(clamped, step);
-  };
+      const clamped = Math.max(min, Math.min(max, numValue));
+      if (isTypeMode) {
+        const d = stepDecimals(step > 0 ? step : 0.01);
+        return Number(clamped.toFixed(Math.max(d, 2)));
+      }
+      return roundToStep(clamped, step);
+    },
+    [discrete, min, max, isTypeMode, step],
+  );
 
   const handleSave = () => {
     const normalized = String(selectedValue || "").trim().replace(",", ".");
@@ -157,7 +160,7 @@ export default function NumberPicker({
     }
   };
 
-  const handleOpen = () => {
+  const handleOpen = useCallback(() => {
     if (disabled) return;
     openedAtRef.current = Date.now();
     setShowPopup(true);
@@ -173,7 +176,9 @@ export default function NumberPicker({
     } else {
       setSelectedValue(String(min));
     }
-  };
+  }, [disabled, value, isTypeMode, discrete, min, snapToAllowed]);
+
+  const press = useIntentionalPress(handleOpen, disabled);
 
   useEffect(() => {
     if (!showPopup || !isTypeMode) return;
@@ -196,22 +201,7 @@ export default function NumberPicker({
         disabled={disabled}
         aria-label={inputAriaLabel}
         title={title}
-        onPointerDown={(e) => {
-          if (disabled) return;
-          e.preventDefault();
-          handleOpen();
-        }}
-        onClick={() => {
-          if (disabled) return;
-          handleOpen();
-        }}
-        onKeyDown={(e) => {
-          if (disabled) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            handleOpen();
-          }
-        }}
+        {...press}
         className={`${className} min-h-10 cursor-pointer touch-manipulation`}
         inputMode="none"
         placeholder={placeholder}
