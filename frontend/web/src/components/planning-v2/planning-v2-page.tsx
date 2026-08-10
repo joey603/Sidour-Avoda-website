@@ -1,11 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
 import { LoadingOverlay } from "@/components/loading-animation";
 import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 import { PlanningV2Header } from "./planning-v2-header";
@@ -21,11 +19,9 @@ import { PlanningV2PlanExportButtons } from "./planning-v2-plan-export-buttons";
 import {
   buildEventAvailabilityLocks,
   countEventAssignmentsPerWorkerName,
-  isShiftLockedByEvent,
-  locksForWorkerName,
   stripEventLocksFromAvailabilityMap,
 } from "./lib/event-availability-locks";
-import type { PlanningV2PullEntry, PlanningV2PullsMap, SiteEvent, WorkerAvailability } from "./types";
+import type { PlanningV2PullsMap, SiteEvent, WorkerAvailability } from "./types";
 import { EMPTY_WORKER_AVAILABILITY } from "./lib/constants";
 import { PlanningV2FullscreenVisualization } from "./planning-v2-fullscreen-visualization";
 import { PlanningV2ActionBar } from "./planning-v2-action-bar";
@@ -35,89 +31,22 @@ import { PlanningWorkersSection } from "./workers/planning-workers-section";
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { usePlanningV2PlanController } from "./hooks/use-planning-v2-plan-controller";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
-import { buildDistinctWorkerColorMap, workerNameChipColor } from "./lib/worker-name-chip-color";
-import { analyzeManualSlotDrop, pullEditOnlyViaPopupMessage, workerParticipatesInPull, type ManualDropFlags } from "./lib/planning-v2-manual-full-drop";
-import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
+import { buildDistinctWorkerColorMap } from "./lib/worker-name-chip-color";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
-import { getRequiredFor } from "./lib/station-grid-helpers";
+import { PlanningV2LinkedSitesRail } from "./planning-v2-linked-sites-rail";
 import { getWeekKeyISO } from "./lib/week";
-import { computeLinkedSiteHoleEntries } from "./lib/linked-site-holes";
 import {
-  clearLinkedPlansFromMemory,
-  clearMultiSiteNavigationInApp,
-  countLinkedPlanVisibleAlternatives,
-  MULTI_SITE_NAV_FLAG,
   readLinkedPlansFromMemory,
   readMultiSiteNavigationInApp,
-  resolveAssignmentsForAlternative,
-  resolvePullsForAlternative,
-  saveLinkedPlansToMemory,
-  type LinkedSitePlan,
 } from "./lib/multi-site-linked-memory";
-import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-const PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX = "planning_v2_linked_generation_stop_visible_";
-
-function readLinkedGenerationStopVisibleCountFromSession(weekIso: string): number | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = sessionStorage.getItem(`${PLANNING_V2_LINKED_GENERATION_STOP_VISIBLE_PREFIX}${weekIso}`);
-    const value = raw == null ? NaN : Number(raw);
-    if (!Number.isFinite(value) || value <= 0) return null;
-    return Math.max(1, Math.trunc(value));
-  } catch {
-    return null;
-  }
-}
-
-type PlanningV2AlternativesBarSnapshot = {
-  alternativeCount: number;
-  selectedAlternativeIndex: number;
-  selectedAlternativeDisplayIndex: number;
-  alternativesFiltered: boolean;
-  alternativesTotalCount: number;
-};
-
-function normWorkerName(value: string): string {
-  return String(value || "")
-    .normalize("NFKC")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function planningV2PullEntryIsReal(e: PlanningV2PullEntry | undefined): boolean {
-  const beforeName = normWorkerName(String(e?.before?.name || ""));
-  const afterName = normWorkerName(String(e?.after?.name || ""));
-  return !!beforeName && !!afterName && beforeName !== afterName;
-}
-
-function removeGuardDisplayForSlot(
-  pulls: PlanningV2PullsMap | null | undefined,
-  key: string,
-): { pulls: PlanningV2PullsMap; changed: boolean } {
-  const next = JSON.parse(JSON.stringify((pulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
-  const existing = next[key];
-  if (!existing?.guardDisplay) {
-    return { pulls: next, changed: false };
-  }
-  const nextEntry: PlanningV2PullEntry = { ...existing };
-  delete nextEntry.guardDisplay;
-  if (planningV2PullEntryIsReal(nextEntry)) {
-    next[key] = nextEntry;
-  } else {
-    delete next[key];
-  }
-  return { pulls: next, changed: true };
-}
-
-function truncateMobile6(value: unknown): string {
-  const s = String(value ?? "");
-  const chars = Array.from(s);
-  return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
-}
-
-function isRtlName(value: string): boolean {
-  return /[\u0590-\u05FF]/.test(String(value || ""));
-}
+import { normWorkerName } from "./lib/planning-v2-worker-name";
+import { usePlanningV2FullscreenViz } from "./hooks/use-planning-v2-fullscreen-viz";
+import { usePlanningV2SessionLifecycle } from "./hooks/use-planning-v2-session-lifecycle";
+import { usePlanningV2SavedEditMode } from "./hooks/use-planning-v2-saved-edit-mode";
+import { usePlanningV2ManualEditing } from "./hooks/use-planning-v2-manual-editing";
+import { usePlanningV2PullsEditing } from "./hooks/use-planning-v2-pulls-editing";
+import { usePlanningV2AlternativesUi } from "./hooks/use-planning-v2-alternatives-ui";
+import { usePlanningV2LinkedMemory } from "./hooks/use-planning-v2-linked-memory";
 
 function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const {
@@ -177,74 +106,26 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     return Array.from(s).sort((a, b) => a - b);
   }, [siteId, linkedSites]);
   const router = useRouter();
-  const [editingSaved, setEditingSaved] = useState(false);
-  const [editingSavedGenerationStarted, setEditingSavedGenerationStarted] = useState(false);
+  usePlanningV2SessionLifecycle();
+  const { visualizationOpen, setVisualizationOpen, fullscreenReveal } = usePlanningV2FullscreenViz();
+  const {
+    editingSaved,
+    setEditingSaved,
+    editingSavedGenerationStarted,
+    setEditingSavedGenerationStarted,
+    isSavedMode,
+    weekPlanSaveBadgeConfig,
+    showSavedPlanEditBadge,
+  } = usePlanningV2SavedEditMode(weekPlan, weekStart);
   const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
   const [shiftHoursModeStationIdx, setShiftHoursModeStationIdx] = useState<number | null>(null);
-  const [manualConfirm, setManualConfirm] = useState<{
-    title: string;
-    body: string;
-    resolve: (v: boolean) => void;
-  } | null>(null);
-  const [manualDragWorkerName, setManualDragWorkerName] = useState<string | null>(null);
-  const [manualSelectSource, setManualSelectSource] = useState<ManualDragSource | null>(null);
-  /** Début de drag / sélection עובד → quitter משיכה / שינוי שעות. */
-  const handleDraggingWorkerChange = useCallback((workerName: string | null) => {
-    if (workerName) {
-      setPullsModeStationIdx(null);
-      setShiftHoursModeStationIdx(null);
-    }
-    setManualDragWorkerName(workerName);
-    if (!workerName) setManualSelectSource(null);
-  }, []);
-  const handleWorkerSelectToggle = useCallback(
-    (workerName: string, source: ManualDragSource | null = null) => {
-      const nm = String(workerName || "").trim();
-      if (!nm) return;
-      const nameMatch =
-        !!manualDragWorkerName && normWorkerName(manualDragWorkerName) === normWorkerName(nm);
-      const sourceMatch =
-        !source && !manualSelectSource
-          ? true
-          : !!source &&
-            !!manualSelectSource &&
-            source.dayKey === manualSelectSource.dayKey &&
-            source.shiftName === manualSelectSource.shiftName &&
-            source.stationIndex === manualSelectSource.stationIndex &&
-            source.slotIndex === manualSelectSource.slotIndex;
-      if (nameMatch && sourceMatch) {
-        setManualDragWorkerName(null);
-        setManualSelectSource(null);
-        return;
-      }
-      setPullsModeStationIdx(null);
-      setShiftHoursModeStationIdx(null);
-      setManualDragWorkerName(nm);
-      setManualSelectSource(source);
-    },
-    [manualDragWorkerName, manualSelectSource],
-  );
-  const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [weekSiteEvents, setWeekSiteEvents] = useState<SiteEvent[]>([]);
-  const [summaryFilterState, setSummaryFilterState] = useState<{
-    indices: number[];
-    hasActiveFilters: boolean;
-  }>({ indices: [], hasActiveFilters: false });
   const visibleAlternativeCountRef = useRef(0);
   const getVisibleAlternativeCount = useCallback(() => visibleAlternativeCountRef.current, []);
-  const [visualizationOpen, setVisualizationOpen] = useState(false);
-  const [fullscreenReveal, setFullscreenReveal] = useState(false);
-  const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(() => navigationInApp);
-  const lastCurrentSiteMemorySyncRef = useRef("");
   /** Clic sur une ligne du סיכום שיבוצים → surbrillance de l’עובד dans le גריד. */
   const [summaryHighlightWorkerName, setSummaryHighlightWorkerName] = useState<string | null>(null);
-  const [pullScopeDialog, setPullScopeDialog] = useState<{
-    mode: "upsert" | "remove";
-    kind?: "pull" | "guard_hours";
-    resolve: (scope: "current_only" | "all_sites" | null) => void;
-  } | null>(null);
 
   const eventLocksByWorkerId = useMemo(
     () =>
@@ -282,162 +163,77 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
   const protectOfficialSavedPlan = hasOfficialSavedWeekPlan && !editingSaved;
 
+  /** Changement de semaine sans remount : reset outils locaux (édition saved → hook). */
   useEffect(() => {
-    if (!editingSaved) {
-      setEditingSavedGenerationStarted(false);
-    }
-  }, [editingSaved]);
-
-  /** Changement de semaine sans remount : reset modes édition / outils locaux. */
-  useEffect(() => {
-    setEditingSaved(false);
-    setEditingSavedGenerationStarted(false);
     setPullsModeStationIdx(null);
     setShiftHoursModeStationIdx(null);
-    setManualDragWorkerName(null);
-    setManualSelectSource(null);
     setSummaryHighlightWorkerName(null);
     setWeekSiteEvents([]);
   }, [weekStart]);
 
-  /** חלופות : piloté par l’état des variantes, pas par le contenu affiché momentanément dans la grille. */
-  const alternativesUiEnabled = useMemo(
-    () =>
-      plan.alternativesUnlocked &&
-      !plan.isManual &&
-      plan.alternativeCount >= 1,
-    [plan.alternativesUnlocked, plan.isManual, plan.alternativeCount],
+  const hasMultiWorkersThisWeek = useMemo(
+    () => workers.some((w) => Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1),
+    [workers],
   );
+  const hasLinkedSitesRail = linkedSites.length > 1 && hasMultiWorkersThisWeek;
 
-  /** Recalculer la barre « אתרים מקושרים » quand sessionStorage (linked plans) change — le useMemo lit la mémoire sans que les autres deps bougent (ex. pendant SSE). */
+  // État partagé Alts ↔ LinkedMemory (évite dépendance circulaire entre hooks).
+  const [multiSiteNavigationLoading, setMultiSiteNavigationLoading] = useState(() => navigationInApp);
   const [linkedPlansMemoryTick, setLinkedPlansMemoryTick] = useState(0);
-  useEffect(() => {
-    if (linkedSites.length <= 1) return;
-    const bump = () => {
-      // Pendant le streaming SSE, ne pas re-render toute la page à chaque alternative
-      // (sinon les clics חלופות se mettent en file et « rattrapent » ensuite).
-      if (plan.generationRunning) return;
-      setLinkedPlansMemoryTick((n) => n + 1);
-    };
-    window.addEventListener("linked-plans-memory-updated", bump as EventListener);
-    return () => window.removeEventListener("linked-plans-memory-updated", bump as EventListener);
-  }, [linkedSites.length, plan.generationRunning]);
 
-  const prevLinkedSitesLengthRef = useRef<number>(linkedSites.length);
-  useEffect(() => {
-    const prev = prevLinkedSitesLengthRef.current;
-    if (prev <= 1 && linkedSites.length > 1) {
-      queueMicrotask(() => setLinkedPlansMemoryTick((n) => n + 1));
-    }
-    if (prev > 1 && linkedSites.length <= 1) {
-      setShowLinkedSitesRail(false);
-    }
-    prevLinkedSitesLengthRef.current = linkedSites.length;
-  }, [linkedSites.length]);
-
-  /** Masquer חלופות si la grille du site courant est vide, sauf multi-site avec un autre site non vide. */
-  const currentGridNonEmpty = useMemo(
-    () => assignmentsNonEmpty(plan.displayAssignments),
-    [plan.displayAssignments],
-  );
-  const otherLinkedSiteGridNonEmpty = useMemo(() => {
-    if (linkedSites.length <= 1 || protectOfficialSavedPlan) return false;
-    const mem = readLinkedPlansFromMemory(weekStart);
-    const plansBySite = mem?.plansBySite;
-    if (!plansBySite || typeof plansBySite !== "object") return false;
-    const currentKey = String(siteId);
-    const altIdx = plan.selectedAlternativeIndex;
-    for (const ls of linkedSites) {
-      const key = String(ls.id);
-      if (key === currentKey) continue;
-      const sitePlan = plansBySite[key] as LinkedSitePlan | undefined;
-      if (!sitePlan) continue;
-      const asg = resolveAssignmentsForAlternative(sitePlan, altIdx);
-      if (assignmentsNonEmpty(asg)) return true;
-    }
-    return false;
-  }, [
-    linkedSites,
+  const {
+    summaryFilterState,
+    setSummaryFilterState,
+    alternativesUiVisible,
+    visibleAlternativeIndices,
+    selectedVisibleAlternativeIndex,
+    effectiveAlternativeIndex,
+    actionBarAlternativesFrozen,
+    actionBarAltSnap,
+    actionBarAlternativesResetPending,
+    actionBarAlternativesNavFrozen,
+  } = usePlanningV2AlternativesUi({
     siteId,
     weekStart,
+    linkedSites,
     protectOfficialSavedPlan,
+    multiSiteNavigationLoading,
     linkedPlansMemoryTick,
-    plan.selectedAlternativeIndex,
-  ]);
-  const alternativesGridVisible = currentGridNonEmpty || otherLinkedSiteGridNonEmpty;
-  const alternativesUiVisible = alternativesUiEnabled && alternativesGridVisible;
+    visibleAlternativeCountRef,
+    plan,
+  });
 
-  /** Rail mobile « אתרים מקושרים » : fermé par défaut à chaque changement de site / semaine. */
-  useEffect(() => {
-    setShowLinkedSitesRail(false);
-  }, [siteId, weekStart]);
-
-  // Fin de « session » onglet : fermeture / navigation pleine page — pas au démontage SPA
-  // (changement site/semaine avec `key=` sinon on casse la barre multi-sites + drapeau in-app).
-  useEffect(() => {
-    const onPageHide = (e: PageTransitionEvent) => {
-      if (e.persisted) return;
-      clearAllPlanningSessionCaches();
-    };
-    window.addEventListener("pagehide", onPageHide);
-    return () => window.removeEventListener("pagehide", onPageHide);
-  }, []);
-
-  useEffect(() => {
-    if (!visualizationOpen) {
-      setFullscreenReveal(false);
-      return;
-    }
-    const id = requestAnimationFrame(() => setFullscreenReveal(true));
-    const prevOverflow = document.body.style.overflow;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setVisualizationOpen(false);
-      }
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      cancelAnimationFrame(id);
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [visualizationOpen]);
-
-  /** Plan « officiel » (מנהל / משותף) — pas une טיוטת auto seule (pas d’encadré vert / pas de blocage génération). */
-  const isSavedMode =
-    assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
-    (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
-
-  /** תגיות כמו ב-planning הישן (`weekPlanSaveBadgeKind` / `weekPlanSaveBadgeConfig`). */
-  const weekPlanSaveBadgeKind = useMemo<null | "director" | "shared">(() => {
-    if (editingSaved) return null;
-    if (!assignmentsNonEmpty(weekPlan?.assignments ?? null)) return null;
-    if (weekPlan?.sourceScope === "shared") return "shared";
-    if (weekPlan?.sourceScope === "director") return "director";
-    return null;
-  }, [editingSaved, weekPlan?.assignments, weekPlan?.sourceScope]);
-
-  const weekPlanSaveBadgeConfig = useMemo(() => {
-    if (weekPlanSaveBadgeKind === "director") {
-      return {
-        label: "נשמר (מנהל)",
-        className:
-          "inline-flex items-center rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
-      };
-    }
-    if (weekPlanSaveBadgeKind === "shared") {
-      return {
-        label: "נשמר ונשלח לעובדים",
-        className:
-          "inline-flex items-center rounded-full border border-teal-300 bg-teal-50 px-2 py-0.5 text-xs text-teal-800 dark:border-teal-800 dark:bg-teal-950/40 dark:text-teal-300",
-      };
-    }
-    return null;
-  }, [weekPlanSaveBadgeKind]);
-
-  const showSavedPlanEditBadge =
-    editingSaved && assignmentsNonEmpty(weekPlan?.assignments ?? null);
+  const {
+    showLinkedSitesRail,
+    setShowLinkedSitesRail,
+    navigateToLinkedSiteFromRail,
+    navigationMemorySnapshot,
+    linkedSitesRailData,
+    linkedSiteRailBadges,
+    linkedSiteHolesById,
+  } = usePlanningV2LinkedMemory({
+    siteId,
+    weekStart,
+    isoWeek: getWeekKeyISO(weekStart),
+    site,
+    workers,
+    linkedSites,
+    weekPlan,
+    protectOfficialSavedPlan,
+    hasOfficialSavedWeekPlan,
+    effectiveAlternativeIndex,
+    summaryFilterState,
+    multiSiteNavigationLoading,
+    setMultiSiteNavigationLoading,
+    linkedPlansMemoryTick,
+    setLinkedPlansMemoryTick,
+    hasLinkedSitesRail,
+    siteLoading,
+    workersLoading,
+    weekPlanLoading,
+    router,
+    plan,
+  });
 
   const siteIsArchived = Boolean(site?.deletedAt);
 
@@ -446,31 +242,9 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const manualEditable =
     !siteIsArchived && plan.isManual && (!isSavedMode || editingSaved || linkedSites.length > 1);
 
-  /** Désélectionner l’עובד actif au clic hors grille / palette / noms. */
-  useEffect(() => {
-    if (!manualEditable || !manualDragWorkerName) return;
-    const onPointerDown = (e: PointerEvent) => {
-      const t = e.target;
-      if (!(t instanceof Element)) return;
-      if (t.closest("[data-manual-worker-select]")) return;
-      if (t.closest('[data-slot="1"]')) return;
-      if (t.closest('[role="dialog"]')) return;
-      setManualDragWorkerName(null);
-      setManualSelectSource(null);
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [manualEditable, manualDragWorkerName]);
-
   const handleResetStation = (stationIdx: number) => {
     plan.resetManualStation(stationIdx);
   };
-
-  const waitManualConfirm = useCallback((title: string, body: string) => {
-    return new Promise<boolean>((resolve) => {
-      setManualConfirm({ title, body, resolve });
-    });
-  }, []);
 
   const availabilityByWorkerName = useMemo(() => {
     const o: Record<string, WorkerAvailability> = {};
@@ -495,42 +269,50 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     >;
   }, [workerRowsForTable, availabilityOverlays, eventLocksByWorkerId, workers]);
 
+  const {
+    manualConfirm,
+    setManualConfirm,
+    manualDragWorkerName,
+    manualSelectSource,
+    handleDraggingWorkerChange,
+    handleWorkerSelectToggle,
+    handleManualSlotDrop,
+    handleManualSlotDragOutside,
+  } = usePlanningV2ManualEditing({
+    site,
+    siteId,
+    weekStart,
+    workers,
+    workerRowsForTable,
+    availabilityByWorkerName,
+    eventLocksByWorkerId,
+    eventAssignmentCountsByName,
+    manualEditable,
+    plan,
+    setAvailabilityOverlays,
+    setPullsModeStationIdx,
+    setShiftHoursModeStationIdx,
+  });
+
+  const {
+    pullScopeDialog,
+    setPullScopeDialog,
+    handleUpsertPull,
+    handleRemovePull,
+    handleUpsertGuardDisplay,
+    handleRemoveGuardDisplay,
+  } = usePlanningV2PullsEditing({
+    plan,
+    site,
+    linkedSitesLength: linkedSites.length,
+    weekStart,
+  });
+
   const assignmentHighlightBase = useMemo(() => plan.getLatestAssignmentBase(), [plan.displayAssignments, plan.getLatestAssignmentBase]);
   const workerColorMap = useMemo(() => {
     const bundles = [plan.displayAssignments, ...(plan.assignmentVariants || [])];
     return buildDistinctWorkerColorMap(workers, bundles);
   }, [workers, plan.displayAssignments, plan.assignmentVariants]);
-
-  const linkedSiteHoleEntries = useMemo(
-    () =>
-      computeLinkedSiteHoleEntries({
-        linkedSites,
-        weekStart,
-        currentSiteId: siteId,
-        currentSite: site ?? null,
-        currentAssignments: plan.displayAssignments,
-        currentPulls: plan.displayPulls ?? null,
-        alternativeIndex: plan.selectedAlternativeIndex,
-        ignoreLinkedMemory: protectOfficialSavedPlan,
-      }),
-    [
-      hasOfficialSavedWeekPlan,
-      protectOfficialSavedPlan,
-      linkedSites,
-      weekStart,
-      siteId,
-      site,
-      plan.displayAssignments,
-      plan.displayPulls,
-      plan.selectedAlternativeIndex,
-    ],
-  );
-
-  const linkedSiteHolesById = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const e of linkedSiteHoleEntries) m.set(e.id, e.holesCount);
-    return m;
-  }, [linkedSiteHoleEntries]);
 
   const displayedAvailabilityOverlays = useMemo(() => {
     const base = plan.getLatestAssignmentBase();
@@ -614,589 +396,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     });
   }, [plan.displayAssignments, plan.getLatestAssignmentBase]);
 
-  const isoWeek = useMemo(() => getWeekKeyISO(weekStart), [weekStart]);
-
-  const navigateToLinkedSiteFromRail = useCallback(
-    (targetId: number) => {
-      try {
-        sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
-      } catch {
-        /* ignore */
-      }
-      // Persister l’index חלופה avant le remount (comme legacy navigate-before-push).
-      const mem = readLinkedPlansFromMemory(weekStart);
-      if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-        const uiIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
-        const memIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-        // Si l’UI n’a pas encore rattrapé la mémoire, ne pas rétrograder l’index partagé.
-        const nextIdx = uiIdx < memIdx && plan.alternativeCount <= memIdx ? memIdx : uiIdx;
-        saveLinkedPlansToMemory(weekStart, mem.plansBySite, nextIdx);
-      }
-      setMultiSiteNavigationLoading(true);
-      router.push(`/director/planning/${targetId}?week=${encodeURIComponent(isoWeek)}`);
-    },
-    [router, isoWeek, weekStart, plan.alternativeCount, plan.selectedAlternativeIndex],
-  );
-
-  const handleManualSlotDrop = useCallback(
-    async (p: {
-      dayKey: string;
-      shiftName: string;
-      stationIndex: number;
-      slotIndex: number;
-      workerName: string;
-      dragSource: ManualDragSource | null;
-    }) => {
-      if (
-        isShiftLockedByEvent(
-          locksForWorkerName(eventLocksByWorkerId, workers, p.workerName),
-          p.dayKey,
-          p.shiftName,
-        )
-      ) {
-        toast.error("לא ניתן לשבץ", { description: "העובד משובץ לאירוע בזמן זה (לא ניתן לשינוי)." });
-        return;
-      }
-      let flags: ManualDropFlags = {};
-      for (let guard = 0; guard < 12; guard++) {
-        const base = plan.getLatestAssignmentBase();
-        const r = analyzeManualSlotDrop({
-          site,
-          siteId,
-          weekStart,
-          workers,
-          availabilityByWorkerName,
-          base,
-          dayKey: p.dayKey,
-          shiftName: p.shiftName,
-          stationIndex: p.stationIndex,
-          slotIndex: p.slotIndex,
-          workerName: p.workerName,
-          dragSource: p.dragSource,
-          flags,
-          pulls: plan.displayPulls ?? null,
-          eventAssignmentCount: eventAssignmentCountsByName.get(String(p.workerName || "").trim()) || 0,
-        });
-        if (r.action === "block") {
-          toast.error("לא ניתן לשבץ", { description: r.message });
-          return;
-        }
-        if (r.action === "apply") {
-          if (flags.forceAvailability) {
-            const nm = String(p.workerName || "").trim();
-            if (nm) {
-              const canonicalName =
-                workerRowsForTable.find((r) => normWorkerName(r.name) === normWorkerName(nm))?.name || nm;
-              setAvailabilityOverlays((prev) => {
-                const next = { ...prev };
-                const byDay = { ...(next[canonicalName] || {}) } as Record<string, string[]>;
-                const cur = new Set<string>([...(byDay[p.dayKey] || [])]);
-                cur.add(p.shiftName);
-                byDay[p.dayKey] = Array.from(cur);
-                next[canonicalName] = byDay;
-                return next;
-              });
-            }
-          }
-          let nextAssignments = r.next;
-          // Garde-fou move: si drop depuis une cellule vers une autre, on vide explicitement la source.
-          if (p.dragSource) {
-            const src = p.dragSource;
-            const sameCell =
-              src.dayKey === p.dayKey &&
-              src.shiftName === p.shiftName &&
-              Number(src.stationIndex) === Number(p.stationIndex) &&
-              Number(src.slotIndex) === Number(p.slotIndex);
-            if (!sameCell) {
-              const sourcePullKey = `${src.dayKey}|${src.shiftName}|${src.stationIndex}|${src.slotIndex}`;
-              const srcRow = nextAssignments?.[src.dayKey]?.[src.shiftName]?.[src.stationIndex];
-              if (Array.isArray(srcRow)) {
-                const srcNext = JSON.parse(JSON.stringify(nextAssignments)) as Record<
-                  string,
-                  Record<string, string[][]>
-                >;
-                const arr = Array.from(srcNext[src.dayKey]?.[src.shiftName]?.[src.stationIndex] || []);
-                while (arr.length <= src.slotIndex) arr.push("");
-                arr[src.slotIndex] = "";
-                if (!srcNext[src.dayKey]) srcNext[src.dayKey] = {};
-                if (!srcNext[src.dayKey][src.shiftName]) srcNext[src.dayKey][src.shiftName] = [];
-                srcNext[src.dayKey][src.shiftName][src.stationIndex] = arr;
-                nextAssignments = srcNext;
-              }
-            }
-          }
-          plan.commitDraftAssignments(nextAssignments);
-          if (p.dragSource) {
-            setManualSelectSource({
-              dayKey: p.dayKey,
-              shiftName: p.shiftName,
-              stationIndex: p.stationIndex,
-              slotIndex: flags.forceReplacePull ? 0 : p.slotIndex,
-              workerName: p.workerName,
-            });
-          }
-          return;
-        }
-        if (r.action === "confirm_availability") {
-          const ok = await waitManualConfirm(
-            "זמינות",
-            `לעובד "${r.workerName}" אין זמינות למשמרת זו. להקצות בכל זאת?`,
-          );
-          if (!ok) return;
-          {
-            const nm = String(r.workerName || "").trim();
-            if (nm) {
-              const canonicalName =
-                workerRowsForTable.find((row) => normWorkerName(row.name) === normWorkerName(nm))?.name || nm;
-              setAvailabilityOverlays((prev) => {
-                const next = { ...prev };
-                const byDay = { ...(next[canonicalName] || {}) } as Record<string, string[]>;
-                const cur = new Set<string>([...(byDay[p.dayKey] || [])]);
-                cur.add(p.shiftName);
-                byDay[p.dayKey] = Array.from(cur);
-                next[canonicalName] = byDay;
-                return next;
-              });
-            }
-          }
-          flags = { ...flags, forceAvailability: true };
-          continue;
-        }
-        if (r.action === "confirm_role") {
-          const ok = await waitManualConfirm(
-            "תפקיד",
-            `לעובד "${r.workerName}" אין את התפקיד "${r.roleName}" בתא זה. להקצות בכל זאת?`,
-          );
-          if (!ok) return;
-          flags = { ...flags, forceRole: true };
-          continue;
-        }
-        if (r.action === "confirm_rules") {
-          const ok = await waitManualConfirm(
-            "שיבוץ חורג מהכללים",
-            `שיבוץ עלול להפר חוקים:\n- ${r.lines.join("\n- ")}\n\nלהקצות בכל זאת?`,
-          );
-          if (!ok) return;
-          flags = { ...flags, forceRules: true };
-          continue;
-        }
-        if (r.action === "confirm_max_shifts") {
-          const ok = await waitManualConfirm(
-            "מקסימום משמרות",
-            `השיבוץ יגיע ל-${r.total} משמרות השבוע, מעל המקסימום המוגדר לעובד (${r.maxShifts}). להקצות בכל זאת?`,
-          );
-          if (!ok) return;
-          flags = { ...flags, forceMaxShifts: true };
-          continue;
-        }
-        if (r.action === "confirm_replace_pull") {
-          toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-          return;
-        }
-      }
-      toast.error("שגיאה", { description: "יותר מדי שלבי אישור — נסה שוב." });
-    },
-    [site, siteId, weekStart, workers, availabilityByWorkerName, plan, waitManualConfirm, workerRowsForTable, eventLocksByWorkerId, eventAssignmentCountsByName],
-  );
-
-  const handleManualSlotDragOutside = useCallback(
-    (dragSource: ManualDragSource) => {
-      const src = dragSource;
-      if (!src) return;
-      if (
-        workerParticipatesInPull(plan.displayPulls ?? null, src.workerName, {
-          dayKey: src.dayKey,
-          shiftName: src.shiftName,
-          stationIndex: src.stationIndex,
-        })
-      ) {
-        toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-        return;
-      }
-      const base = plan.getLatestAssignmentBase();
-      const row = base[src.dayKey]?.[src.shiftName]?.[src.stationIndex];
-      if (!Array.isArray(row)) return;
-      const next = JSON.parse(JSON.stringify(base)) as Record<string, Record<string, string[][]>>;
-      const srcArr = Array.from(next[src.dayKey]?.[src.shiftName]?.[src.stationIndex] || []);
-      while (srcArr.length <= src.slotIndex) srcArr.push("");
-      srcArr[src.slotIndex] = "";
-      if (!next[src.dayKey]) next[src.dayKey] = {};
-      if (!next[src.dayKey][src.shiftName]) next[src.dayKey][src.shiftName] = [];
-      next[src.dayKey][src.shiftName][src.stationIndex] = srcArr;
-      plan.commitDraftAssignments(next);
-    },
-    [plan],
-  );
-
-  const handleUpsertPull = useCallback(
-    async (key: string, entry: PlanningV2PullEntry) => {
-      const parts = String(key || "").split("|");
-      if (parts.length < 4) return false;
-      const dayKey = String(parts[0] || "");
-      const shiftName = String(parts[1] || "");
-      const stationIdx = Number(parts[2] || -1);
-      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
-      const beforeName = String(entry?.before?.name || "").trim();
-      const afterName = String(entry?.after?.name || "").trim();
-      if (!beforeName || !afterName) return false;
-      if (normWorkerName(beforeName) === normWorkerName(afterName)) {
-        toast.error("לא ניתן ליצור משיכות", { description: "בחר שני עובדים שונים" });
-        return false;
-      }
-
-      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
-      const oldEntry = nextPulls[key];
-      const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-      const others = Object.entries(nextPulls)
-        .filter(([k]) => String(k).startsWith(cellPrefix) && String(k) !== String(key))
-        .map(([, e]) => e);
-      const usedElsewhere = (nm: string) =>
-        others.some((e) => String(e?.before?.name || "").trim() === nm || String(e?.after?.name || "").trim() === nm);
-
-      const baseAssignments = plan.getLatestAssignmentBase();
-      const currentCell = baseAssignments?.[dayKey]?.[shiftName]?.[stationIdx];
-      let names = Array.isArray(currentCell)
-        ? (currentCell as string[]).map((x) => String(x || "").trim()).filter(Boolean)
-        : [];
-
-      if (oldEntry) {
-        const oldBefore = String(oldEntry?.before?.name || "").trim();
-        const oldAfter = String(oldEntry?.after?.name || "").trim();
-        const keep = new Set([beforeName, afterName]);
-        if (oldBefore && !keep.has(oldBefore) && !usedElsewhere(oldBefore)) names = names.filter((x) => x !== oldBefore);
-        if (oldAfter && !keep.has(oldAfter) && !usedElsewhere(oldAfter)) names = names.filter((x) => x !== oldAfter);
-      }
-      const toAdd = [beforeName, afterName].filter((x) => x && !names.includes(x));
-      const nextNames = [...names, ...toAdd];
-
-      const stCfg = (site?.config?.stations as Record<string, unknown>[] | undefined)?.[stationIdx];
-      const required = getRequiredFor(stCfg, shiftName, dayKey);
-      const maxNamesAllowed = Number(required || 0) + (oldEntry ? others.length + 1 : others.length + 1);
-      if (nextNames.length > maxNamesAllowed) {
-        toast.error("לא ניתן ליצור משיכות", { description: "אין מספיק מקום בעמדה" });
-        return false;
-      }
-
-      const nextAssignments = JSON.parse(JSON.stringify(baseAssignments)) as Record<string, Record<string, string[][]>>;
-      nextAssignments[dayKey] = nextAssignments[dayKey] || {};
-      nextAssignments[dayKey][shiftName] = Array.isArray(nextAssignments[dayKey][shiftName])
-        ? nextAssignments[dayKey][shiftName]
-        : [];
-      while (nextAssignments[dayKey][shiftName].length <= stationIdx) nextAssignments[dayKey][shiftName].push([]);
-      nextAssignments[dayKey][shiftName][stationIdx] = nextNames;
-      const applyCurrentOnly = () => {
-        nextPulls[key] = entry;
-        plan.commitDraftAssignments(nextAssignments);
-        plan.commitDraftPulls(nextPulls);
-      };
-      if (linkedSites.length <= 1) {
-        applyCurrentOnly();
-        return true;
-      }
-      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
-        setPullScopeDialog({ mode: "upsert", resolve });
-      });
-      if (!scope) return false;
-      applyCurrentOnly();
-      if (scope === "all_sites") {
-        const mem = readLinkedPlansFromMemory(weekStart);
-        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
-          for (const sid of Object.keys(nextPlans)) {
-            const planForSite = nextPlans[sid];
-            if (!planForSite) continue;
-            const curAssignments = (resolveAssignmentsForAlternative(planForSite, activeIdx) ||
-              {}) as Record<string, Record<string, string[][]>>;
-            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
-            const asg = JSON.parse(JSON.stringify(curAssignments)) as Record<string, Record<string, string[][]>>;
-            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
-            const row = asg?.[dayKey]?.[shiftName]?.[stationIdx];
-            const names = Array.isArray(row) ? row.map((x) => String(x || "").trim()).filter(Boolean) : [];
-            const toAddAll = [beforeName, afterName].filter((x) => x && !names.includes(x));
-            const nextNamesAll = [...names, ...toAddAll];
-            asg[dayKey] = asg[dayKey] || {};
-            asg[dayKey][shiftName] = Array.isArray(asg[dayKey][shiftName]) ? asg[dayKey][shiftName] : [];
-            while (asg[dayKey][shiftName].length <= stationIdx) asg[dayKey][shiftName].push([]);
-            asg[dayKey][shiftName][stationIdx] = nextNamesAll;
-            pls[key] = entry;
-            if (activeIdx <= 0) {
-              planForSite.assignments = asg;
-              planForSite.pulls = pls;
-            } else {
-              const alts = Array.isArray(planForSite.alternatives) ? [...planForSite.alternatives] : [];
-              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
-              while (alts.length < activeIdx) alts.push(planForSite.assignments || {});
-              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
-              alts[activeIdx - 1] = asg;
-              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
-              planForSite.alternatives = alts;
-              planForSite.alternative_pulls = altPulls;
-            }
-          }
-          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
-        }
-      }
-      return true;
-    },
-    [plan, site, linkedSites.length, weekStart],
-  );
-
-  const handleRemovePull = useCallback(
-    async (key: string) => {
-      const parts = String(key || "").split("|");
-      if (parts.length < 4) return false;
-      const dayKey = String(parts[0] || "");
-      const shiftName = String(parts[1] || "");
-      const stationIdx = Number(parts[2] || -1);
-      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
-
-      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
-      const existing = nextPulls[key];
-      if (!existing) return true;
-      delete nextPulls[key];
-
-      const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-      const others = Object.entries(nextPulls)
-        .filter(([k]) => String(k).startsWith(cellPrefix))
-        .map(([, e]) => e);
-      const keep = new Set<string>();
-      others.forEach((e) => {
-        const b = String(e?.before?.name || "").trim();
-        const a = String(e?.after?.name || "").trim();
-        if (b) keep.add(b);
-        if (a) keep.add(a);
-      });
-      const removeNames = [
-        String(existing?.before?.name || "").trim(),
-        String(existing?.after?.name || "").trim(),
-      ].filter(Boolean);
-
-      const baseAssignments = plan.getLatestAssignmentBase();
-      const currentCell = baseAssignments?.[dayKey]?.[shiftName]?.[stationIdx];
-      const names = Array.isArray(currentCell)
-        ? (currentCell as string[]).map((x) => String(x || "").trim()).filter(Boolean)
-        : [];
-      const nextNames = names.filter((nm) => !removeNames.includes(nm) || keep.has(nm));
-
-      const nextAssignments = JSON.parse(JSON.stringify(baseAssignments)) as Record<string, Record<string, string[][]>>;
-      nextAssignments[dayKey] = nextAssignments[dayKey] || {};
-      nextAssignments[dayKey][shiftName] = Array.isArray(nextAssignments[dayKey][shiftName])
-        ? nextAssignments[dayKey][shiftName]
-        : [];
-      while (nextAssignments[dayKey][shiftName].length <= stationIdx) nextAssignments[dayKey][shiftName].push([]);
-      nextAssignments[dayKey][shiftName][stationIdx] = nextNames;
-
-      const applyCurrentOnly = () => {
-        plan.commitDraftAssignments(nextAssignments);
-        plan.commitDraftPulls(nextPulls);
-      };
-      if (linkedSites.length <= 1) {
-        applyCurrentOnly();
-        return true;
-      }
-      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
-        setPullScopeDialog({ mode: "remove", resolve });
-      });
-      if (!scope) return false;
-      applyCurrentOnly();
-      if (scope === "all_sites") {
-        const mem = readLinkedPlansFromMemory(weekStart);
-        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
-          for (const sid of Object.keys(nextPlans)) {
-            const planForSite = nextPlans[sid];
-            if (!planForSite) continue;
-            const curAssignments = (resolveAssignmentsForAlternative(planForSite, activeIdx) ||
-              {}) as Record<string, Record<string, string[][]>>;
-            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
-            const asg = JSON.parse(JSON.stringify(curAssignments)) as Record<string, Record<string, string[][]>>;
-            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
-            const existingInSite = pls[key];
-            if (!existingInSite) continue;
-            delete pls[key];
-            const othersSite = Object.entries(pls)
-              .filter(([k]) => String(k).startsWith(cellPrefix))
-              .map(([, e]) => e);
-            const keepSite = new Set<string>();
-            othersSite.forEach((e) => {
-              const b = String(e?.before?.name || "").trim();
-              const a = String(e?.after?.name || "").trim();
-              if (b) keepSite.add(b);
-              if (a) keepSite.add(a);
-            });
-            const removeNamesSite = [
-              String(existingInSite?.before?.name || "").trim(),
-              String(existingInSite?.after?.name || "").trim(),
-            ].filter(Boolean);
-            const row = asg?.[dayKey]?.[shiftName]?.[stationIdx];
-            const namesSite = Array.isArray(row) ? row.map((x) => String(x || "").trim()).filter(Boolean) : [];
-            const nextNamesSite = namesSite.filter((nm) => !removeNamesSite.includes(nm) || keepSite.has(nm));
-            asg[dayKey] = asg[dayKey] || {};
-            asg[dayKey][shiftName] = Array.isArray(asg[dayKey][shiftName]) ? asg[dayKey][shiftName] : [];
-            while (asg[dayKey][shiftName].length <= stationIdx) asg[dayKey][shiftName].push([]);
-            asg[dayKey][shiftName][stationIdx] = nextNamesSite;
-            if (activeIdx <= 0) {
-              planForSite.assignments = asg;
-              planForSite.pulls = pls;
-            } else {
-              const alts = Array.isArray(planForSite.alternatives) ? [...planForSite.alternatives] : [];
-              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
-              while (alts.length < activeIdx) alts.push(planForSite.assignments || {});
-              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
-              alts[activeIdx - 1] = asg;
-              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
-              planForSite.alternatives = alts;
-              planForSite.alternative_pulls = altPulls;
-            }
-          }
-          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
-        }
-      }
-      return true;
-    },
-    [plan, linkedSites.length, weekStart],
-  );
-
-  const handleUpsertGuardDisplay = useCallback(
-    async (key: string, start: string, end: string) => {
-      const parts = String(key || "").split("|");
-      if (parts.length < 4) return false;
-      const dayKey = String(parts[0] || "");
-      const shiftName = String(parts[1] || "");
-      const stationIdx = Number(parts[2] || -1);
-      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
-
-      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
-      const existing = nextPulls[key] || {};
-      nextPulls[key] = {
-        ...existing,
-        guardDisplay: { start: String(start || "").trim(), end: String(end || "").trim() },
-      };
-
-      const applyCurrentOnly = () => {
-        // Sans draft actif (plan sauvegardé affiché), on doit activer le brouillon
-        // pour que pullVariants utilise draftPulls et que les horaires restent visibles + sauvegardables.
-        if (!plan.draftActive) {
-          plan.commitDraftAssignments(plan.getLatestAssignmentBase());
-        }
-        plan.commitDraftPulls(nextPulls);
-      };
-
-      if (linkedSites.length <= 1) {
-        applyCurrentOnly();
-        return true;
-      }
-      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
-        setPullScopeDialog({ mode: "upsert", kind: "guard_hours", resolve });
-      });
-      if (!scope) return false;
-      applyCurrentOnly();
-      if (scope === "all_sites") {
-        const mem = readLinkedPlansFromMemory(weekStart);
-        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
-          for (const sid of Object.keys(nextPlans)) {
-            const planForSite = nextPlans[sid];
-            if (!planForSite) continue;
-            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
-            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
-            const ex = pls[key] || {};
-            pls[key] = {
-              ...ex,
-              guardDisplay: { start: String(start || "").trim(), end: String(end || "").trim() },
-            };
-            if (activeIdx <= 0) {
-              planForSite.pulls = pls;
-            } else {
-              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
-              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
-              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
-              planForSite.alternative_pulls = altPulls;
-            }
-          }
-          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
-        }
-      }
-      return true;
-    },
-    [plan, linkedSites.length, weekStart],
-  );
-
-  const handleRemoveGuardDisplay = useCallback(
-    async (key: string) => {
-      const parts = String(key || "").split("|");
-      if (parts.length < 4) return false;
-      const dayKey = String(parts[0] || "");
-      const shiftName = String(parts[1] || "");
-      const stationIdx = Number(parts[2] || -1);
-      if (!dayKey || !shiftName || !Number.isFinite(stationIdx) || stationIdx < 0) return false;
-
-      const nextPulls = JSON.parse(JSON.stringify((plan.displayPulls || {}) as PlanningV2PullsMap)) as PlanningV2PullsMap;
-      const existing = nextPulls[key];
-      if (!existing?.guardDisplay) return true;
-
-      const nextEntry: PlanningV2PullEntry = { ...existing };
-      delete nextEntry.guardDisplay;
-      if (planningV2PullEntryIsReal(nextEntry)) {
-        nextPulls[key] = nextEntry;
-      } else {
-        delete nextPulls[key];
-      }
-
-      const applyCurrentOnly = () => {
-        // Sans draft actif (plan sauvegardé affiché), on doit activer le brouillon
-        // pour que pullVariants utilise draftPulls et que la suppression reste visible + sauvegardable.
-        if (!plan.draftActive) {
-          plan.commitDraftAssignments(plan.getLatestAssignmentBase());
-        }
-        plan.commitDraftPulls(nextPulls);
-      };
-
-      if (linkedSites.length <= 1) {
-        applyCurrentOnly();
-        return true;
-      }
-      const scope = await new Promise<"current_only" | "all_sites" | null>((resolve) => {
-        setPullScopeDialog({ mode: "remove", kind: "guard_hours", resolve });
-      });
-      if (!scope) return false;
-      applyCurrentOnly();
-      if (scope === "all_sites") {
-        const mem = readLinkedPlansFromMemory(weekStart);
-        if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
-          const activeIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-          const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
-          for (const sid of Object.keys(nextPlans)) {
-            const planForSite = nextPlans[sid];
-            if (!planForSite) continue;
-            const curPulls = (resolvePullsForAlternative(planForSite, activeIdx) || {}) as PlanningV2PullsMap;
-            const pls = JSON.parse(JSON.stringify(curPulls)) as PlanningV2PullsMap;
-            const exIn = pls[key];
-            if (!exIn?.guardDisplay) continue;
-            const ne: PlanningV2PullEntry = { ...exIn };
-            delete ne.guardDisplay;
-            if (planningV2PullEntryIsReal(ne)) pls[key] = ne;
-            else delete pls[key];
-            if (activeIdx <= 0) {
-              planForSite.pulls = pls;
-            } else {
-              const altPulls = Array.isArray(planForSite.alternative_pulls) ? [...planForSite.alternative_pulls] : [];
-              while (altPulls.length < activeIdx) altPulls.push((planForSite.pulls || {}) as Record<string, unknown>);
-              altPulls[activeIdx - 1] = pls as Record<string, unknown>;
-              planForSite.alternative_pulls = altPulls;
-            }
-          }
-          saveLinkedPlansToMemory(weekStart, nextPlans, activeIdx);
-        }
-      }
-      return true;
-    },
-    [plan, linkedSites.length, weekStart],
-  );
-
   const savedHighlight = useMemo(
     () =>
       assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
@@ -1204,516 +403,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared"),
     [weekPlan?.assignments, weekPlan?.sourceScope, editingSaved],
   );
-
-  const visibleAlternativeIndices = useMemo(() => {
-    if (!alternativesUiEnabled) {
-      return [0];
-    }
-    if (!summaryFilterState.hasActiveFilters) {
-      return Array.from({ length: Math.max(0, plan.alternativeCount) }, (_, i) => i);
-    }
-    return summaryFilterState.indices;
-  }, [summaryFilterState, plan.alternativeCount, alternativesUiEnabled]);
-
-  useEffect(() => {
-    visibleAlternativeCountRef.current = alternativesUiEnabled ? visibleAlternativeIndices.length : 0;
-  }, [alternativesUiEnabled, visibleAlternativeIndices.length]);
-
-  const navigationMemorySnapshot = useMemo(() => {
-    if (protectOfficialSavedPlan) {
-      return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
-    }
-    const mem = readLinkedPlansFromMemory(weekStart);
-    const currentPlan = mem?.plansBySite?.[String(siteId)];
-    if (!currentPlan && linkedSites.length <= 1 && !multiSiteNavigationLoading) {
-      return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
-    }
-    const stopVisibleCount = readLinkedGenerationStopVisibleCountFromSession(getWeekKeyISO(weekStart));
-    const visibleAlternativeCount = countLinkedPlanVisibleAlternatives(currentPlan, stopVisibleCount);
-    const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
-    const rawActiveIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
-    // Pendant « פתח אתר », garder l’index partagé mémoire même si le plan cible
-    // n’a pas encore toutes ses alternatives chargées (sinon clamp → חלופה 1).
-    const activeIdx = multiSiteNavigationLoading
-      ? rawActiveIdx
-      : Math.min(rawActiveIdx, maxVisibleIndex);
-    return {
-      activeIdx,
-      currentPlanAlternativeCount: visibleAlternativeCount,
-      hasCurrentPlan: !!currentPlan,
-    };
-  }, [protectOfficialSavedPlan, linkedSites.length, multiSiteNavigationLoading, linkedPlansMemoryTick, siteId, weekStart]);
-
-  const selectedVisibleAlternativeIndex = useMemo(() => {
-    return visibleAlternativeIndices.indexOf(plan.selectedAlternativeIndex);
-  }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
-
-  /** Alternative réellement affichée après filtres (fallback robuste si l’index courant sort du sous-ensemble). */
-  const effectiveAlternativeIndex = useMemo(() => {
-    if (visibleAlternativeIndices.length <= 0) {
-      return Math.max(0, plan.selectedAlternativeIndex);
-    }
-    if (visibleAlternativeIndices.includes(plan.selectedAlternativeIndex)) {
-      return plan.selectedAlternativeIndex;
-    }
-    return visibleAlternativeIndices[0] ?? 0;
-  }, [visibleAlternativeIndices, plan.selectedAlternativeIndex]);
-
-  const multiSiteNavigationTargetIndex =
-    multiSiteNavigationLoading && navigationMemorySnapshot.hasCurrentPlan
-      ? navigationMemorySnapshot.activeIdx
-      : effectiveAlternativeIndex;
-
-  /** Dernière barre חלופות valide — utilisée pendant יצירה מאפס jusqu’au premier plan SSE. */
-  const lastAlternativesBarRef = useRef<PlanningV2AlternativesBarSnapshot | null>(null);
-
-  useLayoutEffect(() => {
-    if (!alternativesUiEnabled) return;
-    lastAlternativesBarRef.current = {
-      alternativeCount: visibleAlternativeIndices.length,
-      selectedAlternativeIndex: Math.max(0, selectedVisibleAlternativeIndex),
-      selectedAlternativeDisplayIndex: effectiveAlternativeIndex,
-      alternativesFiltered: summaryFilterState.hasActiveFilters,
-      alternativesTotalCount: plan.alternativeCount,
-    };
-  }, [
-    alternativesUiEnabled,
-    visibleAlternativeIndices.length,
-    selectedVisibleAlternativeIndex,
-    effectiveAlternativeIndex,
-    summaryFilterState.hasActiveFilters,
-    plan.alternativeCount,
-  ]);
-
-  // Dérivé (pas de setState) : évite « Maximum update depth exceeded » sur la barre חלופות.
-  const alternativesBarHold = useMemo((): PlanningV2AlternativesBarSnapshot | null => {
-    if (!plan.generationRunning) return null;
-    if (alternativesUiEnabled) return null;
-    // Génération « replace » : alternativeCount à 0 tout de suite — ne pas figer l’ancien total.
-    if (plan.alternativeCount <= 0) return null;
-    const snap = lastAlternativesBarRef.current;
-    if (!snap || snap.alternativeCount < 1) return null;
-    return snap;
-  }, [plan.generationRunning, plan.alternativeCount, alternativesUiEnabled]);
-
-  const actionBarAlternativesFrozen =
-    plan.generationRunning && !alternativesUiEnabled && alternativesBarHold !== null;
-  const actionBarAltSnap = actionBarAlternativesFrozen ? alternativesBarHold : null;
-  const actionBarAlternativesResetPending = plan.generationRunning && !actionBarAltSnap && plan.alternativeCount === 0;
-  // Geler la nav seulement pendant le reset initial (avant le 1er plan SSE).
-  // Dès que des חלופות streamées existent, prev/next restent interactifs.
-  const actionBarAlternativesNavFrozen = actionBarAlternativesFrozen || actionBarAlternativesResetPending;
-
-  useEffect(() => {
-    if (plan.generationRunning) return;
-    if (multiSiteNavigationLoading) return;
-    if (readMultiSiteNavigationInApp()) return;
-    if (!summaryFilterState.hasActiveFilters) return;
-    if (effectiveAlternativeIndex === plan.selectedAlternativeIndex) return;
-    plan.setSelectedAlternativeIndex(effectiveAlternativeIndex);
-  }, [
-    effectiveAlternativeIndex,
-    multiSiteNavigationLoading,
-    plan.generationRunning,
-    plan.selectedAlternativeIndex,
-    plan.setSelectedAlternativeIndex,
-    summaryFilterState.hasActiveFilters,
-  ]);
-
-  useEffect(() => {
-    if (protectOfficialSavedPlan) return;
-    if (!multiSiteNavigationLoading) return;
-    if (!navigationMemorySnapshot.hasCurrentPlan) return;
-    const targetIdx = Math.max(0, navigationMemorySnapshot.activeIdx);
-    const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
-    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
-    // Attendre que les variantes réellement chargées rattrapent la cible mémoire.
-    if (loadedVariantCount <= targetIdx) {
-      if (memoryCount <= 0 || loadedVariantCount < memoryCount) return;
-    }
-    if (plan.selectedAlternativeIndex === targetIdx) return;
-    plan.setSelectedAlternativeIndex(targetIdx);
-  }, [
-    protectOfficialSavedPlan,
-    multiSiteNavigationLoading,
-    navigationMemorySnapshot.hasCurrentPlan,
-    navigationMemorySnapshot.activeIdx,
-    navigationMemorySnapshot.currentPlanAlternativeCount,
-    plan.assignmentVariants,
-    plan.selectedAlternativeIndex,
-    plan.setSelectedAlternativeIndex,
-  ]);
-
-  useEffect(() => {
-    if (linkedSites.length <= 1) return;
-    if (plan.generationRunning) return;
-    if (weekPlan?.sourceScope !== "auto") return;
-    if (readMultiSiteNavigationInApp()) return;
-    const isoWeek = getWeekKeyISO(weekStart);
-    let cancelled = false;
-
-    const syncLinkedAutoPlansFromDb = async () => {
-      const targetSiteIds = Array.from(
-        new Set(
-          linkedSites
-            .map((ls) => Number(ls.id))
-            .filter((id) => Number.isFinite(id) && id > 0),
-        ),
-      );
-      if (targetSiteIds.length <= 1) return;
-
-      const entries = await Promise.all(
-        targetSiteIds.map(async (id) => {
-          try {
-            const raw = await apiFetch<Record<string, unknown> | null>(
-              `/director/sites/${id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`,
-              {
-                cache: "no-store" as RequestCache,
-              },
-            );
-            if (!raw || typeof raw !== "object" || !raw.assignments || typeof raw.assignments !== "object") {
-              return [String(id), null] as const;
-            }
-            return [
-              String(id),
-              {
-                assignments: raw.assignments as Record<string, Record<string, string[][]>>,
-                pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : {},
-                alternatives: Array.isArray(raw.alternatives)
-                  ? (raw.alternatives as Record<string, Record<string, string[][]>>[])
-                  : [],
-                alternative_pulls: Array.isArray(raw.alternative_pulls)
-                  ? (raw.alternative_pulls as Record<string, unknown>[])
-                  : [],
-              } satisfies LinkedSitePlan,
-            ] as const;
-          } catch {
-            return [String(id), null] as const;
-          }
-        }),
-      );
-
-      if (cancelled) return;
-      const plansBySite = Object.fromEntries(entries.filter(([, planValue]) => !!planValue)) as Record<string, LinkedSitePlan>;
-      if (Object.keys(plansBySite).length <= 1) return;
-
-      const mem = readLinkedPlansFromMemory(weekStart);
-      const activeAltIndex = Math.max(0, Number(mem?.activeAltIndex || 0));
-      const memoryPlans = mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
-      const mergedPlans: Record<string, LinkedSitePlan> = { ...plansBySite };
-      for (const [sid, memoryPlan] of Object.entries(memoryPlans)) {
-        if (!memoryPlan || typeof memoryPlan !== "object") continue;
-        const dbPlan = plansBySite[sid];
-        const memoryAltCount = Array.isArray(memoryPlan.alternatives) ? memoryPlan.alternatives.length : 0;
-        const dbAltCount = Array.isArray(dbPlan?.alternatives) ? dbPlan.alternatives.length : 0;
-        // `עוד` enrichit d'abord sessionStorage. Ne pas écraser ces alternatives par une
-        // réponse DB auto plus ancienne quand on navigue vers un autre site lié.
-        if (memoryAltCount > dbAltCount || (activeAltIndex > dbAltCount && memoryAltCount >= activeAltIndex)) {
-          mergedPlans[sid] = memoryPlan as LinkedSitePlan;
-        }
-      }
-      saveLinkedPlansToMemory(weekStart, mergedPlans, activeAltIndex);
-    };
-
-    void syncLinkedAutoPlansFromDb();
-    return () => {
-      cancelled = true;
-    };
-  }, [linkedSites, plan.generationRunning, siteId, weekPlan?.sourceScope, weekStart]);
-
-  useEffect(() => {
-    // En multi-site, `alternativesUiEnabled` peut passer brièvement à false pendant une
-    // resynchronisation mémoire / affichage. Ne pas forcer un retour à l'alternative 0
-    // sur cet état transitoire, sinon la navigation "saute" au début.
-    if (readMultiSiteNavigationInApp()) return;
-    if (linkedSites.length > 1) return;
-    if (alternativesUiEnabled) return;
-    if (plan.selectedAlternativeIndex === 0) return;
-    plan.setSelectedAlternativeIndex(0);
-  }, [alternativesUiEnabled, linkedSites.length, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
-
-  useEffect(() => {
-    if (linkedSites.length <= 1) return;
-    if (plan.generationRunning) return;
-    if (protectOfficialSavedPlan) {
-      if (lastCurrentSiteMemorySyncRef.current !== "official-saved-memory-cleared") {
-        lastCurrentSiteMemorySyncRef.current = "official-saved-memory-cleared";
-        clearLinkedPlansFromMemory(weekStart);
-      }
-      return;
-    }
-    const mem = readLinkedPlansFromMemory(weekStart);
-    if (!mem?.plansBySite || Object.keys(mem.plansBySite).length === 0) return;
-    const memoryActiveIdx = Math.max(0, Number(mem.activeAltIndex || 0));
-    const inAppMultiSiteNavigation = readMultiSiteNavigationInApp();
-    const currentSiteKey = String(siteId);
-    const nextPlans: Record<string, LinkedSitePlan> = JSON.parse(JSON.stringify(mem.plansBySite));
-    const activeIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
-    // Pendant « פתח אתר » / réhydratation : ne jamais écraser l’index partagé ni clear le flag
-    // (sinon un clamp transitoire vers חלופה 1 réécrit activeAltIndex=0 en session).
-    if (inAppMultiSiteNavigation || multiSiteNavigationLoading) {
-      if (activeIdx !== memoryActiveIdx) return;
-      if (plan.alternativeCount <= memoryActiveIdx) return;
-    }
-    // Ne pas rétrograder l’index mémoire tant que les variantes locales n’ont pas rattrapé.
-    if (activeIdx < memoryActiveIdx && plan.alternativeCount <= memoryActiveIdx) {
-      return;
-    }
-    const displayedAssignments = plan.displayAssignments;
-    const displayedPulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
-    if (!assignmentsNonEmpty(displayedAssignments ?? null)) return;
-    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
-    // Variantes pas encore réhydratées : displayAssignments peut encore être la חלופה 1
-    // alors que selectedAlternativeIndex pointe déjà vers 12 — ne pas écraser la mémoire.
-    if (activeIdx > 0 && loadedVariantCount <= activeIdx) {
-      return;
-    }
-    const currentPlan = {
-      ...(nextPlans[currentSiteKey] || {}),
-    } as LinkedSitePlan;
-    const nextDisplayedAssignments = JSON.parse(
-      JSON.stringify(displayedAssignments),
-    ) as Record<string, Record<string, string[][]>>;
-    const nextDisplayedPulls = JSON.parse(
-      JSON.stringify(displayedPulls),
-    ) as PlanningV2PullsMap;
-    const renderSnapshot = JSON.stringify({
-      activeIdx,
-      assignments: nextDisplayedAssignments,
-      pulls: nextDisplayedPulls,
-    });
-    if (renderSnapshot === lastCurrentSiteMemorySyncRef.current) {
-      return;
-    }
-    const existingAssignmentsForActiveIdx = resolveAssignmentsForAlternative(currentPlan, activeIdx) || null;
-    const existingPullsForActiveIdx = (resolvePullsForAlternative(currentPlan, activeIdx) || {}) as PlanningV2PullsMap;
-    const existingSnapshot = JSON.stringify({
-      activeIdx,
-      assignments: existingAssignmentsForActiveIdx || {},
-      pulls: existingPullsForActiveIdx || {},
-    });
-    const nextSnapshot = JSON.stringify({
-      activeIdx,
-      assignments: nextDisplayedAssignments,
-      pulls: nextDisplayedPulls,
-    });
-    if (existingSnapshot === nextSnapshot && memoryActiveIdx === activeIdx) {
-      lastCurrentSiteMemorySyncRef.current = renderSnapshot;
-      return;
-    }
-    if (activeIdx <= 0) {
-      currentPlan.assignments = nextDisplayedAssignments;
-      currentPlan.pulls = nextDisplayedPulls;
-    } else {
-      const alts = Array.isArray(currentPlan.alternatives) ? [...currentPlan.alternatives] : [];
-      const altPulls = Array.isArray(currentPlan.alternative_pulls) ? [...currentPlan.alternative_pulls] : [];
-      while (alts.length < activeIdx) {
-        alts.push(
-          JSON.parse(
-            JSON.stringify(currentPlan.assignments || {}),
-          ) as Record<string, Record<string, string[][]>>,
-        );
-      }
-      while (altPulls.length < activeIdx) {
-        altPulls.push(
-          JSON.parse(JSON.stringify((currentPlan.pulls || {}) as Record<string, unknown>)) as Record<string, unknown>,
-        );
-      }
-      alts[activeIdx - 1] = nextDisplayedAssignments;
-      altPulls[activeIdx - 1] = nextDisplayedPulls as Record<string, unknown>;
-      currentPlan.alternatives = alts;
-      currentPlan.alternative_pulls = altPulls;
-    }
-    nextPlans[currentSiteKey] = currentPlan;
-    lastCurrentSiteMemorySyncRef.current = renderSnapshot;
-    // Préserver le max(mémoire, UI) pour ne jamais perdre l’index partagé au retour de site.
-    const idxToPersist = Math.max(activeIdx, memoryActiveIdx);
-    saveLinkedPlansToMemory(weekStart, nextPlans, idxToPersist);
-  }, [
-    linkedSites.length,
-    multiSiteNavigationLoading,
-    plan.alternativeCount,
-    plan.assignmentVariants,
-    plan.displayAssignments,
-    plan.displayPulls,
-    plan.generationRunning,
-    plan.selectedAlternativeIndex,
-    protectOfficialSavedPlan,
-    siteId,
-    weekStart,
-  ]);
-
-  const linkedSitesRailData = useMemo(() => {
-    if (linkedSites.length <= 1) return [];
-    const currentSiteIdNum = Number(siteId);
-    const linkedById = new Map<number, string>();
-    linkedSites.forEach((ls) => linkedById.set(Number(ls.id), String(ls.name || `אתר ${ls.id}`)));
-
-    const otherSiteIds = [
-      ...new Set(
-        linkedSites
-          .map((ls) => Number(ls.id))
-          .filter((id) => Number.isFinite(id) && id > 0 && id !== currentSiteIdNum),
-      ),
-    ];
-    if (otherSiteIds.length === 0) return [];
-
-    const multiNames = new Set(
-      workers
-        .filter((w) => Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1)
-        .map((w) => String(w.name || "").trim())
-        .filter(Boolean),
-    );
-
-    const mem = protectOfficialSavedPlan ? null : readLinkedPlansFromMemory(weekStart);
-    const plansBySite =
-      mem?.plansBySite && typeof mem.plansBySite === "object" ? mem.plansBySite : {};
-
-    const rowsForSite = (
-      sid: number,
-    ): {
-      rows: Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }>;
-      workerCounts: Array<{ workerName: string; count: number }>;
-    } => {
-      if (multiNames.size === 0) return { rows: [], workerCounts: [] };
-      const sitePlan = plansBySite[String(sid)] as LinkedSitePlan | undefined;
-      if (!sitePlan) return { rows: [], workerCounts: [] };
-      const asg = resolveAssignmentsForAlternative(sitePlan, multiSiteNavigationTargetIndex) || {};
-      const rows: Array<{ dayKey: string; shiftName: string; stationLabel: string; workers: string[] }> = [];
-      const workerCountsMap = new Map<string, number>();
-      for (const [dayKey, shiftsMap] of Object.entries(asg)) {
-        if (!shiftsMap || typeof shiftsMap !== "object") continue;
-        for (const [shiftName, perStation] of Object.entries(shiftsMap)) {
-          if (!Array.isArray(perStation)) continue;
-          perStation.forEach((cell, stationIdx) => {
-            if (!Array.isArray(cell)) return;
-            const matched = cell
-              .map((n) => String(n || "").trim())
-              .filter((n) => n && multiNames.has(n));
-            if (matched.length === 0) return;
-            matched.forEach((nm) => workerCountsMap.set(nm, (workerCountsMap.get(nm) || 0) + 1));
-            rows.push({
-              dayKey,
-              shiftName,
-              stationLabel: `עמדה ${stationIdx + 1}`,
-              workers: matched,
-            });
-          });
-        }
-      }
-      const workerCounts = Array.from(workerCountsMap.entries())
-        .map(([workerName, count]) => ({ workerName, count }))
-        .sort((a, b) => {
-          if (b.count !== a.count) return b.count - a.count;
-          return a.workerName.localeCompare(b.workerName, "he");
-        });
-      return { rows, workerCounts };
-    };
-
-    const archivedById = new Map<number, boolean>();
-    linkedSites.forEach((ls) => archivedById.set(Number(ls.id), !!ls.site_deleted));
-
-    const out = otherSiteIds.map((sid) => {
-      const siteRows = rowsForSite(sid);
-      return {
-      siteId: sid,
-      siteName: linkedById.get(sid) || `אתר ${sid}`,
-      siteDeleted: archivedById.get(sid) === true,
-        rows: siteRows.rows,
-        workerCounts: siteRows.workerCounts,
-      };
-    });
-    return out.sort((a, b) => {
-      const aa = a.siteDeleted ? 1 : 0;
-      const bb = b.siteDeleted ? 1 : 0;
-      if (aa !== bb) return aa - bb;
-      return a.siteName.localeCompare(b.siteName, "he");
-    });
-  }, [
-    protectOfficialSavedPlan,
-    linkedSites,
-    weekStart,
-    workers,
-    siteId,
-    multiSiteNavigationTargetIndex,
-    plan.alternativeCount,
-    linkedPlansMemoryTick,
-  ]);
-
-  const linkedSiteRailBadges = useMemo(() => {
-    const weekIso = getWeekKeyISO(weekStart);
-    const ids = new Set<number>();
-    const current = Number(siteId);
-    if (Number.isFinite(current) && current > 0) ids.add(current);
-    linkedSites.forEach((ls) => {
-      const n = Number(ls.id);
-      if (Number.isFinite(n) && n > 0) ids.add(n);
-    });
-    const linkedSiteIdsKey = Array.from(ids)
-      .sort((a, b) => a - b)
-      .join("-");
-    const filterStorageKey = `planning_v2_multisite_assignment_filters_by_site_${weekIso}_${linkedSiteIdsKey}`;
-    const savedBySiteId = new Map<number, boolean>();
-    const filterCountBySiteId = new Map<number, number>();
-    if (typeof window === "undefined") {
-      return { savedBySiteId, filterCountBySiteId };
-    }
-    try {
-      const hasSavedFromApiBySiteId = new Map<number, boolean>();
-      linkedSites.forEach((ls) => {
-        const sid = Number(ls.id);
-        if (!Number.isFinite(sid) || sid <= 0) return;
-        hasSavedFromApiBySiteId.set(sid, !!ls.has_saved_plan);
-      });
-      for (const ls of linkedSites) {
-        const sid = Number(ls.id);
-        if (!Number.isFinite(sid) || sid <= 0) continue;
-        const localGeneric = !!localStorage.getItem(`plan_${sid}_${weekIso}`);
-        const localDirector = !!localStorage.getItem(`plan_director_${sid}_${weekIso}`);
-        const localShared = !!localStorage.getItem(`plan_shared_${sid}_${weekIso}`);
-        const sessionGeneric = !!sessionStorage.getItem(`plan_${sid}_${weekIso}`);
-        const sessionDirector = !!sessionStorage.getItem(`plan_director_${sid}_${weekIso}`);
-        const sessionShared = !!sessionStorage.getItem(`plan_shared_${sid}_${weekIso}`);
-        const currentSitePersistedFromApi =
-          String(sid) === String(siteId) &&
-          assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
-          (weekPlan?.sourceScope === "director" || weekPlan?.sourceScope === "shared");
-        savedBySiteId.set(
-          sid,
-          !!hasSavedFromApiBySiteId.get(sid) ||
-          localGeneric ||
-            localDirector ||
-            localShared ||
-            sessionGeneric ||
-            sessionDirector ||
-            sessionShared ||
-            currentSitePersistedFromApi,
-        );
-      }
-    } catch {
-      /* ignore */
-    }
-    try {
-      const raw = localStorage.getItem(filterStorageKey);
-      const parsed = raw ? (JSON.parse(raw) as Record<string, Record<string, unknown>>) : {};
-      for (const ls of linkedSites) {
-        const sid = String(ls.id);
-        const byWorker = parsed?.[sid];
-        if (!byWorker || typeof byWorker !== "object") {
-          filterCountBySiteId.set(Number(ls.id), 0);
-          continue;
-        }
-        const count = Object.values(byWorker).filter((v) => {
-          const n = Number(v);
-          return Number.isFinite(n) && n >= 0;
-        }).length;
-        filterCountBySiteId.set(Number(ls.id), count);
-      }
-    } catch {
-      linkedSites.forEach((ls) => filterCountBySiteId.set(Number(ls.id), 0));
-    }
-    return { savedBySiteId, filterCountBySiteId };
-  }, [linkedSites, siteId, weekStart, summaryFilterState, weekPlan?.assignments, weekPlan?.sourceScope]);
 
   const refreshWorkersAndGrid = () => {
     void reloadWorkers();
@@ -1737,56 +426,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     await plan.savePlan(publishToWorkers);
     setEditingSaved(false);
   };
-  const hasMultiWorkersThisWeek = useMemo(
-    () => workers.some((w) => Array.isArray(w.linkedSiteIds) && w.linkedSiteIds.length > 1),
-    [workers],
-  );
-  const hasLinkedSitesRail = linkedSites.length > 1 && hasMultiWorkersThisWeek;
-
-  useEffect(() => {
-    if (!multiSiteNavigationLoading) return;
-    if (siteLoading || workersLoading) return;
-    if (!navigationMemorySnapshot.hasCurrentPlan) {
-      if (!weekPlanLoading) {
-        setMultiSiteNavigationLoading(false);
-        clearMultiSiteNavigationInApp();
-      }
-      return;
-    }
-    const targetAlternativeIndex = navigationMemorySnapshot.activeIdx;
-    const memoryCount = navigationMemorySnapshot.currentPlanAlternativeCount;
-    const hasDisplayablePlan = assignmentsNonEmpty(plan.displayAssignments);
-    // Compter les variantes réellement chargées (pas alternativeCount « mémoire » gonflé).
-    const loadedVariantCount = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
-    const variantsCaughtUp =
-      loadedVariantCount > targetAlternativeIndex ||
-      (memoryCount > 0 && loadedVariantCount >= memoryCount);
-    const appliedTarget =
-      loadedVariantCount > 0
-        ? Math.min(targetAlternativeIndex, loadedVariantCount - 1)
-        : targetAlternativeIndex;
-    // Exiger la vraie חלופה partagée — pas Math.min(target, count-1) seul qui
-    // validait à tort חלופה 1 tant que le plan n’était pas réhydraté.
-    const alternativesReady =
-      hasDisplayablePlan &&
-      variantsCaughtUp &&
-      loadedVariantCount > targetAlternativeIndex &&
-      plan.selectedAlternativeIndex === targetAlternativeIndex &&
-      appliedTarget === targetAlternativeIndex;
-    if (!alternativesReady) return;
-    setMultiSiteNavigationLoading(false);
-    clearMultiSiteNavigationInApp();
-  }, [
-    multiSiteNavigationLoading,
-    siteLoading,
-    workersLoading,
-    weekPlanLoading,
-    navigationMemorySnapshot,
-    plan.assignmentVariants,
-    plan.displayAssignments,
-    plan.selectedAlternativeIndex,
-  ]);
-
   const showPlanningLoadingOverlay =
     !workerModalSaving &&
     !plan.generationRunning &&
@@ -1796,74 +435,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
       (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
       // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
       multiSiteNavigationLoading);
-
-  /** Pas de défilement de la page sous le panneau mobile « אתרים מקושרים » lorsqu’il est ouvert (< lg). */
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(max-width: 1023px)");
-    const apply = () => {
-      const lock = mq.matches && hasLinkedSitesRail && showLinkedSitesRail;
-      document.body.style.overflow = lock ? "hidden" : "";
-      document.documentElement.style.overflow = lock ? "hidden" : "";
-    };
-    apply();
-    mq.addEventListener("change", apply);
-    return () => {
-      mq.removeEventListener("change", apply);
-      document.body.style.overflow = "";
-      document.documentElement.style.overflow = "";
-    };
-  }, [hasLinkedSitesRail, showLinkedSitesRail]);
-
-  /** Insets du rail mobile : bas de `#app-top-nav` → `top`, haut de la barre d’action → `bottom`. */
-  useLayoutEffect(() => {
-    const syncRailInsets = () => {
-      const navEl = document.getElementById("app-top-nav");
-      const barEl = document.getElementById("planning-v2-action-bar");
-
-      let topPx = 0;
-      if (navEl) {
-        const cs = window.getComputedStyle(navEl);
-        const nr = navEl.getBoundingClientRect();
-        const navVisible =
-          cs.display !== "none" && cs.visibility !== "hidden" && nr.height > 0.5 && nr.bottom > 0;
-        topPx = navVisible ? Math.max(0, nr.bottom) : 0;
-      }
-      document.documentElement.style.setProperty("--planning-v2-rail-top-px", `${topPx}px`);
-
-      if (barEl) {
-        const br = barEl.getBoundingClientRect();
-        document.documentElement.style.setProperty(
-          "--planning-v2-action-bar-px",
-          `${Math.max(0, window.innerHeight - br.top)}px`,
-        );
-      }
-    };
-
-    syncRailInsets();
-    const ro = new ResizeObserver(() => requestAnimationFrame(syncRailInsets));
-    const navEl = document.getElementById("app-top-nav");
-    const barEl = document.getElementById("planning-v2-action-bar");
-    if (navEl) ro.observe(navEl);
-    if (barEl) ro.observe(barEl);
-    window.addEventListener("resize", syncRailInsets);
-    window.addEventListener("orientationchange", syncRailInsets);
-    window.addEventListener("scroll", syncRailInsets, true);
-    const vv = window.visualViewport;
-    vv?.addEventListener("resize", syncRailInsets);
-    vv?.addEventListener("scroll", syncRailInsets);
-    requestAnimationFrame(() => requestAnimationFrame(syncRailInsets));
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", syncRailInsets);
-      window.removeEventListener("orientationchange", syncRailInsets);
-      window.removeEventListener("scroll", syncRailInsets, true);
-      vv?.removeEventListener("resize", syncRailInsets);
-      vv?.removeEventListener("scroll", syncRailInsets);
-      document.documentElement.style.removeProperty("--planning-v2-rail-top-px");
-      document.documentElement.style.removeProperty("--planning-v2-action-bar-px");
-    };
-  }, []);
 
   const handleSummaryHighlightToggle = useCallback((name: string) => {
     setSummaryHighlightWorkerName((prev) => {
@@ -1981,244 +552,19 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     alternativesUiVisible,
   ]);
 
-  const renderLinkedSitesRailContent = () => (
-    <div className="flex h-full min-h-0 w-full max-w-full flex-1 flex-col gap-3 overflow-hidden">
-      <div className="shrink-0 border-b border-zinc-100 bg-white pb-2 dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-base font-extrabold text-zinc-900 dark:text-zinc-100">אתרים מקושרים</div>
-          <div className="flex flex-col items-end gap-0.5">
-            {alternativesUiVisible ? (
-                <span className="rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                חלופה מסוננת{" "}
-                {Math.max(1, selectedVisibleAlternativeIndex >= 0 ? selectedVisibleAlternativeIndex + 1 : 1)}
-                /{Math.max(1, visibleAlternativeIndices.length)}
-                </span>
-            ) : null}
-              </div>
-        </div>
-        <div className="text-xs leading-snug text-zinc-500 dark:text-zinc-400">
-                מוצגים רק עובדים רב-אתריים בעמדות של החלופה הנוכחית.
-              </div>
-      </div>
-      <div className="planning-v2-linked-rail-scroll min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-auto overscroll-y-contain pt-1 pb-2 pl-0.5 pr-0.5 touch-pan-y [-webkit-overflow-scrolling:touch]">
-                {linkedSitesRailData.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-zinc-300 p-2 text-xs text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                    אין אתרים מקושרים נוספים להצגה.
-                  </div>
-                ) : (
-                  linkedSitesRailData.map((siteBlock) => (
-                    <div key={siteBlock.siteId} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
-                      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200">
-                            <span className="min-w-0 break-words">{siteBlock.siteName}</span>
-                    {linkedSiteRailBadges.savedBySiteId.get(siteBlock.siteId) ? (
-                      <span className="shrink-0 rounded bg-emerald-100 px-1 py-px text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                        תכנון שמור
-                      </span>
-                    ) : null}
-                            {siteBlock.siteDeleted ? (
-                              <span className="shrink-0 rounded bg-zinc-200 px-1 py-px text-[10px] font-semibold text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300">
-                                ארכיון
-                              </span>
-                            ) : null}
-                          </div>
-                  <div className="mt-0.5 text-[10px] font-bold text-red-600 dark:text-red-400">
-                            חוסרים: {linkedSiteHolesById.has(siteBlock.siteId) ? linkedSiteHolesById.get(siteBlock.siteId) : "—"}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => navigateToLinkedSiteFromRail(siteBlock.siteId)}
-                          className="shrink-0 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[10px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                        >
-                          פתח אתר
-                        </button>
-                      </div>
-              <div className="mb-2 rounded-md border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-900/40">
-                <div className="mb-1 text-[10px] font-semibold text-zinc-600 dark:text-zinc-300">
-                  עובדים רב-אתריים משובצים באתר זה
-                  {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
-                    <span className="ms-1 inline-flex items-center rounded border border-orange-200 bg-orange-50 px-1.5 py-px text-[9px] font-semibold text-orange-700 dark:border-orange-800 dark:bg-orange-900/30 dark:text-orange-300">
-                      פילטר
-                    </span>
-                  ) : null}
-                </div>
-                {siteBlock.workerCounts.length === 0 ? (
-                  <div className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                    אין שיבוצים רב-אתריים בחלופה זו.
-                  </div>
-                ) : (
-                  <div className="max-h-24 overflow-y-auto">
-                    <table className="w-full border-collapse text-[10px]">
-                      <thead>
-                        <tr className="border-b dark:border-zinc-800">
-                          <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">עובד</th>
-                          <th className="w-14 px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
-                            {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
-                              <span className="inline-flex items-center rounded border border-orange-300 px-1.5 py-0.5 text-orange-700 dark:border-orange-700 dark:text-orange-300">
-                                שיבוצים
-                              </span>
-                            ) : (
-                              "שיבוצים"
-                            )}
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {siteBlock.workerCounts.map((entry) => (
-                          <tr key={`${siteBlock.siteId}-${entry.workerName}`} className="border-b last:border-0 dark:border-zinc-800">
-                            <td className="px-1 py-1 text-zinc-700 dark:text-zinc-200">{entry.workerName}</td>
-                            <td className="px-1 py-1 text-center font-semibold text-zinc-700 dark:text-zinc-200">
-                              {(linkedSiteRailBadges.filterCountBySiteId.get(siteBlock.siteId) || 0) > 0 ? (
-                                <span className="inline-flex min-w-6 items-center justify-center rounded border border-orange-300 px-1 py-px text-orange-700 dark:border-orange-700 dark:text-orange-300">
-                                  {entry.count}
-                                </span>
-                              ) : (
-                                entry.count
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                      </div>
-                      {(() => {
-                        const dayOrder = ["sun", "sunday", "mon", "monday", "tue", "tuesday", "wed", "wednesday", "thu", "thursday", "fri", "friday", "sat", "saturday"];
-                        const dayLabel: Record<string, string> = {
-                          sun: "א׳",
-                          sunday: "א׳",
-                          mon: "ב׳",
-                          monday: "ב׳",
-                          tue: "ג׳",
-                          tuesday: "ג׳",
-                          wed: "ד׳",
-                          wednesday: "ד׳",
-                          thu: "ה׳",
-                          thursday: "ה׳",
-                          fri: "ו׳",
-                          friday: "ו׳",
-                          sat: "ש׳",
-                          saturday: "ש׳",
-                        };
-                        const shiftOrder = ["morning", "noon", "night", "בוקר", "צהריים", "לילה"];
-
-                        if (siteBlock.rows.length === 0) {
-                          return (
-                            <div className="overflow-x-auto">
-                              <table className="w-full border-collapse text-[11px]">
-                                <thead>
-                                  <tr className="border-b dark:border-zinc-800">
-                                    <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                                    <th className="min-w-[10rem] px-1 py-1 text-center text-zinc-500 dark:text-zinc-400"> </th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  <tr className="border-b dark:border-zinc-800">
-                                    <td className="whitespace-nowrap px-1 py-2 align-middle text-zinc-400 dark:text-zinc-500">—</td>
-                                    <td className="border border-dashed border-zinc-200 px-2 py-3 text-center text-[10px] leading-snug text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
-                                      אין עובדים רב-אתריים משובצים בחלופה זו.
-                                    </td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </div>
-                          );
-                        }
-
-                        const days = [...new Set(siteBlock.rows.map((r) => String(r.dayKey || "")))]
-                          .sort((a, b) => {
-                            const ia = dayOrder.indexOf(a.toLowerCase());
-                            const ib = dayOrder.indexOf(b.toLowerCase());
-                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                            return a.localeCompare(b);
-                          });
-                        const shifts = [...new Set(siteBlock.rows.map((r) => String(r.shiftName || "")))]
-                          .sort((a, b) => {
-                            const ia = shiftOrder.findIndex((x) => a.toLowerCase().includes(x.toLowerCase()));
-                            const ib = shiftOrder.findIndex((x) => b.toLowerCase().includes(x.toLowerCase()));
-                            if (ia >= 0 || ib >= 0) return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
-                            return a.localeCompare(b);
-                          });
-                        const cellMap = new Map<string, Array<{ stationLabel: string; workers: string[] }>>();
-                        siteBlock.rows.forEach((r) => {
-                          const k = `${r.dayKey}||${r.shiftName}`;
-                          const current = cellMap.get(k) || [];
-                          cellMap.set(k, [...current, { stationLabel: r.stationLabel, workers: r.workers }]);
-                        });
-                        return (
-                          <div className="overflow-x-auto">
-                            <table className="w-full border-collapse text-[11px]">
-                              <thead>
-                                <tr className="border-b dark:border-zinc-800">
-                                  <th className="px-1 py-1 text-right text-zinc-500 dark:text-zinc-400">משמרת</th>
-                                  {days.map((d) => (
-                                    <th key={`${siteBlock.siteId}-${d}`} className="px-1 py-1 text-center text-zinc-500 dark:text-zinc-400">
-                                      {dayLabel[d.toLowerCase()] || d}
-                                    </th>
-                                  ))}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {shifts.map((s) => (
-                                  <tr key={`${siteBlock.siteId}-${s}`} className="border-b last:border-0 dark:border-zinc-800">
-                                    <td className="whitespace-nowrap px-1 py-1 font-medium text-zinc-700 dark:text-zinc-200">{s}</td>
-                                    {days.map((d) => {
-                                      const k = `${d}||${s}`;
-                                      const lines = cellMap.get(k) || [];
-                                      return (
-                                        <td key={`${siteBlock.siteId}-${d}-${s}`} className="align-top px-1 py-1">
-                                          {lines.length === 0 ? (
-                                            <span className="text-zinc-400 dark:text-zinc-500">—</span>
-                                          ) : (
-                                            <div className="space-y-0.5">
-                                              {lines.slice(0, 3).map((line, idx) => (
-                                                <div key={`${k}-${idx}`} className="rounded bg-zinc-50 px-1 py-0.5 dark:bg-zinc-900/50">
-                                                  <div className="mb-0.5 text-[10px] text-zinc-600 dark:text-zinc-400">
-                                                    {line.stationLabel}
-                                                  </div>
-                                                  <div className="flex flex-wrap gap-1">
-                                                    {line.workers.map((nm) => {
-                                                      const col = workerNameChipColor(nm, workerColorMap);
-                                                      return (
-                                                        <span
-                                                          key={`${k}-${idx}-${nm}`}
-                                                  className="inline-flex max-w-[6.5rem] min-w-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] md:max-w-[10rem]"
-                                                          style={{
-                                                            backgroundColor: col.bg,
-                                                            borderColor: col.border,
-                                                            color: col.text,
-                                                          }}
-                                                  dir={isRtlName(nm) ? "rtl" : "ltr"}
-                                                        >
-                                                  <span className="md:hidden">{truncateMobile6(nm)}</span>
-                                                  <span className="hidden max-w-full truncate md:inline">{nm}</span>
-                                                        </span>
-                                                      );
-                                                    })}
-                                                  </div>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </td>
-                                      );
-                                    })}
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  ))
-                )}
-              </div>
-    </div>
+  const linkedSitesRail = (
+    <PlanningV2LinkedSitesRail
+      alternativesUiVisible={alternativesUiVisible}
+      selectedVisibleAlternativeIndex={selectedVisibleAlternativeIndex}
+      visibleAlternativeIndicesLength={visibleAlternativeIndices.length}
+      linkedSitesRailData={linkedSitesRailData}
+      linkedSiteRailBadges={linkedSiteRailBadges}
+      linkedSiteHolesById={linkedSiteHolesById}
+      workerColorMap={workerColorMap}
+      onNavigateToSite={navigateToLinkedSiteFromRail}
+    />
   );
+
 
   return (
     <div
@@ -2277,7 +623,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
                   : "top-[var(--planning-v2-rail-top-px,4.5rem)] z-30 bottom-[var(--planning-v2-action-bar-px)] pt-3 -translate-x-[102%] pointer-events-none")
               }
             >
-              {renderLinkedSitesRailContent()}
+              {linkedSitesRail}
             </aside>
           ) : null}
           <PlanningV2SitePaperHeader
@@ -2337,7 +683,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         <div className="h-6 shrink-0" aria-hidden />
         {hasLinkedSitesRail ? (
           <aside className="hidden lg:absolute lg:right-[calc(100%+1rem)] lg:top-0 lg:flex lg:h-[calc(100dvh-var(--planning-v2-rail-top-px)-var(--planning-v2-action-bar-px)-0.75rem)] lg:min-h-0 lg:w-[20rem] lg:flex-col lg:overflow-hidden lg:rounded-2xl lg:border lg:border-zinc-200 lg:bg-white lg:p-3 lg:shadow-sm dark:lg:border-zinc-800 dark:lg:bg-zinc-950">
-            {renderLinkedSitesRailContent()}
+            {linkedSitesRail}
           </aside>
         ) : null}
         </div>
