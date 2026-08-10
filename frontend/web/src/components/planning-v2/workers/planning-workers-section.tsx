@@ -10,6 +10,7 @@ import { usePlanningV2WorkerModals } from "../hooks/use-planning-v2-worker-modal
 import { CreateWorkerStepModal } from "./create-worker-step-modal";
 import { ExistingWorkersPickerModal } from "./existing-workers-picker-modal";
 import { PlanningWorkersTable } from "./planning-workers-table";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 function normalizeWorkerSearch(value: string): string {
   return String(value || "")
@@ -194,7 +195,7 @@ export function PlanningWorkersSection({
       <FilterWorkersAnswersModal {...modals.filterModalProps} />
       <LinkedAvailabilityConfirmDialog {...modals.linkedDialogProps} />
       {modals.pendingInviteModalProps.open ? (
-        <div className="fixed inset-0 z-[11000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+        <ModalOverlay className="z-[11000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
             <div className="space-y-2 text-center">
               <h3 className="text-lg font-semibold">אישור עובד חדש</h3>
@@ -232,7 +233,7 @@ export function PlanningWorkersSection({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </>
   );

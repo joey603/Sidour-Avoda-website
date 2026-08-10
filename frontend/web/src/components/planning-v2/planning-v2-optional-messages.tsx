@@ -15,6 +15,7 @@ import Highlight from "@tiptap/extension-highlight";
 import { TextStyle } from "@tiptap/extension-text-style";
 import Color from "@tiptap/extension-color";
 import { getWeekKeyISO } from "./lib/week";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 type OptionalMessage = {
   id: number;
@@ -318,7 +319,7 @@ export function PlanningV2OptionalMessages({
       </div>
 
       {isAddMessageOpen ? (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4" onClick={closeMessageModal}>
+        <ModalOverlay className="z-[200] flex items-center justify-center bg-black/50 p-4" onClick={closeMessageModal}>
           <div
             className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
@@ -506,7 +507,7 @@ export function PlanningV2OptionalMessages({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </>
   );

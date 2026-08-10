@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import type { PlanningV2PullEntry, PlanningWorker, SiteSummary } from "../types";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 function isRealPullEntry(entry: unknown): boolean {
   const e = entry as PlanningV2PullEntry | undefined;
@@ -1833,7 +1834,7 @@ export function PlanningV2StationWeekGrid({
         />
       ) : null}
       {pullsEditor ? (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4" onClick={() => setPullsEditor(null)}>
+        <ModalOverlay className="z-[200] flex items-center justify-center bg-black/50 p-4" onClick={() => setPullsEditor(null)}>
           <div
             className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
             onClick={(e) => e.stopPropagation()}
@@ -2041,11 +2042,11 @@ export function PlanningV2StationWeekGrid({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
       {shiftHoursEditor ? (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4"
+        <ModalOverlay
+          className="z-[200] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setShiftHoursEditor(null)}
         >
           <div
@@ -2145,11 +2146,11 @@ export function PlanningV2StationWeekGrid({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
       {shiftHoursOorConfirm && shiftHoursEditor ? (
-        <div
-          className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 p-4"
+        <ModalOverlay
+          className="z-[11000] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setShiftHoursOorConfirm(false)}
         >
           <div
@@ -2186,7 +2187,7 @@ export function PlanningV2StationWeekGrid({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </section>
   );

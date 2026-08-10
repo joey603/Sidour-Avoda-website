@@ -6,6 +6,7 @@ import { apiFetch } from "@/lib/api";
 import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "./types";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
 import { buildDistinctWorkerColorMap } from "./lib/worker-name-chip-color";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 import {
   formatHebDate,
   getWeekKeyISO,
@@ -514,8 +515,8 @@ export function PlanningV2PlanExportButtons({
       ) : null}
 
       {salaryFeatureEnabled && salaryMonthOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        <ModalOverlay
+          className="z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => setSalaryMonthOpen(false)}
         >
           <div
@@ -564,12 +565,12 @@ export function PlanningV2PlanExportButtons({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {monthPhotoOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        <ModalOverlay
+          className="z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => {
             if (monthPhotoExporting) return;
             setMonthPhotoOpen(false);
@@ -613,7 +614,7 @@ export function PlanningV2PlanExportButtons({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {photoPreview ? (
@@ -670,8 +671,8 @@ export function PlanningV2PlanExportButtons({
       ) : null}
 
       {monthPickerOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4"
+        <ModalOverlay
+          className="z-[60] flex items-center justify-center bg-black/40 p-4"
           onClick={() => setMonthPickerOpen(false)}
         >
           <div
@@ -713,7 +714,7 @@ export function PlanningV2PlanExportButtons({
               })}
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </>
   );

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useIntentionalPress } from "./use-intentional-press";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 interface TimePickerProps {
   value: string; // Format HH:MM
@@ -88,8 +89,8 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
       {showPopup &&
         portalEl &&
         createPortal(
-          <div
-            className="fixed inset-0 z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
+          <ModalOverlay
+            className="z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
             onClick={(e) => {
               if (Date.now() - openedAtRef.current < 400) return;
               if (e.target === e.currentTarget) setShowPopup(false);
@@ -164,7 +165,7 @@ export default function TimePicker({ value, onChange, className = "", dir = "ltr
                 </button>
               </div>
             </div>
-          </div>,
+          </ModalOverlay>,
           portalEl,
         )}
     </>

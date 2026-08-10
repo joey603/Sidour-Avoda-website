@@ -1,5 +1,7 @@
 "use client";
 
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
+
 type PlanningV2ManualConfirmDialogProps = {
   open: boolean;
   title: string;
@@ -21,8 +23,8 @@ export function PlanningV2ManualConfirmDialog({
 }: PlanningV2ManualConfirmDialogProps) {
   if (!open) return null;
   return (
-    <div
-      className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4"
+    <ModalOverlay
+      className="z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="manual-confirm-title"
@@ -49,6 +51,6 @@ export function PlanningV2ManualConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

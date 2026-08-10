@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { ModalOverlay, modalScrollAreaClassName } from "@/components/ui/modal-scroll-lock";
 import { useIntentionalPress } from "./use-intentional-press";
 
 export interface OptionListItem {
@@ -90,8 +91,8 @@ export default function OptionListPicker({
       {showPopup &&
         portalEl &&
         createPortal(
-          <div
-            className="fixed inset-0 z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
+          <ModalOverlay
+            className="z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
             onClick={(e) => {
               if (Date.now() - openedAtRef.current < 400) return;
               if (e.target === e.currentTarget) setShowPopup(false);
@@ -106,7 +107,7 @@ export default function OptionListPicker({
               <div className="border-b px-4 py-3 dark:border-zinc-800">
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{popupTitle}</h3>
               </div>
-              <div className="max-h-[min(70dvh,28rem)] overflow-y-auto px-4 py-3">
+              <div className={`max-h-[min(70dvh,28rem)] overflow-y-auto px-4 py-3 ${modalScrollAreaClassName}`}>
                 <div className="mx-auto flex w-full flex-col gap-1.5">
                   {options.map((o) => {
                     const isSelected = selectedValue === o.value;
@@ -161,7 +162,7 @@ export default function OptionListPicker({
                 </button>
               </div>
             </div>
-          </div>,
+          </ModalOverlay>,
           portalEl,
         )}
     </>

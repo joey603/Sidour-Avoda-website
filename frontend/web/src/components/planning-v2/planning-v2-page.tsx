@@ -7,6 +7,7 @@ import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { LoadingOverlay } from "@/components/loading-animation";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 import { PlanningV2Header } from "./planning-v2-header";
 import { PlanningV2LayoutShell } from "./planning-v2-layout-shell";
 import { PlanningV2MainPaper } from "./planning-v2-main-paper";
@@ -1265,7 +1266,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   /** Dernière barre חלופות valide — utilisée pendant יצירה מאפס jusqu’au premier plan SSE. */
   const lastAlternativesBarRef = useRef<PlanningV2AlternativesBarSnapshot | null>(null);
-  const [alternativesBarHold, setAlternativesBarHold] = useState<PlanningV2AlternativesBarSnapshot | null>(null);
 
   useLayoutEffect(() => {
     if (!alternativesUiEnabled) return;
@@ -1278,43 +1278,22 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     };
   }, [
     alternativesUiEnabled,
-    visibleAlternativeIndices,
+    visibleAlternativeIndices.length,
     selectedVisibleAlternativeIndex,
     effectiveAlternativeIndex,
     summaryFilterState.hasActiveFilters,
     plan.alternativeCount,
   ]);
 
-  useEffect(() => {
-    const applyHold = () => {
-      if (!plan.generationRunning) {
-        setAlternativesBarHold(null);
-        return;
-      }
-      if (alternativesUiEnabled) {
-        setAlternativesBarHold(null);
-        return;
-      }
-      // Génération « replace » : le contrôleur met alternativeCount à 0 tout de suite — ne pas
-      // réafficher le snapshot précédent (barre figée sur l’ancien total).
-      if (plan.alternativeCount <= 0) {
-        setAlternativesBarHold(null);
-        return;
-      }
-      const snap = lastAlternativesBarRef.current;
-      if (snap && snap.alternativeCount >= 1) {
-        setAlternativesBarHold({
-          alternativeCount: snap.alternativeCount,
-          selectedAlternativeIndex: snap.selectedAlternativeIndex,
-          selectedAlternativeDisplayIndex: snap.selectedAlternativeDisplayIndex,
-          alternativesFiltered: snap.alternativesFiltered,
-          alternativesTotalCount: snap.alternativesTotalCount,
-        });
-      } else {
-        setAlternativesBarHold(null);
-      }
-    };
-    queueMicrotask(applyHold);
+  // Dérivé (pas de setState) : évite « Maximum update depth exceeded » sur la barre חלופות.
+  const alternativesBarHold = useMemo((): PlanningV2AlternativesBarSnapshot | null => {
+    if (!plan.generationRunning) return null;
+    if (alternativesUiEnabled) return null;
+    // Génération « replace » : alternativeCount à 0 tout de suite — ne pas figer l’ancien total.
+    if (plan.alternativeCount <= 0) return null;
+    const snap = lastAlternativesBarRef.current;
+    if (!snap || snap.alternativeCount < 1) return null;
+    return snap;
   }, [plan.generationRunning, plan.alternativeCount, alternativesUiEnabled]);
 
   const actionBarAlternativesFrozen =
@@ -1449,9 +1428,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     if (readMultiSiteNavigationInApp()) return;
     if (linkedSites.length > 1) return;
     if (alternativesUiEnabled) return;
-    if (plan.selectedAlternativeIndex !== 0) {
-      plan.setSelectedAlternativeIndex(0);
-    }
+    if (plan.selectedAlternativeIndex === 0) return;
+    plan.setSelectedAlternativeIndex(0);
   }, [alternativesUiEnabled, linkedSites.length, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
 
   useEffect(() => {
@@ -2519,7 +2497,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         }}
       />
       {pullScopeDialog ? (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4">
+        <ModalOverlay className="z-[200] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-base font-semibold">
               {pullScopeDialog.kind === "guard_hours"
@@ -2568,7 +2546,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </div>
   );

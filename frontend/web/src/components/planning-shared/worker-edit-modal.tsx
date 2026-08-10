@@ -3,6 +3,7 @@
 import Link from "next/link";
 import NumberPicker from "@/components/number-picker";
 import FormSwitch from "@/components/ui/form-switch";
+import { ModalOverlay, modalScrollAreaClassName } from "@/components/ui/modal-scroll-lock";
 import type { WorkerModalQuestionView } from "./worker-modal-question-view";
 
 export type DayDef = { key: string; label: string };
@@ -108,7 +109,7 @@ export function WorkerEditModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[10000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+    <ModalOverlay className="z-[10000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="flex h-[72vh] h-[72dvh] min-h-0 max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[34rem]">
         <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">
@@ -124,7 +125,7 @@ export function WorkerEditModal({
             </button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 md:p-4">
+        <div className={`min-h-0 flex-1 overflow-y-auto p-3 md:p-4 ${modalScrollAreaClassName}`}>
           <div className="grid grid-cols-1 justify-items-center gap-2 text-center md:grid-cols-4 md:gap-3">
             <div>
               <label className="block text-xs font-semibold md:text-sm">שם</label>
@@ -487,6 +488,6 @@ export function WorkerEditModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 type LinkedAvailabilityConfirmDialogProps = {
   open: boolean;
@@ -28,8 +29,8 @@ export function LinkedAvailabilityConfirmDialog({
   if (!open || siteNames.length === 0 || !portalEl) return null;
 
   return createPortal(
-    <div
-      className={`fixed inset-0 ${DIALOG_Z} flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4`}
+    <ModalOverlay
+      className={`${DIALOG_Z} flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4`}
       role="dialog"
       aria-modal="true"
       aria-labelledby="linked-availability-confirm-title"
@@ -57,7 +58,7 @@ export function LinkedAvailabilityConfirmDialog({
           </button>
         </div>
       </div>
-    </div>,
+    </ModalOverlay>,
     portalEl,
   );
 }

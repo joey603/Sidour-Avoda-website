@@ -1,6 +1,7 @@
 "use client";
 
 import type { SalaryReport } from "./lib/salary-calculator";
+import { ModalOverlay, modalScrollAreaClassName } from "@/components/ui/modal-scroll-lock";
 
 type PlanningV2SalaryReportModalProps = {
   open: boolean;
@@ -33,7 +34,7 @@ export function PlanningV2SalaryReportModal({
   const showMonthlyBonus = !!report && report.lines.some((l) => l.monthlyBonus > 0);
 
   return (
-    <div className="fixed inset-0 z-[220] flex items-center justify-center bg-black/40 p-3" onClick={onClose}>
+    <ModalOverlay className="z-[220] flex items-center justify-center bg-black/40 p-3" onClick={onClose}>
       <div
         className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
         dir="rtl"
@@ -53,7 +54,7 @@ export function PlanningV2SalaryReportModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-auto px-4 py-3">
+        <div className={`flex-1 overflow-auto px-4 py-3 ${modalScrollAreaClassName}`}>
           {loading ? (
             <div className="py-10 text-center text-sm text-zinc-500">מחשב משכורת…</div>
           ) : error ? (
@@ -212,6 +213,6 @@ export function PlanningV2SalaryReportModal({
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

@@ -8,6 +8,7 @@ import TimePicker from "@/components/time-picker";
 import { addDays, formatHebDate, getWeekKeyISO } from "./lib/week";
 import { DAY_COLS } from "./lib/station-grid-helpers";
 import type { PlanningWorker, SiteEvent } from "./types";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 type PlanningV2SiteEventsProps = {
   siteId: string;
@@ -406,8 +407,8 @@ export function PlanningV2SiteEvents({
       </div>
 
       {isListOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        <ModalOverlay
+          className="z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => setIsListOpen(false)}
         >
           <div
@@ -464,12 +465,12 @@ export function PlanningV2SiteEvents({
               </div>
             )}
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {isEditorOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        <ModalOverlay
+          className="z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={closeEditor}
         >
           <div
@@ -630,12 +631,12 @@ export function PlanningV2SiteEvents({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {isDatePickerOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+        <ModalOverlay
+          className="z-[60] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setIsDatePickerOpen(false)}
         >
           <div
@@ -743,12 +744,12 @@ export function PlanningV2SiteEvents({
               })()}
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {workerPickerDateIso ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+        <ModalOverlay
+          className="z-[60] flex items-center justify-center bg-black/50 p-4"
           onClick={() => {
             if (workerConflict) return;
             setWorkerPickerDateIso(null);
@@ -822,12 +823,12 @@ export function PlanningV2SiteEvents({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
 
       {workerConflict ? (
-        <div
-          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4"
+        <ModalOverlay
+          className="z-[70] flex items-center justify-center bg-black/50 p-4"
           onClick={() => setWorkerConflict(null)}
         >
           <div
@@ -871,7 +872,7 @@ export function PlanningV2SiteEvents({
               </button>
             </div>
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </>
   );

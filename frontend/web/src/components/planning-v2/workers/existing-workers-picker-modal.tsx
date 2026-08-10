@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
 import { getWeekKeyISO } from "../lib/week";
+import { ModalOverlay, modalScrollAreaClassName } from "@/components/ui/modal-scroll-lock";
 
 type ExistingWorkerEntry = {
   id: number;
@@ -188,7 +189,7 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
+    <ModalOverlay className="z-[200] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
       <div className="flex h-[72vh] h-[72dvh] w-full max-w-3xl min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[34rem]">
         <div className="border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">
@@ -211,7 +212,7 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
             />
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 md:p-4">
+        <div className={`min-h-0 flex-1 overflow-y-auto p-3 md:p-4 ${modalScrollAreaClassName}`}>
           {existingWorkersLoading ? (
             <div className="flex h-full items-center justify-center text-sm text-zinc-500">טוען עובדים...</div>
           ) : filteredExistingWorkers.length === 0 ? (
@@ -277,6 +278,6 @@ export function ExistingWorkersPickerModal({ open, onClose, siteId, weekStart, o
           )}
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useIntentionalPress } from "./use-intentional-press";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 interface NumberPickerProps {
   value: number;
@@ -209,8 +210,8 @@ export default function NumberPicker({
       {showPopup &&
         portalEl &&
         createPortal(
-          <div
-            className="fixed inset-0 z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
+          <ModalOverlay
+            className="z-[11000] flex min-h-[100dvh] items-center justify-center bg-black/50 p-4"
             onClick={(e) => {
               if (Date.now() - openedAtRef.current < 400) return;
               if (e.target === e.currentTarget) setShowPopup(false);
@@ -293,7 +294,7 @@ export default function NumberPicker({
                 </button>
               </div>
             </div>
-          </div>,
+          </ModalOverlay>,
           portalEl,
         )}
     </>

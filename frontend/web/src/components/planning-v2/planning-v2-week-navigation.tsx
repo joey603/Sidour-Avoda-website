@@ -4,6 +4,7 @@ import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { addDays, formatHebDate, getWeekKeyISO } from "./lib/week";
 import { getJewishHolidaysForMonth } from "./lib/jewish-holidays";
+import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 type PlanningV2WeekNavigationProps = {
   siteId: string;
@@ -141,8 +142,8 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
       </div>
 
       {isCalendarOpen ? (
-        <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50"
+        <ModalOverlay
+          className="z-[200] flex items-center justify-center bg-black/50"
           onClick={() => setIsCalendarOpen(false)}
         >
           <div
@@ -311,7 +312,7 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
               </p>
             ) : null}
           </div>
-        </div>
+        </ModalOverlay>
       ) : null}
     </>
   );
