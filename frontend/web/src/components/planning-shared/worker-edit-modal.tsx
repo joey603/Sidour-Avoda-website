@@ -281,14 +281,14 @@ export function WorkerEditModal({
           ) : null}
 
           <div className="mt-3 text-center md:mt-4">
-            <div className="mb-1 block text-sm font-semibold md:mb-1.5 md:text-base">זמינות לפי יום/משמרת</div>
-            <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400 md:mb-3 md:text-sm">
+            <div className="mb-1.5 block text-base font-semibold">זמינות לפי יום/משמרת</div>
+            <p className="mb-3 text-sm text-zinc-500 dark:text-zinc-400">
               לחיצה על משמרת: זמין → מועדף (כתום) → ביטול. מועדף = העדפה רכה בלבד.
             </p>
-            <div className="mx-auto inline-flex max-w-full flex-col items-stretch gap-2 md:gap-2.5">
-              <div className="flex flex-wrap items-center justify-center gap-2 text-sm md:gap-2.5 md:text-base">
+            <div className="mx-auto inline-flex max-w-full translate-x-6 flex-col items-stretch gap-2.5 sm:translate-x-8">
+              <div className="flex flex-wrap items-center justify-center gap-2.5 text-base">
                 {/* Même largeur que le label jour (א'/ב'…) pour centrer sur les cases משמרת */}
-                <div className="w-10 shrink-0 md:w-12" aria-hidden />
+                <div className="w-12 shrink-0" aria-hidden />
                 {(
                   [
                     {
@@ -320,7 +320,7 @@ export function WorkerEditModal({
                       disabled={workerModalSaving || !enabled}
                       onClick={() => onToggleAvailabilityForAllDays(bulk.shiftName, !active)}
                       className={
-                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 md:px-3 md:py-1.5 md:text-sm " +
+                        "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-60 " +
                         (active
                           ? "border-violet-600 bg-violet-600 text-white"
                           : "border-violet-300 bg-white text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-zinc-900 dark:text-violet-300 dark:hover:bg-violet-950/40")
@@ -333,8 +333,8 @@ export function WorkerEditModal({
                 })}
               </div>
               {dayDefs.map((d) => (
-                <div key={d.key} className="flex flex-wrap items-center justify-center gap-2 text-sm md:gap-2.5 md:text-base">
-                  <div className="w-10 shrink-0 text-center text-zinc-600 dark:text-zinc-300 md:w-12 md:text-sm">
+                <div key={d.key} className="flex flex-wrap items-center justify-center gap-2.5 text-base">
+                  <div className="w-12 shrink-0 text-center text-sm text-zinc-600 dark:text-zinc-300">
                     {d.label}
                   </div>
                   {allShiftNames.length === 0 ? (
@@ -359,7 +359,7 @@ export function WorkerEditModal({
                             onToggleAvailability(d.key, sn);
                           }}
                           className={
-                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm " +
+                            "rounded-md border px-3 py-1.5 text-sm font-medium transition-colors " +
                             (isEventLocked
                               ? "cursor-not-allowed border-[#722F37] bg-[#722F37] text-white disabled:opacity-100"
                               : "disabled:opacity-60 " +
