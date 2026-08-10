@@ -15,6 +15,12 @@ from app.ai_solver import (
     sanitize_plan,
     solve_schedule,
 )
+from tests.ai_solver_fixtures import (
+    assignments_signature,
+    count_assigned_names,
+    minimal_station_config,
+    worker,
+)
 
 
 def test_order_days_standard_week_order():
@@ -304,3 +310,108 @@ def test_solve_schedule_returns_status_string_on_infeasible_model(monkeypatch):
     result = solve_schedule(config, workers, time_limit_seconds=1, num_alternatives=0)
     assert result["status"] == str(cp_model.INFEASIBLE)
     assert result["assignments"]["sun"]["06-14"][0] == []
+
+
+def test_solve_schedule_respects_fixed_assignments():
+    config = minimal_station_config(workers=1)
+    workers = [
+        worker("Alice", worker_id=1, availability={"sun": ["06-14"]}),
+        worker("Bob", worker_id=2, availability={"sun": ["06-14"]}),
+    ]
+    fixed = {"sun": {"06-14": [["Bob"]]}}
+
+    result = solve_schedule(
+        config,
+        workers,
+        time_limit_seconds=5,
+        num_alternatives=0,
+        fixed_assignments=fixed,
+    )
+    assert result["status"] in ("OPTIMAL", "FEASIBLE")
+    assert "Bob" in result["assignments"]["sun"]["06-14"][0]
+
+
+def test_solve_schedule_respects_availability():
+    config = minimal_station_config(workers=1, days={"sun": True, "mon": True}, shift_names=["06-14"])
+    workers = [worker("Alice", availability={"sun": ["06-14"]})]
+
+    result = solve_schedule(config, workers, time_limit_seconds=5, num_alternatives=0)
+    assert count_assigned_names(result["assignments"]) == 1
+    assert result["assignments"]["mon"]["06-14"][0] == []
+
+
+def test_solve_schedule_max_nights_per_worker():
+    config = minimal_station_config(
+        workers=1,
+        days={"sun": True, "mon": True},
+        shift_names=["22-06"],
+    )
+    workers = [worker("NightOwl", availability={"sun": ["22-06"], "mon": ["22-06"]})]
+
+    result = solve_schedule(
+        config,
+        workers,
+        time_limit_seconds=5,
+        max_nights_per_worker=1,
+        num_alternatives=0,
+    )
+    assert result["status"] in ("OPTIMAL", "FEASIBLE")
+    night_count = count_assigned_names(result["assignments"])
+    assert night_count <= 1
+
+
+def test_solve_schedule_exclude_days():
+    config = minimal_station_config(workers=1)
+    workers = [worker("Alice", availability={"sun": ["06-14"]})]
+
+    result = solve_schedule(
+        config,
+        workers,
+        time_limit_seconds=5,
+        num_alternatives=0,
+        exclude_days=["sun"],
+    )
+    assert count_assigned_names(result["assignments"]) == 0
+
+
+def test_solve_schedule_returns_alternatives_when_requested():
+    config = minimal_station_config(
+        workers=1,
+        days={"sun": True},
+        shift_names=["06-14", "14-22"],
+    )
+    workers = [
+        worker("Alice", worker_id=1, availability={"sun": ["06-14", "14-22"]}),
+        worker("Bob", worker_id=2, availability={"sun": ["06-14", "14-22"]}),
+    ]
+
+    result = solve_schedule(config, workers, time_limit_seconds=15, num_alternatives=2)
+    assert result["status"] in ("OPTIMAL", "FEASIBLE")
+    assert isinstance(result.get("alternatives"), list)
+    assert len(result["alternatives"]) >= 1
+    for alt in result["alternatives"]:
+        assert count_assigned_names(alt) == 2
+
+
+def test_solve_schedule_fixed_preserved_in_alternatives_when_generated():
+    config = minimal_station_config(
+        workers=1,
+        days={"sun": True},
+        shift_names=["06-14", "14-22"],
+    )
+    workers = [
+        worker("Alice", worker_id=1, availability={"sun": ["06-14", "14-22"]}),
+        worker("Bob", worker_id=2, availability={"sun": ["06-14", "14-22"]}),
+    ]
+    fixed = {"sun": {"06-14": [["Alice"]]}}
+
+    result = solve_schedule(
+        config,
+        workers,
+        time_limit_seconds=15,
+        num_alternatives=3,
+        fixed_assignments=fixed,
+    )
+    assert ("sun", "06-14", 0, "Alice") in assignments_signature(result["assignments"])
+    for alt in result.get("alternatives") or []:
+        assert ("sun", "06-14", 0, "Alice") in assignments_signature(alt)
