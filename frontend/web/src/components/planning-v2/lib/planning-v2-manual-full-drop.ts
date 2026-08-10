@@ -224,12 +224,27 @@ function isWorkerAlreadyAssignedInShift(
   dayKey: string,
   shiftName: string,
   workerName: string,
+  dragSource?: ManualDragSource | null,
 ): boolean {
   const t = normName(workerName);
   if (!t) return false;
   const perStation: string[][] = (assignments?.[dayKey]?.[shiftName] || []) as string[][];
-  for (const arr of perStation) {
-    if ((arr || []).some((nm) => normName(nm) === t)) return true;
+  for (let sIdx = 0; sIdx < perStation.length; sIdx++) {
+    const names = perStation[sIdx] || [];
+    for (let slotIdx = 0; slotIdx < names.length; slotIdx++) {
+      if (normName(names[slotIdx]) !== t) continue;
+      if (
+        dragSource &&
+        normName(dragSource.workerName) === t &&
+        dragSource.dayKey === dayKey &&
+        dragSource.shiftName === shiftName &&
+        Number(dragSource.stationIndex) === sIdx &&
+        Number(dragSource.slotIndex) === slotIdx
+      ) {
+        continue;
+      }
+      return true;
+    }
   }
   return false;
 }
@@ -310,6 +325,280 @@ export function collectManualRuleViolations(
   return conflicts;
 }
 
+type LinkedShiftKind = "morning" | "noon" | "night";
+
+type LinkedShiftSlot = { dayKey: string; kind: LinkedShiftKind };
+
+export type WorkerLinkedAssignmentOnOtherSite = {
+  siteId: string;
+  siteName: string | null;
+  dayKey: string;
+  kind: LinkedShiftKind;
+  shiftName: string;
+};
+
+function linkedSiteNameForWorker(workers: PlanningWorker[], workerName: string, siteId: string): string | null {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return null;
+  const worker = workers.find((w) => (w.name || "").trim() === trimmed);
+  const ids = Array.isArray(worker?.linkedSiteIds) ? (worker.linkedSiteIds as number[]) : [];
+  const names = Array.isArray(worker?.linkedSiteNames) ? (worker.linkedSiteNames as string[]) : [];
+  const idx = ids.findIndex((id) => String(id) === String(siteId));
+  if (idx < 0) return null;
+  const name = String(names[idx] || "").trim();
+  return name || null;
+}
+
+/** Cases interdites sur le site courant quand l’עובד est déjà שובץ sur un site lié (dayKey, kind). */
+export function linkedForbiddenSlotsFromAssignment(dayKey: string, kind: LinkedShiftKind): LinkedShiftSlot[] {
+  const slots: LinkedShiftSlot[] = [{ dayKey, kind }];
+  if (kind === "morning") {
+    slots.push({ dayKey: prevDayKeyOf(dayKey), kind: "night" });
+    slots.push({ dayKey, kind: "noon" });
+  } else if (kind === "noon") {
+    slots.push({ dayKey, kind: "morning" });
+    slots.push({ dayKey, kind: "night" });
+  } else if (kind === "night") {
+    slots.push({ dayKey, kind: "noon" });
+    slots.push({ dayKey: nextDayKeyOf(dayKey), kind: "morning" });
+  }
+  return slots;
+}
+
+function linkedSiteIdsForWorker(workers: PlanningWorker[], workerName: string): number[] {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return [];
+  const worker = workers.find((w) => (w.name || "").trim() === trimmed);
+  return Array.isArray(worker?.linkedSiteIds)
+    ? (worker.linkedSiteIds as number[]).map((id: number) => Number(id)).filter(Number.isFinite)
+    : [];
+}
+
+/** Toutes les משמרות (jour + type) où l’עובד est שובץ sur les autres sites liés. */
+export function listWorkerLinkedAssignmentsOnOtherSites(
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+): WorkerLinkedAssignmentOnOtherSite[] {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return [];
+  const linkedSiteIds = linkedSiteIdsForWorker(workers, trimmed);
+  if (linkedSiteIds.length <= 1) return [];
+  const linkedMemory = readLinkedPlansFromMemory(weekStart);
+  const activeAltIndex = Number(linkedMemory?.activeAltIndex || 0);
+  const out: WorkerLinkedAssignmentOnOtherSite[] = [];
+  const seen = new Set<string>();
+
+  for (const linkedSiteId of linkedSiteIds) {
+    if (String(linkedSiteId) === String(currentSiteId)) continue;
+    const siteKey = String(linkedSiteId);
+    const plan = linkedMemory?.plansBySite?.[siteKey];
+    const asg = plan ? resolveAssignmentsForSharedAlternative(plan, activeAltIndex) : null;
+    if (!asg || typeof asg !== "object") continue;
+    const siteName = linkedSiteNameForWorker(workers, trimmed, siteKey);
+    for (const assignmentDayKey of Object.keys(asg)) {
+      const shiftsMap = asg[assignmentDayKey] || {};
+      for (const candidateShiftName of Object.keys(shiftsMap)) {
+        const kind = detectShiftKind(candidateShiftName);
+        if (kind === "other") continue;
+        const perStation = (shiftsMap as Record<string, string[][]>)[candidateShiftName] || [];
+        const assigned = perStation.some((namesHere) =>
+          (namesHere || []).some((nm) => String(nm || "").trim() === trimmed),
+        );
+        if (!assigned) continue;
+        const key = `${siteKey}|${assignmentDayKey}|${kind}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          siteId: siteKey,
+          siteName,
+          dayKey: assignmentDayKey,
+          kind,
+          shiftName: candidateShiftName,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+export function listWorkerLinkedShiftAssignmentsOnOtherSites(
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+): LinkedShiftSlot[] {
+  return listWorkerLinkedAssignmentsOnOtherSites(currentSiteId, weekStart, workers, workerName).map(
+    ({ dayKey, kind }) => ({ dayKey, kind }),
+  );
+}
+
+/** Clés `${dayKey}|${kind}` interdites pour le drag manuel (sites liés + site courant, gardes adjacentes). */
+export function listCurrentSiteShiftAssignmentsForWorker(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  workerName: string,
+  dragSource?: ManualDragSource | null,
+): LinkedShiftSlot[] {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed || !assignments || typeof assignments !== "object") return [];
+  const t = normName(trimmed);
+  const out: LinkedShiftSlot[] = [];
+  const seen = new Set<string>();
+  for (const dayKey of Object.keys(assignments)) {
+    const shiftsMap = assignments[dayKey] || {};
+    for (const shiftName of Object.keys(shiftsMap)) {
+      const kind = detectShiftKind(shiftName);
+      if (kind === "other") continue;
+      const perStation = (shiftsMap as Record<string, string[][]>)[shiftName] || [];
+      let assigned = false;
+      for (let sIdx = 0; sIdx < perStation.length; sIdx++) {
+        const names = perStation[sIdx] || [];
+        for (let slotIdx = 0; slotIdx < names.length; slotIdx++) {
+          if (normName(names[slotIdx]) !== t) continue;
+          if (
+            dragSource &&
+            normName(dragSource.workerName) === t &&
+            dragSource.dayKey === dayKey &&
+            dragSource.shiftName === shiftName &&
+            Number(dragSource.stationIndex) === sIdx &&
+            Number(dragSource.slotIndex) === slotIdx
+          ) {
+            continue;
+          }
+          assigned = true;
+          break;
+        }
+        if (assigned) break;
+      }
+      if (!assigned) continue;
+      const key = `${dayKey}|${kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ dayKey, kind });
+    }
+  }
+  return out;
+}
+
+export function buildManualDropForbiddenSlotKeySet(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+  dragSource?: ManualDragSource | null,
+): Set<string> {
+  const keys = new Set<string>();
+  const addFromSlots = (slots: LinkedShiftSlot[]) => {
+    for (const assignment of slots) {
+      for (const forbidden of linkedForbiddenSlotsFromAssignment(assignment.dayKey, assignment.kind)) {
+        keys.add(`${forbidden.dayKey}|${forbidden.kind}`);
+      }
+    }
+  };
+  addFromSlots(
+    listWorkerLinkedShiftAssignmentsOnOtherSites(currentSiteId, weekStart, workers, workerName),
+  );
+  addFromSlots(listCurrentSiteShiftAssignmentsForWorker(assignments, workerName, dragSource));
+  return keys;
+}
+
+/** Clés `${dayKey}|${kind}` interdites pour le drag manuel multi-site (garde + gardes adjacentes). */
+export function buildLinkedSiteForbiddenSlotKeySet(
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+): Set<string> {
+  return buildManualDropForbiddenSlotKeySet(undefined, currentSiteId, weekStart, workers, workerName);
+}
+
+function linkedSiteConflictMessage(
+  targetDayKey: string,
+  targetKind: LinkedShiftKind,
+  otherDayKey: string,
+  otherKind: LinkedShiftKind,
+): string {
+  if (targetDayKey === otherDayKey && targetKind === otherKind) {
+    return "העובד כבר משובץ במשמרת חופפת באתר מקושר.";
+  }
+  if (targetKind === "morning" && otherKind === "night" && targetDayKey === nextDayKeyOf(otherDayKey)) {
+    return "העובד כבר משובץ בלילה קודם באתר מקושר.";
+  }
+  if (targetKind === "noon" && otherKind === "morning" && targetDayKey === otherDayKey) {
+    return "העובד כבר משובץ בבוקר באותו יום באתר מקושר.";
+  }
+  if (targetKind === "morning" && otherKind === "noon" && targetDayKey === otherDayKey) {
+    return "העובד כבר משובץ בצהריים באותו יום באתר מקושר.";
+  }
+  if (targetKind === "night" && otherKind === "noon" && targetDayKey === otherDayKey) {
+    return "העובד כבר משובץ בצהריים באותו יום באתר מקושר.";
+  }
+  if (targetKind === "noon" && otherKind === "night" && targetDayKey === otherDayKey) {
+    return "העובד כבר משובץ בלילה באותו יום באתר מקושר.";
+  }
+  if (targetKind === "night" && otherKind === "morning" && targetDayKey === prevDayKeyOf(otherDayKey)) {
+    return "העובד כבר משובץ בבוקר שלמחרת באתר מקושר.";
+  }
+  return "העובד כבר משובץ במשמרת סמוכה באתר מקושר.";
+}
+
+const SAME_SITE_ADJACENT_MSG = "אין משמרות צמודות (כולל חציית יום)";
+
+/** Conflit garde (site courant + sites liés) — même logique partout, avec exclusion de la source en déplacement. */
+export function getManualShiftConflictReason(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+  dayKey: string,
+  shiftName: string,
+  dragSource?: ManualDragSource | null,
+): string | null {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return null;
+  const kind = detectShiftKind(shiftName);
+  if (kind === "other") {
+    if (hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, dayKey, shiftName, "same")) {
+      return "העובד כבר משובץ במשמרת חופפת באתר מקושר.";
+    }
+    if (isWorkerAlreadyAssignedInShift(assignments || {}, dayKey, shiftName, trimmed, dragSource)) {
+      return "העובד כבר משובץ במשמרת זו ולא ניתן לשבץ אותו שוב.";
+    }
+    return null;
+  }
+  const targetKey = `${dayKey}|${kind}`;
+  const forbiddenKeys = buildManualDropForbiddenSlotKeySet(
+    assignments,
+    currentSiteId,
+    weekStart,
+    workers,
+    trimmed,
+    dragSource,
+  );
+  if (!forbiddenKeys.has(targetKey)) return null;
+  for (const other of listWorkerLinkedAssignmentsOnOtherSites(
+    currentSiteId,
+    weekStart,
+    workers,
+    trimmed,
+  )) {
+    for (const forbidden of linkedForbiddenSlotsFromAssignment(other.dayKey, other.kind)) {
+      if (`${forbidden.dayKey}|${forbidden.kind}` !== targetKey) continue;
+      return linkedSiteConflictMessage(dayKey, kind, other.dayKey, other.kind);
+    }
+  }
+  for (const current of listCurrentSiteShiftAssignmentsForWorker(assignments, trimmed, dragSource)) {
+    for (const forbidden of linkedForbiddenSlotsFromAssignment(current.dayKey, current.kind)) {
+      if (`${forbidden.dayKey}|${forbidden.kind}` !== targetKey) continue;
+      return SAME_SITE_ADJACENT_MSG;
+    }
+  }
+  return SAME_SITE_ADJACENT_MSG;
+}
+
 function hasWorkerAssignmentOnOtherLinkedSite(
   currentSiteId: string,
   weekStart: Date,
@@ -321,10 +610,7 @@ function hasWorkerAssignmentOnOtherLinkedSite(
 ): boolean {
   const trimmed = String(workerName || "").trim();
   if (!trimmed) return false;
-  const worker = workers.find((w) => (w.name || "").trim() === trimmed);
-  const linkedSiteIds = Array.isArray(worker?.linkedSiteIds)
-    ? (worker.linkedSiteIds as number[]).map((id: number) => Number(id)).filter(Number.isFinite)
-    : [];
+  const linkedSiteIds = linkedSiteIdsForWorker(workers, trimmed);
   if (linkedSiteIds.length <= 1) return false;
   const linkedMemory = readLinkedPlansFromMemory(weekStart);
   const activeAltIndex = Number(linkedMemory?.activeAltIndex || 0);
@@ -414,16 +700,21 @@ export function canHighlightManualDropTarget(ctx: {
     return false;
   }
   if (ctx.roleHint && !workerHasRole(ctx.workers, trimmed, ctx.roleHint)) return false;
-  if (getLinkedSiteConflictReason(ctx.siteId, ctx.weekStart, ctx.workers, trimmed, ctx.dayKey, ctx.shiftName)) {
+  if (
+    getManualShiftConflictReason(
+      ctx.assignments,
+      ctx.siteId,
+      ctx.weekStart,
+      ctx.workers,
+      trimmed,
+      ctx.dayKey,
+      ctx.shiftName,
+      ctx.dragSource,
+    )
+  ) {
     return false;
   }
-  // Pendant un déplacement slot->slot, l’état actuel contient encore la cellule source.
-  // Pour l’aperçu vert, on évite les faux négatifs (ex: ancienne cellule) et on garde
-  // les validations strictes au moment du drop via analyzeManualSlotDrop.
-  if (ctx.dragSource && String(ctx.dragSource.workerName || "").trim() === trimmed) {
-    return true;
-  }
-  if (isWorkerAlreadyAssignedInShift(ctx.assignments, ctx.dayKey, ctx.shiftName, trimmed)) {
+  if (isWorkerAlreadyAssignedInShift(ctx.assignments, ctx.dayKey, ctx.shiftName, trimmed, ctx.dragSource)) {
     return false;
   }
   try {
@@ -455,32 +746,57 @@ export function canHighlightManualDropTarget(ctx: {
   } catch {
     /* ignore */
   }
-  try {
-    const kind = detectShiftKind(ctx.shiftName);
-    const hasInShift = (dKey: string, kindWanted: "morning" | "noon" | "night") => {
-      const shiftsMap = ctx.assignments?.[dKey] || {};
-      const sn = Object.keys(shiftsMap).find((x) => detectShiftKind(x) === kindWanted);
-      if (!sn) return false;
-      const perStation: string[][] = shiftsMap[sn] || [];
-      return perStation.some((arr: string[]) => (arr || []).some((nm) => String(nm || "").trim() === trimmed));
-    };
-    const prevCheck = () => {
-      if (kind === "morning") return hasInShift(prevDayKeyOf(ctx.dayKey), "night");
-      if (kind === "noon") return hasInShift(ctx.dayKey, "morning");
-      if (kind === "night") return hasInShift(ctx.dayKey, "noon");
-      return false;
-    };
-    const nextCheck = () => {
-      if (kind === "morning") return hasInShift(ctx.dayKey, "noon");
-      if (kind === "noon") return hasInShift(ctx.dayKey, "night");
-      if (kind === "night") return hasInShift(nextDayKeyOf(ctx.dayKey), "morning");
-      return false;
-    };
-    if (prevCheck() || nextCheck()) return false;
-  } catch {
-    /* ignore */
-  }
   return true;
+}
+
+/** « משובץ » uniquement sur la garde exacte déjà occupée sur un autre site lié (pas les gardes adjacentes). */
+export function isLinkedSiteExactAssignmentConflictCell(
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+  dayKey: string,
+  shiftName: string,
+): boolean {
+  const trimmed = String(workerName || "").trim();
+  if (!trimmed) return false;
+  const kind = detectShiftKind(shiftName);
+  if (kind === "other") {
+    return hasWorkerAssignmentOnOtherLinkedSite(
+      currentSiteId,
+      weekStart,
+      workers,
+      trimmed,
+      dayKey,
+      shiftName,
+      "same",
+    );
+  }
+  const targetKey = `${dayKey}|${kind}`;
+  return listWorkerLinkedAssignmentsOnOtherSites(currentSiteId, weekStart, workers, trimmed).some(
+    (other) => `${other.dayKey}|${other.kind}` === targetKey,
+  );
+}
+
+/** Libellé court (hébreu) à afficher dans la cellule rouge pendant le drag — garde exacte seulement. */
+export function getLinkedSiteConflictCellLabel(
+  currentSiteId: string,
+  weekStart: Date,
+  workers: PlanningWorker[],
+  workerName: string,
+  dayKey: string,
+  shiftName: string,
+): string | null {
+  return isLinkedSiteExactAssignmentConflictCell(
+    currentSiteId,
+    weekStart,
+    workers,
+    workerName,
+    dayKey,
+    shiftName,
+  )
+    ? "משובץ"
+    : null;
 }
 
 export function getLinkedSiteConflictReason(
@@ -490,26 +806,19 @@ export function getLinkedSiteConflictReason(
   workerName: string,
   dayKey: string,
   shiftName: string,
+  assignments?: Record<string, Record<string, string[][]>> | null,
+  dragSource?: ManualDragSource | null,
 ): string | null {
-  const trimmed = String(workerName || "").trim();
-  if (!trimmed) return null;
-  if (hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, dayKey, shiftName, "kind")) {
-    return "העובד כבר משובץ במשמרת חופפת באתר מקושר.";
-  }
-  const kind = detectShiftKind(shiftName);
-  if (kind === "morning" && hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, prevDayKeyOf(dayKey), "night", "kind")) {
-    return "העובד כבר משובץ בלילה קודם באתר מקושר.";
-  }
-  if (kind === "noon" && hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, dayKey, "morning", "kind")) {
-    return "העובד כבר משובץ בבוקר באותו יום באתר מקושר.";
-  }
-  if (kind === "night" && hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, dayKey, "noon", "kind")) {
-    return "העובד כבר משובץ בצהריים באותו יום באתר מקושר.";
-  }
-  if (kind === "night" && hasWorkerAssignmentOnOtherLinkedSite(currentSiteId, weekStart, workers, trimmed, nextDayKeyOf(dayKey), "morning", "kind")) {
-    return "העובד כבר משובץ בבוקר שלמחרת באתר מקושר.";
-  }
-  return null;
+  return getManualShiftConflictReason(
+    assignments,
+    currentSiteId,
+    weekStart,
+    workers,
+    workerName,
+    dayKey,
+    shiftName,
+    dragSource,
+  );
 }
 
 export type ManualDropFlags = {
@@ -634,18 +943,18 @@ export function analyzeManualSlotDrop(ctx: {
   const stationsCount = (ctx.site?.config?.stations as unknown[] | undefined)?.length || 0;
   if (!stationsCount) return { action: "block", message: "אין עמדות" };
 
-  const linked = getLinkedSiteConflictReason(ctx.siteId, ctx.weekStart, ctx.workers, trimmed, ctx.dayKey, ctx.shiftName);
-  if (linked) return { action: "block", message: linked };
-
-  const isMoveFromSameWorker = !!(
-    ctx.dragSource &&
-    normName(ctx.dragSource.workerName) === normName(trimmed)
+  const shiftConflict = getManualShiftConflictReason(
+    ctx.base,
+    ctx.siteId,
+    ctx.weekStart,
+    ctx.workers,
+    trimmed,
+    ctx.dayKey,
+    ctx.shiftName,
+    ctx.dragSource,
   );
-  if (
-    !isMoveFromSameWorker &&
-    isWorkerAlreadyAssignedInShift(ctx.base, ctx.dayKey, ctx.shiftName, trimmed)
-  ) {
-    return { action: "block", message: "העובד כבר משובץ במשמרת זו ולא ניתן לשבץ אותו שוב." };
+  if (shiftConflict && !ctx.flags.forceRules) {
+    return { action: "block", message: shiftConflict };
   }
 
   const w = ctx.workers.find((x) => (x.name || "").trim() === trimmed);

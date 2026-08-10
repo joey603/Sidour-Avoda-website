@@ -66,7 +66,8 @@ import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
 import {
   canHighlightManualDropTarget,
-  getLinkedSiteConflictReason,
+  getLinkedSiteConflictCellLabel,
+  getManualShiftConflictReason,
   pullEditOnlyViaPopupMessage,
   pullEntriesInCell,
   workerHasRole,
@@ -1075,11 +1076,26 @@ export function PlanningV2StationWeekGrid({
                             sn,
                             idx,
                           );
+                          const manualDragSource = dragSourceRef.current ?? selectedWorkerSource ?? null;
+                          const dropConflictReason =
+                            dragNm && dndHere
+                              ? getManualShiftConflictReason(
+                                  highlightMap,
+                                  siteId || "",
+                                  weekStart,
+                                  workers,
+                                  dragNm,
+                                  d.key,
+                                  sn,
+                                  manualDragSource,
+                                )
+                              : null;
+                          const hasDropConflict = !!dropConflictReason;
                           const slotCanHighlight = (roleHint: string | null) =>
                             !!dragNm &&
                             dndHere &&
                             !availabilityOverlayByNormName[normName(dragNm)]?.[d.key]?.has(String(sn || "").trim()) &&
-                            !getLinkedSiteConflictReason(siteId || "", weekStart, workers, dragNm, d.key, sn) &&
+                            !dropConflictReason &&
                             canHighlightManualDropTarget({
                               assignments: highlightMap,
                               siteId,
@@ -1092,13 +1108,19 @@ export function PlanningV2StationWeekGrid({
                               stationIndex: idx,
                               stationsCount: stations.length,
                               roleHint,
-                              dragSource: dragSourceRef.current ?? selectedWorkerSource ?? null,
+                              dragSource: manualDragSource,
                             });
-                          const linkedConflictReason =
+                          const linkedConflictCellLabel =
                             dragNm && dndHere
-                              ? getLinkedSiteConflictReason(siteId || "", weekStart, workers, dragNm, d.key, sn)
+                              ? getLinkedSiteConflictCellLabel(
+                                  siteId || "",
+                                  weekStart,
+                                  workers,
+                                  dragNm,
+                                  d.key,
+                                  sn,
+                                )
                               : null;
-                          const hasLinkedConflict = !!linkedConflictReason;
 
                           return (
                             <td
@@ -1196,18 +1218,20 @@ export function PlanningV2StationWeekGrid({
                                                 ? erc && pullsActiveHere && isPullable
                                                   ? " border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900 "
                                                   : " bg-white dark:bg-zinc-900 "
-                                                : " border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 ") +
+                                                : linkedConflictCellLabel
+                                                  ? " border-red-300 bg-red-50 text-red-700 dark:border-red-600 dark:bg-red-950/40 dark:text-red-300 "
+                                                  : " border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 ") +
                                               (pullsActiveHere && isPullable ? " ring-1 ring-orange-400 cursor-pointer" : "") +
                                               (!dragNm && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                               (dragNm && emptyOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
-                                              (dragNm && hasLinkedConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
+                                              (dragNm && hasDropConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
                                               (dragNm && emptyOk && isSlotHovered
                                                 ? " [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22),0_0_0_2px_rgb(34_197_94)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38),0_0_0_2px_rgb(34_197_94)]"
                                                 : "") +
-                                              (dragNm && hasLinkedConflict && isSlotHovered
+                                              (dragNm && hasDropConflict && isSlotHovered
                                                 ? "ring-2 ring-red-500 cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]"
                                                 : "") +
-                                              (dragNm && !emptyOk && isSlotHovered
+                                              (dragNm && !emptyOk && !hasDropConflict && isSlotHovered
                                                 ? "ring-2 ring-[#00A8E0] cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]"
                                                 : "")
                                             }
@@ -1216,6 +1240,7 @@ export function PlanningV2StationWeekGrid({
                                                 ? { borderColor: erc.border }
                                                 : undefined
                                             }
+                                            title={dropConflictReason || undefined}
                                             onClick={() => {
                                               if (!pullsActiveHere || !isPullable) return;
                                               const used = new Set<string>();
@@ -1281,6 +1306,10 @@ export function PlanningV2StationWeekGrid({
                                                   —
                                                 </span>
                                               </>
+                                            ) : linkedConflictCellLabel ? (
+                                              <span className="max-w-full truncate px-0.5 text-center text-[7px] font-semibold leading-tight md:text-[10px]">
+                                                {linkedConflictCellLabel}
+                                              </span>
                                             ) : (
                                               <>
                                                 <span className="text-[7px] font-medium opacity-0 md:text-[10px]">
@@ -1534,14 +1563,14 @@ export function PlanningV2StationWeekGrid({
                                                 ? " relative z-[21] scale-110 ring-2 ring-[#00A8E0] ring-offset-2 ring-offset-white dark:ring-offset-zinc-950 "
                                                 : "")) +
                                             (dragNm && fillOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
-                                            (dragNm && hasLinkedConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
+                                            (dragNm && hasDropConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
                                             (dragNm && fillOk && isSlotHovered
                                               ? " [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22),0_0_0_2px_rgb(34_197_94)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38),0_0_0_2px_rgb(34_197_94)]"
                                               : "") +
-                                            (dragNm && hasLinkedConflict && isSlotHovered
+                                            (dragNm && hasDropConflict && isSlotHovered
                                               ? " ring-2 ring-red-500 cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]"
                                               : "") +
-                                            (dragNm && !fillOk && isSlotHovered
+                                            (dragNm && !fillOk && !hasDropConflict && isSlotHovered
                                               ? "ring-2 ring-[#00A8E0] cursor-not-allowed [box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.22)] dark:[box-shadow:inset_0_0_0_9999px_rgba(0,0,0,0.38)]"
                                               : "")
                                           }
