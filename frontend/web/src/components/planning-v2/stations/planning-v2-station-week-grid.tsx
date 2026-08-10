@@ -3,64 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import type { PlanningV2PullEntry, PlanningWorker, SiteSummary } from "../types";
-import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
-
-function isRealPullEntry(entry: unknown): boolean {
-  const e = entry as PlanningV2PullEntry | undefined;
-  return !!String(e?.before?.name || "").trim() && !!String(e?.after?.name || "").trim();
-}
-
-/** Plage שינוי שעות affichée sous le nom (rouge), clé = même slot que משיכה. */
-/** Vérifie le format HH:MM et si [start,end] garde est dans la plage משמרת (pour confirmation optionnelle). */
-function checkGuardDisplayVsShift(ed: {
-  shiftStart: string;
-  shiftEnd: string;
-  start: string;
-  end: string;
-}): { formatOk: false } | { formatOk: true; inRange: boolean } {
-  const toMinutesLocal = (t: string): number | null => {
-    const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})$/);
-    if (!m) return null;
-    const hh = Number(m[1]);
-    const mm = Number(m[2]);
-    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-    return hh * 60 + mm;
-  };
-  const s0 = toMinutesLocal(ed.shiftStart);
-  const e0 = toMinutesLocal(ed.shiftEnd);
-  const gS = toMinutesLocal(ed.start);
-  const gE = toMinutesLocal(ed.end);
-  if ([s0, e0, gS, gE].some((x) => x == null)) return { formatOk: false };
-  const s = s0 as number;
-  let e = e0 as number;
-  const crossesMidnight = e <= s;
-  if (crossesMidnight) e += 24 * 60;
-  const abs = (m: number) => (crossesMidnight && m < s ? m + 24 * 60 : m);
-  const within = (m: number) => {
-    const am = abs(m);
-    return am >= s && am <= e;
-  };
-  const okRange = (startM: number, endM: number) =>
-    within(startM) && within(endM) && abs(startM) <= abs(endM);
-  return { formatOk: true, inRange: okRange(gS as number, gE as number) };
-}
-
-function guardDisplayTimeForSlot(
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  slotIdx: number,
-): string | null {
-  if (!pulls) return null;
-  const key = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
-  const e = pulls[key] as PlanningV2PullEntry | undefined;
-  const s = String(e?.guardDisplay?.start || "").trim();
-  const en = String(e?.guardDisplay?.end || "").trim();
-  if (s && en) return `${s}–${en}`;
-  return null;
-}
 import { addDays, formatHebDate } from "../lib/week";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
@@ -103,7 +45,31 @@ import {
   buildPullHighlightKindByNormName,
   pullHighlightRingClass,
 } from "../lib/planning-v2-pull-slot-display";
-import TimePicker from "@/components/time-picker";
+import {
+  blockSavedViewPullBubble,
+  countPullEntriesInCell,
+  expandedKeyFor,
+  guardDisplayTimeForSlot,
+  isRealPullEntry,
+  isRtlName,
+  mergeCellRawWithPulls,
+  normName,
+  parseHoursRange,
+  pullTimeRangeForName,
+  shouldShowDraftFixedPinForWorker,
+  splitRangeForPulls,
+  truncateMobile6,
+} from "../lib/planning-v2-station-week-grid-utils";
+import { usePlanningV2StationGridZoom } from "../hooks/use-planning-v2-station-grid-zoom";
+import { usePlanningV2StationGridManualDrag } from "../hooks/use-planning-v2-station-grid-manual-drag";
+import {
+  PlanningV2StationPullsEditorModal,
+  type PlanningV2StationPullsEditorState,
+} from "./planning-v2-station-pulls-editor-modal";
+import {
+  PlanningV2StationShiftHoursEditorModal,
+  type PlanningV2StationShiftHoursEditorState,
+} from "./planning-v2-station-shift-hours-editor-modal";
 
 type PlanningV2StationWeekGridProps = {
   site: SiteSummary | null;
@@ -151,245 +117,12 @@ type PlanningV2StationWeekGridProps = {
   summaryHighlightWorkerName?: string | null;
 };
 
-function normName(s: unknown): string {
-  return String(s || "")
-    .normalize("NFKC")
-    .trim()
-    .replace(/\s+/g, " ");
-}
-
-function draftFixedCellNamesInRow(row: unknown): string[] {
-  if (!Array.isArray(row)) return [];
-  const out: string[] = [];
-  for (const cell of row) {
-    if (Array.isArray(cell)) {
-      for (const inner of cell) {
-        const n = normName(inner);
-        if (n) out.push(n);
-      }
-    } else {
-      const n = normName(cell);
-      if (n) out.push(n);
-    }
-  }
-  return out;
-}
-
-function isWorkerInDraftFixedSnapshot(
-  snap: Record<string, Record<string, string[][]>> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-): boolean {
-  if (!snap) return false;
-  const row = snap[dayKey]?.[shiftName]?.[stationIdx];
-  const names = draftFixedCellNamesInRow(row);
-  const n = normName(workerName);
-  if (!n) return false;
-  return names.includes(n);
-}
-
-function shouldShowDraftFixedPinForWorker(
-  snap: Record<string, Record<string, string[][]>> | null | undefined,
-  isSavedMode: boolean,
-  editingSaved: boolean,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-  cellAssignedNames: string[],
-): boolean {
-  if (!snap || (isSavedMode && !editingSaved)) return false;
-  const snapNames = draftFixedCellNamesInRow(snap[dayKey]?.[shiftName]?.[stationIdx]);
-  if (!snapNames.length) return false;
-  // Affichage robuste du cadenas: dès que le worker fait partie du snapshot fixe de la cellule.
-  // Le planning classique garde aussi ce comportement visuel après génération autour des fixes.
-  return isWorkerInDraftFixedSnapshot(snap, dayKey, shiftName, stationIdx, workerName);
-}
-
-/** שמור sans עריכה : pas d’interaction sur les bulles d’une משיכה (comme le planning classique). */
-function blockSavedViewPullBubble(
-  isSavedMode: boolean,
-  editingSaved: boolean,
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-): boolean {
-  if (!isSavedMode || editingSaved) return false;
-  const nm = normPullWorkerName(String(workerName || ""));
-  if (!nm) return false;
-  const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  for (const [k, v] of Object.entries(pulls || {})) {
-    if (!String(k).startsWith(prefix)) continue;
-    if (!isRealPullEntry(v)) continue;
-    const e = v as PlanningV2PullEntry;
-    if (normPullWorkerName(String(e?.before?.name || "")) === nm) return true;
-    if (normPullWorkerName(String(e?.after?.name || "")) === nm) return true;
-  }
-  return false;
-}
-
-function truncateMobile6(value: unknown): string {
-  const s = String(value ?? "");
-  const chars = Array.from(s);
-  return chars.length > 6 ? chars.slice(0, 4).join("") + "…" : s;
-}
-
-function isRtlName(s: string): boolean {
-  return /[\u0590-\u05FF]/.test(String(s || ""));
-}
-
-function expandedKeyFor(
-  dayKey: string,
-  shiftName: string,
-  stationIndex: number,
-  slotIndex: number,
-  token: string,
-): string {
-  return `${dayKey}|${shiftName}|${stationIndex}|${slotIndex}|${token}`;
-}
-
-/** Plage horaire משיכה pour ce nom dans la cellule (affichage lecture seule). */
-function pullTimeRangeForName(
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  workerName: string,
-): string | null {
-  if (!pulls) return null;
-  const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  const nm = normName(workerName);
-  for (const [k, v] of Object.entries(pulls)) {
-    if (!String(k).startsWith(prefix)) continue;
-    const e = v as {
-      before?: { name?: string; start?: string; end?: string };
-      after?: { name?: string; start?: string; end?: string };
-    };
-    if (normName(e?.before?.name) === nm) {
-      const s = String(e?.before?.start || "").trim();
-      const en = String(e?.before?.end || "").trim();
-      if (s && en) return `${s}–${en}`;
-    }
-    if (normName(e?.after?.name) === nm) {
-      const s = String(e?.after?.start || "").trim();
-      const en = String(e?.after?.end || "").trim();
-      if (s && en) return `${s}–${en}`;
-    }
-  }
-  return null;
-}
-
-/** Nombre de משיכות dans la cellule (même préfixe que le planning). */
-function countPullEntriesInCell(
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-): number {
-  if (!pulls) return 0;
-  const prefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  let n = 0;
-  for (const k of Object.keys(pulls)) {
-    if (!String(k).startsWith(prefix)) continue;
-    if (isRealPullEntry(pulls[k])) n++;
-  }
-  return n;
-}
-
-/**
- * Tableau de slots (ordre préservé) + injection des noms משיכה dans les trous,
- * comme `cellRaw` dans le planning — base pour N sous-slots et comptage שיבוצים.
- */
-function mergeCellRawWithPulls(
-  assignments: Record<string, Record<string, string[][]>> | null | undefined,
-  pulls: Record<string, unknown> | null | undefined,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-): string[] {
-  const cell = assignments?.[dayKey]?.[shiftName]?.[stationIdx];
-  const baseArr: string[] = Array.isArray(cell)
-    ? (cell as unknown[]).map((x) => String(x ?? ""))
-    : [];
-  const cellPrefix = `${dayKey}|${shiftName}|${stationIdx}|`;
-  const have = new Set(baseArr.map((x) => normName(x)).filter(Boolean));
-  const normSlot = (s: unknown) => String(s ?? "");
-  const addInto = (name: string) => {
-    const n = normName(name);
-    if (!n || have.has(n)) return;
-    const emptyIdx = baseArr.findIndex((x) => !normName(x));
-    if (emptyIdx >= 0) baseArr[emptyIdx] = normSlot(name);
-    else baseArr.push(normSlot(name));
-    have.add(n);
-  };
-  try {
-    if (pulls) {
-      Object.entries(pulls).forEach(([k, entry]) => {
-        if (!String(k).startsWith(cellPrefix)) return;
-        if (!isRealPullEntry(entry)) return;
-        const e = entry as { before?: { name?: string }; after?: { name?: string } };
-        const b = String(e?.before?.name || "").trim();
-        const a = String(e?.after?.name || "").trim();
-        if (b) addInto(b);
-        if (a) addInto(a);
-      });
-    }
-  } catch {
-    /* ignore */
-  }
-  return baseArr;
-}
-
-function parseHoursRange(range: string | null): { start: string; end: string } | null {
-  const raw = String(range || "").trim();
-  if (!raw) return null;
-  const m = raw.match(/^\s*(\d{1,2})\s*[:\-]\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*[:\-]\s*(\d{1,2})\s*$/);
-  if (!m) return null;
-  const h1 = Math.min(23, Math.max(0, Number(m[1])));
-  const m1 = Math.min(59, Math.max(0, Number(m[2])));
-  const h2 = Math.min(23, Math.max(0, Number(m[3])));
-  const m2 = Math.min(59, Math.max(0, Number(m[4])));
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return { start: `${pad(h1)}:${pad(m1)}`, end: `${pad(h2)}:${pad(m2)}` };
-}
-
-function splitRangeForPulls(start: string, end: string): { before: { start: string; end: string }; after: { start: string; end: string } } {
-  const parseMin = (t: string): number => {
-    const [h, m] = String(t || "00:00").split(":").map((x) => Number(x || 0));
-    return ((h % 24) * 60 + (m % 60) + 1440) % 1440;
-  };
-  const fmt = (n: number): string => {
-    const x = ((Math.round(n) % 1440) + 1440) % 1440;
-    const h = Math.floor(x / 60);
-    const m = x % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-  };
-  const s = parseMin(start);
-  const eRaw = parseMin(end);
-  const e = eRaw <= s ? eRaw + 1440 : eRaw;
-  const mid = s + (e - s) / 2;
-  return {
-    before: { start: fmt(s), end: fmt(mid) },
-    after: { start: fmt(mid), end: fmt(e) },
-  };
-}
-
-const MIN_STATION_GRID_ZOOM = 1;
-const MAX_STATION_GRID_ZOOM = 2;
-const STATION_GRID_ZOOM_STEP = 0.1;
-
-function roundStationZoom(value: number): number {
-  return Math.round(value * 10) / 10;
-}
 
 
 /**
  * גריד שבועי לפי עמדה — structure / tailles / couleurs alignées sur le planning (+ עריכה ידנית / DnD).
  */
+
 export function PlanningV2StationWeekGrid({
   site,
   siteId = "",
@@ -426,90 +159,42 @@ export function PlanningV2StationWeekGrid({
 }: PlanningV2StationWeekGridProps) {
   const [expandedSlotKey, setExpandedSlotKey] = useState<string | null>(null);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
-  const [pullsEditor, setPullsEditor] = useState<null | {
-    key: string;
-    dayKey: string;
-    shiftName: string;
-    stationIdx: number;
-    required: number;
-    shiftStart: string;
-    shiftEnd: string;
-    roleName?: string | null;
-    beforeOptions: string[];
-    afterOptions: string[];
-    beforeName: string;
-    afterName: string;
-    beforeStart: string;
-    beforeEnd: string;
-    afterStart: string;
-    afterEnd: string;
-  }>(null);
-  const [shiftHoursEditor, setShiftHoursEditor] = useState<null | {
-    key: string;
-    dayKey: string;
-    shiftName: string;
-    stationIdx: number;
-    slotIdx: number;
-    workerName: string;
-    start: string;
-    end: string;
-    shiftStart: string;
-    shiftEnd: string;
-  }>(null);
+  const [pullsEditor, setPullsEditor] = useState<PlanningV2StationPullsEditorState | null>(null);
+  const [shiftHoursEditor, setShiftHoursEditor] = useState<PlanningV2StationShiftHoursEditorState | null>(null);
   const [shiftHoursOorConfirm, setShiftHoursOorConfirm] = useState(false);
-  const [stationZoomByIdx, setStationZoomByIdx] = useState<Record<number, number>>({});
-  /** Dimensions naturelles capturées au 1er zoom — largeur pour scaler H, hauteur pour figer le paper. */
-  const [stationZoomBaseSizeByIdx, setStationZoomBaseSizeByIdx] = useState<
-    Record<number, { width: number; height: number }>
-  >({});
-  const stationGridScrollRefByIdx = useRef<Record<number, HTMLDivElement | null>>({});
-  const getStationZoom = useCallback(
-    (stationIdx: number) => stationZoomByIdx[stationIdx] ?? MIN_STATION_GRID_ZOOM,
-    [stationZoomByIdx],
-  );
-  const adjustStationZoom = useCallback((stationIdx: number, delta: number) => {
-    const current = stationZoomByIdx[stationIdx] ?? MIN_STATION_GRID_ZOOM;
-    const next = roundStationZoom(
-      Math.min(MAX_STATION_GRID_ZOOM, Math.max(MIN_STATION_GRID_ZOOM, current + delta)),
-    );
-    if (next === current) return;
-
-    // Au passage 1 → >1 : figer la taille visible (boutons ± restent juste sous la grille).
-    if (current <= MIN_STATION_GRID_ZOOM && next > MIN_STATION_GRID_ZOOM) {
-      const scroller = stationGridScrollRefByIdx.current[stationIdx];
-      const table = scroller?.querySelector("table");
-      const width = Math.round(
-        table?.getBoundingClientRect().width || scroller?.clientWidth || 0,
-      );
-      const height = Math.round(
-        table?.getBoundingClientRect().height || scroller?.clientHeight || 0,
-      );
-      if (width > 0 && height > 0) {
-        setStationZoomBaseSizeByIdx((sizes) => {
-          const prev = sizes[stationIdx];
-          if (prev?.width === width && prev?.height === height) return sizes;
-          return { ...sizes, [stationIdx]: { width, height } };
-        });
-      }
-    }
-    if (next <= MIN_STATION_GRID_ZOOM) {
-      setStationZoomBaseSizeByIdx((sizes) => {
-        if (sizes[stationIdx] == null) return sizes;
-        const { [stationIdx]: _removed, ...rest } = sizes;
-        return rest;
-      });
-    }
-
-    setStationZoomByIdx((prev) => ({ ...prev, [stationIdx]: next }));
-  }, [stationZoomByIdx]);
-  const dragSourceRef = useRef<ManualDragSource | null>(null);
-  const didDropRef = useRef(false);
+  const {
+    MIN_STATION_GRID_ZOOM,
+    MAX_STATION_GRID_ZOOM,
+    STATION_GRID_ZOOM_STEP,
+    stationZoomBaseSizeByIdx,
+    stationGridScrollRefByIdx,
+    getStationZoom,
+    adjustStationZoom,
+  } = usePlanningV2StationGridZoom();
+  const {
+    dragSourceRef,
+    onWorkerDragStart,
+    onSlotDragOver,
+    onSlotDrop,
+    trySlotClickAssign,
+    onChipDragEnd,
+  } = usePlanningV2StationGridManualDrag({
+    manualEditable,
+    draggingWorkerName,
+    selectedWorkerSource,
+    assignments,
+    pulls,
+    onManualSlotDrop,
+    onManualSlotDragOutside,
+    onDraggingWorkerChange,
+    setHoverSlotKey,
+  });
 
   useEffect(() => {
     if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
   }, [shiftHoursEditor]);
 
-  // Quitter le mode משיכה → fermer la modale (mais autoriser l’ouverture hors mode, en manuel).
+  // Quitter le mode משיכה → fermer la modale (mais autoriser l'ouverture hors mode, en manuel).
   const prevPullsModeStationIdxRef = useRef(pullsModeStationIdx);
   useEffect(() => {
     const prev = prevPullsModeStationIdxRef.current;
@@ -553,199 +238,6 @@ export function PlanningV2StationWeekGrid({
     }
     return out;
   }, [availabilityOverlays]);
-
-  const onWorkerDragStart = (e: DragEvent, workerName: string) => {
-    dragSourceRef.current = null;
-    didDropRef.current = false;
-    const el = e.currentTarget as HTMLElement;
-    const dayKey = el?.getAttribute?.("data-dkey") || "";
-    const shiftName = el?.getAttribute?.("data-sname") || "";
-    const stationIndex = Number(el?.getAttribute?.("data-stidx") || NaN);
-    const slotIndex = Number(el?.getAttribute?.("data-slotidx") || NaN);
-    const isFromSlot = !!(dayKey && shiftName && Number.isFinite(stationIndex) && Number.isFinite(slotIndex));
-    try {
-      e.dataTransfer.setData("text/plain", workerName);
-      e.dataTransfer.effectAllowed = manualEditable && isFromSlot ? "move" : "copy";
-    } catch {
-      /* ignore */
-    }
-    const nm = (workerName || "").trim();
-    if (dayKey && shiftName && Number.isFinite(stationIndex) && Number.isFinite(slotIndex) && nm) {
-      const srcPayload: ManualDragSource = { dayKey, shiftName, stationIndex, slotIndex, workerName: nm };
-      dragSourceRef.current = srcPayload;
-      try {
-        e.dataTransfer.setData("application/x-planning-v2-drag-source", JSON.stringify(srcPayload));
-      } catch {
-        /* ignore */
-      }
-    }
-    if (manualEditable && nm) onDraggingWorkerChange?.(nm);
-  };
-
-  const onSlotDragOver = (e: DragEvent) => {
-    e.preventDefault();
-    try {
-      e.dataTransfer.dropEffect = dragSourceRef.current ? "move" : "copy";
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const onSlotDrop = (
-    e: DragEvent,
-    dayKey: string,
-    shiftName: string,
-    stationIndex: number,
-    slotIndex: number,
-  ) => {
-    e.preventDefault();
-    let name = "";
-    let sourceFromData: ManualDragSource | null = null;
-    try {
-      name = e.dataTransfer.getData("text/plain");
-      const srcRaw = e.dataTransfer.getData("application/x-planning-v2-drag-source");
-      if (srcRaw) {
-        const parsed = JSON.parse(srcRaw) as Partial<ManualDragSource>;
-        if (
-          parsed &&
-          typeof parsed.dayKey === "string" &&
-          typeof parsed.shiftName === "string" &&
-          Number.isFinite(Number(parsed.stationIndex)) &&
-          Number.isFinite(Number(parsed.slotIndex)) &&
-          typeof parsed.workerName === "string"
-        ) {
-          sourceFromData = {
-            dayKey: parsed.dayKey,
-            shiftName: parsed.shiftName,
-            stationIndex: Number(parsed.stationIndex),
-            slotIndex: Number(parsed.slotIndex),
-            workerName: parsed.workerName,
-          };
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    const trimmed = name.trim();
-    if (!trimmed || !onManualSlotDrop) return;
-    const src = sourceFromData || dragSourceRef.current;
-    const pullsMap = (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null;
-    if (pullEntriesInCell(pullsMap, dayKey, shiftName, stationIndex).length > 0) {
-      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-      didDropRef.current = true;
-      setHoverSlotKey(null);
-      onDraggingWorkerChange?.(null);
-      dragSourceRef.current = null;
-      return;
-    }
-    const targetNm = String(
-      (assignments && typeof assignments === "object"
-        ? assignments?.[dayKey]?.[shiftName]?.[stationIndex]?.[slotIndex]
-        : "") || "",
-    ).trim();
-    if (
-      (src &&
-        workerParticipatesInPull(pullsMap, src.workerName, {
-          dayKey: src.dayKey,
-          shiftName: src.shiftName,
-          stationIndex: src.stationIndex,
-        })) ||
-      (targetNm &&
-        workerParticipatesInPull(pullsMap, targetNm, {
-          dayKey,
-          shiftName,
-          stationIndex,
-        }))
-    ) {
-      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-      didDropRef.current = true;
-      setHoverSlotKey(null);
-      onDraggingWorkerChange?.(null);
-      dragSourceRef.current = null;
-      return;
-    }
-    didDropRef.current = true;
-    setHoverSlotKey(null);
-    onDraggingWorkerChange?.(null);
-    void Promise.resolve(
-      onManualSlotDrop({
-        dayKey,
-        shiftName,
-        stationIndex,
-        slotIndex,
-        workerName: trimmed,
-        dragSource: src,
-      }),
-    ).finally(() => {
-      dragSourceRef.current = null;
-    });
-  };
-
-  const trySlotClickAssign = (
-    dayKey: string,
-    shiftName: string,
-    stationIndex: number,
-    slotIndex: number,
-  ) => {
-    const dragNm = (draggingWorkerName || "").trim();
-    if (!dragNm || !manualEditable || !onManualSlotDrop) return;
-    const pullsMap = (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null;
-    if (pullEntriesInCell(pullsMap, dayKey, shiftName, stationIndex).length > 0) {
-      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-      return;
-    }
-    const targetNm = String(
-      (assignments && typeof assignments === "object"
-        ? assignments?.[dayKey]?.[shiftName]?.[stationIndex]?.[slotIndex]
-        : "") || "",
-    ).trim();
-    if (
-      targetNm &&
-      workerParticipatesInPull(pullsMap, targetNm, {
-        dayKey,
-        shiftName,
-        stationIndex,
-      })
-    ) {
-      toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
-      return;
-    }
-    void Promise.resolve(
-      onManualSlotDrop({
-        dayKey,
-        shiftName,
-        stationIndex,
-        slotIndex,
-        workerName: dragNm,
-        dragSource: selectedWorkerSource || null,
-      }),
-    );
-  };
-
-  const onChipDragEnd = () => {
-    const src = dragSourceRef.current;
-    const shouldClearFromSource =
-      manualEditable &&
-      !!src &&
-      !didDropRef.current &&
-      typeof onManualSlotDragOutside === "function" &&
-      !workerParticipatesInPull(
-        (pulls as Record<string, PlanningV2PullEntry> | null | undefined) || null,
-        src.workerName,
-        {
-          dayKey: src.dayKey,
-          shiftName: src.shiftName,
-          stationIndex: src.stationIndex,
-        },
-      );
-    dragSourceRef.current = null;
-    didDropRef.current = false;
-    setHoverSlotKey(null);
-    onDraggingWorkerChange?.(null);
-    if (shouldClearFromSource && src) {
-      void Promise.resolve(onManualSlotDragOutside(src));
-    }
-  };
 
   const today0 = new Date();
   today0.setHours(0, 0, 0, 0);
@@ -1863,360 +1355,24 @@ export function PlanningV2StationWeekGrid({
         />
       ) : null}
       {pullsEditor ? (
-        <ModalOverlay className="z-[200] flex items-center justify-center bg-black/50 p-4" onClick={() => setPullsEditor(null)}>
-          <div
-            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-lg font-semibold">משיכות</div>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => setPullsEditor(null)}
-                aria-label="סגור"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-              </button>
-            </div>
-            <div className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
-              {(() => {
-                const dayLabels: Record<string, string> = {
-                  sun: "א'",
-                  mon: "ב'",
-                  tue: "ג'",
-                  wed: "ד'",
-                  thu: "ה'",
-                  fri: "ו'",
-                  sat: "ש'",
-                };
-                const dayLabel = dayLabels[pullsEditor.dayKey] || pullsEditor.dayKey;
-                return `${dayLabel} • ${pullsEditor.shiftName} • עמדה ${pullsEditor.stationIdx + 1}`;
-              })()}
-            </div>
-            {pullsEditor.roleName ? (
-              <div className="mb-3 text-xs text-zinc-500">
-                תפקיד: <span className="font-medium text-zinc-700 dark:text-zinc-200">{pullsEditor.roleName}</span>
-              </div>
-            ) : null}
-            <div className="space-y-3">
-              <div className="rounded-md border p-3 dark:border-zinc-700">
-                <div className="mb-2 text-sm font-medium">{pullsEditor.beforeName}</div>
-                {(pullsEditor.beforeOptions || []).length > 1 && (
-                  <div className="mb-3">
-                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (לפני)</div>
-                    <select
-                      value={pullsEditor.beforeName}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, beforeName: e.target.value } : p))}
-                      size={Math.min(4, Math.max(2, (pullsEditor.beforeOptions || []).length))}
-                      className="w-full overflow-y-auto rounded-md border bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                    >
-                      {(pullsEditor.beforeOptions || []).map((nm) => (
-                        <option key={nm} value={nm}>
-                          {nm}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-zinc-500">
-                    התחלה
-                    <TimePicker
-                      value={pullsEditor.beforeStart}
-                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, beforeStart: v } : p))}
-                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                      dir="ltr"
-                    />
-                  </label>
-                  <label className="text-xs text-zinc-500">
-                    סיום
-                    <TimePicker
-                      value={pullsEditor.beforeEnd}
-                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, beforeEnd: v } : p))}
-                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                      dir="ltr"
-                    />
-                  </label>
-                </div>
-              </div>
-              <div className="rounded-md border p-3 dark:border-zinc-700">
-                <div className="mb-2 text-sm font-medium">{pullsEditor.afterName}</div>
-                {(pullsEditor.afterOptions || []).length > 1 && (
-                  <div className="mb-3">
-                    <div className="mb-1 text-xs text-zinc-500">בחר עובד (אחרי)</div>
-                    <select
-                      value={pullsEditor.afterName}
-                      onChange={(e) => setPullsEditor((p) => (p ? { ...p, afterName: e.target.value } : p))}
-                      size={Math.min(4, Math.max(2, (pullsEditor.afterOptions || []).length))}
-                      className="w-full overflow-y-auto rounded-md border bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-                    >
-                      {(pullsEditor.afterOptions || []).map((nm) => (
-                        <option key={nm} value={nm}>
-                          {nm}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-xs text-zinc-500">
-                    התחלה
-                    <TimePicker
-                      value={pullsEditor.afterStart}
-                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, afterStart: v } : p))}
-                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                      dir="ltr"
-                    />
-                  </label>
-                  <label className="text-xs text-zinc-500">
-                    סיום
-                    <TimePicker
-                      value={pullsEditor.afterEnd}
-                      onChange={(v) => setPullsEditor((p) => (p ? { ...p, afterEnd: v } : p))}
-                      className="mt-1 h-9 w-full rounded-md border px-3 text-sm dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                      dir="ltr"
-                    />
-                  </label>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
-                onClick={async () => {
-                  const res = await onRemovePull?.(pullsEditor.key);
-                  if (res !== false) setPullsEditor(null);
-                }}
-              >
-                מחק
-              </button>
-              <button
-                type="button"
-                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => setPullsEditor(null)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-[#00A8E0] px-4 py-2 text-sm text-white hover:bg-[#0092c6]"
-                onClick={async () => {
-                  const beforeName = String(pullsEditor.beforeName || "").trim();
-                  const afterName = String(pullsEditor.afterName || "").trim();
-                  if (!beforeName || !afterName) {
-                    toast.error("לא ניתן ליצור משיכות", { description: "יש לבחור שני עובדים" });
-                    return;
-                  }
-                  const toMinutesLocal = (t: string): number | null => {
-                    const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})$/);
-                    if (!m) return null;
-                    const hh = Number(m[1]);
-                    const mm = Number(m[2]);
-                    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-                    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
-                    return hh * 60 + mm;
-                  };
-                  const s0 = toMinutesLocal(pullsEditor.shiftStart);
-                  const e0 = toMinutesLocal(pullsEditor.shiftEnd);
-                  const bS0 = toMinutesLocal(pullsEditor.beforeStart);
-                  const bE0 = toMinutesLocal(pullsEditor.beforeEnd);
-                  const aS0 = toMinutesLocal(pullsEditor.afterStart);
-                  const aE0 = toMinutesLocal(pullsEditor.afterEnd);
-                  if ([s0, e0, bS0, bE0, aS0, aE0].some((x) => x == null)) {
-                    toast.error("שעות לא תקינות", { description: "פורמט השעה חייב להיות HH:MM" });
-                    return;
-                  }
-                  const s = s0 as number;
-                  let e = e0 as number;
-                  const crossesMidnight = e <= s;
-                  if (crossesMidnight) e += 24 * 60;
-                  const abs = (m: number) => (crossesMidnight && m < s ? m + 24 * 60 : m);
-                  const within = (m: number) => {
-                    const am = abs(m);
-                    return am >= s && am <= e;
-                  };
-                  const okRange = (startM: number, endM: number) =>
-                    within(startM) && within(endM) && abs(startM) <= abs(endM);
-                  if (!okRange(bS0 as number, bE0 as number) || !okRange(aS0 as number, aE0 as number)) {
-                    toast.error("שעות לא תקינות", { description: "השעות חייבות להיות בתוך טווח המשמרת" });
-                    return;
-                  }
-                  const maxEach = 4 * 60;
-                  const durBefore = abs(bE0 as number) - abs(bS0 as number);
-                  const durAfter = abs(aE0 as number) - abs(aS0 as number);
-                  if (durBefore > maxEach || durAfter > maxEach) {
-                    toast.error("שעות לא תקינות", { description: "מקסימום 4 שעות לכל עובד במשיכה" });
-                    return;
-                  }
-                  if (beforeName === afterName) {
-                    toast.error("שעות לא תקינות", { description: "בחר שני עובדים שונים" });
-                    return;
-                  }
-                  if (!pullsEditor.required || pullsEditor.required <= 0) {
-                    toast.error("לא ניתן ליצור משיכות", { description: "המשמרת לא פעילה / לא נדרש" });
-                    return;
-                  }
-                  const res = await onUpsertPull?.(pullsEditor.key, {
-                    before: { name: beforeName, start: pullsEditor.beforeStart, end: pullsEditor.beforeEnd },
-                    after: { name: afterName, start: pullsEditor.afterStart, end: pullsEditor.afterEnd },
-                  });
-                  if (res !== false) setPullsEditor(null);
-                }}
-              >
-                שמירה
-              </button>
-            </div>
-          </div>
-        </ModalOverlay>
+        <PlanningV2StationPullsEditorModal
+          editor={pullsEditor}
+          onClose={() => setPullsEditor(null)}
+          setEditor={setPullsEditor}
+          onRemovePull={onRemovePull}
+          onUpsertPull={onUpsertPull}
+        />
       ) : null}
       {shiftHoursEditor ? (
-        <ModalOverlay
-          className="z-[200] flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setShiftHoursEditor(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-800 dark:bg-zinc-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="text-lg font-semibold text-yellow-800 dark:text-yellow-200">שינוי שעות</div>
-              <button
-                type="button"
-                className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => setShiftHoursEditor(null)}
-                aria-label="סגור"
-              >
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden>
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                </svg>
-              </button>
-            </div>
-            <div className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">
-              {(() => {
-                const dayLabels: Record<string, string> = {
-                  sun: "א'",
-                  mon: "ב'",
-                  tue: "ג'",
-                  wed: "ד'",
-                  thu: "ה'",
-                  fri: "ו'",
-                  sat: "ש'",
-                };
-                const dayLabel = dayLabels[shiftHoursEditor.dayKey] || shiftHoursEditor.dayKey;
-                return `${dayLabel} • ${shiftHoursEditor.shiftName} • עמדה ${shiftHoursEditor.stationIdx + 1}`;
-              })()}
-            </div>
-            <div className="rounded-md border border-yellow-200 p-3 dark:border-yellow-700">
-              <div className="mb-3 text-sm font-medium text-zinc-800 dark:text-zinc-100">
-                {shiftHoursEditor.workerName}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-xs text-zinc-500">
-                  התחלת משמרת
-                  <TimePicker
-                    value={shiftHoursEditor.start}
-                    onChange={(v) => setShiftHoursEditor((p) => (p ? { ...p, start: v } : p))}
-                    className="mt-1 h-9 w-full rounded-md border border-yellow-200 bg-white px-3 text-sm dark:border-yellow-700 dark:bg-zinc-900"
-                    dir="ltr"
-                  />
-                </label>
-                <label className="text-xs text-zinc-500">
-                  סיום משמרת
-                  <TimePicker
-                    value={shiftHoursEditor.end}
-                    onChange={(v) => setShiftHoursEditor((p) => (p ? { ...p, end: v } : p))}
-                    className="mt-1 h-9 w-full rounded-md border border-yellow-200 bg-white px-3 text-sm dark:border-yellow-700 dark:bg-zinc-900"
-                    dir="ltr"
-                  />
-                </label>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-60"
-                onClick={async () => {
-                  const res = await onRemoveGuardDisplay?.(shiftHoursEditor.key);
-                  if (res !== false) setShiftHoursEditor(null);
-                }}
-              >
-                מחק
-              </button>
-              <button
-                type="button"
-                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => setShiftHoursEditor(null)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-yellow-500 px-4 py-2 text-sm text-yellow-950 hover:bg-yellow-600"
-                onClick={async () => {
-                  if (!onUpsertGuardDisplay) return;
-                  const check = checkGuardDisplayVsShift(shiftHoursEditor);
-                  if (!check.formatOk) {
-                    toast.error("שעות לא תקינות", { description: "פורמט השעה חייב להיות HH:MM" });
-                    return;
-                  }
-                  if (!check.inRange) {
-                    setShiftHoursOorConfirm(true);
-                    return;
-                  }
-                  const res = await onUpsertGuardDisplay(shiftHoursEditor.key, shiftHoursEditor.start, shiftHoursEditor.end);
-                  if (res !== false) setShiftHoursEditor(null);
-                }}
-              >
-                שמירה
-              </button>
-            </div>
-          </div>
-        </ModalOverlay>
-      ) : null}
-      {shiftHoursOorConfirm && shiftHoursEditor ? (
-        <ModalOverlay
-          className="z-[11000] flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setShiftHoursOorConfirm(false)}
-        >
-          <div
-            className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-4 shadow-lg dark:border-amber-800 dark:bg-zinc-900"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="text-base font-semibold text-zinc-900 dark:text-zinc-100">שימו לב</div>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-              השעות שבחרת אינן בתוך טווח המשמרת. האם לשמור בכל זאת?
-            </p>
-            <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                className="rounded-md border px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                onClick={() => setShiftHoursOorConfirm(false)}
-              >
-                ביטול
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-yellow-500 px-4 py-2 text-sm text-yellow-950 hover:bg-yellow-600"
-                onClick={async () => {
-                  if (!onUpsertGuardDisplay || !shiftHoursEditor) return;
-                  setShiftHoursOorConfirm(false);
-                  const res = await onUpsertGuardDisplay(
-                    shiftHoursEditor.key,
-                    shiftHoursEditor.start,
-                    shiftHoursEditor.end,
-                  );
-                  if (res !== false) setShiftHoursEditor(null);
-                }}
-              >
-                שמור בכל זאת
-              </button>
-            </div>
-          </div>
-        </ModalOverlay>
+        <PlanningV2StationShiftHoursEditorModal
+          editor={shiftHoursEditor}
+          oorConfirm={shiftHoursOorConfirm}
+          onClose={() => setShiftHoursEditor(null)}
+          setEditor={setShiftHoursEditor}
+          setOorConfirm={setShiftHoursOorConfirm}
+          onRemoveGuardDisplay={onRemoveGuardDisplay}
+          onUpsertGuardDisplay={onUpsertGuardDisplay}
+        />
       ) : null}
     </section>
   );
