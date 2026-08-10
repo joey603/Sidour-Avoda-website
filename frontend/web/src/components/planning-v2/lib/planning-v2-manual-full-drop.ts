@@ -7,8 +7,6 @@ import {
   detectShiftKind,
   getManualShiftConflictReason,
   isWorkerAlreadyAssignedInShift,
-  nextDayKeyOf,
-  prevDayKeyOf,
 } from "./planning-v2-manual-conflicts";
 
 export {
