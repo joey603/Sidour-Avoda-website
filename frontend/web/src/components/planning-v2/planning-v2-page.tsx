@@ -11,21 +11,17 @@ import { PlanningV2LayoutShell } from "./planning-v2-layout-shell";
 import { PlanningV2MainPaper } from "./planning-v2-main-paper";
 import { PlanningV2SitePaperHeader } from "./planning-v2-site-paper-header";
 import { usePlanningV2SiteWorkers } from "./hooks/use-planning-v2-site-workers";
-import { usePlanningV2WeekPlan, type V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
-import { PlanningV2AssignmentsSummary } from "./planning-v2-assignments-summary";
+import { usePlanningV2WeekPlan } from "./hooks/use-planning-v2-week-plan";
 import { PlanningV2OptionalMessages } from "./planning-v2-optional-messages";
 import { PlanningV2SiteEvents } from "./planning-v2-site-events";
 import { PlanningV2PlanExportButtons } from "./planning-v2-plan-export-buttons";
 import {
   buildEventAvailabilityLocks,
   countEventAssignmentsPerWorkerName,
-  stripEventLocksFromAvailabilityMap,
 } from "./lib/event-availability-locks";
-import type { PlanningV2PullsMap, SiteEvent, WorkerAvailability } from "./types";
-import { EMPTY_WORKER_AVAILABILITY } from "./lib/constants";
+import type { SiteEvent } from "./types";
 import { PlanningV2FullscreenVisualization } from "./planning-v2-fullscreen-visualization";
 import { PlanningV2ActionBar } from "./planning-v2-action-bar";
-import { PlanningV2StationWeekGrid } from "./stations/planning-v2-station-week-grid";
 import { PlanningV2WeekNavigation } from "./planning-v2-week-navigation";
 import { PlanningWorkersSection } from "./workers/planning-workers-section";
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
@@ -35,10 +31,6 @@ import { buildDistinctWorkerColorMap } from "./lib/worker-name-chip-color";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
 import { PlanningV2LinkedSitesRail } from "./planning-v2-linked-sites-rail";
 import { getWeekKeyISO } from "./lib/week";
-import {
-  readLinkedPlansFromMemory,
-  readMultiSiteNavigationInApp,
-} from "./lib/multi-site-linked-memory";
 import { normWorkerName } from "./lib/planning-v2-worker-name";
 import { usePlanningV2FullscreenViz } from "./hooks/use-planning-v2-fullscreen-viz";
 import { usePlanningV2SessionLifecycle } from "./hooks/use-planning-v2-session-lifecycle";
@@ -47,6 +39,9 @@ import { usePlanningV2ManualEditing } from "./hooks/use-planning-v2-manual-editi
 import { usePlanningV2PullsEditing } from "./hooks/use-planning-v2-pulls-editing";
 import { usePlanningV2AlternativesUi } from "./hooks/use-planning-v2-alternatives-ui";
 import { usePlanningV2LinkedMemory } from "./hooks/use-planning-v2-linked-memory";
+import { usePlanningV2AvailabilityOverlays } from "./hooks/use-planning-v2-availability-overlays";
+import { usePlanningV2NavigationBootstrap } from "./hooks/use-planning-v2-navigation-bootstrap";
+import { PlanningV2VisualizationContent } from "./planning-v2-visualization-content";
 
 function PlanningV2PageInner({ siteId }: { siteId: string }) {
   const {
@@ -64,26 +59,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     () => site?.next_week_saved_plan_status?.scope ?? null,
     [site?.next_week_saved_plan_status?.scope],
   );
-  const navigationInApp = useMemo(() => readMultiSiteNavigationInApp(), []);
-  const initialNavigationWeekPlan = useMemo<V2WeekPlanData>(() => {
-    if (!navigationInApp) return null;
-    const mem = readLinkedPlansFromMemory(weekStart);
-    const plan = mem?.plansBySite?.[String(siteId)];
-    // Précharger base + alternatives pour que assignmentVariants couvre activeAltIndex
-    // dès le premier rendu (évite le clamp vers חלופה 1).
-    const assignments =
-      plan?.assignments && typeof plan.assignments === "object"
-        ? (plan.assignments as Record<string, Record<string, string[][]>>)
-        : null;
-    if (!assignments || !assignmentsNonEmpty(assignments)) return null;
-    return {
-      assignments,
-      pulls: plan?.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
-      alternatives: Array.isArray(plan?.alternatives) ? plan.alternatives : [],
-      alternativePulls: Array.isArray(plan?.alternative_pulls) ? plan.alternative_pulls : [],
-      sourceScope: "auto",
-    };
-  }, [navigationInApp, siteId, weekStart]);
+  const { navigationInApp, initialNavigationWeekPlan } = usePlanningV2NavigationBootstrap(siteId, weekStart);
   const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(
     siteId,
     weekStart,
@@ -246,28 +222,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     plan.resetManualStation(stationIdx);
   };
 
-  const availabilityByWorkerName = useMemo(() => {
-    const o: Record<string, WorkerAvailability> = {};
-    for (const r of workerRowsForTable) {
-      const nm = String(r.name || "").trim();
-      if (!nm) continue;
-      const base = (r.availability || {}) as WorkerAvailability;
-      const overlay = (availabilityOverlays[nm] || {}) as Record<string, string[]>;
-      const merged: WorkerAvailability = { ...EMPTY_WORKER_AVAILABILITY };
-      for (const d of ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const) {
-        const next = new Set<string>([...(base[d] || []), ...(overlay[d] || [])]);
-        merged[d] = Array.from(next);
-      }
-      if (Array.isArray(base._stations) && base._stations.length > 0) {
-        merged._stations = [...base._stations];
-      }
-      o[nm] = merged;
-    }
-    return stripEventLocksFromAvailabilityMap(o, eventLocksByWorkerId, workers) as Record<
-      string,
-      WorkerAvailability
-    >;
-  }, [workerRowsForTable, availabilityOverlays, eventLocksByWorkerId, workers]);
+  const { availabilityByWorkerName, displayedAvailabilityOverlays } = usePlanningV2AvailabilityOverlays({
+    workerRowsForTable,
+    availabilityOverlays,
+    setAvailabilityOverlays,
+    eventLocksByWorkerId,
+    workers,
+    getLatestAssignmentBase: plan.getLatestAssignmentBase,
+    displayAssignments: plan.displayAssignments,
+  });
 
   const {
     manualConfirm,
@@ -313,88 +276,6 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     const bundles = [plan.displayAssignments, ...(plan.assignmentVariants || [])];
     return buildDistinctWorkerColorMap(workers, bundles);
   }, [workers, plan.displayAssignments, plan.assignmentVariants]);
-
-  const displayedAvailabilityOverlays = useMemo(() => {
-    const base = plan.getLatestAssignmentBase();
-    const cellHasWorker = (dayKey: string, shiftName: string, workerName: string): boolean => {
-      const target = normWorkerName(workerName);
-      if (!target) return false;
-      const perStation = base?.[dayKey]?.[shiftName];
-      return Array.isArray(perStation)
-        ? perStation.some(
-            (cell) =>
-              Array.isArray(cell) &&
-              cell.some((nm) => normWorkerName(String(nm || "")) === target),
-          )
-        : false;
-    };
-    const out: Record<string, Record<string, string[]>> = {};
-    for (const [workerName, byDay] of Object.entries(availabilityOverlays || {})) {
-      const nextByDay: Record<string, string[]> = {};
-      for (const [dayKey, shifts] of Object.entries(byDay || {})) {
-        const kept: string[] = [];
-        for (const shiftName of shifts || []) {
-          const exists = cellHasWorker(dayKey, shiftName, workerName);
-          if (exists) kept.push(shiftName);
-        }
-        if (kept.length > 0) nextByDay[dayKey] = kept;
-      }
-      if (Object.keys(nextByDay).length > 0) out[workerName] = nextByDay;
-    }
-    return out;
-  }, [availabilityOverlays, plan.displayAssignments, plan.getLatestAssignmentBase]);
-
-  // Nettoyage auto des overlays rouges quand le worker n'est plus réellement sur le planning.
-  useEffect(() => {
-    const base = plan.getLatestAssignmentBase();
-    const hasWorkerInAnyShift = (workerName: string): boolean => {
-      const target = normWorkerName(workerName);
-      if (!target) return false;
-      for (const shiftsMap of Object.values(base || {})) {
-        if (!shiftsMap || typeof shiftsMap !== "object") continue;
-        for (const perStation of Object.values(shiftsMap)) {
-          if (!Array.isArray(perStation)) continue;
-          const found = perStation.some(
-            (cell) =>
-              Array.isArray(cell) &&
-              cell.some((nm) => normWorkerName(String(nm || "")) === target),
-          );
-          if (found) return true;
-        }
-      }
-      return false;
-    };
-    const hasWorkerInShift = (workerName: string, dayKey: string, shiftName: string): boolean => {
-      const target = normWorkerName(workerName);
-      if (!target) return false;
-      const perStation = base?.[dayKey]?.[shiftName];
-      return Array.isArray(perStation)
-        ? perStation.some(
-            (cell) =>
-              Array.isArray(cell) &&
-              cell.some((nm) => normWorkerName(String(nm || "")) === target),
-          )
-        : false;
-    };
-    setAvailabilityOverlays((prev) => {
-      let changed = false;
-      const next: Record<string, Record<string, string[]>> = {};
-      for (const [workerName, byDay] of Object.entries(prev || {})) {
-        if (!hasWorkerInAnyShift(workerName)) {
-          changed = true;
-          continue;
-        }
-        const cleanedByDay: Record<string, string[]> = {};
-        for (const [dayKey, shifts] of Object.entries(byDay || {})) {
-          const kept = (shifts || []).filter((shiftName) => hasWorkerInShift(workerName, dayKey, shiftName));
-          if (kept.length > 0) cleanedByDay[dayKey] = kept;
-          if (kept.length !== (shifts || []).length) changed = true;
-        }
-        if (Object.keys(cleanedByDay).length > 0) next[workerName] = cleanedByDay;
-      }
-      return changed ? next : prev;
-    });
-  }, [plan.displayAssignments, plan.getLatestAssignmentBase]);
 
   const savedHighlight = useMemo(
     () =>
@@ -451,106 +332,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     });
   }, [hasLinkedSitesRail]);
 
-  const renderPlanningVisualizationContent = useCallback(() => (
-    <div className="space-y-4">
-      <PlanningV2StationWeekGrid
-        site={site}
-        siteId={siteId}
-        weekStart={weekStart}
-        workers={workers}
-        assignments={plan.displayAssignments}
-        assignmentVariants={plan.assignmentVariants}
-        assignmentHighlightBase={assignmentHighlightBase}
-        pulls={plan.displayPulls}
-        draftFixedAssignmentsSnapshot={plan.draftFixedAssignmentsSnapshot}
-        isSavedMode={isSavedMode}
-        editingSaved={editingSaved}
-        loading={weekPlanLoading}
-        isManual={plan.isManual}
-        manualEditable={manualEditable}
-        pullsModeStationIdx={pullsModeStationIdx}
-        shiftHoursModeStationIdx={shiftHoursModeStationIdx}
-        draggingWorkerName={manualDragWorkerName}
-        selectedWorkerSource={manualSelectSource}
-        onDraggingWorkerChange={handleDraggingWorkerChange}
-        onWorkerSelectToggle={handleWorkerSelectToggle}
-        availabilityByWorkerName={availabilityByWorkerName}
-        availabilityOverlays={displayedAvailabilityOverlays}
-        onTogglePullsModeStation={(idx) => {
-          setShiftHoursModeStationIdx(null);
-          setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
-        }}
-        onToggleShiftHoursModeStation={(idx) => {
-          setPullsModeStationIdx(null);
-          setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
-        }}
-        onUpsertGuardDisplay={handleUpsertGuardDisplay}
-        onRemoveGuardDisplay={handleRemoveGuardDisplay}
-        onResetStation={handleResetStation}
-        onManualSlotDragOutside={handleManualSlotDragOutside}
-        onManualSlotDrop={handleManualSlotDrop}
-        onUpsertPull={handleUpsertPull}
-        onRemovePull={handleRemovePull}
-        summaryHighlightWorkerName={summaryHighlightWorkerName}
-      />
-      <PlanningV2AssignmentsSummary
-        siteId={siteId}
-        site={site}
-        weekStart={weekStart}
-        workers={workers}
-        assignments={plan.displayAssignments}
-        pulls={plan.displayPulls}
-        assignmentVariants={plan.assignmentVariants}
-        pullVariants={plan.pullVariants}
-        alternativesEnabled={alternativesUiVisible}
-        selectedAlternativeIndex={effectiveAlternativeIndex}
-        onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
-        onFilteredAlternativesChange={setSummaryFilterState}
-        loading={weekPlanLoading}
-        generationRunning={plan.generationRunning}
-        highlightedWorkerName={summaryHighlightWorkerName}
-        onHighlightWorkerToggle={handleSummaryHighlightToggle}
-        eventAssignmentCountsByName={eventAssignmentCountsByName}
-      />
-    </div>
-  ), [
-    assignmentHighlightBase,
-    availabilityByWorkerName,
-    displayedAvailabilityOverlays,
-    editingSaved,
-    effectiveAlternativeIndex,
-    handleDraggingWorkerChange,
-    handleWorkerSelectToggle,
-    handleManualSlotDragOutside,
-    handleManualSlotDrop,
-    handleRemoveGuardDisplay,
-    handleRemovePull,
-    handleResetStation,
-    handleSummaryHighlightToggle,
-    handleUpsertGuardDisplay,
-    handleUpsertPull,
-    isSavedMode,
-    manualDragWorkerName,
-    manualSelectSource,
-    manualEditable,
-    plan.assignmentVariants,
-    plan.displayAssignments,
-    plan.displayPulls,
-    plan.draftFixedAssignmentsSnapshot,
-    plan.generationRunning,
-    plan.isManual,
-    plan.pullVariants,
-    plan.setSelectedAlternativeIndex,
-    pullsModeStationIdx,
-    shiftHoursModeStationIdx,
-    site,
-    siteId,
-    summaryHighlightWorkerName,
-    weekPlanLoading,
-    weekStart,
-    workers,
-    alternativesUiVisible,
-  ]);
+  const handleTogglePullsModeStation = useCallback((idx: number) => {
+    setShiftHoursModeStationIdx(null);
+    setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
+  }, []);
+
+  const handleToggleShiftHoursModeStation = useCallback((idx: number) => {
+    setPullsModeStationIdx(null);
+    setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
+  }, []);
 
   const linkedSitesRail = (
     <PlanningV2LinkedSitesRail
@@ -659,7 +449,50 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             readOnly={siteIsArchived}
             eventLocksByWorkerId={eventLocksByWorkerId}
           />
-          {!visualizationOpen ? renderPlanningVisualizationContent() : null}
+          {!visualizationOpen ? (
+            <PlanningV2VisualizationContent
+              site={site}
+              siteId={siteId}
+              weekStart={weekStart}
+              workers={workers}
+              assignments={plan.displayAssignments}
+              assignmentVariants={plan.assignmentVariants}
+              assignmentHighlightBase={assignmentHighlightBase}
+              pulls={plan.displayPulls}
+              draftFixedAssignmentsSnapshot={plan.draftFixedAssignmentsSnapshot}
+              isSavedMode={isSavedMode}
+              editingSaved={editingSaved}
+              loading={weekPlanLoading}
+              isManual={plan.isManual}
+              manualEditable={manualEditable}
+              pullsModeStationIdx={pullsModeStationIdx}
+              shiftHoursModeStationIdx={shiftHoursModeStationIdx}
+              draggingWorkerName={manualDragWorkerName}
+              selectedWorkerSource={manualSelectSource}
+              onDraggingWorkerChange={handleDraggingWorkerChange}
+              onWorkerSelectToggle={handleWorkerSelectToggle}
+              availabilityByWorkerName={availabilityByWorkerName}
+              availabilityOverlays={displayedAvailabilityOverlays}
+              onTogglePullsModeStation={handleTogglePullsModeStation}
+              onToggleShiftHoursModeStation={handleToggleShiftHoursModeStation}
+              onUpsertGuardDisplay={handleUpsertGuardDisplay}
+              onRemoveGuardDisplay={handleRemoveGuardDisplay}
+              onResetStation={handleResetStation}
+              onManualSlotDragOutside={handleManualSlotDragOutside}
+              onManualSlotDrop={handleManualSlotDrop}
+              onUpsertPull={handleUpsertPull}
+              onRemovePull={handleRemovePull}
+              summaryHighlightWorkerName={summaryHighlightWorkerName}
+              pullVariants={plan.pullVariants}
+              alternativesEnabled={alternativesUiVisible}
+              selectedAlternativeIndex={effectiveAlternativeIndex}
+              onSelectedAlternativeChange={plan.setSelectedAlternativeIndex}
+              onFilteredAlternativesChange={setSummaryFilterState}
+              generationRunning={plan.generationRunning}
+              onHighlightWorkerToggle={handleSummaryHighlightToggle}
+              eventAssignmentCountsByName={eventAssignmentCountsByName}
+            />
+          ) : null}
           <PlanningV2SiteEvents
             siteId={siteId}
             weekStart={weekStart}

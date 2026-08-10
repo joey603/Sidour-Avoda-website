@@ -4,12 +4,6 @@ import { startTransition, useCallback, useEffect, useRef, useState, type Dispatc
 import { flushSync } from "react-dom";
 import { toast } from "sonner";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
-import { assignmentsNonEmpty } from "../lib/assignments-empty";
-import {
-  buildWeekPlanDataPayload,
-  buildWorkersSnapshotForSave,
-  persistAutoWeekPlanDraftToApi,
-} from "../lib/week-plan-persist";
 import { weeklyAvailabilityMapFromRows } from "../lib/weekly-availability-for-ai";
 import { stripEventLocksFromAvailabilityMap } from "../lib/event-availability-locks";
 import {
@@ -24,7 +18,7 @@ import {
   clearSitesListPlanningClientCachesBeforePlanningCreat,
 } from "@/lib/clear-sites-list-planning-for-week";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
-import { apiFetch, getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl } from "@/lib/api";
 import { readSseStream } from "../lib/planning-v2-sse";
 import {
   GENERATION_ACCEPTED_IDLE_CLOSE_MS,
@@ -52,7 +46,6 @@ import {
   draftAlternativesForMode,
   linkedSitePlansSnapshot,
   normalizeDraftAlternatives,
-  uniqueDraftAlternatives,
 } from "../lib/planning-v2-draft-alternatives";
 import { type HoleScore, linkedPlansHoleScore, singlePlanHoleScore } from "../lib/planning-v2-hole-scores";
 import {
@@ -71,6 +64,8 @@ import {
   writeLinkedGenerationStopRequestToSession,
   writeLinkedGenerationStopVisibleCountToSession,
 } from "../lib/planning-v2-generation-session";
+import { persistGeneratedAutoDraftToServer } from "../lib/planning-v2-generation-persist";
+import { pruneLinkedPlansMemoryAfterStop } from "../lib/planning-v2-generation-stop-prune";
 
 type AssignmentGrid = Record<string, Record<string, string[][]>>;
 
@@ -167,37 +162,6 @@ export function usePlanningV2Generation({
     workersRef.current = workers;
   }, [workers]);
 
-  const pruneLinkedPlansMemoryAfterStop = useCallback(
-    (visibleAlternativeCount: number) => {
-      if (linkedSitesLength <= 1) return;
-      const mem = readLinkedPlansFromMemory(weekStart);
-      if (!mem?.plansBySite || typeof mem.plansBySite !== "object") return;
-      const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
-      const maxStoredAlternatives = maxVisibleIndex;
-      const nextPlans: Record<string, LinkedSitePlan> = {};
-      let changed = false;
-      for (const [sid, plan] of Object.entries(mem.plansBySite)) {
-        if (!plan || typeof plan !== "object") continue;
-        const alternatives = Array.isArray(plan.alternatives) ? plan.alternatives : [];
-        const alternativePulls = Array.isArray(plan.alternative_pulls) ? plan.alternative_pulls : [];
-        const nextAlternatives = alternatives.slice(0, maxStoredAlternatives);
-        const nextAlternativePulls = alternativePulls.slice(0, maxStoredAlternatives);
-        nextPlans[sid] = {
-          ...plan,
-          alternatives: nextAlternatives,
-          alternative_pulls: nextAlternativePulls,
-        };
-        if (nextAlternatives.length !== alternatives.length || nextAlternativePulls.length !== alternativePulls.length) {
-          changed = true;
-        }
-      }
-      const nextActiveIndex = Math.min(Math.max(0, Number(mem.activeAltIndex || 0)), maxVisibleIndex);
-      if (!changed && nextActiveIndex === Math.max(0, Number(mem.activeAltIndex || 0))) return;
-      saveLinkedPlansToMemory(weekStart, nextPlans, nextActiveIndex);
-    },
-    [linkedSitesLength, weekStart],
-  );
-
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (linkedSitesLength <= 1) {
@@ -273,7 +237,7 @@ export function usePlanningV2Generation({
     if (linkedSitesLength > 1) {
       writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
     }
-    pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
+    pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, visibleCountAtStop);
     try {
       abortRef.current?.abort();
     } catch {
@@ -306,7 +270,7 @@ export function usePlanningV2Generation({
     }
     setSharedLinkedGenerationRunning(false);
     genBusyRef.current = false;
-  }, [assignmentVariantsRef, dedupeAlternatives, linkedSitesLength, pruneLinkedPlansMemoryAfterStop, weekIso]);
+  }, [assignmentVariantsRef, dedupeAlternatives, linkedSitesLength, weekIso, weekStart]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -401,7 +365,7 @@ export function usePlanningV2Generation({
       });
       if (resumeFromStoppedVisibleCount != null) {
         stopVisibleAlternativeCountRef.current = resumeFromStoppedVisibleCount;
-        pruneLinkedPlansMemoryAfterStop(resumeFromStoppedVisibleCount);
+        pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, resumeFromStoppedVisibleCount);
       }
       const normalizedLinkedPlans =
         linkedSitesLength > 1 ? buildPersistableLinkedPlans(readLinkedPlansFromMemory(weekStart)?.plansBySite) : null;
@@ -685,117 +649,6 @@ export function usePlanningV2Generation({
       return false;
     };
 
-    const persistGeneratedAutoDraftToServer = async () => {
-      if (linkedSitesLength > 1) {
-        const mem = readLinkedPlansFromMemory(weekStart);
-        let persistablePlans = buildPersistableLinkedPlans(mem?.plansBySite);
-        const currentSiteKey = String(siteId);
-        const currentPersistablePlan = persistablePlans[currentSiteKey];
-        const currentVisibleAssignments =
-          draftAssignmentsRef.current ??
-          weekPlanAssignmentsRef.current ??
-          (assignmentVariants[0] && typeof assignmentVariants[0] === "object" ? assignmentVariants[0] : null);
-        if (
-          currentPersistablePlan &&
-          !assignmentsNonEmpty(currentPersistablePlan.assignments ?? null) &&
-          assignmentsNonEmpty(currentVisibleAssignments ?? null)
-        ) {
-          persistablePlans = {
-            ...persistablePlans,
-            [currentSiteKey]: {
-              ...currentPersistablePlan,
-              assignments: currentVisibleAssignments as Record<string, Record<string, string[][]>>,
-              pulls:
-                (draftPullsRef.current && typeof draftPullsRef.current === "object"
-                  ? draftPullsRef.current
-                  : {}) as Record<string, unknown>,
-            },
-          };
-          console.warn("[planning-v2][multi-site][persist][hydrate-current-site-before-save]", {
-            siteId: String(siteId),
-            weekIso,
-            beforeAltCounts: linkedPlansAltCounts(mem?.plansBySite),
-            afterAltCounts: linkedPlansAltCounts(persistablePlans),
-          });
-        }
-        const persistedSiteIds: string[] = [];
-        for (const [sid, pl] of Object.entries(persistablePlans)) {
-          const assignments = pl.assignments;
-          if (!assignments || !assignmentsNonEmpty(assignments)) continue;
-          const pulls = (pl.pulls && typeof pl.pulls === "object" ? pl.pulls : {}) as Record<string, unknown>;
-          const altAsg = Array.isArray(pl.alternatives) ? pl.alternatives : [];
-          const altPulls = Array.isArray(pl.alternative_pulls) ? pl.alternative_pulls : [];
-          const w = String(sid) === String(siteId) ? workersRef.current : [];
-          const base = buildWeekPlanDataPayload(
-            Number(sid),
-            weekStart,
-            assignments as Record<string, Record<string, string[][]>>,
-            pulls as PlanningV2PullsMap,
-            buildWorkersSnapshotForSave(w),
-            false,
-          ) as Record<string, unknown>;
-          if (altAsg.length > 0) {
-            base.alternatives = altAsg;
-            base.alternative_pulls = altPulls.map((x) => (x && typeof x === "object" ? x : {}));
-          }
-          await persistAutoWeekPlanDraftToApi(sid, weekStart, base);
-          persistedSiteIds.push(String(sid));
-        }
-        if (persistedSiteIds.length > 0) {
-          try {
-            const refreshedEntries = await Promise.all(
-              persistedSiteIds.map(async (sid) => {
-                const payload = await apiFetch<LinkedSitePlan | null>(
-                  `/director/sites/${sid}/week-plan?week=${encodeURIComponent(weekIso)}&scope=auto`,
-                  {
-                    cache: "no-store" as RequestCache,
-                  },
-                );
-                return [sid, (payload && typeof payload === "object" ? payload : {}) as LinkedSitePlan] as const;
-              }),
-            );
-            const refreshedPlans = Object.fromEntries(refreshedEntries);
-            const nextPlans = buildPersistableLinkedPlans({
-              ...persistablePlans,
-              ...refreshedPlans,
-            });
-            const nextActiveAltIndex = Math.max(0, Number(mem?.activeAltIndex || 0));
-            console.warn("[planning-v2][multi-site][persist][refreshed-auto-plans]", {
-              siteId: String(siteId),
-              weekIso,
-              activeIdx: nextActiveAltIndex,
-              savedSiteIds: persistedSiteIds,
-              beforeAltCounts: linkedPlansAltCounts(persistablePlans),
-              refreshedAltCounts: linkedPlansAltCounts(refreshedPlans),
-              afterAltCounts: linkedPlansAltCounts(nextPlans),
-            });
-            saveLinkedPlansToMemory(weekStart, nextPlans, nextActiveAltIndex);
-            seenLinkedAlternativeSnapshotsRef.current = buildSeenLinkedAlternativeSnapshots(nextPlans);
-          } catch {
-            /* ignore */
-          }
-        }
-        return;
-      }
-      const asg = draftAssignmentsRef.current;
-      if (!asg || !assignmentsNonEmpty(asg)) return;
-      const pulls = draftPullsRef.current || {};
-      const alts = uniqueDraftAlternatives(draftAlternativesRef.current || []);
-      const base = buildWeekPlanDataPayload(
-        Number(siteId),
-        weekStart,
-        asg,
-        pulls,
-        buildWorkersSnapshotForSave(workersRef.current),
-        false,
-      ) as Record<string, unknown>;
-      if (alts.length > 0) {
-        base.alternatives = alts.map((x) => x.assignments);
-        base.alternative_pulls = alts.map((x) => x.pulls || {});
-      }
-      await persistAutoWeekPlanDraftToApi(siteId, weekStart, base);
-    };
-
     try {
       const resp = await fetch(url, {
         method: "POST",
@@ -831,7 +684,7 @@ export function usePlanningV2Generation({
           const visibleCountAtStop = Math.max(0, assignmentVariantsRef.current.length);
           stopVisibleAlternativeCountRef.current = visibleCountAtStop;
           writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
-          pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
+          pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, visibleCountAtStop);
           stopped = true;
           try {
             controller.abort();
@@ -885,7 +738,7 @@ export function usePlanningV2Generation({
               const visibleCountAtStop = Math.max(0, assignmentVariantsRef.current.length);
               stopVisibleAlternativeCountRef.current = visibleCountAtStop;
               writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
-              pruneLinkedPlansMemoryAfterStop(visibleCountAtStop);
+              pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, visibleCountAtStop);
             }
             try {
               controller.abort();
@@ -1563,7 +1416,19 @@ export function usePlanningV2Generation({
         writeAlternativesUnlockedToSession(weekIso, siteId);
         setAlternativesUnlockNonce((n) => n + 1);
         try {
-          await persistGeneratedAutoDraftToServer();
+          await persistGeneratedAutoDraftToServer({
+            linkedSitesLength,
+            weekStart,
+            weekIso,
+            siteId,
+            assignmentVariants,
+            draftAssignmentsRef,
+            draftPullsRef,
+            draftAlternativesRef,
+            weekPlanAssignmentsRef,
+            workersRef,
+            seenLinkedAlternativeSnapshotsRef,
+          });
           if (!(editingSaved && hasOfficialSavedWeekPlan)) {
             await reloadWeekPlan({ silent: true, preferredScope: "auto" });
             // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
@@ -1609,7 +1474,6 @@ export function usePlanningV2Generation({
     hasOfficialSavedWeekPlan,
     site,
     weekPurgeSiteIds,
-    pruneLinkedPlansMemoryAfterStop,
     alternativesFlushRafRef,
     getVisibleAlternativeCount,
   ]);
