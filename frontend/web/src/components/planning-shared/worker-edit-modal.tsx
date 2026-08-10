@@ -110,7 +110,7 @@ export function WorkerEditModal({
 
   return (
     <ModalOverlay className="z-[10000] flex min-h-[100dvh] w-screen items-center justify-center bg-black/40 p-4">
-      <div className="flex h-[72vh] h-[72dvh] min-h-0 max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[34rem]">
+      <div className="flex h-[72vh] h-[72dvh] min-h-0 w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-800 dark:bg-zinc-900 md:h-[min(85dvh,48rem)]">
         <div className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 p-3 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-900/95 md:p-4">
           <div className="relative flex items-center justify-center">
             <h3 className="text-center text-base font-semibold md:text-lg">
@@ -280,15 +280,15 @@ export function WorkerEditModal({
             </div>
           ) : null}
 
-          <div className="mt-3 text-center">
-            <div className="mb-1 block text-sm font-semibold">זמינות לפי יום/משמרת</div>
-            <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+          <div className="mt-3 text-center md:mt-4">
+            <div className="mb-1 block text-sm font-semibold md:mb-1.5 md:text-base">זמינות לפי יום/משמרת</div>
+            <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400 md:mb-3 md:text-sm">
               לחיצה על משמרת: זמין → מועדף (כתום) → ביטול. מועדף = העדפה רכה בלבד.
             </p>
-            <div className="mx-auto inline-flex max-w-full flex-col items-stretch gap-2">
-              <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
+            <div className="mx-auto inline-flex max-w-full flex-col items-stretch gap-2 md:gap-2.5">
+              <div className="flex flex-wrap items-center justify-center gap-2 text-sm md:gap-2.5 md:text-base">
                 {/* Même largeur que le label jour (א'/ב'…) pour centrer sur les cases משמרת */}
-                <div className="w-10 shrink-0" aria-hidden />
+                <div className="w-10 shrink-0 md:w-12" aria-hidden />
                 {(
                   [
                     {
@@ -320,7 +320,7 @@ export function WorkerEditModal({
                       disabled={workerModalSaving || !enabled}
                       onClick={() => onToggleAvailabilityForAllDays(bulk.shiftName, !active)}
                       className={
-                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 " +
+                        "rounded-md border px-2 py-1 text-xs font-medium transition-colors disabled:opacity-60 md:px-3 md:py-1.5 md:text-sm " +
                         (active
                           ? "border-violet-600 bg-violet-600 text-white"
                           : "border-violet-300 bg-white text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:bg-zinc-900 dark:text-violet-300 dark:hover:bg-violet-950/40")
@@ -333,8 +333,10 @@ export function WorkerEditModal({
                 })}
               </div>
               {dayDefs.map((d) => (
-                <div key={d.key} className="flex flex-wrap items-center justify-center gap-2 text-sm">
-                  <div className="w-10 shrink-0 text-center text-zinc-600 dark:text-zinc-300">{d.label}</div>
+                <div key={d.key} className="flex flex-wrap items-center justify-center gap-2 text-sm md:gap-2.5 md:text-base">
+                  <div className="w-10 shrink-0 text-center text-zinc-600 dark:text-zinc-300 md:w-12 md:text-sm">
+                    {d.label}
+                  </div>
                   {allShiftNames.length === 0 ? (
                     <span className="text-zinc-500">אין משמרות פעילות</span>
                   ) : (
@@ -357,7 +359,7 @@ export function WorkerEditModal({
                             onToggleAvailability(d.key, sn);
                           }}
                           className={
-                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors " +
+                            "rounded-md border px-2 py-1 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm " +
                             (isEventLocked
                               ? "cursor-not-allowed border-[#722F37] bg-[#722F37] text-white disabled:opacity-100"
                               : "disabled:opacity-60 " +
