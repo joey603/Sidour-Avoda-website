@@ -632,7 +632,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
         saveLinkedPlansToMemory(weekStart, mem.plansBySite, nextIdx);
       }
       setMultiSiteNavigationLoading(true);
-      router.push(`/director/planning-v2/${targetId}?week=${encodeURIComponent(isoWeek)}`);
+      router.push(`/director/planning/${targetId}?week=${encodeURIComponent(isoWeek)}`);
     },
     [router, isoWeek, weekStart, plan.alternativeCount, plan.selectedAlternativeIndex],
   );

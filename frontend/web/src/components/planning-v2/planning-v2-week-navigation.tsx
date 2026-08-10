@@ -40,9 +40,9 @@ export function PlanningV2WeekNavigation({ siteId, weekStart }: PlanningV2WeekNa
     try {
       const paramsObj = new URLSearchParams(searchParams.toString());
       paramsObj.set("week", getWeekKeyISO(normalized));
-      router.replace(`/director/planning-v2/${siteId}?${paramsObj.toString()}`);
+      router.replace(`/director/planning/${siteId}?${paramsObj.toString()}`);
     } catch {
-      router.replace(`/director/planning-v2/${siteId}?week=${encodeURIComponent(getWeekKeyISO(normalized))}`);
+      router.replace(`/director/planning/${siteId}?week=${encodeURIComponent(getWeekKeyISO(normalized))}`);
     }
   }
 

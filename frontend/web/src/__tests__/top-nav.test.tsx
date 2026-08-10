@@ -28,6 +28,10 @@ jest.mock("next/link", () => ({
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
   logout: () => logoutMock(),
+
+  peekCachedMe: jest.fn(() => null),
+  AUTH_SESSION_CHANGED_EVENT: "auth-session-changed",
+  notifyAuthSessionChanged: jest.fn(),
 }));
 
 describe("TopNav", () => {

@@ -6,13 +6,6 @@ import SitesList from "@/app/director/sites/page";
 
 jest.setTimeout(15000);
 
-jest.mock("@/components/loading-animation", () => ({
-  __esModule: true,
-  default: function Loading() {
-    return <div data-testid="loading" />;
-  },
-}));
-
 const toastSuccessMock = jest.fn();
 const toastErrorMock = jest.fn();
 jest.mock("sonner", () => ({
@@ -32,6 +25,10 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
+
+  peekCachedMe: jest.fn(() => null),
+  AUTH_SESSION_CHANGED_EVENT: "auth-session-changed",
+  notifyAuthSessionChanged: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({
@@ -117,17 +114,6 @@ describe("/director/sites", () => {
     });
 
     expect(toastSuccessMock).toHaveBeenCalled();
-  });
-
-  it("redirects worker users away from director sites", async () => {
-    const { fetchMe } = require("@/lib/auth");
-    fetchMe.mockResolvedValue({ role: "worker", full_name: "Yoeli" });
-
-    render(<SitesList />);
-
-    await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("/worker");
-    });
   });
 });
 

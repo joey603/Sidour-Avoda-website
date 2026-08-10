@@ -5,10 +5,9 @@ import LoadingAnimation, { LoadingOverlay } from "@/components/loading-animation
 import { PlanningV2Page } from "@/components/planning-v2/planning-v2-page";
 
 /**
- * Route publique : Planning v2 uniquement.
+ * URL canonique du planning directeur : `/director/planning/[id]` (implémentation v2).
  *
- * L’ancienne page planning complète n’a pas été supprimée du dépôt : elle reste dans
- * `planning-legacy-page.tsx` comme fichier de référence / archive (non utilisée par le site).
+ * Alias historiques (même page) : `/director/planning-v2/[id]`, `/director/planning-modular/[id]`.
  */
 export default function DirectorPlanningSitePage() {
   return (

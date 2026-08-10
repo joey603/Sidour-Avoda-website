@@ -31,7 +31,7 @@ type StationCfg = {
 };
 
 /**
- * Comme `roleColorMap` dans la page planning classique (`planning-legacy-page.tsx` / `page.tsx`) :
+ * Couleurs de pastilles noms — palette stable par rôle (comme l’ancien planning).
  * uniquement `stations[].roles`, `stations[].shifts[].roles` et les rôles des employés —
  * pas les rôles dérivés de `dayOverrides`, sinon l’ensemble trié change et les teintes GOLDEN ne
  * correspondent plus au planning v1.

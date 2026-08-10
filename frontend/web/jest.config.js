@@ -14,8 +14,6 @@ const customJestConfig = {
   testPathIgnorePatterns: [
     "<rootDir>/.next/",
     "<rootDir>/node_modules/",
-    // Planning legacy ~12k lignes : exécuter avec `npx jest director-planning-page`
-    "<rootDir>/src/__tests__/director-planning-page.test.tsx",
   ],
 };
 

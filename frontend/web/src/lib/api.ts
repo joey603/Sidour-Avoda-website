@@ -13,9 +13,27 @@ export function getApiBaseUrl(): string {
   if (process.env.NODE_ENV !== "development") {
     return API_PROXY_PREFIX;
   }
-  return normalizeBaseUrl(DEV_API_BASE_URL);
+  const configured = normalizeBaseUrl(DEV_API_BASE_URL) || "http://localhost:8000";
+  // localhost et 127.0.0.1 sont des sites distincts pour le navigateur :
+  // un cookie SameSite=Lax posé sur l'un n'est pas renvoyé depuis l'autre.
+  if (typeof window !== "undefined") {
+    try {
+      const apiUrl = new URL(configured);
+      const pageHost = window.location.hostname;
+      const apiIsLoopback = apiUrl.hostname === "localhost" || apiUrl.hostname === "127.0.0.1";
+      const pageIsLoopback = pageHost === "localhost" || pageHost === "127.0.0.1";
+      if (apiIsLoopback && pageIsLoopback && apiUrl.hostname !== pageHost) {
+        apiUrl.hostname = pageHost;
+        return apiUrl.origin;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return configured;
 }
 
+/** @deprecated Préférer getApiBaseUrl() — le host peut s’aligner sur la page en local. */
 export const API_BASE_URL = getApiBaseUrl();
 const TOKEN_KEY = "access_token";
 
@@ -27,7 +45,7 @@ function clearTokenLocal() {
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE_URL}${path}`;
+  const url = `${getApiBaseUrl()}${path}`;
   const headers = new Headers(options.headers);
   const authHeader = headers.get("Authorization");
   if (authHeader && /Bearer\s+(null|undefined)\s*$/i.test(authHeader)) {

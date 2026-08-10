@@ -6,13 +6,6 @@ import DirectorLoginPage from "@/app/login/director/page";
 
 jest.setTimeout(15000);
 
-jest.mock("@/components/loading-animation", () => ({
-  __esModule: true,
-  default: function Loading() {
-    return <div data-testid="loading" />;
-  },
-}));
-
 const replaceMock = jest.fn();
 const routerMock = { replace: replaceMock };
 
@@ -26,6 +19,10 @@ jest.mock("next/navigation", () => ({
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
   logout: jest.fn(),
+
+  peekCachedMe: jest.fn(() => null),
+  AUTH_SESSION_CHANGED_EVENT: "auth-session-changed",
+  notifyAuthSessionChanged: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({

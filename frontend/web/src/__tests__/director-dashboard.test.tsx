@@ -14,6 +14,10 @@ jest.mock("next/navigation", () => ({
 
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
+
+  peekCachedMe: jest.fn(() => null),
+  AUTH_SESSION_CHANGED_EVENT: "auth-session-changed",
+  notifyAuthSessionChanged: jest.fn(),
 }));
 
 describe("/director dashboard", () => {

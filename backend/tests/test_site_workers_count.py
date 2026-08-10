@@ -45,10 +45,12 @@ def test_list_sites_workers_count_uses_next_week_not_historical_total(client, db
 
     next_week = _next_week_iso(datetime.now())
     current_week = _week_start_date(datetime.now()).date().isoformat()
+    # Gamma part après la semaine suivante → encore compté pour next_week
+    week_after_next = (datetime.fromisoformat(next_week).date() + timedelta(days=7)).isoformat()
 
     leaving = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.name == "Gamma").first()
     assert leaving is not None
-    leaving.removed_from_week_iso = next_week
+    leaving.removed_from_week_iso = week_after_next
     db_session.commit()
 
     already_gone = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.name == "Alpha").first()
@@ -60,5 +62,6 @@ def test_list_sites_workers_count_uses_next_week_not_historical_total(client, db
     assert list_resp.status_code == 200, list_resp.text
     site_row = next(row for row in list_resp.json() if row["id"] == site_id)
 
+    # Beta + Gamma (Alpha déjà retiré depuis current_week)
     assert site_row["workers_count"] == 2
     assert db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id).count() == 3

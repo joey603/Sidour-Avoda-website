@@ -1335,7 +1335,7 @@ export default function SitesList() {
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
-                                    router.push(`/director/planning-v2/${s.id}`);
+                                    router.push(`/director/planning/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
@@ -1409,7 +1409,7 @@ export default function SitesList() {
                           </div>
                         ) : (
                         <button
-                          onClick={() => router.push(`/director/planning-v2/${s.id}`)}
+                          onClick={() => router.push(`/director/planning/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
@@ -1575,7 +1575,7 @@ export default function SitesList() {
                                   type="button"
                                   onClick={() => {
                                     setOpenActionsSiteId(null);
-                                    router.push(`/director/planning-v2/${s.id}`);
+                                    router.push(`/director/planning/${s.id}`);
                                   }}
                                   className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
@@ -1649,7 +1649,7 @@ export default function SitesList() {
                           </div>
                         ) : (
                         <button
-                          onClick={() => router.push(`/director/planning-v2/${s.id}`)}
+                          onClick={() => router.push(`/director/planning/${s.id}`)}
                             className="inline-flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1 text-sm text-zinc-800 shadow-sm ring-1 ring-white hover:bg-zinc-50 dark:border-zinc-600 dark:bg-white dark:text-zinc-900 dark:ring-white dark:hover:bg-zinc-100"
                         >
                           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">

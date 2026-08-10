@@ -34,6 +34,10 @@ def db_session(test_engine):
         yield db
     finally:
         db.close()
+        # Isolation entre tests (SQLite in-memory partagé via StaticPool).
+        with test_engine.begin() as conn:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
 
 
 @pytest.fixture()

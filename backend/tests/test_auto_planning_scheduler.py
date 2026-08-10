@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta
 
 from app.models import DirectorAutoPlanningConfig
-from app.sites import _now_ms, compute_auto_planning_scheduler_sleep_seconds
+from app.sites import compute_auto_planning_scheduler_sleep_seconds
+
+
+def _ms(dt: datetime) -> int:
+    return int(dt.timestamp() * 1000)
 
 
 def test_scheduler_sleep_idle_when_no_enabled_config(db_session):
@@ -15,6 +19,7 @@ def test_scheduler_sleep_idle_when_no_enabled_config(db_session):
 
 def test_scheduler_sleep_zero_when_run_is_due(db_session):
     now = datetime(2026, 6, 21, 10, 0, 0)
+    # updated_at avant le créneau (dimanche 9:00) pour ne pas le repousser d’une semaine
     db_session.add(
         DirectorAutoPlanningConfig(
             director_id=1,
@@ -22,7 +27,7 @@ def test_scheduler_sleep_zero_when_run_is_due(db_session):
             day_of_week=0,
             hour=9,
             minute=0,
-            updated_at=_now_ms(),
+            updated_at=_ms(now - timedelta(days=2)),
         )
     )
     db_session.commit()
@@ -39,12 +44,12 @@ def test_scheduler_sleep_until_next_slot(db_session):
     now = datetime(2026, 6, 21, 8, 0, 0)
     db_session.add(
         DirectorAutoPlanningConfig(
-            director_id=1,
+            director_id=2,
             enabled=True,
             day_of_week=0,
             hour=9,
             minute=0,
-            updated_at=_now_ms(),
+            updated_at=_ms(now - timedelta(days=2)),
         )
     )
     db_session.commit()

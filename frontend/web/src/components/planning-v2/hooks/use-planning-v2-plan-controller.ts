@@ -1290,8 +1290,13 @@ export function usePlanningV2PlanController({
         setDraftAlternatives([]);
       });
     } else {
-      setGenerationRunning(true);
-      setReplaceGenerationUiClear(false);
+      // Sync immédiat : sinon les 1ers events SSE « עוד » flushent encore via startTransition
+      // (generationRunningRef encore false) et le compteur חלופות ne monte pas en live.
+      generationRunningRef.current = true;
+      flushSync(() => {
+        setGenerationRunning(true);
+        setReplaceGenerationUiClear(false);
+      });
       if (resumeFromStoppedVisibleCount != null) {
         stopVisibleAlternativeCountRef.current = resumeFromStoppedVisibleCount;
         pruneLinkedPlansMemoryAfterStop(resumeFromStoppedVisibleCount);
@@ -1333,6 +1338,7 @@ export function usePlanningV2PlanController({
         const activeIdx = Math.max(0, Number(appendMemoryBefore?.activeAltIndex || 0));
         const nextActiveIdx =
           resumeFromStoppedVisibleCount == null ? activeIdx : Math.min(activeIdx, Math.max(0, resumeFromStoppedVisibleCount - 1));
+        // Conserve l’index choisi par l’utilisateur (nav manuelle uniquement — pas d’auto-défilement).
         saveLinkedPlansToMemory(weekStart, normalizedLinkedPlans, nextActiveIdx);
       }
       if (baseAssignments && typeof baseAssignments === "object") {
@@ -1478,8 +1484,7 @@ export function usePlanningV2PlanController({
       if (alternativesFlushRafRef.current != null) return;
       alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
         alternativesFlushRafRef.current = null;
-        // Transition basse priorité : les clics חלופות restent urgents et ne se mettent pas en file.
-        startTransition(() => {
+        const apply = () => {
           setDraftAlternatives((prev) => {
             const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
             const stopLimit = stopVisibleAlternativeCountRef.current;
@@ -1489,11 +1494,32 @@ export function usePlanningV2PlanController({
             if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
               draftAlternativesRef.current = next;
             }
-            // Évite les renders inutiles quand rien n'a changé.
-            if (prev.length === next.length) return prev;
+            // Multi-site: ne pas court-circuiter sur la seule longueur — les slots
+            // peuvent se remplir sans changer length, et startTransition était trop
+            // différé pendant le SSE lourd (les alts n’apparaissaient qu’au clic prev/next).
+            if (prev.length === next.length) {
+              if (linkedSitesLength <= 1) return prev;
+              if (prev === next) return prev;
+              let same = true;
+              for (let i = 0; i < next.length; i += 1) {
+                if (prev[i]?.assignments !== next[i]?.assignments || prev[i]?.pulls !== next[i]?.pulls) {
+                  same = false;
+                  break;
+                }
+              }
+              if (same) return prev;
+            }
             return [...next];
           });
-        });
+        };
+        // Pendant le streaming multi-site (יצירה או עוד), appliquer tout de suite
+        // pour que le compteur חלופות monte en live. Pas d’auto-navigation d’index :
+        // prev/next restent uniquement manuels.
+        if (linkedSitesLength > 1 && (generationRunningRef.current || genBusyRef.current)) {
+          apply();
+        } else {
+          startTransition(apply);
+        }
       });
     };
 

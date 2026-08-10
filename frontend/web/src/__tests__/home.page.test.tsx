@@ -1,52 +1,29 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 import Home from "@/app/page";
 
 jest.setTimeout(15000);
 
-const replaceMock = jest.fn();
-const routerMock = { replace: replaceMock };
-
 jest.mock("next/navigation", () => ({
-  useRouter: () => routerMock,
+  useRouter: () => ({ replace: jest.fn(), push: jest.fn() }),
 }));
 
-jest.mock("@/lib/auth", () => ({
-  fetchMe: jest.fn(),
+jest.mock("next/link", () => ({
+  __esModule: true,
+  default: ({ href, children, ...props }: any) => (
+    <a href={typeof href === "string" ? href : String(href)} {...props}>
+      {children}
+    </a>
+  ),
 }));
 
 describe("/ home page", () => {
-  beforeEach(() => {
-    replaceMock.mockReset();
-    jest.clearAllMocks();
-  });
-
-  it("redirects to /login when there is no active session", async () => {
-    const auth = require("@/lib/auth");
-    auth.fetchMe.mockResolvedValue(null);
-
+  it("renders the landing brand and login entry points", async () => {
     render(<Home />);
 
-    await waitFor(() => {
-      expect(replaceMock).toHaveBeenCalledWith("/login?returnUrl=%2F");
-    });
-  });
-
-  it("renders worker/director info when session is valid", async () => {
-    const auth = require("@/lib/auth");
-    auth.fetchMe.mockResolvedValue({
-      full_name: "Yoeli",
-      role: "director",
-      director_code: "346837536",
-    });
-
-    render(<Home />);
-
-    await waitFor(() => {
-      expect(screen.getByText("346837536")).toBeInTheDocument();
-    });
-    expect(screen.getByText("Yoeli")).toBeInTheDocument();
+    expect((await screen.findAllByText(/סידור|Sidour|מוכן|להתחיל/i)).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /כניסת מנהל/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /כניסת עובד/i }).length).toBeGreaterThan(0);
   });
 });
-

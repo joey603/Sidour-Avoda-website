@@ -252,7 +252,7 @@ export default function DirectorDashboard() {
             {sites.slice(0, 5).map((site) => (
               <Link
                 key={site.id}
-                href={`/director/planning-v2/${site.id}`}
+                href={`/director/planning/${site.id}`}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:border-[#00A8E0]/50 hover:bg-[#00A8E0]/5 hover:text-[#00A8E0] transition-colors dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-[#00A8E0]/50 dark:hover:bg-[#00A8E0]/10"
               >
                 {isPublished(site) && (

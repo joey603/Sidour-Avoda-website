@@ -78,7 +78,12 @@ function DirectorLoginInner() {
         },
       );
       const me = await fetchMe({ force: true });
-      if (me?.role !== "director") {
+      if (!me) {
+        await logout();
+        setError("ההתחברות הצליחה אך לא ניתן לאמת את החשבון. רעננו את הדף ונסו שוב.");
+        return;
+      }
+      if (me.role !== "director") {
         await logout();
         setError("חשבון זה אינו למנהל. נא להתחבר כמנהל.");
         return;

@@ -21,6 +21,11 @@ def auth_headers(token: str):
     return {"Authorization": f"Bearer {token}"}
 
 
+def clear_auth_cookies(client):
+    """Le cookie worker-login prime sur Bearer ; on le retire avant les appels director."""
+    client.cookies.clear()
+
+
 def create_site(client, token: str, name: str = "Site Invite"):
     return client.post(
         "/director/sites/",
@@ -128,6 +133,7 @@ def test_director_can_approve_or_reject_pending_invited_worker(client, db_sessio
         json={"phone": "0509991111", "password": "workerpass123"},
     )
     assert worker_login_resp.status_code == 200, worker_login_resp.text
+    clear_auth_cookies(client)
     user = db_session.query(User).filter(User.phone == "0509991111").first()
     pending_row = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.user_id == user.id).first()
     assert pending_row is not None
@@ -151,6 +157,7 @@ def test_director_can_approve_or_reject_pending_invited_worker(client, db_sessio
         "/auth/worker-login",
         json={"phone": "0509992222", "password": "workerpass456"},
     )
+    clear_auth_cookies(client)
     rejected_user = db_session.query(User).filter(User.phone == "0509992222").first()
     rejected_row = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.user_id == rejected_user.id).first()
     assert rejected_row is not None
@@ -185,6 +192,7 @@ def test_pending_workers_are_excluded_from_planning_generation(client, create_di
         json={"phone": "0501113333", "password": "workerpass123"},
     )
     assert login_resp.status_code == 200, login_resp.text
+    clear_auth_cookies(client)
 
     workers_resp = client.get(f"/director/sites/{site_id}/workers", headers=auth_headers(director_token))
     assert workers_resp.status_code == 200, workers_resp.text
@@ -220,6 +228,7 @@ def test_pending_invited_workers_only_appear_from_registration_week(client, db_s
         json={"phone": "0502224444", "password": "workerpass123"},
     )
     assert login_resp.status_code == 200, login_resp.text
+    clear_auth_cookies(client)
 
     pending_user = db_session.query(User).filter(User.phone == "0502224444").first()
     pending_row = db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id, SiteWorker.user_id == pending_user.id).first()

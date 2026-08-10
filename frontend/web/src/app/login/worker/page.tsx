@@ -105,7 +105,12 @@ function WorkerLoginInner() {
         },
       );
       const me = await fetchMe({ force: true });
-      if (me?.role !== "worker") {
+      if (!me) {
+        await logout();
+        setError("ההתחברות הצליחה אך לא ניתן לאמת את החשבון. רעננו את הדף ונסו שוב.");
+        return;
+      }
+      if (me.role !== "worker") {
         await logout();
         setError("חשבון זה אינו לעובד. נא להתחבר כעובד.");
         return;

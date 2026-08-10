@@ -6,13 +6,6 @@ import WorkerLoginPage from "@/app/login/worker/page";
 
 jest.setTimeout(15000);
 
-jest.mock("@/components/loading-animation", () => ({
-  __esModule: true,
-  default: function Loading() {
-    return <div data-testid="loading" />;
-  },
-}));
-
 const replaceMock = jest.fn();
 let returnUrlMock: string | null = null;
 let inviteTokenMock: string | null = null;
@@ -33,6 +26,10 @@ jest.mock("next/navigation", () => ({
 jest.mock("@/lib/auth", () => ({
   fetchMe: jest.fn(),
   logout: jest.fn(),
+
+  peekCachedMe: jest.fn(() => null),
+  AUTH_SESSION_CHANGED_EVENT: "auth-session-changed",
+  notifyAuthSessionChanged: jest.fn(),
 }));
 
 jest.mock("@/lib/api", () => ({
@@ -53,7 +50,9 @@ describe("worker login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "worker" });
+    auth.fetchMe.mockImplementation(async (opts?: { force?: boolean }) =>
+      opts?.force ? { role: "worker" } : null,
+    );
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
     returnUrlMock = "/worker/history";
 
@@ -86,7 +85,9 @@ describe("worker login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "director" });
+    auth.fetchMe.mockImplementation(async (opts?: { force?: boolean }) =>
+      opts?.force ? { role: "director" } : null,
+    );
     auth.logout.mockResolvedValue(undefined);
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "director-token" });
 
@@ -110,8 +111,9 @@ describe("worker login submit", () => {
     const auth = require("@/lib/auth");
     const api = require("@/lib/api");
 
-    auth.fetchMe.mockResolvedValueOnce(null).mockResolvedValueOnce({ role: "worker" });
-    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss" });
+    auth.fetchMe.mockImplementation(async (opts?: { force?: boolean }) =>
+      opts?.force ? { role: "worker" } : null,
+    );    api.apiFetch.mockResolvedValue({ site_id: 1, site_name: "Site A", director_name: "Boss" });
     api.apiFetchWithRetry.mockResolvedValue({ access_token: "worker-token" });
     inviteTokenMock = "secure-token";
     returnUrlMock = "/worker/availability";
