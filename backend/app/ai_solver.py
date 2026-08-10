@@ -9,8 +9,6 @@ from ortools.sat.python import cp_model
 from .ai_solver_utils import (
     DayKey,
     ShiftName,
-    _shift_kind_pref_penalty,
-    _shift_slot_pref_hits,
     _solver_num_search_workers,
     build_capacities_from_config,
     enforce_max_shifts_on_plan,
@@ -19,6 +17,12 @@ from .ai_solver_utils import (
     order_days,
     order_shifts,
     sanitize_plan,
+)
+from .ai_solver_model import (
+    build_cp_sat_schedule_model,
+    is_morning_shift_name,
+    is_night_shift_name,
+    is_noon_shift_name,
 )
 
 # Réexport public (compat imports existants / tests)
@@ -51,319 +55,27 @@ def solve_schedule(
     workers: [{"id": int, "name": str, "max_shifts": int, "availability": {day: [shift]}}]
     """
     logger = logging.getLogger("ai_solver")
-    days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
-    logger.info("Start solve: days=%s shifts=%s stations=%s workers=%s", days, shifts, [st.get("name") for st in stations], [w.get("name") for w in workers])
-
-    model = cp_model.CpModel()
-
-    W = list(range(len(workers)))
-    D = list(range(len(days)))
-    S = list(range(len(shifts)))
-    T = list(range(len(stations)))
-
-    # Liste pour collecter toutes les pénuries de rôles (pour pénalisation dans l'objectif)
-    role_shortfalls_total: List[cp_model.IntVar] = []
-
-    # Normalisation des libellés de rôle pour aligner config et profils employés
-    def _norm_role_local(name: Any) -> str:
-        s = str(name or "").strip()
-        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
-        s = s.replace('"', "'")
-        return s
-    def _norm_name_local(name: Any) -> str:
-        s = str(name or "").strip()
-        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
-        return s
-    worker_roles_norm: List[set[str]] = [
-        { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
-        for w in W
-    ]
-
-    # Map worker name -> index
-    name_to_w: Dict[str, int] = {_norm_name_local(workers[i].get("name")): i for i in range(len(workers))}
-
-    # Pre-assign map: (d,s,t) -> set of worker indices
-    pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
-    fixed_assignments = fixed_assignments or {}
-    # Détection de figeages contradictoires: même worker sur deux stations au même créneau.
-    worker_fixed_slots: Dict[Tuple[int, int], int] = {}  # (w, d, s) -> t
-    fixed_conflicts: List[str] = []
-    for d, day_key in enumerate(days):
-        day_map = fixed_assignments.get(day_key) or {}
-        for s, sh_name in enumerate(shifts):
-            per_station = (day_map.get(sh_name) or [])
-            for t in range(len(stations)):
-                names = []
-                try:
-                    names = per_station[t] if t < len(per_station) else []
-                except Exception:
-                    names = []
-                if not names:
-                    continue
-                for nm in names:
-                    nm_str = _norm_name_local(nm)
-                    if not nm_str:
-                        continue
-                    widx = name_to_w.get(nm_str)
-                    if widx is None:
-                        continue
-                    slot_key = (widx, d, s)
-                    if slot_key in worker_fixed_slots and worker_fixed_slots[slot_key] != t:
-                        conflict_msg = (
-                            f"worker '{nm_str}' fixed on day={day_key} shift={sh_name} "
-                            f"at station {worker_fixed_slots[slot_key]} AND {t} simultaneously"
-                        )
-                        fixed_conflicts.append(conflict_msg)
-                        logger.warning("[FIXED] Contradictory fixed assignment ignored: %s", conflict_msg)
-                        # Ignorer ce figeage contradictoire pour éviter l'infaisabilité
-                        continue
-                    worker_fixed_slots[slot_key] = t
-                    pre_assign.setdefault((d, s, t), set()).add(widx)
-    if fixed_conflicts:
-        logger.warning("[FIXED] %d contradictory fixed assignments detected and skipped", len(fixed_conflicts))
-
-    # Decision variables: x[w,d,s,t] in {0,1} worker w works shift s at station t on day d
-    x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
-    for w in W:
-        for d in D:
-            for s in S:
-                for t in T:
-                    # Availability filter: if worker not available for (day, shift), force 0
-                    day_key = days[d]
-                    sh_name = shifts[s]
-                    avail = (workers[w].get("availability") or {}).get(day_key, [])
-                    allowed = sh_name in avail if isinstance(avail, list) else False
-                    station_allowed_workers = stations[t].get("allowed_workers") or []
-                    allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
-                    worker_station_allow = [
-                        i for i in (workers[w].get("allowed_station_indices") or [])
-                        if isinstance(i, int) and i in range(len(stations))
-                    ]
-                    allowed_for_worker_station = (not worker_station_allow) or (t in worker_station_allow)
-                    var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
-                    # Pré-affectation prioritaire: force à 1 et ignore indisponibilité
-                    if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
-                        model.Add(var == 1)
-                    else:
-                        if not allowed or not allowed_for_station or not allowed_for_worker_station:
-                            model.Add(var == 0)
-                    x[(w, d, s, t)] = var
-
-    # Capacity per station/day/shift
-    for t, st in enumerate(stations):
-        cap = st.get("capacity", {})
-        cap_roles = st.get("capacity_roles", {}) or {}
-        for d, day_key in enumerate(days):
-            day_caps = cap.get(day_key, {})
-            for s, sh_name in enumerate(shifts):
-                required = int(day_caps.get(sh_name, 0))
-                if required <= 0:
-                    # Force no assignment on this cell
-                    for w in W:
-                        model.Add(x[(w, d, s, t)] == 0)
-                    continue
-                # Réservation stricte des rôles avec pénalité de pénurie: les non-rôles ne comblent jamais un manque de rôle
-                # Construire la map des rôles demandés (normalisés)
-                role_map_raw: Dict[str, int] = (cap_roles.get(day_key, {}) or {}).get(sh_name, {}) or {}
-                role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
-                # Borne supérieure par défaut (on ajustera avec la pénurie de rôles)
-                if role_map_norm:
-                    all_required_roles = set(role_map_norm.keys())
-                    # Bloquer les workers sans aucun rôle requis sur cette cellule:
-                    # évite qu'ils soient affectés par le solver puis retirés par le post-traitement.
-                    for w in W:
-                        if not (worker_roles_norm[w] & all_required_roles):
-                            model.Add(x[(w, d, s, t)] == 0)
-                    # Variables de pénurie par rôle (shortfall)
-                    shortfalls: List[cp_model.IntVar] = []
-                    for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
-                        cap_int = max(0, int(r_cap))
-                        short = model.NewIntVar(0, cap_int, f"short_t{t}_d{d}_s{s}_r{idx_r}")
-                        shortfalls.append(short)
-                        # Compte des porteurs du rôle
-                        role_count = sum(x[(w, d, s, t)] for w in W if r_name in worker_roles_norm[w])
-                        # Rôle rempli + pénurie == capacité de rôle
-                        model.Add(role_count + short == cap_int)
-                    # Total pénurie toutes catégories
-                    short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"short_total_t{t}_d{d}_s{s}")
-                    if len(shortfalls) > 1:
-                        model.Add(short_total == sum(shortfalls))
-                    role_shortfalls_total.append(short_total)
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
-                else:
-                    # Pas de rôles requis: simple borne supérieure sur la cellule
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
-
-    # At most one station per (worker, day, shift): prevents the solver from placing the
-    # same worker in two different stations at the same time-slot (multi-site or same site).
-    for w in W:
-        for d in D:
-            for s in S:
-                model.Add(sum(x[(w, d, s, t)] for t in T) <= 1)
-
-    # No adjacent shifts for a worker (including across day boundary)
-    for w in W:
-        for d in D:
-            # same day adjacents between consecutive shifts
-            for s in range(len(S) - 1):
-                model.Add(sum(x[(w, d, s, t)] for t in T) + sum(x[(w, d, s + 1, t)] for t in T) <= 1)
-        # across day boundary: last shift of day d and first of day d+1
-        for d in range(len(D) - 1):
-            model.Add(sum(x[(w, d, len(S) - 1, t)] for t in T) + sum(x[(w, d + 1, 0, t)] for t in T) <= 1)
-
-    # Max nights per worker (shift name exactly "22-06")
-    def _is_night_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return (
-            s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("לילה" in name)
-        )
-    night_indices = [i for i, nm in enumerate(shifts) if _is_night_name(nm)]
-    if night_indices:
-        for w in W:
-            model.Add(
-                sum(x[(w, d, s, t)] for d in D for s in night_indices for t in T)
-                <= max_nights_per_worker
-            )
-
-    # Soft constraint: avoid morning & night same day for same worker when possible
-    def _is_morning_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return ("בוקר" in name) or s.startswith("06") or ("06-14" in s)
-    def _is_noon_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return ("צהר" in name) or s.startswith("14") or ("14-22" in s)
-    morning_indices = [i for i, nm in enumerate(shifts) if _is_morning_name(nm)]
-    noon_indices = [i for i, nm in enumerate(shifts) if _is_noon_name(nm)]
-    morning_night_pairs: List[cp_model.IntVar] = []
-    noon_next_morning_pairs: List[cp_model.IntVar] = []
-    if morning_indices and night_indices:
-        for w in W:
-            for d in D:
-                morn_any = model.NewBoolVar(f"mn_morn_any_w{w}_d{d}")
-                night_any = model.NewBoolVar(f"mn_night_any_w{w}_d{d}")
-                # OR over stations and relevant shifts
-                morn_lits = [x[(w, d, s, t)] for s in morning_indices for t in T]
-                night_lits = [x[(w, d, s, t)] for s in night_indices for t in T]
-                if morn_lits:
-                    model.AddMaxEquality(morn_any, morn_lits)
-                else:
-                    model.Add(morn_any == 0)
-                if night_lits:
-                    model.AddMaxEquality(night_any, night_lits)
-                else:
-                    model.Add(night_any == 0)
-                both = model.NewBoolVar(f"mn_both_w{w}_d{d}")
-                # both == 1 iff morn_any == 1 and night_any == 1
-                model.Add(both <= morn_any)
-                model.Add(both <= night_any)
-                model.Add(both >= morn_any + night_any - 1)
-                morning_night_pairs.append(both)
-        # Noon (day d) with Morning (day d+1)
-        for w in W:
-            for d in range(len(D) - 1):
-                noon_any = model.NewBoolVar(f"mn2_noon_any_w{w}_d{d}")
-                next_morn_any = model.NewBoolVar(f"mn2_morn_any_w{w}_d{d+1}")
-                noon_lits = [x[(w, d, s, t)] for s in noon_indices for t in T]
-                morn_lits_next = [x[(w, d + 1, s, t)] for s in morning_indices for t in T]
-                if noon_lits:
-                    model.AddMaxEquality(noon_any, noon_lits)
-                else:
-                    model.Add(noon_any == 0)
-                if morn_lits_next:
-                    model.AddMaxEquality(next_morn_any, morn_lits_next)
-                else:
-                    model.Add(next_morn_any == 0)
-                both2 = model.NewBoolVar(f"mn2_both_w{w}_d{d}")
-                model.Add(both2 <= noon_any)
-                model.Add(both2 <= next_morn_any)
-                model.Add(both2 >= noon_any + next_morn_any - 1)
-                noon_next_morning_pairs.append(both2)
-
-    # No 7 consecutive days for a worker: over a 7-day window sum <= 6
-    for w in W:
-        day_work = [model.NewBoolVar(f"y_w{w}_d{d}") for d in D]
-        for d in D:
-            lits = [x[(w, d, s, t)] for s in S for t in T]
-            if lits:
-                # OR over all shifts/stations that day
-                model.AddMaxEquality(day_work[d], lits)
-            else:
-                model.Add(day_work[d] == 0)
-        if len(D) >= 7:
-            for start in range(0, len(D) - 6):
-                model.Add(sum(day_work[d] for d in range(start, start + 7)) <= 6)
-
-    # Per-worker weekly max (global)
-    for w in W:
-        max_shifts = int(workers[w].get("max_shifts") or 5)
-        model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in T) <= max_shifts)
-
-    # Per-worker per-site max (contrainte spécifique multi-site)
-    site_limit_count = 0
-    for w in W:
-        site_limits = workers[w].get("site_limits") or []
-        for limit in site_limits:
-            t_indices = [t for t in limit.get("station_indices", []) if t in range(len(stations))]
-            site_max = int(limit.get("max") or 5)
-            if t_indices:
-                model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in t_indices) <= site_max)
-                site_limit_count += 1
-    if site_limit_count > 0:
-        logger.info("[SOLVER] applied %d per-site max_shifts constraints for multi-site workers", site_limit_count)
-
-    # Objective: maximize coverage, + mild fairness term to approach targets
-    coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
-
-    # Fairness: introduce deviation variables to target = max_shifts (soft)
-    max_possible_assignments = max(1, len(D) * len(S) * len(T))
-    max_target_shifts = max([int(workers[w].get("max_shifts") or 5) for w in W], default=1)
-    max_deviation_bound = max(max_possible_assignments, max_target_shifts)
-    fairness_terms: List[cp_model.IntVar] = []
-    assigned_vars: List[cp_model.IntVar] = []
-    for w in W:
-        assigned = model.NewIntVar(0, max_possible_assignments, f"assign_count_w{w}")
-        model.Add(assigned == sum(x[(w, d, s, t)] for d in D for s in S for t in T))
-        assigned_vars.append(assigned)
-        target = int(workers[w].get("max_shifts") or 5)
-        # deviation = |assigned - target| using two non-negative vars
-        over = model.NewIntVar(0, max_deviation_bound, f"dev_over_w{w}")
-        under = model.NewIntVar(0, max_deviation_bound, f"dev_under_w{w}")
-        model.Add(assigned - target == over - under)
-        dev = model.NewIntVar(0, max_deviation_bound, f"dev_abs_w{w}")
-        model.Add(dev == over + under)
-        fairness_terms.append(dev)
-
-    # Minimize maximum deviation as priority after coverage
-    max_dev = model.NewIntVar(0, max_deviation_bound, "max_dev")
-    for dev in fairness_terms:
-        model.Add(dev <= max_dev)
-
-    # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
-    total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
-    # Soft penalty for morning+night same day pairs (very small weight)
-    mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
-    nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
-    # Soft prefs volumes matin/midi/nuit (sous mn/nm — ne prime pas sur תפקידים / multi-site)
-    skp_penalty = _shift_kind_pref_penalty(
-        model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="skp",
+    built = build_cp_sat_schedule_model(
+        config or {},
+        workers,
+        max_nights_per_worker=max_nights_per_worker,
+        fixed_assignments=fixed_assignments,
+        exclude_days=exclude_days,
+        log_label="SOLVER",
     )
-    # Soft prefs créneaux précis (jour×משמרת) — sous les volumes kind
-    ssp_hits = _shift_slot_pref_hits(
-        model, x, workers, W, days, shifts, T, var_prefix="ssp",
-    )
-
-    # Maximize coverage strongly, then minimize max deviation, then total deviation, then minimize role shortfalls,
-    # then avoid morning+night pairs when possible, then shift-kind prefs, then slot prefs
-    # Weights: coverage >> max_dev >> sum(dev) >> role_shortfalls >> mn pairs >> kind prefs >> slot prefs
-    model.Maximize(
-        1000000 * coverage
-        - 10000 * max_dev
-        - 100 * sum(fairness_terms)
-        - 10 * total_role_shortfall
-        - 5 * mn_penalty
-        - 5 * nm_penalty
-        - 3 * skp_penalty
-        + 2 * ssp_hits
+    days, shifts, stations = built.days, built.shifts, built.stations
+    model, x = built.model, built.x
+    W, D, S, T = built.W, built.D, built.S, built.T
+    name_to_w = built.name_to_w
+    _is_night_name = is_night_shift_name
+    _is_morning_name = is_morning_shift_name
+    _is_noon_name = is_noon_shift_name
+    logger.info(
+        "Start solve: days=%s shifts=%s stations=%s workers=%s",
+        days,
+        shifts,
+        [st.get("name") for st in stations],
+        [w.get("name") for w in workers],
     )
 
     solver = cp_model.CpSolver()
@@ -1277,268 +989,22 @@ def solve_schedule_stream(
         )
     except Exception:
         pass
-    # Build base model and plan using existing function but reusing logic inline for streaming
-    days, shifts, stations = build_capacities_from_config(config or {}, exclude_days)
-    # (debug availability logging removed)
-
-    model = cp_model.CpModel()
-    W = list(range(len(workers)))
-    D = list(range(len(days)))
-    S = list(range(len(shifts)))
-    T = list(range(len(stations)))
-
-    # Liste pour collecter toutes les pénuries de rôles (pour pénalisation dans l'objectif)
-    role_shortfalls_total: List[cp_model.IntVar] = []
-
-    x: Dict[Tuple[int, int, int, int], cp_model.IntVar] = {}
-
-    # Normalisation locale (rôles et noms)
-    def _norm_role_local(name: Any) -> str:
-        s = str(name or "").strip()
-        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
-        s = s.replace('"', "'")
-        return s
-    def _norm_name_local(name: Any) -> str:
-        s = str(name or "").strip()
-        s = s.replace("\u200f", "").replace("\u200e", "").replace("\xa0", " ")
-        return s
-
-    # Map worker name (normalisé) -> index
-    name_to_w: Dict[str, int] = {_norm_name_local(workers[i].get("name")): i for i in range(len(workers))}
-    # Pre-assign map
-    pre_assign: Dict[Tuple[int, int, int], set[int]] = {}
-    fixed_assignments = fixed_assignments or {}
-    worker_fixed_slots_s: Dict[Tuple[int, int, int], int] = {}  # (w, d, s) -> t
-    for d, day_key in enumerate(days):
-        day_map = fixed_assignments.get(day_key) or {}
-        for s, sh_name in enumerate(shifts):
-            per_station = (day_map.get(sh_name) or [])
-            for t in range(len(stations)):
-                names = []
-                try:
-                    names = per_station[t] if t < len(per_station) else []
-                except Exception:
-                    names = []
-                if not names:
-                    continue
-                for nm in names:
-                    nm_str = _norm_name_local(nm)
-                    if not nm_str:
-                        continue
-                    widx = name_to_w.get(nm_str)
-                    if widx is None:
-                        continue
-                    slot_key = (widx, d, s)
-                    if slot_key in worker_fixed_slots_s and worker_fixed_slots_s[slot_key] != t:
-                        logger.warning(
-                            "[STREAM][FIXED] Contradictory fixed assignment ignored: worker '%s' day=%s shift=%s stations %d and %d",
-                            nm_str, day_key, sh_name, worker_fixed_slots_s[slot_key], t,
-                        )
-                        continue
-                    worker_fixed_slots_s[slot_key] = t
-                    pre_assign.setdefault((d, s, t), set()).add(widx)
-
-    # Normalisation locale des rôles et cache par employé
-    worker_roles_norm: List[set[str]] = [
-        { _norm_role_local(r) for r in (workers[w].get("roles") or []) }
-        for w in W
-    ]
-    for w in W:
-        for d in D:
-            for s in S:
-                for t in T:
-                    day_key = days[d]
-                    sh_name = shifts[s]
-                    avail = (workers[w].get("availability") or {}).get(day_key, [])
-                    allowed = sh_name in avail if isinstance(avail, list) else False
-                    station_allowed_workers = stations[t].get("allowed_workers") or []
-                    allowed_for_station = True if not station_allowed_workers else (str(workers[w].get("name") or "") in set(station_allowed_workers))
-                    worker_station_allow = [
-                        i for i in (workers[w].get("allowed_station_indices") or [])
-                        if isinstance(i, int) and i in range(len(stations))
-                    ]
-                    allowed_for_worker_station = (not worker_station_allow) or (t in worker_station_allow)
-                    var = model.NewBoolVar(f"x_w{w}_d{d}_s{s}_t{t}")
-                    # Pré-affectation prioritaire
-                    if (d, s, t) in pre_assign and w in pre_assign[(d, s, t)]:
-                        model.Add(var == 1)
-                    else:
-                        if not allowed or not allowed_for_station or not allowed_for_worker_station:
-                            model.Add(var == 0)
-                    x[(w, d, s, t)] = var
-
-    # capacity
-    for t, st in enumerate(stations):
-        cap = st.get("capacity", {})
-        cap_roles = st.get("capacity_roles", {}) or {}
-        for d, day_key in enumerate(days):
-            day_caps = cap.get(day_key, {})
-            for s, sh_name in enumerate(shifts):
-                required = int(day_caps.get(sh_name, 0))
-                if required <= 0:
-                    for w in W:
-                        model.Add(x[(w, d, s, t)] == 0)
-                    continue
-                # Réservation stricte des rôles (comme solve_schedule):
-                role_map_raw: Dict[str, int] = (cap_roles.get(day_key, {}) or {}).get(sh_name, {}) or {}
-                role_map_norm: Dict[str, int] = {_norm_role_local(k): int(v) for k, v in role_map_raw.items()}
-                if role_map_norm:
-                    all_required_roles = set(role_map_norm.keys())
-                    # Bloquer les workers sans aucun rôle requis (stream)
-                    for w in W:
-                        if not (worker_roles_norm[w] & all_required_roles):
-                            model.Add(x[(w, d, s, t)] == 0)
-                    shortfalls: List[cp_model.IntVar] = []
-                    for idx_r, (r_name, r_cap) in enumerate(role_map_norm.items()):
-                        cap_int = max(0, int(r_cap))
-                        short = model.NewIntVar(0, cap_int, f"s_short_t{t}_d{d}_s{s}_r{idx_r}")
-                        shortfalls.append(short)
-                        role_count = sum(x[(w, d, s, t)] for w in W if r_name in worker_roles_norm[w])
-                        model.Add(role_count + short == cap_int)
-                    short_total = shortfalls[0] if len(shortfalls) == 1 else model.NewIntVar(0, sum(role_map_norm.values()), f"s_short_total_t{t}_d{d}_s{s}")
-                    if len(shortfalls) > 1:
-                        model.Add(short_total == sum(shortfalls))
-                    role_shortfalls_total.append(short_total)
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
-                else:
-                    model.Add(sum(x[(w, d, s, t)] for w in W) <= required)
-
-    # At most one station per (worker, day, shift)
-    for w in W:
-        for d in D:
-            for s in S:
-                model.Add(sum(x[(w, d, s, t)] for t in T) <= 1)
-
-    # No adjacent shifts
-    for w in W:
-        for d in D:
-            for s in range(len(S) - 1):
-                model.Add(sum(x[(w, d, s, t)] for t in T) + sum(x[(w, d, s + 1, t)] for t in T) <= 1)
-        for d in range(len(D) - 1):
-            model.Add(sum(x[(w, d, len(S) - 1, t)] for t in T) + sum(x[(w, d + 1, 0, t)] for t in T) <= 1)
-
-    # nights ≤ max_nights_per_worker
-    def _is_night_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return s == "22-06" or ("22" in s and "06" in s) or ("night" in s) or ("\u05dc\u05d9\u05dc\u05d4" in name)
-    night_indices = [i for i, nm in enumerate(shifts) if _is_night_name(nm)]
-    if night_indices:
-        for w in W:
-            model.Add(sum(x[(w, d, s, t)] for d in D for s in night_indices for t in T) <= max_nights_per_worker)
-
-    # per-week max per worker (target) — préaffectations comptées dans la somme, ce qui réduit automatiquement le solde restant
-    for w in W:
-        max_sh = int(workers[w].get("max_shifts") or 5)
-        model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in T) <= max_sh)
-
-    # Per-worker per-site max (contrainte spécifique multi-site)
-    site_limit_count_stream = 0
-    for w in W:
-        site_limits = workers[w].get("site_limits") or []
-        for limit in site_limits:
-            t_indices = [t for t in limit.get("station_indices", []) if t in range(len(stations))]
-            site_max = int(limit.get("max") or 5)
-            if t_indices:
-                model.Add(sum(x[(w, d, s, t)] for d in D for s in S for t in t_indices) <= site_max)
-                site_limit_count_stream += 1
-    if site_limit_count_stream > 0:
-        logger.info("[STREAM][SOLVER] applied %d per-site max_shifts constraints for multi-site workers", site_limit_count_stream)
-
-    # objective coverage + fairness
-    coverage = sum(x[(w, d, s, t)] for w in W for d in D for s in S for t in T)
-    max_possible_assignments = max(1, len(D) * len(S) * len(T))
-    max_target_shifts = max([int(workers[w].get("max_shifts") or 5) for w in W], default=1)
-    max_deviation_bound = max(max_possible_assignments, max_target_shifts)
-    fairness_terms: List[cp_model.IntVar] = []
-    assigned_vars: List[cp_model.IntVar] = []
-    for w in W:
-        assigned = model.NewIntVar(0, max_possible_assignments, f"assign_count_w{w}")
-        model.Add(assigned == sum(x[(w, d, s, t)] for d in D for s in S for t in T))
-        assigned_vars.append(assigned)
-        target = int(workers[w].get("max_shifts") or 5)
-        over = model.NewIntVar(0, max_deviation_bound, f"dev_over_w{w}")
-        under = model.NewIntVar(0, max_deviation_bound, f"dev_under_w{w}")
-        model.Add(assigned - target == over - under)
-        dev = model.NewIntVar(0, max_deviation_bound, f"dev_abs_w{w}")
-        model.Add(dev == over + under)
-        fairness_terms.append(dev)
-    max_dev = model.NewIntVar(0, max_deviation_bound, "max_dev")
-    for dev in fairness_terms:
-        model.Add(dev <= max_dev)
-    # Pénalité pour les pénuries de rôles (pour encourager à remplir les rôles requis)
-    total_role_shortfall = sum(role_shortfalls_total) if role_shortfalls_total else 0
-
-    # Soft constraint in streaming too: avoid morning & night same day when possible
-    def _is_morning_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return ("בוקר" in name) or s.startswith("06") or ("06-14" in s)
-    def _is_noon_name(name: str) -> bool:
-        s = (name or "").strip().lower()
-        return ("צהר" in name) or s.startswith("14") or ("14-22" in s)
-    morning_indices = [i for i, nm in enumerate(shifts) if _is_morning_name(nm)]
-    noon_indices = [i for i, nm in enumerate(shifts) if _is_noon_name(nm)]
-    morning_night_pairs: List[cp_model.IntVar] = []
-    noon_next_morning_pairs: List[cp_model.IntVar] = []
-    if morning_indices and night_indices:
-        for w in W:
-            for d in D:
-                morn_any = model.NewBoolVar(f"s_mn_morn_any_w{w}_d{d}")
-                night_any = model.NewBoolVar(f"s_mn_night_any_w{w}_d{d}")
-                morn_lits = [x[(w, d, s, t)] for s in morning_indices for t in T]
-                night_lits = [x[(w, d, s, t)] for s in night_indices for t in T]
-                if morn_lits:
-                    model.AddMaxEquality(morn_any, morn_lits)
-                else:
-                    model.Add(morn_any == 0)
-                if night_lits:
-                    model.AddMaxEquality(night_any, night_lits)
-                else:
-                    model.Add(night_any == 0)
-                both = model.NewBoolVar(f"s_mn_both_w{w}_d{d}")
-                model.Add(both <= morn_any)
-                model.Add(both <= night_any)
-                model.Add(both >= morn_any + night_any - 1)
-                morning_night_pairs.append(both)
-        # Noon day d + Morning day d+1 (même boucle que solve_schedule)
-        if noon_indices:
-            for w in W:
-                for d in range(len(D) - 1):
-                    noon_any = model.NewBoolVar(f"s_mn2_noon_any_w{w}_d{d}")
-                    next_morn_any = model.NewBoolVar(f"s_mn2_morn_any_w{w}_d{d+1}")
-                    noon_lits = [x[(w, d, s, t)] for s in noon_indices for t in T]
-                    morn_lits_next = [x[(w, d + 1, s, t)] for s in morning_indices for t in T]
-                    if noon_lits:
-                        model.AddMaxEquality(noon_any, noon_lits)
-                    else:
-                        model.Add(noon_any == 0)
-                    if morn_lits_next:
-                        model.AddMaxEquality(next_morn_any, morn_lits_next)
-                    else:
-                        model.Add(next_morn_any == 0)
-                    both2 = model.NewBoolVar(f"s_mn2_both_w{w}_d{d}")
-                    model.Add(both2 <= noon_any)
-                    model.Add(both2 <= next_morn_any)
-                    model.Add(both2 >= noon_any + next_morn_any - 1)
-                    noon_next_morning_pairs.append(both2)
-    mn_penalty = sum(morning_night_pairs) if morning_night_pairs else 0
-    nm_penalty = sum(noon_next_morning_pairs) if noon_next_morning_pairs else 0
-    skp_penalty = _shift_kind_pref_penalty(
-        model, x, workers, W, D, T, morning_indices, noon_indices, night_indices, var_prefix="s_skp",
+    built = build_cp_sat_schedule_model(
+        config or {},
+        workers,
+        max_nights_per_worker=max_nights_per_worker,
+        fixed_assignments=fixed_assignments,
+        exclude_days=exclude_days,
+        var_prefix="s",
+        log_label="STREAM",
     )
-    ssp_hits = _shift_slot_pref_hits(
-        model, x, workers, W, days, shifts, T, var_prefix="s_ssp",
-    )
-
-    model.Maximize(
-        1000000 * coverage
-        - 10000 * max_dev
-        - 100 * sum(fairness_terms)
-        - 10 * total_role_shortfall
-        - 5 * mn_penalty
-        - 5 * nm_penalty
-        - 3 * skp_penalty
-        + 2 * ssp_hits
-    )
+    days, shifts, stations = built.days, built.shifts, built.stations
+    model, x = built.model, built.x
+    W, D, S, T = built.W, built.D, built.S, built.T
+    name_to_w = built.name_to_w
+    _is_night_name = is_night_shift_name
+    _is_morning_name = is_morning_shift_name
+    _is_noon_name = is_noon_shift_name
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit_seconds)
