@@ -49,11 +49,7 @@ else
 fi
 
 echo "==> Vérification syntaxe Python"
-python3 -m py_compile \
-  "$BACKEND_DIR/app/main.py" \
-  "$BACKEND_DIR/app/sites.py" \
-  "$BACKEND_DIR/app/schemas.py" \
-  "$BACKEND_DIR/app/models.py"
+python3 -m compileall -q -f "$BACKEND_DIR/app"
 
 echo "==> Alembic upgrade (head) avec fallback stamp si schéma déjà présent"
 cd "$BACKEND_DIR"
