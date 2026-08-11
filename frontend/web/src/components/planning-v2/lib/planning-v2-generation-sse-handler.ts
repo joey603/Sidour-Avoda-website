@@ -10,7 +10,13 @@ import {
   alternativeSnapshot,
   type DraftAlternative,
 } from "./planning-v2-draft-alternatives";
-import { type HoleScore, linkedPlansHoleScore, singlePlanHoleScore } from "./planning-v2-hole-scores";
+import {
+  compareHoleScores,
+  type HoleScore,
+  linkedPlansHoleScore,
+  shouldHoldPlanUntilPullTarget,
+  singlePlanHoleScore,
+} from "./planning-v2-hole-scores";
 import {
   linkedPlansAltCounts,
   linkedSitePlansMaxShiftOverages,
@@ -20,6 +26,7 @@ import {
   linkedPlansMatchRequestedPulls,
   logPlanningV2PullCandidate,
   pullsMatchRequestedCount,
+  type PullsShiftKind,
 } from "./planning-v2-pulls-match";
 import {
   readLinkedGenerationStopRequestFromSession,
@@ -57,13 +64,23 @@ export type PlanningV2GenerationSseHelpers = {
   scheduleAlternativesFlush: () => void;
   stopWhenBatchTargetReached: () => boolean;
   currentBatchVisibleCount: () => number;
-  pruneDraftAlternativesByBestHoles: (bestScore: HoleScore) => void;
   shouldRejectForHoleScore: (
     score: HoleScore,
     itemType: "base" | "alternative",
     eventIndex: unknown,
     generationId: unknown,
   ) => boolean;
+  promoteBetterPlanToBase: (
+    assignments: AssignmentGrid,
+    pulls: PlanningV2PullsMap,
+    score: HoleScore,
+  ) => boolean;
+  maybePaintOrHoldFirstPlan: (
+    assignments: AssignmentGrid,
+    pulls: PlanningV2PullsMap,
+    score: HoleScore,
+  ) => "painted" | "held" | "skipped";
+  flushPendingHeldBase: () => void;
 };
 
 export type PlanningV2GenerationSseArgs = {
@@ -76,6 +93,7 @@ export type PlanningV2GenerationSseArgs = {
   site: SiteSummary | null;
   pullsScope?: "current_only" | "all_sites";
   requestedPullsCount: number | null;
+  pullsPreferKinds?: PullsShiftKind[] | null;
   appendExistingAlternativesCount: number;
   visibleAlternativeCountAtStart: number;
   autoPullsEnabled: boolean;
@@ -108,6 +126,8 @@ export type PlanningV2GenerationSseArgs = {
   setSelectedAlternativeIndex: Dispatch<SetStateAction<number>>;
   setIsManual: Dispatch<SetStateAction<boolean>>;
   setMoreAlternativesAvailable: Dispatch<SetStateAction<boolean>>;
+  userPickedAltIndexRef?: MutableRefObject<number | null>;
+  selectedAlternativeIndexRef?: MutableRefObject<number>;
   runtime: PlanningV2GenerationSseRuntimeState;
 };
 
@@ -118,6 +138,7 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     site,
     weekIso,
     requestedPullsCount,
+    pullsPreferKinds = null,
     visibleAlternativeCountAtStart,
     autoPullsEnabled,
     dedupeAlternatives,
@@ -129,17 +150,32 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     alternativesFlushRafRef,
     generationRunningRef,
     draftAssignmentsRef,
+    draftPullsRef,
     draftAlternativesRef,
     bestGeneratedHoleScoreRef,
     appendUniqueCountRef,
     setGenerationRunning,
     setReplaceGenerationUiClear,
     setSharedLinkedGenerationRunning,
+    setDraftAssignments,
+    setDraftPulls,
     setDraftAlternatives,
+    setSelectedAlternativeIndex,
+    setIsManual,
+    userPickedAltIndexRef,
+    selectedAlternativeIndexRef,
     runtime,
   } = args;
 
+  const planScore = (
+    asg: AssignmentGrid | null | undefined,
+    pulls: PlanningV2PullsMap | null | undefined,
+  ) => singlePlanHoleScore(site, asg, pulls, pullsPreferKinds);
+
+  const pendingFlushRef = { current: () => {} };
+
   const finishGenerationVisualState = () => {
+    pendingFlushRef.current();
     if (runtime.generationVisualFinished) return;
     runtime.generationVisualFinished = true;
     // flushSync : sinon יוצר/stop restent visibles pendant les startTransition des חלופות.
@@ -166,18 +202,76 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     alternativesFlushRafRef.current = window.requestAnimationFrame(() => {
       alternativesFlushRafRef.current = null;
       const apply = () => {
+        const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
+        const stopLimit = stopVisibleAlternativeCountRef.current;
+        const preferActive = !!(pullsPreferKinds && pullsPreferKinds.length > 0);
+        const canResplitBase =
+          preferActive &&
+          !appendMode &&
+          linkedSitesLength <= 1 &&
+          !!draftAssignmentsRef.current;
+
+        if (canResplitBase) {
+          const all: DraftAlternative[] = [
+            { assignments: draftAssignmentsRef.current as AssignmentGrid, pulls: draftPullsRef.current },
+            ...normalized,
+          ];
+          const ranked = [...all].sort((a, b) =>
+            compareHoleScores(
+              planScore(a.assignments, a.pulls),
+              planScore(b.assignments, b.pulls),
+              requestedPullsCount,
+            ),
+          );
+          const maxTotal = stopLimit == null ? ranked.length : Math.max(1, stopLimit);
+          const sliced = ranked.slice(0, maxTotal);
+          const nextBase = sliced[0];
+          const nextAlts = sliced.slice(1);
+          const pin = userPickedAltIndexRef?.current != null;
+          const viewedIdx = Math.max(0, selectedAlternativeIndexRef?.current ?? 0);
+          const viewed = pin && viewedIdx < all.length ? all[viewedIdx] : null;
+          const viewedSnap = viewed ? alternativeSnapshot(viewed.assignments, viewed.pulls) : "";
+
+          draftAssignmentsRef.current = nextBase.assignments;
+          draftPullsRef.current = nextBase.pulls;
+          draftAlternativesRef.current = nextAlts;
+          setDraftAssignments(nextBase.assignments);
+          setDraftPulls(nextBase.pulls);
+          setDraftAlternatives([...nextAlts]);
+
+          if (viewedSnap) {
+            const newIdx = [nextBase, ...nextAlts].findIndex(
+              (p) => alternativeSnapshot(p.assignments, p.pulls) === viewedSnap,
+            );
+            if (newIdx >= 0) {
+              if (selectedAlternativeIndexRef) selectedAlternativeIndexRef.current = newIdx;
+              if (userPickedAltIndexRef) userPickedAltIndexRef.current = newIdx;
+              setSelectedAlternativeIndex(newIdx);
+            }
+          }
+          return;
+        }
+
         setDraftAlternatives((prev) => {
-          const normalized = draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives);
-          const stopLimit = stopVisibleAlternativeCountRef.current;
+          const ordered = preferActive
+            ? [...normalized].sort((a, b) =>
+                compareHoleScores(
+                  planScore(a.assignments, a.pulls),
+                  planScore(b.assignments, b.pulls),
+                  requestedPullsCount,
+                ),
+              )
+            : normalized;
           const maxDraftAlternatives =
-            stopLimit == null ? normalized.length : draftAssignmentsRef.current ? Math.max(0, stopLimit - 1) : stopLimit;
-          const next = normalized.slice(0, maxDraftAlternatives);
+            stopLimit == null
+              ? ordered.length
+              : draftAssignmentsRef.current
+                ? Math.max(0, stopLimit - 1)
+                : stopLimit;
+          const next = ordered.slice(0, maxDraftAlternatives);
           if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
             draftAlternativesRef.current = next;
           }
-          // Multi-site: ne pas court-circuiter sur la seule longueur — les slots
-          // peuvent se remplir sans changer length, et startTransition était trop
-          // différé pendant le SSE lourd (les alts n’apparaissaient qu’au clic prev/next).
           if (prev.length === next.length) {
             if (linkedSitesLength <= 1) return prev;
             if (prev === next) return prev;
@@ -224,17 +318,6 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
       ? Math.max(0, Number(getVisibleAlternativeCount() || 0) - visibleAlternativeCountAtStart)
       : appendUniqueCountRef.current;
 
-  const pruneDraftAlternativesByBestHoles = (bestScore: HoleScore) => {
-    const before = draftAlternativesRef.current.length;
-    draftAlternativesRef.current = normalizeDraftAlternatives(draftAlternativesRef.current || []).filter((alt) => {
-      const score = singlePlanHoleScore(site, alt.assignments, alt.pulls);
-      return score.holes < bestScore.holes || (score.holes === bestScore.holes && score.pulls <= bestScore.pulls);
-    });
-    if (draftAlternativesRef.current.length !== before) {
-      scheduleAlternativesFlush();
-    }
-  };
-
   const shouldRejectForHoleScore = (
     score: HoleScore,
     itemType: "base" | "alternative",
@@ -247,22 +330,79 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     void eventIndex;
     void generationId;
     void appendMode;
-    void requestedPullsCount;
-    if (
-      !best ||
-      score.holes < best.holes ||
-      (score.holes === best.holes && score.pulls < best.pulls) ||
-      (score.holes === best.holes && score.pulls === best.pulls && score.assigned > best.assigned)
-    ) {
+    if (!best) {
       bestGeneratedHoleScoreRef.current = score;
-      pruneDraftAlternativesByBestHoles(score);
       return false;
     }
-    if (score.holes > best.holes || (score.holes === best.holes && score.pulls > best.pulls)) {
-      return true;
+    // Ne jeter que les nouveaux plans avec plus de trous. Un meilleur score משיכות
+    // ne doit pas vider les חלופות déjà affichées (sinon le compteur retombe à 1).
+    if (score.holes > best.holes) return true;
+    if (compareHoleScores(score, best, requestedPullsCount) < 0) {
+      bestGeneratedHoleScoreRef.current = score;
     }
     return false;
   };
+
+  type HeldFirstPlan = { assignments: AssignmentGrid; pulls: PlanningV2PullsMap; score: HoleScore };
+  let pendingHeldBase: HeldFirstPlan | null = null;
+
+  const paintFirstPlan = (assignments: AssignmentGrid, pulls: PlanningV2PullsMap, score: HoleScore) => {
+    const demote =
+      pendingHeldBase && pendingHeldBase.assignments !== assignments
+        ? pendingHeldBase
+        : null;
+    pendingHeldBase = null;
+    draftAssignmentsRef.current = assignments;
+    draftPullsRef.current = pulls;
+    setDraftAssignments(assignments);
+    setDraftPulls(pulls);
+    setReplaceGenerationUiClear(false);
+    setSelectedAlternativeIndex(0);
+    if (selectedAlternativeIndexRef) selectedAlternativeIndexRef.current = 0;
+    setIsManual(false);
+    if (demote) {
+      draftAlternativesRef.current = normalizeDraftAlternatives([
+        { assignments: demote.assignments, pulls: demote.pulls },
+        ...(draftAlternativesRef.current || []),
+      ]);
+      scheduleAlternativesFlush();
+    }
+    bestGeneratedHoleScoreRef.current = score;
+    toast.success("תכנון בסיסי מוכן");
+  };
+
+  const maybePaintOrHoldFirstPlan = (
+    assignments: AssignmentGrid,
+    pulls: PlanningV2PullsMap,
+    score: HoleScore,
+  ): "painted" | "held" | "skipped" => {
+    if (appendMode || linkedSitesLength > 1) return "skipped";
+    if (draftAssignmentsRef.current) return "skipped";
+    if (autoPullsEnabled && shouldHoldPlanUntilPullTarget(score, requestedPullsCount, pullsPreferKinds)) {
+      if (
+        !pendingHeldBase ||
+        compareHoleScores(score, pendingHeldBase.score, requestedPullsCount) < 0
+      ) {
+        pendingHeldBase = { assignments, pulls, score };
+      }
+      return "held";
+    }
+    paintFirstPlan(assignments, pulls, score);
+    return "painted";
+  };
+
+  const flushPendingHeldBase = () => {
+    if (!pendingHeldBase || draftAssignmentsRef.current) return;
+    paintFirstPlan(pendingHeldBase.assignments, pendingHeldBase.pulls, pendingHeldBase.score);
+  };
+  pendingFlushRef.current = flushPendingHeldBase;
+
+  /** Ne jamais remplacer une חלופה déjà à l’écran : les meilleurs plans s’ajoutent à la fin. */
+  const promoteBetterPlanToBase = (
+    _assignments: AssignmentGrid,
+    _pulls: PlanningV2PullsMap,
+    _score: HoleScore,
+  ): boolean => false;
 
   return {
     finishGenerationVisualState,
@@ -271,8 +411,10 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     scheduleAlternativesFlush,
     stopWhenBatchTargetReached,
     currentBatchVisibleCount,
-    pruneDraftAlternativesByBestHoles,
     shouldRejectForHoleScore,
+    promoteBetterPlanToBase,
+    maybePaintOrHoldFirstPlan,
+    flushPendingHeldBase,
   };
 }
 
@@ -289,6 +431,7 @@ export function createPlanningV2GenerationSseHandler(
     site,
     pullsScope,
     requestedPullsCount,
+    pullsPreferKinds = null,
     appendExistingAlternativesCount,
     dedupeAlternatives,
     controller,
@@ -321,7 +464,17 @@ export function createPlanningV2GenerationSseHandler(
     stopWhenBatchTargetReached,
     currentBatchVisibleCount,
     shouldRejectForHoleScore,
+    promoteBetterPlanToBase,
+    maybePaintOrHoldFirstPlan,
+    flushPendingHeldBase,
   } = args.helpers || createGenerationSseHelpers(args);
+  const planScore = (
+    asg: AssignmentGrid | null | undefined,
+    pulls: PlanningV2PullsMap | null | undefined,
+  ) => singlePlanHoleScore(site, asg, pulls, pullsPreferKinds);
+  const linkedScore = (
+    plans: Record<string, { assignments?: unknown; pulls?: unknown; required_count?: unknown }>,
+  ) => linkedPlansHoleScore(plans, siteId, site, pullsPreferKinds);
 
   return (evt) => {
     if (
@@ -378,7 +531,7 @@ export function createPlanningV2GenerationSseHandler(
         if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, pullsScope)) {
           return false;
         }
-        const holeScore = linkedPlansHoleScore(plans, siteId, site);
+        const holeScore = linkedScore(plans);
         if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
           return false;
         }
@@ -411,12 +564,37 @@ export function createPlanningV2GenerationSseHandler(
         });
       }
       if (!linked && evt.assignments && typeof evt.assignments === "object") {
-        const holeScore = singlePlanHoleScore(
-          site,
+        const holeScore = planScore(
           evt.assignments as Record<string, Record<string, string[][]>>,
           evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
         );
         if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
+          return false;
+        }
+        const firstDecision = maybePaintOrHoldFirstPlan(
+          evt.assignments as Record<string, Record<string, string[][]>>,
+          evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
+          holeScore,
+        );
+        if (firstDecision === "held") {
+          runtime.sawGeneratedPlan = true;
+          runtime.sawPlanToPersist = true;
+          markAcceptedPlan();
+          return false;
+        }
+        if (firstDecision === "painted") {
+          runtime.sawGeneratedPlan = true;
+          runtime.sawPlanToPersist = true;
+          markAcceptedPlan();
+          seenAlternativeSnapshotsRef.current = buildSeenAlternativeSnapshots(
+            evt.assignments as Record<string, Record<string, string[][]>>,
+            evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
+            [],
+          );
+          return false;
+        }
+        // Un 2e « base » alors qu’un plan est déjà à l’écran : ne pas raz les חלופות.
+        if (draftAssignmentsRef.current) {
           return false;
         }
       }
@@ -425,6 +603,9 @@ export function createPlanningV2GenerationSseHandler(
       runtime.sawPlanToPersist = true;
       markAcceptedPlan();
       if (linked && evt.site_plans && typeof evt.site_plans === "object") {
+        if (draftAssignmentsRef.current) {
+          return false;
+        }
         const plans = evt.site_plans as Record<string, { assignments?: unknown; pulls?: unknown }>;
         const existing = readLinkedPlansFromMemory(weekStart);
         const merged: Record<string, LinkedSitePlan> = { ...(existing?.plansBySite || {}) };
@@ -496,7 +677,7 @@ export function createPlanningV2GenerationSseHandler(
         if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, pullsScope)) {
           return false;
         }
-        const holeScore = linkedPlansHoleScore(plans, siteId, site);
+        const holeScore = linkedScore(plans);
         if (shouldRejectForHoleScore(holeScore, "base", evt.index, evt.generation_id)) {
           return false;
         }
@@ -529,8 +710,7 @@ export function createPlanningV2GenerationSseHandler(
         });
       }
       if (!linked && evt.assignments && typeof evt.assignments === "object") {
-        const holeScore = singlePlanHoleScore(
-          site,
+        const holeScore = planScore(
           evt.assignments as Record<string, Record<string, string[][]>>,
           evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
         );
@@ -655,6 +835,29 @@ export function createPlanningV2GenerationSseHandler(
           seenAlternativeSnapshotsRef.current.add(nextSnapshot);
           lastAlternativeSnapshotRef.current = nextSnapshot;
         }
+        const holeScore = planScore(altAssignments, altPulls);
+        const firstDecision = maybePaintOrHoldFirstPlan(altAssignments, altPulls, holeScore);
+        if (firstDecision === "held" || firstDecision === "painted") {
+          appendUniqueCountRef.current += 1;
+          markAcceptedPlan();
+          if (firstDecision === "painted" && stopWhenBatchTargetReached()) {
+            finishGenerationVisualState();
+            return true;
+          }
+          return false;
+        }
+        if (promoteBetterPlanToBase(altAssignments, altPulls, holeScore)) {
+          appendUniqueCountRef.current += 1;
+          markAcceptedPlan();
+          if (appendMode) {
+            setMoreAlternativesAvailable(true);
+          }
+          if (stopWhenBatchTargetReached()) {
+            finishGenerationVisualState();
+            return true;
+          }
+          return false;
+        }
         draftAlternativesRef.current = [
           ...(draftAlternativesRef.current || []),
           { assignments: altAssignments, pulls: altPulls },
@@ -690,7 +893,7 @@ export function createPlanningV2GenerationSseHandler(
         if (!linkedPlansMatchRequestedPulls(plans, siteId, requestedPullsCount, pullsScope)) {
           return false;
         }
-        const holeScore = linkedPlansHoleScore(plans, siteId, site);
+        const holeScore = linkedScore(plans);
         if (shouldRejectForHoleScore(holeScore, "alternative", evt.index, evt.generation_id)) {
           return false;
         }
@@ -723,8 +926,7 @@ export function createPlanningV2GenerationSseHandler(
         });
       }
       if (!linked && evt.assignments && typeof evt.assignments === "object") {
-        const holeScore = singlePlanHoleScore(
-          site,
+        const holeScore = planScore(
           evt.assignments as Record<string, Record<string, string[][]>>,
           evt.pulls && typeof evt.pulls === "object" ? (evt.pulls as PlanningV2PullsMap) : {},
         );
@@ -794,9 +996,8 @@ export function createPlanningV2GenerationSseHandler(
             const prevAlternativePulls = Array.isArray(prev.alternative_pulls) ? prev.alternative_pulls : [];
             const nextAlternatives = [...prevAlternatives];
             const nextAlternativePulls = [...prevAlternativePulls];
-            const targetAltSlot = appendMode ? nextAlternatives.length : altSlot;
-            nextAlternatives[targetAltSlot] = nextAssignments;
-            nextAlternativePulls[targetAltSlot] = nextPulls;
+            nextAlternatives.push(nextAssignments);
+            nextAlternativePulls.push(nextPulls);
             merged[k] = {
               ...prev,
               alternatives: nextAlternatives,
@@ -871,13 +1072,33 @@ export function createPlanningV2GenerationSseHandler(
           seenAlternativeSnapshotsRef.current.add(nextSnapshot);
           lastAlternativeSnapshotRef.current = nextSnapshot;
         }
-        const nextDraftAlternatives = [...(draftAlternativesRef.current || [])];
-        const targetAltSlot = appendMode ? nextDraftAlternatives.length : altSlot;
-        nextDraftAlternatives[targetAltSlot] = {
-          assignments: altAssignments as Record<string, Record<string, string[][]>>,
-          pulls: altPulls,
-        };
-        draftAlternativesRef.current = nextDraftAlternatives;
+        const holeScore = planScore(altAssignments, altPulls);
+        const firstDecision = maybePaintOrHoldFirstPlan(altAssignments, altPulls, holeScore);
+        if (firstDecision === "held" || firstDecision === "painted") {
+          appendUniqueCountRef.current += 1;
+          markAcceptedPlan();
+          if (firstDecision === "painted" && stopWhenBatchTargetReached()) {
+            finishGenerationVisualState();
+            return true;
+          }
+          return false;
+        }
+        if (promoteBetterPlanToBase(altAssignments, altPulls, holeScore)) {
+          appendUniqueCountRef.current += 1;
+          markAcceptedPlan();
+          if (appendMode) {
+            setMoreAlternativesAvailable(true);
+          }
+          if (stopWhenBatchTargetReached()) return true;
+          return false;
+        }
+        draftAlternativesRef.current = [
+          ...(draftAlternativesRef.current || []),
+          {
+            assignments: altAssignments as Record<string, Record<string, string[][]>>,
+            pulls: altPulls,
+          },
+        ];
         appendUniqueCountRef.current += 1;
         markAcceptedPlan();
         if (appendMode) {
@@ -928,6 +1149,7 @@ export function createPlanningV2GenerationSseHandler(
       return false;
     }
     if (evt.type === "done") {
+      flushPendingHeldBase();
       runtime.serverExhaustedAlternatives = currentBatchVisibleCount() < VISIBLE_ALTERNATIVES_BATCH_SIZE;
       finishGenerationVisualState();
       if (runtime.serverExhaustedAlternatives && runtime.sawGeneratedPlan) {
