@@ -181,18 +181,6 @@ export function usePlanningV2WorkerModals(
     [stationPickerOptions],
   );
 
-  const workerModalBulkSelection = useMemo(() => {
-    const isAllSelected = (shiftName?: string) => {
-      if (!shiftName) return false;
-      return DAY_DEFS.every((d) => (newWorkerAvailability[d.key] || []).includes(shiftName));
-    };
-    return {
-      morningAll: isAllSelected(workerModalShiftBuckets.morningName),
-      noonAll: isAllSelected(workerModalShiftBuckets.noonName),
-      nightAll: isAllSelected(workerModalShiftBuckets.nightName),
-    };
-  }, [newWorkerAvailability, workerModalShiftBuckets]);
-
   const currentWeekWorkersForEditor = useMemo(() => workers, [workers]);
 
   const editingWorkerEventLocks = useMemo(() => {
@@ -204,6 +192,20 @@ export function usePlanningV2WorkerModals(
     (dayKey: string, shift: string) => (editingWorkerEventLocks[dayKey] || []).includes(shift),
     [editingWorkerEventLocks],
   );
+
+  const workerModalBulkSelection = useMemo(() => {
+    const isAllUnlockedSelected = (shiftName?: string) => {
+      if (!shiftName) return false;
+      const unlockedDays = DAY_DEFS.filter((d) => !isEventLockedSlot(d.key, shiftName));
+      if (unlockedDays.length === 0) return true;
+      return unlockedDays.every((d) => (newWorkerAvailability[d.key] || []).includes(shiftName));
+    };
+    return {
+      morningAll: isAllUnlockedSelected(workerModalShiftBuckets.morningName),
+      noonAll: isAllUnlockedSelected(workerModalShiftBuckets.noonName),
+      nightAll: isAllUnlockedSelected(workerModalShiftBuckets.nightName),
+    };
+  }, [isEventLockedSlot, newWorkerAvailability, workerModalShiftBuckets]);
 
   const toggleNewAvailability = useCallback(
     (dayKey: string, shift: string) => {
@@ -270,6 +272,7 @@ export function usePlanningV2WorkerModals(
     setNewWorkerAvailability((prev) => {
       const next: WorkerAvailability = { ...prev };
       for (const dayDef of DAY_DEFS) {
+        // Cases bordeaux (אירוע) : ne jamais les cocher/décocher en masse.
         if (isEventLockedSlot(dayDef.key, shiftName)) continue;
         const currentValues = new Set(next[dayDef.key] || []);
         if (checked) currentValues.add(shiftName);
