@@ -46,20 +46,18 @@ function pullsTargetGap(score: HoleScore, requestedPullsCount: number | null | u
 
 /**
  * Attendre avant d’afficher la 1re vue :
- * il reste des trous et on n’a pas encore atteint N משיכות,
- * ou (si une préférence de kind est active) aucune משיכה préférée.
- * Si 0/1 משיכה comble tous les trous, on affiche tout de suite.
+ * il reste des trous et on n’a pas encore atteint N משיכות.
+ * La préférence de kind est souple : ne pas bloquer s’il n’y a pas de משיכה demandée.
  */
 export function shouldHoldPlanUntilPullTarget(
   score: HoleScore,
   requestedPullsCount: number | null | undefined,
-  preferKinds?: PullsShiftKind[] | null,
+  _preferKinds?: PullsShiftKind[] | null,
 ): boolean {
   if (score.holes <= 0) return false;
   if (requestedPullsCount != null && requestedPullsCount > 0 && score.pulls < requestedPullsCount) {
     return true;
   }
-  if (preferKinds && preferKinds.length > 0 && score.noonPulls <= 0) return true;
   return false;
 }
 

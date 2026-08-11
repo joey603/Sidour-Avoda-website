@@ -56,10 +56,9 @@ describe("shouldHoldPlanUntilPullTarget", () => {
     expect(shouldHoldPlanUntilPullTarget(score({ pulls: 0, holes: 0 }), 2)).toBe(false);
   });
 
-  it("avec préférence, attend une משיכה du kind demandé tant qu’il reste des trous", () => {
-    expect(shouldHoldPlanUntilPullTarget(score({ pulls: 2, noonPulls: 0, holes: 2 }), 2, ["morning"])).toBe(true);
-    expect(shouldHoldPlanUntilPullTarget(score({ pulls: 2, noonPulls: 1, holes: 2 }), 2, ["morning"])).toBe(false);
-    expect(shouldHoldPlanUntilPullTarget(score({ pulls: 0, noonPulls: 0, holes: 0 }), 2, ["morning"])).toBe(false);
+  it("préférence souple : n’attend pas un kind s’il n’y en a pas", () => {
+    expect(shouldHoldPlanUntilPullTarget(score({ pulls: 2, noonPulls: 0, holes: 2 }), 2, ["night"])).toBe(false);
+    expect(shouldHoldPlanUntilPullTarget(score({ pulls: 1, noonPulls: 0, holes: 2 }), 2, ["night"])).toBe(true);
   });
 });
 

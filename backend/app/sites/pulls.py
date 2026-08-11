@@ -330,39 +330,9 @@ def _apply_auto_pulls_to_payload(
 
     target_cells.sort(key=lambda item: (item[0], item[1], item[3], item[2]))
 
-    def _shift_is_preferred_pull_target(shift_name: str) -> bool:
-        if not prefer_kinds:
-            return True
-        kind = _shift_pull_kind(shift_name)
-        return bool(kind and kind in prefer_kinds)
-
-    def _preferred_requirement_holes_remain() -> bool:
-        """True s'il reste un besoin non couvert sur les משמרות de משיכות préférées."""
-        if not prefer_kinds:
-            return False
-        for st_idx, st in enumerate(stations):
-            st_cap = st.get("capacity") or {}
-            for dk in days:
-                for sn in shifts:
-                    if not _shift_is_preferred_pull_target(sn):
-                        continue
-                    req = int((st_cap.get(dk, {}) or {}).get(sn, 0) or 0)
-                    if req <= 0:
-                        continue
-                    prefix = f"{dk}|{sn}|{st_idx}|"
-                    existing = [k for k in pulls if str(k).startswith(prefix)]
-                    names = get_cell_names(dk, sn, st_idx)
-                    assigned_places = max(0, len(names) - len(existing))
-                    if req - assigned_places >= 1:
-                        return True
-        return False
-
     for _, _, station_idx, day_idx, shift_name in target_cells:
         if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
             break
-        # Tant qu'il reste des trous sur les משיכות préférées, ne pas en créer ailleurs.
-        if not _shift_is_preferred_pull_target(shift_name) and _preferred_requirement_holes_remain():
-            continue
         station = stations[station_idx]
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}

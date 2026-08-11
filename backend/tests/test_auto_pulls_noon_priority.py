@@ -32,10 +32,10 @@ def _workers(*names: str) -> list[SimpleNamespace]:
     return [SimpleNamespace(name=nm, roles=[]) for nm in names]
 
 
-def test_skips_night_pull_while_noon_hole_remains():
-    """Ne pas créer de משיכה לילה tant qu'un צהריים reste vide."""
+def test_noon_prefer_falls_back_to_night_when_noon_not_pullable():
+    """Préférence souple : si צהריים n'est pas pullable, créer une משיכה לילה."""
     site = SimpleNamespace(config=_site_config_three_shifts(["sun", "mon"]))
-    # sun לילה pullable (Hanna midi + Orel lendemain matin), mais mon צהריים encore vide.
+    # sun לילה pullable (Hanna midi + Orel lendemain matin), mon צהריים vide non pullable.
     assignments = {
         "sun": {
             "בוקר": [["Extra"]],
@@ -56,9 +56,7 @@ def test_skips_night_pull_while_noon_hole_remains():
         pulls_prefer=["noon"],
     )
     pulls = payload.get("pulls") or {}
-    assert _noon_pulls_count(pulls) == 0
-    assert not any("לילה" in str(k) for k in pulls), pulls
-    assert payload["assignments"]["sun"]["לילה"] == [[]]
+    assert any("לילה" in str(k) for k in pulls), pulls
 
 
 def test_creates_noon_pull_before_night_when_noon_fillable():
@@ -160,12 +158,7 @@ def test_hold_until_two_pulls_when_holes_remain():
         "sun|לילה|0|1": {"before": {"name": "A"}, "after": {"name": "B"}},
         "sun|לילה|0|2": {"before": {"name": "C"}, "after": {"name": "D"}},
     }
-    assert _should_hold_plan_until_pull_target(site, empty, "2026-08-16", night_two, 2, ["morning"]) is True
-    morning_two = {
-        "sun|בוקר|0|1": {"before": {"name": "A"}, "after": {"name": "B"}},
-        "sun|בוקר|0|2": {"before": {"name": "C"}, "after": {"name": "D"}},
-    }
-    assert _should_hold_plan_until_pull_target(site, empty, "2026-08-16", morning_two, 2, ["morning"]) is False
+    assert _should_hold_plan_until_pull_target(site, empty, "2026-08-16", night_two, 2, ["morning"]) is False
 
 
 def test_mix_allows_night_pull_while_noon_hole_remains():
@@ -191,6 +184,31 @@ def test_mix_allows_night_pull_while_noon_hole_remains():
     )
     pulls = payload.get("pulls") or {}
     assert any("לילה" in str(k) for k in pulls), pulls
+
+
+def test_night_prefer_falls_back_to_noon_when_night_not_pullable():
+    site = SimpleNamespace(config=_site_config_three_shifts(["sun", "mon"]))
+    assignments = {
+        "sun": {
+            "בוקר": [["Hanna"]],
+            "צהריים": [[]],
+            "לילה": [["Orel"]],
+        },
+        "mon": {
+            "בוקר": [["Extra"]],
+            "צהריים": [["B"]],
+            "לילה": [[]],
+        },
+    }
+    payload = _apply_auto_pulls_to_payload(
+        site,
+        _workers("Hanna", "Orel", "Extra", "B"),
+        {"assignments": assignments, "pulls": {}},
+        pulls_limit=None,
+        pulls_prefer=["night"],
+    )
+    pulls = payload.get("pulls") or {}
+    assert any("צהריים" in str(k) for k in pulls), pulls
 
 
 def test_night_prefer_creates_night_pull_while_noon_hole_remains():
