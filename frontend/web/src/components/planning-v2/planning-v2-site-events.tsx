@@ -127,11 +127,7 @@ export function PlanningV2SiteEvents({
 
   function openCreate() {
     setEditingId(null);
-    setDraft({
-      ...EMPTY_DRAFT,
-      dates: weekDates.length ? [weekDates[0]] : [],
-      assignments: {},
-    });
+    setDraft({ ...EMPTY_DRAFT });
     setIsEditorOpen(true);
   }
 
