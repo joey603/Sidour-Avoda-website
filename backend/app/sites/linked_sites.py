@@ -122,17 +122,11 @@ def _active_director_site_ids(db: Session, director_id: int) -> set[int]:
 
 def _connected_site_ids_for_root(db: Session, director_id: int, root_site_id: int, graph_week_iso: str | None = None) -> list[int]:
     """Composantes connexes par travailleur identique. Exclut pending et retraits (removed_from) pour la semaine du graphe (None = effectif « maintenant »)."""
-    site_ids_set = _active_director_site_ids(db, director_id)
-    site_ids = sorted(site_ids_set)
-    rows = (
-        [
-            row
-            for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
-            if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, graph_week_iso)
-        ]
-        if site_ids
-        else []
-    )
+    rows = [
+        row
+        for row in _director_worker_identity_rows(db, director_id)
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, graph_week_iso)
+    ]
     site_to_keys: dict[int, set[str]] = {}
     key_to_sites: dict[str, set[int]] = {}
     for row in rows:
@@ -167,10 +161,9 @@ def _linked_site_cluster_map_for_director(
     site_ids = sorted(site_ids_set)
     if not site_ids:
         return {}
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all()
     rows = [
         row
-        for row in rows
+        for row in _director_worker_identity_rows(db, director_id)
         if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, graph_week_iso)
     ]
     key_to_sites: dict[str, set[int]] = {}

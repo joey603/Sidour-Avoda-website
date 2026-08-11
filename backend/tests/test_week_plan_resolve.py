@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 
-from app.sites.week_plans import _pick_week_plan_row_for_resolve, _week_plan_resolve_scope_order
+from app.sites.week_plans import (
+    _pick_week_plan_row_for_resolve,
+    _week_plan_resolve_scope_order,
+    _shape_week_plan_get_payload,
+)
 
 
 def test_resolve_order_without_prefer_matches_rank():
@@ -54,3 +58,34 @@ def test_pick_skips_row_without_assignments():
     )
     assert picked is not None
     assert picked.scope == "director"
+
+
+def test_shape_week_plan_get_payload_base_keeps_assignments_omits_alts():
+    data = {
+        "assignments": {"sun": {"06-14": [["A"]]}},
+        "pulls": {"k": 1},
+        "alternatives": [{"sun": {}}],
+        "alternative_pulls": [{}],
+        "workers": [{"name": "A"}],
+        "isManual": False,
+    }
+    base = _shape_week_plan_get_payload(data, parts="base", include_workers=False, source_scope="auto")
+    assert base is not None
+    assert base["assignments"] == data["assignments"]
+    assert base["pulls"] == {"k": 1}
+    assert base["_alts_omitted"] is True
+    assert base["_alts_count"] == 1
+    assert "alternatives" not in base
+    assert "workers" not in base
+    assert base["_source_scope"] == "auto"
+
+    alts = _shape_week_plan_get_payload(data, parts="alternatives", include_workers=False)
+    assert alts is not None
+    assert alts["alternatives"] == data["alternatives"]
+    assert alts["alternative_pulls"] == [{}]
+    assert "assignments" not in alts
+
+    full = _shape_week_plan_get_payload(data, parts="full", include_workers=True)
+    assert full is not None
+    assert full["alternatives"] == data["alternatives"]
+    assert full["workers"] == data["workers"]

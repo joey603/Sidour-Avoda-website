@@ -75,7 +75,7 @@ async function prefetchOneWeek(
     const [plan, workersRaw, availRaw] = await Promise.all([
       hasPlan
         ? Promise.resolve(weekPlanCache.get(key) ?? null)
-        : loadWeekPlanForSiteWeek(siteId, weekIso, preferredScope),
+        : loadWeekPlanForSiteWeek(siteId, weekIso, preferredScope, { omitWorkers: true }),
       hasWorkers
         ? Promise.resolve(null)
         : apiFetch<Record<string, unknown>[]>(

@@ -11,14 +11,38 @@ export type V2WeekPlanData = {
   sourceScope?: "director" | "shared" | "auto";
 } | null;
 
+export type LoadWeekPlanOptions = {
+  lightweightNav?: boolean;
+  omitWorkers?: boolean;
+  /** Appelé dès que la grille (חלופה 0) est là — les חלופות suivent sans reclasse. */
+  onBase?: (plan: NonNullable<V2WeekPlanData>) => void;
+};
+
 function asSourceScope(value: unknown): "director" | "shared" | "auto" | undefined {
   return value === "director" || value === "shared" || value === "auto" ? value : undefined;
 }
 
-async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "director" | "shared" | "auto") {
+function weekPlanQuery(
+  isoWeek: string,
+  scope: string,
+  extra?: { prefer?: string; parts?: "full" | "base" | "alternatives"; omitWorkers?: boolean },
+) {
+  let qs = `week=${encodeURIComponent(isoWeek)}&scope=${scope}`;
+  if (extra?.prefer) qs += `&prefer=${extra.prefer}`;
+  if (extra?.parts && extra.parts !== "full") qs += `&parts=${extra.parts}`;
+  if (extra?.omitWorkers) qs += `&include_workers=false`;
+  return qs;
+}
+
+async function fetchWeekPlanRaw(
+  siteId: string,
+  isoWeek: string,
+  scope: string,
+  extra?: { prefer?: string; parts?: "full" | "base" | "alternatives"; omitWorkers?: boolean },
+) {
   try {
     return await apiFetch<Record<string, unknown> | null>(
-      `/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=${scope}`,
+      `/director/sites/${siteId}/week-plan?${weekPlanQuery(isoWeek, scope, extra)}`,
       {
         cache: "no-store" as RequestCache,
       },
@@ -26,6 +50,10 @@ async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "direc
   } catch {
     return null;
   }
+}
+
+async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "director" | "shared" | "auto") {
+  return fetchWeekPlanRaw(siteId, isoWeek, scope);
 }
 
 export function normalizeWeekPlan(raw: Record<string, unknown> | null | undefined): V2WeekPlanData {
@@ -66,35 +94,73 @@ async function loadWeekPlanWaterfall(
   return null;
 }
 
+function mergeWeekPlanAlternatives(
+  base: NonNullable<V2WeekPlanData>,
+  altsRaw: Record<string, unknown> | null,
+): NonNullable<V2WeekPlanData> {
+  const alternatives = Array.isArray(altsRaw?.alternatives)
+    ? (altsRaw.alternatives as Record<string, Record<string, string[][]>>[])
+    : [];
+  const alternativePulls = Array.isArray(altsRaw?.alternative_pulls)
+    ? (altsRaw.alternative_pulls as Record<string, unknown>[])
+    : Array.isArray(altsRaw?.alternativePulls)
+      ? (altsRaw.alternativePulls as Record<string, unknown>[])
+      : [];
+  return { ...base, alternatives, alternativePulls };
+}
+
+async function finishWeekPlanLoad(
+  baseRaw: Record<string, unknown> | null,
+  altsPromise: Promise<Record<string, unknown> | null>,
+  fallbackScope: "director" | "shared" | "auto",
+  options?: LoadWeekPlanOptions,
+): Promise<V2WeekPlanData> {
+  const normalized = normalizeWeekPlan(baseRaw);
+  if (!normalized) return null;
+  const withScope: NonNullable<V2WeekPlanData> = {
+    ...normalized,
+    sourceScope: normalized.sourceScope ?? asSourceScope(baseRaw?._source_scope) ?? fallbackScope,
+  };
+  if (baseRaw?._alts_omitted !== true) {
+    return withScope;
+  }
+  options?.onBase?.(withScope);
+  const altsRaw = await altsPromise;
+  return mergeWeekPlanAlternatives(withScope, altsRaw);
+}
+
 /** Un GET `scope=resolve` (même priorité qu’avant : saved puis auto). */
 export async function loadWeekPlanForSiteWeek(
   siteId: string,
   isoWeek: string,
   preferredScope?: "director" | "shared" | "auto" | null,
-  options?: { lightweightNav?: boolean },
+  options?: LoadWeekPlanOptions,
 ): Promise<V2WeekPlanData> {
+  const omitWorkers = options?.omitWorkers === true;
   if (options?.lightweightNav) {
-    const raw = await fetchWeekPlanScope(siteId, isoWeek, "auto");
-    const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
-    return normalized ? { ...normalized, sourceScope: "auto" } : null;
+    const altsP = fetchWeekPlanRaw(siteId, isoWeek, "auto", { parts: "alternatives", omitWorkers });
+    const raw = await fetchWeekPlanRaw(siteId, isoWeek, "auto", { parts: "base", omitWorkers });
+    return finishWeekPlanLoad(raw, altsP, "auto", options);
   }
   const prefer =
-    preferredScope === "director" || preferredScope === "shared"
-      ? `&prefer=${preferredScope}`
-      : "";
+    preferredScope === "director" || preferredScope === "shared" ? preferredScope : undefined;
   try {
-    const raw = await apiFetch<Record<string, unknown> | null>(
-      `/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=resolve${prefer}`,
-      {
-        cache: "no-store" as RequestCache,
-      },
-    );
-    const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
-    if (!normalized) return null;
-    return {
-      ...normalized,
-      sourceScope: normalized.sourceScope ?? asSourceScope(raw?._source_scope) ?? "director",
-    };
+    const altsP = fetchWeekPlanRaw(siteId, isoWeek, "resolve", {
+      prefer,
+      parts: "alternatives",
+      omitWorkers,
+    });
+    const raw = await fetchWeekPlanRaw(siteId, isoWeek, "resolve", {
+      prefer,
+      parts: "base",
+      omitWorkers,
+    });
+    const finished = await finishWeekPlanLoad(raw, altsP, "director", options);
+    if (finished) return finished;
+    if (raw == null) {
+      return loadWeekPlanWaterfall(siteId, isoWeek, preferredScope);
+    }
+    return null;
   } catch {
     // Backend pas encore déployé : ancien waterfall, même résultat.
     return loadWeekPlanWaterfall(siteId, isoWeek, preferredScope);

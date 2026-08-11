@@ -178,6 +178,47 @@ def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
     return best_row
 
 
+def _shape_week_plan_get_payload(
+    data: dict | None,
+    *,
+    parts: str = "full",
+    include_workers: bool = True,
+    source_scope: str | None = None,
+) -> dict | None:
+    """Réduit le JSON GET week-plan sans changer assignments / pulls / ordre des חלופות."""
+    if not isinstance(data, dict):
+        return None
+    payload = dict(data)
+    if source_scope:
+        payload["_source_scope"] = source_scope
+    if not include_workers:
+        payload.pop("workers", None)
+    kind = (parts or "full").strip().lower()
+    if kind == "base":
+        alts = payload.get("alternatives")
+        payload["_alts_count"] = len(alts) if isinstance(alts, list) else 0
+        payload.pop("alternatives", None)
+        payload.pop("alternative_pulls", None)
+        payload.pop("alternativePulls", None)
+        payload["_alts_omitted"] = True
+        return payload
+    if kind == "alternatives":
+        alts = payload.get("alternatives") if isinstance(payload.get("alternatives"), list) else []
+        alt_pulls = payload.get("alternative_pulls")
+        if not isinstance(alt_pulls, list):
+            alt_pulls = payload.get("alternativePulls") if isinstance(payload.get("alternativePulls"), list) else []
+        out: dict = {
+            "alternatives": alts,
+            "alternative_pulls": alt_pulls,
+        }
+        if source_scope:
+            out["_source_scope"] = source_scope
+        elif "_source_scope" in payload:
+            out["_source_scope"] = payload.get("_source_scope")
+        return out
+    return payload
+
+
 def _week_plan_debug_meta(row: SiteWeekPlan | None) -> dict | None:
     if row is None:
         return None
@@ -200,6 +241,8 @@ def get_week_plan(
     week: str = Query(..., description="YYYY-MM-DD (week start)"),
     scope: str = Query("director", description="auto|director|shared|resolve"),
     prefer: str | None = Query(None, description="director|shared — used with scope=resolve"),
+    parts: str = Query("full", description="full|base|alternatives"),
+    include_workers: bool = Query(True),
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
@@ -208,6 +251,9 @@ def get_week_plan(
     sc = (scope or "director").strip()
     if sc not in ("auto", "director", "shared", "resolve"):
         raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared|resolve)")
+    parts_kind = (parts or "full").strip().lower()
+    if parts_kind not in ("full", "base", "alternatives"):
+        raise HTTPException(status_code=400, detail="parts invalide (full|base|alternatives)")
     if sc == "resolve":
         site = db.get(Site, site_id)
         rows = (
@@ -219,9 +265,12 @@ def get_week_plan(
         row = _pick_week_plan_row_for_resolve(rows, site, wk, prefer)
         if row is None or not isinstance(row.data, dict):
             return None
-        payload = dict(row.data)
-        payload["_source_scope"] = str(getattr(row, "scope", "") or "")
-        return payload
+        return _shape_week_plan_get_payload(
+            row.data,
+            parts=parts_kind,
+            include_workers=include_workers,
+            source_scope=str(getattr(row, "scope", "") or ""),
+        )
     row = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.site_id == site_id)
@@ -236,7 +285,14 @@ def get_week_plan(
             wk,
         )
         return None
-    return row.data if row else None
+    if row is None or not isinstance(row.data, dict):
+        return row.data if row else None
+    return _shape_week_plan_get_payload(
+        row.data,
+        parts=parts_kind,
+        include_workers=include_workers,
+        source_scope=str(getattr(row, "scope", "") or ""),
+    )
 
 
 @router.put("/{site_id}/week-plan", response_model=dict | None)

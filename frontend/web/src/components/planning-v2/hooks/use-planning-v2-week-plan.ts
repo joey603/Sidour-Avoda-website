@@ -8,6 +8,7 @@ import {
   setCachedWeekPlan,
 } from "../lib/week-nav-cache";
 import { loadWeekPlanForSiteWeek, type V2WeekPlanData } from "../lib/week-plan-fetch";
+import { readLinkedPlansFromMemory } from "../lib/multi-site-linked-memory";
 
 export type { V2WeekPlanData } from "../lib/week-plan-fetch";
 
@@ -58,8 +59,18 @@ export function usePlanningV2WeekPlan(
       }
       try {
         const effectivePreferredScope = opts?.preferredScope ?? preferredScopeRef.current;
+        const holdForAlts = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0)) > 0;
         const next = await loadWeekPlanForSiteWeek(siteId, isoWeek, effectivePreferredScope, {
           lightweightNav,
+          omitWorkers: true,
+          onBase:
+            silent || holdForAlts
+              ? undefined
+              : (base) => {
+                  if (req !== loadReq.current) return;
+                  setPlan(base);
+                  setLoading(false);
+                },
         });
         if (req !== loadReq.current) return;
         setPlan(next);

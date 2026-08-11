@@ -707,7 +707,10 @@ def get_published_week_plan(
         .filter(SiteWeekPlan.scope == "shared")
         .first()
     )
-    return row.data if row else None
+    if row is None or not isinstance(row.data, dict):
+        return row.data if row else None
+    from .sites.week_plans import _shape_week_plan_get_payload
+    return _shape_week_plan_get_payload(row.data, parts="base", include_workers=True)
 
 
 @router.get("/{site_id}/messages", response_model=list[SiteMessageOut])
