@@ -338,7 +338,7 @@ export function PlanningV2SiteEvents({
               className={
                 readOnly || weekEvents.length === 0
                   ? "inline-flex cursor-not-allowed items-center gap-2 rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
-                  : "inline-flex items-center gap-2 rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-800 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:hover:bg-amber-950/30"
+                  : "inline-flex items-center gap-2 rounded-md border border-[#00A8E0] px-3 py-2 text-sm text-[#00A8E0] hover:bg-sky-50 dark:border-sky-400 dark:text-sky-300 dark:hover:bg-sky-950/40"
               }
               onClick={() => {
                 if (readOnly || weekEvents.length === 0) return;
