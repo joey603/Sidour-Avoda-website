@@ -36,6 +36,9 @@ async function proxyToBackend(request: NextRequest, context: { params: Promise<{
   });
 
   const responseHeaders = new Headers(upstreamResponse.headers);
+  // Node fetch décompresse déjà le body : garder Content-Encoding=gzip casse le JSON
+  // (liste אתרים vide, etc.).
+  responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
   responseHeaders.delete("connection");
   responseHeaders.delete("transfer-encoding");
