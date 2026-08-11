@@ -137,6 +137,36 @@ def _week_plan_rank(row: SiteWeekPlan) -> int:
     return 0
 
 
+def _week_plan_resolve_scope_order(prefer: str | None) -> tuple[str, ...]:
+    """Ordre d’un GET `scope=resolve` : identique au waterfall front final (après chargement du site)."""
+    pref = str(prefer or "").strip()
+    if pref in ("director", "shared"):
+        other = "shared" if pref == "director" else "director"
+        return (pref, other, "auto")
+    # Sans préférence : même rang que `_week_plan_rank` (shared > director > auto).
+    return ("shared", "director", "auto")
+
+
+def _pick_week_plan_row_for_resolve(
+    rows: list[SiteWeekPlan],
+    site: Site | None,
+    week_iso: str,
+    prefer: str | None = None,
+) -> SiteWeekPlan | None:
+    by_scope = {str(getattr(row, "scope", "") or ""): row for row in rows}
+    for sc in _week_plan_resolve_scope_order(prefer):
+        row = by_scope.get(sc)
+        if row is None:
+            continue
+        data = row.data if isinstance(row.data, dict) else None
+        if not isinstance(data, dict) or not isinstance(data.get("assignments"), dict):
+            continue
+        if sc == "auto" and _is_empty_auto_week_plan(site, row, week_iso):
+            continue
+        return row
+    return None
+
+
 def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
     best_row: SiteWeekPlan | None = None
     best_key: tuple[int, int] = (-1, -1)
@@ -168,15 +198,30 @@ def _week_plan_debug_meta(row: SiteWeekPlan | None) -> dict | None:
 def get_week_plan(
     site_id: int,
     week: str = Query(..., description="YYYY-MM-DD (week start)"),
-    scope: str = Query("director", description="director|shared"),
+    scope: str = Query("director", description="auto|director|shared|resolve"),
+    prefer: str | None = Query(None, description="director|shared — used with scope=resolve"),
     user: User = Depends(require_role("director")),
     db: Session = Depends(get_db),
 ):
     _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week)
     sc = (scope or "director").strip()
-    if sc not in ("auto", "director", "shared"):
-        raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared)")
+    if sc not in ("auto", "director", "shared", "resolve"):
+        raise HTTPException(status_code=400, detail="scope invalide (auto|director|shared|resolve)")
+    if sc == "resolve":
+        site = db.get(Site, site_id)
+        rows = (
+            db.query(SiteWeekPlan)
+            .filter(SiteWeekPlan.site_id == site_id)
+            .filter(SiteWeekPlan.week_iso == wk)
+            .all()
+        )
+        row = _pick_week_plan_row_for_resolve(rows, site, wk, prefer)
+        if row is None or not isinstance(row.data, dict):
+            return None
+        payload = dict(row.data)
+        payload["_source_scope"] = str(getattr(row, "scope", "") or "")
+        return payload
     row = (
         db.query(SiteWeekPlan)
         .filter(SiteWeekPlan.site_id == site_id)

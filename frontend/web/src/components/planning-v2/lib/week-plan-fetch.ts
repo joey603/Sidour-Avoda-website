@@ -11,6 +11,10 @@ export type V2WeekPlanData = {
   sourceScope?: "director" | "shared" | "auto";
 } | null;
 
+function asSourceScope(value: unknown): "director" | "shared" | "auto" | undefined {
+  return value === "director" || value === "shared" || value === "auto" ? value : undefined;
+}
+
 async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "director" | "shared" | "auto") {
   try {
     return await apiFetch<Record<string, unknown> | null>(
@@ -24,20 +28,9 @@ async function fetchWeekPlanScope(siteId: string, isoWeek: string, scope: "direc
   }
 }
 
-function buildWeekPlanScopePriority(
-  preferredScope?: "director" | "shared" | "auto" | null,
-): Array<"director" | "shared" | "auto"> {
-  const savedScopes = ["director", "shared"] as const;
-  if (preferredScope === "director" || preferredScope === "shared") {
-    return [preferredScope, ...savedScopes.filter((scope) => scope !== preferredScope), "auto"];
-  }
-  // `auto` est seulement une טיוטה. Même si le statut la signale comme préférée,
-  // un plan sauvegardé director/shared doit toujours gagner.
-  return ["director", "shared", "auto"];
-}
-
 export function normalizeWeekPlan(raw: Record<string, unknown> | null | undefined): V2WeekPlanData {
   if (!raw || typeof raw !== "object" || !raw.assignments) return null;
+  const sourceScope = asSourceScope(raw._source_scope ?? raw.sourceScope);
   return {
     assignments: raw.assignments as Record<string, Record<string, string[][]>>,
     pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : undefined,
@@ -51,25 +44,59 @@ export function normalizeWeekPlan(raw: Record<string, unknown> | null | undefine
         : [],
     isManual: !!raw.isManual,
     workers: Array.isArray(raw.workers) ? raw.workers : undefined,
+    sourceScope,
   };
 }
 
-/** Lecture séquentielle director → shared → auto, arrêt au premier plan trouvé. */
+async function loadWeekPlanWaterfall(
+  siteId: string,
+  isoWeek: string,
+  preferredScope?: "director" | "shared" | "auto" | null,
+): Promise<V2WeekPlanData> {
+  const saved = ["director", "shared"] as const;
+  const ordered: Array<"director" | "shared" | "auto"> =
+    preferredScope === "director" || preferredScope === "shared"
+      ? [preferredScope, ...saved.filter((scope) => scope !== preferredScope), "auto"]
+      : ["shared", "director", "auto"];
+  for (const scope of ordered) {
+    const raw = await fetchWeekPlanScope(siteId, isoWeek, scope);
+    const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
+    if (normalized) return { ...normalized, sourceScope: scope };
+  }
+  return null;
+}
+
+/** Un GET `scope=resolve` (même priorité qu’avant : saved puis auto). */
 export async function loadWeekPlanForSiteWeek(
   siteId: string,
   isoWeek: string,
   preferredScope?: "director" | "shared" | "auto" | null,
   options?: { lightweightNav?: boolean },
 ): Promise<V2WeekPlanData> {
-  const orderedScopes = options?.lightweightNav
-    ? (["auto"] as const)
-    : buildWeekPlanScopePriority(preferredScope);
-  for (const scope of orderedScopes) {
-    const raw = await fetchWeekPlanScope(siteId, isoWeek, scope);
+  if (options?.lightweightNav) {
+    const raw = await fetchWeekPlanScope(siteId, isoWeek, "auto");
     const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
-    if (normalized) {
-      return { ...normalized, sourceScope: scope };
-    }
+    return normalized ? { ...normalized, sourceScope: "auto" } : null;
   }
-  return null;
+  const prefer =
+    preferredScope === "director" || preferredScope === "shared"
+      ? `&prefer=${preferredScope}`
+      : "";
+  try {
+    const raw = await apiFetch<Record<string, unknown> | null>(
+      `/director/sites/${siteId}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=resolve${prefer}`,
+      {
+        cache: "no-store" as RequestCache,
+      },
+    );
+    const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
+    if (!normalized) return null;
+    return {
+      ...normalized,
+      sourceScope: normalized.sourceScope ?? asSourceScope(raw?._source_scope) ?? "director",
+    };
+  } catch {
+    // Backend pas encore déployé : ancien waterfall, même résultat.
+    return loadWeekPlanWaterfall(siteId, isoWeek, preferredScope);
+  }
 }

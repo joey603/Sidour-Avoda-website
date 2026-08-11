@@ -19,7 +19,7 @@ type WeekPlanHookOptions = {
   initialPlan?: V2WeekPlanData;
 };
 
-/** Charge le תכנון שמור (director → shared → auto), comme `fetchExistingSavedPlanForSite` sur le planning. */
+/** Charge le תכנון שמור via un GET `scope=resolve` (shared/director/auto). */
 export function usePlanningV2WeekPlan(
   siteId: string,
   weekStart: Date,
@@ -36,6 +36,8 @@ export function usePlanningV2WeekPlan(
   const prevWeekIsoRef = useRef<string | null>(getWeekKeyISO(weekStart));
   const loadReq = useRef(0);
   const lightweightNav = options?.lightweightNav === true;
+  const preferredScopeRef = useRef(preferredScope);
+  preferredScopeRef.current = preferredScope;
 
   const reload = useCallback(
     async (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => {
@@ -55,7 +57,7 @@ export function usePlanningV2WeekPlan(
         setLoading(true);
       }
       try {
-        const effectivePreferredScope = opts?.preferredScope ?? preferredScope;
+        const effectivePreferredScope = opts?.preferredScope ?? preferredScopeRef.current;
         const next = await loadWeekPlanForSiteWeek(siteId, isoWeek, effectivePreferredScope, {
           lightweightNav,
         });
@@ -72,7 +74,7 @@ export function usePlanningV2WeekPlan(
         if (req === loadReq.current) setLoading(false);
       }
     },
-    [siteId, weekStart, preferredScope, lightweightNav],
+    [siteId, weekStart, lightweightNav],
   );
 
   useEffect(() => {
@@ -86,7 +88,7 @@ export function usePlanningV2WeekPlan(
     const isoWeek = getWeekKeyISO(weekStart);
     const weekChanged = prevWeekIsoRef.current != null && prevWeekIsoRef.current !== isoWeek;
     prevWeekIsoRef.current = isoWeek;
-    // Animation au changement de semaine ; silent seulement pour un refresh même semaine (ex. preferredScope).
+    // Animation au changement de semaine ; silent seulement pour un refresh même semaine.
     const silent = hasLoadedOnceRef.current && !weekChanged;
     hasLoadedOnceRef.current = true;
     void reload({ silent });

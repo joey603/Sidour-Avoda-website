@@ -11,7 +11,6 @@ import { availabilityStorageKey, readWeeklyAvailabilityForSiteWeek } from "../li
 import { mergeWorkerAvailability } from "../lib/merge-availability";
 import {
   getCachedWeekWorkers,
-  prefetchAdjacentWeeks,
   setCachedWeekWorkers,
 } from "../lib/week-nav-cache";
 import {
@@ -144,7 +143,6 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       const cachedAvail =
         getCachedWeekWorkers(siteId, wk)?.weeklyAvailability ?? weeklyAvailabilityRef.current;
       setCachedWeekWorkers(siteId, wk, visible, cachedAvail);
-      prefetchAdjacentWeeks(siteId, weekStart, site?.next_week_saved_plan_status?.scope ?? null);
     } catch (e: unknown) {
       if (req !== loadReq.current) return;
       const msg = e instanceof Error ? e.message : "נסה שוב מאוחר יותר.";
@@ -155,7 +153,7 @@ export function usePlanningV2SiteWorkers(siteId: string) {
       // peut remplacer un premier chargement non-silent et sinon l’overlay reste coincé).
       if (req === loadReq.current) setWorkersLoading(false);
     }
-  }, [siteId, weekStart, site?.next_week_saved_plan_status?.scope]);
+  }, [siteId, weekStart]);
 
   const reloadWeeklyAvailability = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
