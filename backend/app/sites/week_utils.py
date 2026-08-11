@@ -68,14 +68,17 @@ def _workers_counts_by_site_for_week(
     db: Session,
     director_id: int,
     week_iso: str,
+    site_ids: list[int] | None = None,
 ) -> tuple[dict[int, int], dict[int, int]]:
     """Compteurs par site pour une semaine (dimanche), alignés sur `list_workers` / planning."""
-    rows = (
+    q = (
         db.query(SiteWorker)
         .join(Site, Site.id == SiteWorker.site_id)
         .filter(Site.director_id == director_id)
-        .all()
     )
+    if site_ids:
+        q = q.filter(SiteWorker.site_id.in_([int(sid) for sid in site_ids]))
+    rows = q.all()
     counts: dict[int, int] = {}
     pending_counts: dict[int, int] = {}
     for row in rows:

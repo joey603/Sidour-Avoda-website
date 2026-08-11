@@ -2,8 +2,21 @@
 
 from datetime import datetime, timedelta
 
-from app.models import SiteWorker
+from sqlalchemy.orm.attributes import flag_modified
+
+from app.models import Site, SiteWorker
 from app.sites import _next_week_iso, _week_start_date
+from app.sites.site_config import _list_site_public_config
+
+
+def test_list_site_public_config_keeps_only_last_run():
+    assert _list_site_public_config(None) == {}
+    assert _list_site_public_config({"stations": [{"name": "A"}], "questions": []}) == {}
+    last_run = {"week_iso": "2026-05-10", "complete": True}
+    assert _list_site_public_config({
+        "stations": [{"name": "A"}],
+        "autoPlanningLastRun": last_run,
+    }) == {"autoPlanningLastRun": last_run}
 
 
 def auth_headers(token: str):
@@ -65,3 +78,44 @@ def test_list_sites_workers_count_uses_next_week_not_historical_total(client, db
     # Beta + Gamma (Alpha déjà retiré depuis current_week)
     assert site_row["workers_count"] == 2
     assert db_session.query(SiteWorker).filter(SiteWorker.site_id == site_id).count() == 3
+
+
+def test_list_sites_returns_lite_config_without_stations(client, db_session, create_director):
+    create_director(email="director.lite@example.com", full_name="Director Lite")
+    login_resp = login_director(client, email="director.lite@example.com", password="password123")
+    token = login_resp.json()["access_token"]
+
+    site_resp = create_site(client, token, "Lite Site")
+    assert site_resp.status_code == 201, site_resp.text
+    site_id = site_resp.json()["id"]
+
+    site = db_session.query(Site).filter(Site.id == site_id).first()
+    assert site is not None
+    site.config = {
+        "stations": [{"name": "A", "workers": 1, "shifts": []}],
+        "questions": [{"id": "q1"}],
+        "autoPlanningLastRun": {
+            "week_iso": "2026-05-10",
+            "ran_at": 1,
+            "source": "auto",
+            "complete": True,
+            "assigned_count": 3,
+            "required_count": 3,
+        },
+    }
+    flag_modified(site, "config")
+    db_session.commit()
+
+    list_resp = client.get("/director/sites/", headers=auth_headers(token))
+    assert list_resp.status_code == 200, list_resp.text
+    site_row = next(row for row in list_resp.json() if row["id"] == site_id)
+    cfg = site_row.get("config") or {}
+    assert "stations" not in cfg
+    assert "questions" not in cfg
+    assert cfg.get("autoPlanningLastRun", {}).get("week_iso") == "2026-05-10"
+
+    detail_resp = client.get(f"/director/sites/{site_id}", headers=auth_headers(token))
+    assert detail_resp.status_code == 200, detail_resp.text
+    detail_cfg = detail_resp.json().get("config") or {}
+    assert "stations" in detail_cfg
+    assert detail_cfg.get("autoPlanningLastRun", {}).get("week_iso") == "2026-05-10"

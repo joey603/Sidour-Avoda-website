@@ -62,6 +62,7 @@ from .pulls import (
     _pull_extra_names_by_cell, _set_payload_variant_assignments,
     _enforce_role_requirements_on_site_plans, _pulls_count,
     _apply_auto_pulls_to_site_plans, _sanitize_pulls_map,
+    _load_workers_by_site,
 )
 from .events import (
     _compute_site_event_availability_locks,
@@ -280,15 +281,13 @@ def _build_multi_site_generation_context(
     connected_site_ids = _connected_site_ids_for_root(db, director_id, root_site_id, week_iso)
     sites = db.query(Site).filter(Site.id.in_(connected_site_ids)).all() if connected_site_ids else []
     sites_by_id = {int(s.id): s for s in sites}
-    rows = (
-        [
-            row
-            for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(connected_site_ids)).all()
-            if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
-        ]
-        if connected_site_ids
-        else []
-    )
+    workers_by_site = _load_workers_by_site(db, connected_site_ids) if connected_site_ids else {}
+    rows = [
+        row
+        for sid in connected_site_ids
+        for row in (workers_by_site.get(int(sid)) or [])
+        if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
+    ]
     weekly_rows = (
         db.query(SiteWeeklyAvailability)
         .filter(SiteWeeklyAvailability.site_id.in_(connected_site_ids))
@@ -447,12 +446,27 @@ def _build_multi_site_generation_context(
     identity_event_locks: dict[str, dict[str, set[str]]] = {}
     identity_event_counts: dict[str, int] = {}
     identity_event_counts_by_site: dict[str, dict[int, int]] = {}
+    all_event_rows = (
+        db.query(SiteEvent).filter(SiteEvent.site_id.in_(connected_site_ids)).all()
+        if connected_site_ids
+        else []
+    )
+    events_by_site: dict[int, list[SiteEvent]] = {}
+    for ev in all_event_rows:
+        events_by_site.setdefault(int(ev.site_id), []).append(ev)
     for sid in connected_site_ids:
         site_obj = sites_by_id.get(int(sid))
+        event_rows = events_by_site.get(int(sid), [])
         site_locks = _compute_site_event_availability_locks(
-            db, int(sid), week_iso, (site_obj.config if site_obj else None) or {}
+            db,
+            int(sid),
+            week_iso,
+            (site_obj.config if site_obj else None) or {},
+            event_rows=event_rows,
         )
-        site_counts = _count_site_event_assignments_by_worker_id(db, int(sid), week_iso)
+        site_counts = _count_site_event_assignments_by_worker_id(
+            db, int(sid), week_iso, event_rows=event_rows,
+        )
         for row in rows:
             if int(row.site_id) != int(sid):
                 continue
@@ -572,6 +586,7 @@ def _build_multi_site_generation_context(
     return {
         "connected_site_ids": connected_site_ids,
         "sites_by_id": sites_by_id,
+        "workers_by_site": workers_by_site,
         "combined_config": combined_config,
         "combined_workers": combined_workers,
         "combined_fixed": combined_fixed,
@@ -745,13 +760,16 @@ def _enforce_linked_global_caps_on_site_payloads(
     linked_site_ids: list[int],
     week_iso: str,
     payloads_by_site: dict[str, dict],
+    workers_by_site: dict[int, list[SiteWorker]] | None = None,
 ) -> dict[str, dict]:
     if len(linked_site_ids) <= 1 or not payloads_by_site:
         return {str(site_id): deepcopy(payload) for site_id, payload in payloads_by_site.items()}
 
+    loaded = workers_by_site if workers_by_site is not None else _load_workers_by_site(db, linked_site_ids)
     rows = [
         row
-        for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(linked_site_ids)).all()
+        for sid in linked_site_ids
+        for row in (loaded.get(int(sid)) or [])
         if not bool(getattr(row, "pending_approval", False)) and _site_worker_visible_for_week(row, week_iso)
     ]
     if not rows:
@@ -870,12 +888,14 @@ def _enforce_linked_global_caps_on_site_plans(
     linked_site_ids: list[int],
     week_iso: str,
     site_plans: dict[str, dict],
+    workers_by_site: dict[int, list[SiteWorker]] | None = None,
 ) -> dict[str, dict]:
     normalized_site_plans = _enforce_linked_global_caps_on_site_payloads(
         db,
         linked_site_ids,
         week_iso,
         site_plans,
+        workers_by_site=workers_by_site,
     )
     for site_plan in normalized_site_plans.values():
         _refresh_site_plan_assigned_count(site_plan)
@@ -921,10 +941,12 @@ def _generate_multi_site_memory_plans(
         status=result.get("status"),
         objective=result.get("objective"),
     )
+    workers_by_site = context.get("workers_by_site")
     filled_base_site_plans = _enforce_role_requirements_on_site_plans(
         db,
         context["sites_by_id"],
         filled_base_site_plans,
+        workers_by_site=workers_by_site,
     )
     for site_id, site_plan in filled_base_site_plans.items():
         site_plan["status"] = result.get("status")
@@ -940,6 +962,7 @@ def _generate_multi_site_memory_plans(
             db,
             context["sites_by_id"],
             alt_site_plans,
+            workers_by_site=workers_by_site,
         )
         for site_id, alt_site_plan in alt_site_plans.items():
             filled_base_site_plans[site_id].setdefault("alternatives", []).append(alt_site_plan["assignments"])
@@ -954,6 +977,7 @@ def _generate_multi_site_memory_plans(
         context["connected_site_ids"],
         week_iso,
         filled_base_site_plans,
+        workers_by_site=workers_by_site,
     )
     return {
         "root_site_id": root_site_id,

@@ -562,6 +562,22 @@ def _pull_extra_names_by_cell(pulls: dict | None) -> dict[tuple[str, str, int], 
     return extras
 
 
+def _group_workers_by_site(rows: list[SiteWorker]) -> dict[int, list[SiteWorker]]:
+    rows_by_site: dict[int, list[SiteWorker]] = {}
+    for row in rows:
+        rows_by_site.setdefault(int(row.site_id), []).append(row)
+    return rows_by_site
+
+
+def _load_workers_by_site(db: Session, site_ids: list[int]) -> dict[int, list[SiteWorker]]:
+    ids = [int(sid) for sid in site_ids if int(sid) > 0]
+    if not ids:
+        return {}
+    return _group_workers_by_site(
+        db.query(SiteWorker).filter(SiteWorker.site_id.in_(ids)).all(),
+    )
+
+
 def _apply_auto_pulls_to_site_plans(
     db: Session,
     sites_by_id: dict[int, Site],
@@ -569,14 +585,12 @@ def _apply_auto_pulls_to_site_plans(
     pulls_limit: int | None = None,
     pulls_limits_by_site: dict[int, int | None] | None = None,
     pulls_prefer: object | None = None,
+    workers_by_site: dict[int, list[SiteWorker]] | None = None,
 ) -> dict[str, dict]:
     if not site_plans:
         return site_plans
     site_ids = [int(site_id) for site_id in site_plans.keys()]
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
-    rows_by_site: dict[int, list[SiteWorker]] = {}
-    for row in rows:
-        rows_by_site.setdefault(int(row.site_id), []).append(row)
+    rows_by_site = workers_by_site if workers_by_site is not None else _load_workers_by_site(db, site_ids)
 
     for site_id_str, site_plan in site_plans.items():
         site_id = int(site_id_str)
@@ -627,14 +641,12 @@ def _enforce_role_requirements_on_site_plans(
     db: Session,
     sites_by_id: dict[int, Site],
     site_plans: dict[str, dict],
+    workers_by_site: dict[int, list[SiteWorker]] | None = None,
 ) -> dict[str, dict]:
     if not site_plans:
         return site_plans
     site_ids = [int(site_id) for site_id in site_plans.keys()]
-    rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all() if site_ids else []
-    rows_by_site: dict[int, list[SiteWorker]] = {}
-    for row in rows:
-        rows_by_site.setdefault(int(row.site_id), []).append(row)
+    rows_by_site = workers_by_site if workers_by_site is not None else _load_workers_by_site(db, site_ids)
 
     for site_id_str, site_plan in site_plans.items():
         site_id = int(site_id_str)

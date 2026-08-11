@@ -134,11 +134,13 @@ def ai_generate_linked_planning(
             exclude_days=payload.exclude_days if payload else None,
             fixed_assignments=payload.fixed_assignments if payload else None,
         )
+        workers_by_site = context.get("workers_by_site")
         result["site_plans"] = _enforce_linked_global_caps_on_site_plans(
             db,
             context["connected_site_ids"],
             week_iso,
             result.get("site_plans") or {},
+            workers_by_site=workers_by_site,
         )
         result["site_plans"] = _apply_auto_pulls_to_site_plans(
             db,
@@ -147,12 +149,14 @@ def ai_generate_linked_planning(
             pulls_limit=payload.pulls_limit if payload else None,
             pulls_limits_by_site=pulls_limits_by_site or None,
             pulls_prefer=payload.pulls_prefer if payload else None,
+            workers_by_site=workers_by_site,
         )
         result["site_plans"] = _enforce_linked_global_caps_on_site_plans(
             db,
             context["connected_site_ids"],
             week_iso,
             result.get("site_plans") or {},
+            workers_by_site=workers_by_site,
         )
         pulls_limit = int(payload.pulls_limit) if payload and payload.pulls_limit is not None else None
         if payload.auto_pulls_enabled:

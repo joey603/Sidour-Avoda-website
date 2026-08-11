@@ -27,7 +27,12 @@ from .week_utils import (
     _validate_week_iso, _now_ms, _next_week_iso, _week_start_date,
     _site_worker_visible_for_week, _workers_counts_by_site_for_week, _week_date_set,
 )
-from .site_config import validate_site_config, normalize_site_config, _safe_site_config
+from .site_config import (
+    validate_site_config,
+    normalize_site_config,
+    _safe_site_config,
+    _list_site_public_config,
+)
 from .week_plans import (
     _preferred_week_plan,
     _week_plan_debug_meta,
@@ -91,7 +96,7 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
             name=s.name,
             workers_count=counts.get(s.id, 0),
             pending_workers_count=pending_counts.get(s.id, 0),
-            config=_safe_site_config(s.config, site_id=s.id),
+            config=_list_site_public_config(s.config, site_id=s.id),
             next_week_saved_plan_status=_build_next_week_saved_plan_status(
                 s,
                 preferred_plan_by_site.get(s.id),
@@ -227,7 +232,9 @@ def get_site(site_id: int, user: User = Depends(require_role("director")), db: S
     if not site or site.director_id != user.id:
         raise HTTPException(status_code=404, detail="Site introuvable")
     next_week_iso = _next_week_iso(datetime.now())
-    counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
+    counts, pending_counts = _workers_counts_by_site_for_week(
+        db, user.id, next_week_iso, site_ids=[int(site.id)],
+    )
     workers_count = counts.get(int(site.id), 0)
     pending_workers_count = pending_counts.get(int(site.id), 0)
     plan_rows = (
@@ -302,7 +309,9 @@ def update_site(site_id: int, payload: SiteUpdate, user: User = Depends(require_
     db.commit()
     db.refresh(site)
     next_week_iso = _next_week_iso(datetime.now())
-    counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
+    counts, pending_counts = _workers_counts_by_site_for_week(
+        db, user.id, next_week_iso, site_ids=[int(site.id)],
+    )
     workers_count = counts.get(int(site.id), 0)
     pending_workers_count = pending_counts.get(int(site.id), 0)
     linked_by_site = _linked_site_cluster_map_for_director(db, user.id)

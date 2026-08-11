@@ -124,3 +124,12 @@ def _safe_site_config(raw_config: object, *, site_id: int | None = None) -> dict
         )
     return {}
 
+
+def _list_site_public_config(raw_config: object, *, site_id: int | None = None) -> dict:
+    """Config minimale pour GET /sites : badge auto-planning, sans stations/questions."""
+    cfg = _safe_site_config(raw_config, site_id=site_id)
+    last_run = cfg.get("autoPlanningLastRun")
+    if isinstance(last_run, dict):
+        return {"autoPlanningLastRun": last_run}
+    return {}
+

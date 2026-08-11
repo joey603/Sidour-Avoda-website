@@ -204,6 +204,7 @@ def _run_linked_stream_producer(params: LinkedGenerationStreamParams, q: "queue.
     context = params.context
     linked_sites = params.linked_sites
     week_iso = params.week_iso
+    workers_by_site = context.get("workers_by_site")
 
     matched_candidates = 0
     dropped_alternatives = 0
@@ -307,12 +308,14 @@ def _run_linked_stream_producer(params: LinkedGenerationStreamParams, q: "queue.
                         db,
                         context["sites_by_id"],
                         split_site_plans,
+                        workers_by_site=workers_by_site,
                     )
                     split_site_plans = _enforce_linked_global_caps_on_site_plans(
                         db,
                         context["connected_site_ids"],
                         week_iso,
                         split_site_plans,
+                        workers_by_site=workers_by_site,
                     )
                     if payload and payload.auto_pulls_enabled:
                         split_site_plans = _apply_auto_pulls_to_site_plans(
@@ -322,12 +325,14 @@ def _run_linked_stream_producer(params: LinkedGenerationStreamParams, q: "queue.
                             pulls_limit=eff_pulls_limit,
                             pulls_limits_by_site=eff_pulls_limits_by_site or None,
                             pulls_prefer=payload.pulls_prefer if payload else None,
+                            workers_by_site=workers_by_site,
                         )
                         split_site_plans = _enforce_linked_global_caps_on_site_plans(
                             db,
                             context["connected_site_ids"],
                             week_iso,
                             split_site_plans,
+                            workers_by_site=workers_by_site,
                         )
                     pulls_summary = _pulls_debug_summary(split_site_plans)
                     if payload and payload.auto_pulls_enabled:

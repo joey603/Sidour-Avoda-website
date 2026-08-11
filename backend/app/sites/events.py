@@ -144,6 +144,7 @@ def _compute_site_event_availability_locks(
     site_id: int,
     week_iso: str,
     config: dict | None,
+    event_rows: list[SiteEvent] | None = None,
 ) -> dict[int, dict[str, list[str]]]:
     """Créneaux indisponibles (אירועים) : jour + garde précédente + règle 8h."""
     shifts = _site_shift_names_ordered(config)
@@ -151,9 +152,9 @@ def _compute_site_event_availability_locks(
         return {}
     week_dates = set(_week_iso_dates(week_iso))
     rows = (
-        db.query(SiteEvent)
-        .filter(SiteEvent.site_id == int(site_id))
-        .all()
+        event_rows
+        if event_rows is not None
+        else db.query(SiteEvent).filter(SiteEvent.site_id == int(site_id)).all()
     )
     out: dict[int, dict[str, list[str]]] = {}
     last_shift = shifts[-1]
@@ -239,10 +240,15 @@ def _count_site_event_assignments_by_worker_id(
     db: Session,
     site_id: int,
     week_iso: str,
+    event_rows: list[SiteEvent] | None = None,
 ) -> dict[int, int]:
     """Nombre d'affectations אירוע (= gardes) par worker_id pour la semaine."""
     week_dates = set(_week_iso_dates(week_iso))
-    rows = db.query(SiteEvent).filter(SiteEvent.site_id == int(site_id)).all()
+    rows = (
+        event_rows
+        if event_rows is not None
+        else db.query(SiteEvent).filter(SiteEvent.site_id == int(site_id)).all()
+    )
     counts: dict[int, int] = {}
     for ev in rows:
         dates = ev.dates_json if isinstance(ev.dates_json, list) else []
@@ -295,9 +301,14 @@ def _apply_site_event_locks_to_solver_workers(
     config: dict | None,
     workers: list[dict],
 ) -> list[dict]:
-    locks = _compute_site_event_availability_locks(db, site_id, week_iso, config)
+    event_rows = db.query(SiteEvent).filter(SiteEvent.site_id == int(site_id)).all()
+    locks = _compute_site_event_availability_locks(
+        db, site_id, week_iso, config, event_rows=event_rows,
+    )
     workers = _strip_event_locks_from_solver_workers(workers, locks)
-    event_counts = _count_site_event_assignments_by_worker_id(db, site_id, week_iso)
+    event_counts = _count_site_event_assignments_by_worker_id(
+        db, site_id, week_iso, event_rows=event_rows,
+    )
     return _apply_site_event_shift_credits_to_solver_workers(workers, event_counts)
 
 

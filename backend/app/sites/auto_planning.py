@@ -58,6 +58,7 @@ from .solver_bridge import (
 from .pulls import (
     _apply_auto_pulls_to_payload, _enforce_role_requirements_on_assignments,
     _normalize_pulls_limits_by_site, _apply_auto_pulls_to_site_plans,
+    _load_workers_by_site,
     _effective_auto_pulls_limit_for_site, _count_split_day_same_worker_patterns,
     _pulls_count, _preferred_pulls_count, _matches_pulls_limit, _sanitize_pulls_map,
 )
@@ -707,11 +708,13 @@ def _run_auto_planning_for_director(
                     site_plans = generated.get("site_plans") if isinstance(generated, dict) else {}
                     if not isinstance(site_plans, dict):
                         site_plans = {}
+                    workers_by_site = _load_workers_by_site(db, linked_ids)
                     site_plans = _enforce_linked_global_caps_on_site_plans(
                         db,
                         linked_ids,
                         target_week_iso,
                         site_plans,
+                        workers_by_site=workers_by_site,
                     )
                     if auto_pulls_enabled:
                         site_plans = _apply_auto_pulls_to_site_plans(
@@ -720,12 +723,14 @@ def _run_auto_planning_for_director(
                             site_plans,
                             pulls_limit=pulls_limit,
                             pulls_limits_by_site=pulls_limits_by_site,
+                            workers_by_site=workers_by_site,
                         )
                         site_plans = _enforce_linked_global_caps_on_site_plans(
                             db,
                             linked_ids,
                             target_week_iso,
                             site_plans,
+                            workers_by_site=workers_by_site,
                         )
                     for linked_sid in linked_ids:
                         linked_site = sites_by_id.get(linked_sid)
