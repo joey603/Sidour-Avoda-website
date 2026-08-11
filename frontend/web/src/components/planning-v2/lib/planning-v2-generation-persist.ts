@@ -1,5 +1,5 @@
-import { apiFetch } from "@/lib/api";
 import type { PlanningV2PullsMap, PlanningWorker } from "../types";
+import { loadAutoWeekPlanLite } from "./week-plan-fetch";
 import { assignmentsNonEmpty } from "./assignments-empty";
 import {
   type DraftAlternative,
@@ -108,13 +108,8 @@ export async function persistGeneratedAutoDraftToServer({
       try {
         const refreshedEntries = await Promise.all(
           persistedSiteIds.map(async (sid) => {
-            const payload = await apiFetch<LinkedSitePlan | null>(
-              `/director/sites/${sid}/week-plan?week=${encodeURIComponent(weekIso)}&scope=auto`,
-              {
-                cache: "no-store" as RequestCache,
-              },
-            );
-            return [sid, (payload && typeof payload === "object" ? payload : {}) as LinkedSitePlan] as const;
+            const payload = await loadAutoWeekPlanLite(sid, weekIso);
+            return [sid, (payload ?? {}) as LinkedSitePlan] as const;
           }),
         );
         const refreshedPlans = Object.fromEntries(refreshedEntries);

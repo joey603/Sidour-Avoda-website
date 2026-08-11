@@ -1,4 +1,8 @@
-import { loadWeekPlanForSiteWeek, normalizeWeekPlan } from "@/components/planning-v2/lib/week-plan-fetch";
+import {
+  loadAutoWeekPlanLite,
+  loadWeekPlanForSiteWeek,
+  normalizeWeekPlan,
+} from "@/components/planning-v2/lib/week-plan-fetch";
 
 jest.mock("@/lib/api", () => ({
   apiFetch: jest.fn(),
@@ -73,6 +77,40 @@ describe("loadWeekPlanForSiteWeek", () => {
     expect(plan?.assignments).toEqual({ sun: { "06-14": [["A"]] } });
     expect(plan?.alternatives).toEqual([{ sun: { "06-14": [["B"]] } }]);
     expect(plan?.alternativePulls).toEqual([{ q: 2 }]);
+  });
+});
+
+describe("loadAutoWeekPlanLite", () => {
+  beforeEach(() => {
+    apiFetch.mockReset();
+  });
+
+  it("charge le plan auto lié sans workers, même חלופות", async () => {
+    apiFetch.mockImplementation((path: string) => {
+      if (String(path).includes("parts=base")) {
+        return Promise.resolve({
+          assignments: { sun: { "06-14": [["A"]] } },
+          pulls: { p: 1 },
+          workers: [{ name: "skip" }],
+          _alts_omitted: true,
+        });
+      }
+      if (String(path).includes("parts=alternatives")) {
+        return Promise.resolve({
+          alternatives: [{ sun: { "06-14": [["B"]] } }],
+          alternative_pulls: [{ q: 2 }],
+        });
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    const plan = await loadAutoWeekPlanLite("12", "2026-08-09");
+    const urls = apiFetch.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(urls.every((url: string) => url.includes("scope=auto"))).toBe(true);
+    expect(urls.every((url: string) => url.includes("include_workers=false"))).toBe(true);
+    expect(plan?.assignments).toEqual({ sun: { "06-14": [["A"]] } });
+    expect(plan?.alternatives).toEqual([{ sun: { "06-14": [["B"]] } }]);
+    expect(plan?.alternative_pulls).toEqual([{ q: 2 }]);
+    expect(plan && "workers" in plan).toBe(false);
   });
 });
 

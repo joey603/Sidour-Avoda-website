@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { apiFetch } from "@/lib/api";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
+import { loadAutoWeekPlanLite } from "../lib/week-plan-fetch";
 import { computeLinkedSiteHoleEntries } from "../lib/linked-site-holes";
 import {
   clearLinkedPlansFromMemory,
@@ -212,28 +212,9 @@ export function usePlanningV2LinkedMemory({
       const entries = await Promise.all(
         targetSiteIds.map(async (id) => {
           try {
-            const raw = await apiFetch<Record<string, unknown> | null>(
-              `/director/sites/${id}/week-plan?week=${encodeURIComponent(isoWeek)}&scope=auto`,
-              {
-                cache: "no-store" as RequestCache,
-              },
-            );
-            if (!raw || typeof raw !== "object" || !raw.assignments || typeof raw.assignments !== "object") {
-              return [String(id), null] as const;
-            }
-            return [
-              String(id),
-              {
-                assignments: raw.assignments as Record<string, Record<string, string[][]>>,
-                pulls: raw.pulls && typeof raw.pulls === "object" ? (raw.pulls as Record<string, unknown>) : {},
-                alternatives: Array.isArray(raw.alternatives)
-                  ? (raw.alternatives as Record<string, Record<string, string[][]>>[])
-                  : [],
-                alternative_pulls: Array.isArray(raw.alternative_pulls)
-                  ? (raw.alternative_pulls as Record<string, unknown>[])
-                  : [],
-              } satisfies LinkedSitePlan,
-            ] as const;
+            const lite = await loadAutoWeekPlanLite(String(id), isoWeek);
+            if (!lite) return [String(id), null] as const;
+            return [String(id), lite satisfies LinkedSitePlan] as const;
           } catch {
             return [String(id), null] as const;
           }

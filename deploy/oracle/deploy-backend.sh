@@ -32,6 +32,16 @@ fi
 if [[ -f "$PROJECT_DIR/deploy/oracle/watchdog-backend.sh" ]]; then
   install -m 0755 "$PROJECT_DIR/deploy/oracle/watchdog-backend.sh" /home/ubuntu/watchdog-backend.sh
 fi
+if [[ -f "$PROJECT_DIR/deploy/oracle/nginx-gzip.conf" ]]; then
+  echo "==> gzip nginx"
+  sudo install -m 0644 "$PROJECT_DIR/deploy/oracle/nginx-gzip.conf" /etc/nginx/conf.d/sidour-gzip.conf
+  if sudo nginx -t; then
+    sudo systemctl reload nginx
+  else
+    sudo rm -f /etc/nginx/conf.d/sidour-gzip.conf
+    echo "WARN: nginx -t failed, gzip non appliqué" >&2
+  fi
+fi
 
 echo "==> Activer venv"
 # shellcheck disable=SC1091

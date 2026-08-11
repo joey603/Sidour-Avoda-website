@@ -129,6 +129,32 @@ async function finishWeekPlanLoad(
   return mergeWeekPlanAlternatives(withScope, altsRaw);
 }
 
+/** Plan auto sans snapshot workers — même assignments / pulls / ordre des חלופות. */
+export type AutoWeekPlanLite = {
+  assignments: Record<string, Record<string, string[][]>>;
+  pulls: Record<string, unknown>;
+  alternatives: Record<string, Record<string, string[][]>>[];
+  alternative_pulls: Record<string, unknown>[];
+};
+
+export function toAutoWeekPlanLite(plan: NonNullable<V2WeekPlanData>): AutoWeekPlanLite {
+  return {
+    assignments: plan.assignments,
+    pulls: plan.pulls && typeof plan.pulls === "object" ? plan.pulls : {},
+    alternatives: Array.isArray(plan.alternatives) ? plan.alternatives : [],
+    alternative_pulls: Array.isArray(plan.alternativePulls) ? plan.alternativePulls : [],
+  };
+}
+
+export async function loadAutoWeekPlanLite(siteId: string, isoWeek: string): Promise<AutoWeekPlanLite | null> {
+  const plan = await loadWeekPlanForSiteWeek(siteId, isoWeek, "auto", {
+    lightweightNav: true,
+    omitWorkers: true,
+  });
+  if (!plan) return null;
+  return toAutoWeekPlanLite(plan);
+}
+
 /** Un GET `scope=resolve` (même priorité qu’avant : saved puis auto). */
 export async function loadWeekPlanForSiteWeek(
   siteId: string,
