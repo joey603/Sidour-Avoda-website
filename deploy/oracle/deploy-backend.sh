@@ -9,18 +9,21 @@ VENV_DIR="$BACKEND_DIR/.venv"
 BRANCH="${BRANCH:-main}"
 SERVICE_NAME="${SERVICE_NAME:-sidour-backend}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/health}"
+# SKIP_GIT=1 si l’appelant a déjà fetch + reset (GitHub Actions).
+SKIP_GIT="${SKIP_GIT:-0}"
 
 echo "==> Déploiement backend"
 cd "$PROJECT_DIR"
 
-echo "==> Git fetch"
-git fetch origin
-
-echo "==> Checkout $BRANCH"
-git checkout "$BRANCH"
-
-echo "==> Pull latest"
-git pull --ff-only origin "$BRANCH"
+if [[ "$SKIP_GIT" != "1" ]]; then
+  echo "==> Git fetch + reset origin/$BRANCH"
+  git fetch origin "$BRANCH"
+  git checkout "$BRANCH"
+  # Production = origin. Évite le blocage si des fichiers ont été édités sur le serveur.
+  git reset --hard "origin/$BRANCH"
+else
+  echo "==> Git déjà à jour (SKIP_GIT=1)"
+fi
 
 # Resynchroniser ce script vers ~/ si on vient du repo
 if [[ -f "$PROJECT_DIR/deploy/oracle/deploy-backend.sh" ]]; then
@@ -34,8 +37,16 @@ echo "==> Activer venv"
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
-echo "==> Installer dépendances"
-pip install -r "$BACKEND_DIR/requirements.txt"
+REQ_FILE="$BACKEND_DIR/requirements.txt"
+REQ_STAMP="$VENV_DIR/.requirements.sha256"
+REQ_HASH="$(sha256sum "$REQ_FILE" | awk '{print $1}')"
+if [[ -f "$REQ_STAMP" && "$(cat "$REQ_STAMP")" == "$REQ_HASH" ]]; then
+  echo "==> Dépendances inchangées — skip pip"
+else
+  echo "==> Installer dépendances"
+  pip install --disable-pip-version-check --no-input -r "$REQ_FILE"
+  printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
+fi
 
 echo "==> Vérification syntaxe Python"
 python3 -m py_compile \
@@ -109,19 +120,19 @@ PY
 echo "==> Restart forcé $SERVICE_NAME"
 # Évite le hang de systemctl restart si uvicorn est gelé
 sudo systemctl kill -s SIGKILL "$SERVICE_NAME" 2>/dev/null || true
-sleep 1
+sleep 0.5
 sudo systemctl reset-failed "$SERVICE_NAME" 2>/dev/null || true
 sudo systemctl start "$SERVICE_NAME"
 
 echo "==> Attente health"
 ok=0
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -sf --connect-timeout 3 --max-time 5 "$HEALTH_URL" >/dev/null; then
+for i in $(seq 1 20); do
+  if curl -sf --connect-timeout 1 --max-time 3 "$HEALTH_URL" >/dev/null; then
     ok=1
     echo "health OK (tentative $i)"
     break
   fi
-  sleep 2
+  sleep 0.5
 done
 if [[ "$ok" -ne 1 ]]; then
   echo "ECHEC: /health ne répond pas après restart" >&2

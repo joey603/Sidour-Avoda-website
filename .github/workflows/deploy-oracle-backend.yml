@@ -31,12 +31,12 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
-            # Premier pull minimal pour récupérer le script à jour, puis deploy complet
+            # Reset une fois pour récupérer le script à jour (y compris si le serveur a des fichiers sales).
             cd /home/ubuntu/Sidour-Avoda-website
             git fetch origin main
             git checkout main
-            git pull --ff-only origin main
+            git reset --hard origin/main
             if [[ -f deploy/oracle/deploy-backend.sh ]]; then
               install -m 0755 deploy/oracle/deploy-backend.sh /home/ubuntu/deploy-backend.sh
             fi
-            /home/ubuntu/deploy-backend.sh
+            SKIP_GIT=1 /home/ubuntu/deploy-backend.sh

@@ -9,8 +9,12 @@ au code pousse sur `main`.
 [`.github/workflows/deploy-oracle-backend.yml`](.github/workflows/deploy-oracle-backend.yml) :
 
 1. se connecte en SSH à Oracle
-2. lance [`deploy/oracle/deploy-backend.sh`](deploy/oracle/deploy-backend.sh) (`git pull` + pip + restart forcé)
+2. lance [`deploy/oracle/deploy-backend.sh`](deploy/oracle/deploy-backend.sh)
+   (`git reset --hard origin/main`, pip seulement si `requirements.txt` a changé, restart forcé)
 3. vérifie `GET /health`
+
+Le deploy **écrase** les modifications locales non commitées sur le serveur
+(`git reset --hard`) : la prod doit coller à `main`.
 
 Déclenchement manuel : onglet Actions → **Deploy Oracle backend** → Run workflow.
 
@@ -61,6 +65,9 @@ Sur le serveur :
 
 Le script source de vérité est [`deploy/oracle/deploy-backend.sh`](deploy/oracle/deploy-backend.sh)
 (copié vers `/home/ubuntu/deploy-backend.sh` à chaque deploy).
+
+Accélérations : pas de second `git pull` depuis Actions (`SKIP_GIT=1`) ;
+`pip install` est sauté si le hash de `requirements.txt` est inchangé.
 
 ## Verifier que le backend fonctionne
 
