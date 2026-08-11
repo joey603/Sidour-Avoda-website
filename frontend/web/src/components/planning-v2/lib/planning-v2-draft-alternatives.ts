@@ -34,6 +34,53 @@ export function alternativeSnapshot(
   }
 }
 
+/**
+ * Reclasse uniquement les חלופות pas encore vues.
+ * Chaque index déjà consulté reste occupé par le même plan.
+ */
+export function rankUnseenDraftPlans(
+  plans: DraftAlternative[],
+  viewedIndices: Iterable<number> | null | undefined,
+  compare: (a: DraftAlternative, b: DraftAlternative) => number,
+): DraftAlternative[] {
+  if (plans.length <= 1) return plans;
+  const lockedByIdx = new Map<number, DraftAlternative>();
+  for (const raw of viewedIndices || []) {
+    const idx = Math.trunc(Number(raw));
+    if (!Number.isFinite(idx) || idx < 0 || idx >= plans.length) continue;
+    const plan = plans[idx];
+    if (plan) lockedByIdx.set(idx, plan);
+  }
+  if (lockedByIdx.size === 0) return [...plans].sort(compare);
+
+  const lockedSnaps = new Set<string>();
+  for (const plan of lockedByIdx.values()) {
+    const snap = alternativeSnapshot(plan.assignments, plan.pulls);
+    if (snap) lockedSnaps.add(snap);
+  }
+  const rest = plans.filter((plan) => {
+    const snap = alternativeSnapshot(plan.assignments, plan.pulls);
+    return !snap || !lockedSnaps.has(snap);
+  });
+  rest.sort(compare);
+
+  const result: DraftAlternative[] = [];
+  let restI = 0;
+  const lastIdx = Math.max(plans.length - 1, ...lockedByIdx.keys());
+  for (let i = 0; i <= lastIdx; i += 1) {
+    const locked = lockedByIdx.get(i);
+    if (locked) {
+      result.push(locked);
+    } else if (restI < rest.length) {
+      result.push(rest[restI++]);
+    }
+  }
+  while (restI < rest.length) {
+    result.push(rest[restI++]);
+  }
+  return result;
+}
+
 export function linkedSitePlansSnapshot(
   plans: Record<string, { assignments?: unknown; pulls?: unknown }> | null | undefined,
 ): string {

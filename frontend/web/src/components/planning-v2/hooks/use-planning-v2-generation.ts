@@ -104,6 +104,7 @@ type UsePlanningV2GenerationArgs = {
   setSelectedAlternativeIndex: Dispatch<SetStateAction<number>>;
   userPickedAltIndexRef: MutableRefObject<number | null>;
   selectedAlternativeIndexRef: MutableRefObject<number>;
+  viewedAlternativeIndicesRef: MutableRefObject<Set<number>>;
   setIsManual: Dispatch<SetStateAction<boolean>>;
   setMoreAlternativesAvailable: Dispatch<SetStateAction<boolean>>;
   setAlternativesUnlockNonce: Dispatch<SetStateAction<number>>;
@@ -140,6 +141,7 @@ export function usePlanningV2Generation({
   setSelectedAlternativeIndex,
   userPickedAltIndexRef,
   selectedAlternativeIndexRef,
+  viewedAlternativeIndicesRef,
   setIsManual,
   setMoreAlternativesAvailable,
   setAlternativesUnlockNonce,
@@ -343,6 +345,7 @@ export function usePlanningV2Generation({
       }
       userPickedAltIndexRef.current = null;
       selectedAlternativeIndexRef.current = 0;
+      viewedAlternativeIndicesRef.current = new Set();
       draftAssignmentsRef.current = null;
       draftPullsRef.current = {};
       draftAlternativesRef.current = [];
@@ -580,6 +583,7 @@ export function usePlanningV2Generation({
       setMoreAlternativesAvailable,
       userPickedAltIndexRef,
       selectedAlternativeIndexRef,
+      viewedAlternativeIndicesRef,
       runtime,
     };
     const generationSseHelpers = createGenerationSseHelpers(sseArgs);
@@ -802,6 +806,7 @@ export function usePlanningV2Generation({
     getVisibleAlternativeCount,
     userPickedAltIndexRef,
     selectedAlternativeIndexRef,
+    viewedAlternativeIndicesRef,
   ]);
 
   const startGeneration = useCallback(

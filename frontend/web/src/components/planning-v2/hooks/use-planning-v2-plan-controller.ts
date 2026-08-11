@@ -20,7 +20,18 @@ import {
 import { type DraftAlternative, draftAlternativesForMode } from "../lib/planning-v2-draft-alternatives";
 import { usePlanningV2Generation } from "./use-planning-v2-generation";
 import { usePlanningV2DisplayVariants } from "./use-planning-v2-display-variants";
-import { EMPTY_PULLS_SHIFT_PREFS, type PullsShiftPrefs } from "../lib/planning-v2-pulls-match";
+import {
+  EMPTY_PULLS_SHIFT_PREFS,
+  pullsPreferPayload,
+  type PullsShiftPrefs,
+} from "../lib/planning-v2-pulls-match";
+import {
+  anyPlanHasNonPreferredPulls,
+  anyPlanHasPreferredPulls,
+  firstNonExclusivePreferredIndex,
+  pullsPreferFallbackToastCopy,
+  pullsPreferMixedAltsToastCopy,
+} from "../lib/planning-v2-pulls-prefer-notices";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
 const AUTO_PULLS_PREFER_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_prefer_week_";
@@ -92,9 +103,15 @@ export function usePlanningV2PlanController({
   /** Index choisi manuellement pendant le streaming — ne pas le faire écraser par la mémoire. */
   const userPickedAltIndexRef = useRef<number | null>(null);
   const selectedAlternativeIndexRef = useRef(0);
+  const viewedAlternativeIndicesRef = useRef<Set<number>>(new Set());
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
   const assignmentVariantsRef = useRef<Array<Record<string, Record<string, string[][]>>>>([]);
   const pullVariantsRef = useRef<PlanningV2PullsMap[]>([]);
+  const pullsPreferNoticesRef = useRef({
+    active: false,
+    fallbackShown: false,
+    mixedAltsShown: false,
+  });
 
   const weekIso = getWeekKeyISO(weekStart);
   const autoPullsStorageKey = `${AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX}${weekIso}`;
@@ -180,6 +197,7 @@ export function usePlanningV2PlanController({
     setSelectedAlternativeIndex,
     userPickedAltIndexRef,
     selectedAlternativeIndexRef,
+    viewedAlternativeIndicesRef,
     setIsManual,
     setMoreAlternativesAvailable,
     setAlternativesUnlockNonce,
@@ -207,6 +225,9 @@ export function usePlanningV2PlanController({
 
   useEffect(() => {
     selectedAlternativeIndexRef.current = selectedAlternativeIndex;
+    if (selectedAlternativeIndex >= 0) {
+      viewedAlternativeIndicesRef.current.add(selectedAlternativeIndex);
+    }
   }, [selectedAlternativeIndex]);
   useEffect(() => {
     draftAssignmentsRef.current = draftAssignments;
@@ -240,8 +261,10 @@ export function usePlanningV2PlanController({
       : 0;
     setSelectedAlternativeIndex(preservedAltIndex);
     userPickedAltIndexRef.current = preservedAltIndex;
+    viewedAlternativeIndicesRef.current = new Set();
     setMoreAlternativesAvailable(true);
     planLoadedForManualRef.current = false;
+    pullsPreferNoticesRef.current = { active: false, fallbackShown: false, mixedAltsShown: false };
   }, [protectOfficialSavedPlan, resetGenerationForScopeChange, siteId, weekIso, weekStart]);
 
   // Quand les sites liés arrivent après le 1er rendu, resynchroniser l’index partagé
@@ -316,6 +339,54 @@ export function usePlanningV2PlanController({
     assignmentVariantsRef,
     pullVariantsRef,
   });
+
+  useEffect(() => {
+    if (!replaceGenerationUiClear) return;
+    pullsPreferNoticesRef.current = { active: true, fallbackShown: false, mixedAltsShown: false };
+  }, [replaceGenerationUiClear]);
+
+  useEffect(() => {
+    const notices = pullsPreferNoticesRef.current;
+    if (!notices.active) return;
+    if (!autoPullsEnabled || isManual) return;
+    const kinds = pullsPreferPayload(autoPullsPrefer);
+    if (!kinds?.length) return;
+    if (replaceGenerationUiClear) return;
+    const maps = pullVariants;
+    if (!maps.length) return;
+
+    if (!generationRunning && !notices.fallbackShown) {
+      if (!anyPlanHasPreferredPulls(maps, kinds) && anyPlanHasNonPreferredPulls(maps, kinds)) {
+        notices.fallbackShown = true;
+        const copy = pullsPreferFallbackToastCopy(kinds);
+        toast.message(copy.title, {
+          id: "planning-v2-pulls-prefer-fallback",
+          description: copy.description,
+          duration: 8000,
+        });
+      }
+    }
+
+    if (notices.mixedAltsShown || notices.fallbackShown) return;
+    const firstNon = firstNonExclusivePreferredIndex(maps, kinds);
+    if (firstNon == null || firstNon <= 0) return;
+    if (safeAlternativeIndex < firstNon) return;
+    notices.mixedAltsShown = true;
+    const copy = pullsPreferMixedAltsToastCopy(kinds);
+    toast.message(copy.title, {
+      id: "planning-v2-pulls-prefer-mixed-alts",
+      description: copy.description,
+      duration: 8000,
+    });
+  }, [
+    autoPullsEnabled,
+    autoPullsPrefer,
+    generationRunning,
+    isManual,
+    pullVariants,
+    replaceGenerationUiClear,
+    safeAlternativeIndex,
+  ]);
 
   const savePlan = useCallback(
     async (publishToWorkers: boolean) => {
@@ -556,6 +627,7 @@ export function usePlanningV2PlanController({
       const next = Math.min(Math.max(0, Number(index || 0)), maxIdx);
       userPickedAltIndexRef.current = next;
       selectedAlternativeIndexRef.current = next;
+      viewedAlternativeIndicesRef.current.add(next);
       setSelectedAlternativeIndex((prev) => (prev === next ? prev : next));
       if (linkedSitesLength > 1) {
         const mem = readLinkedPlansFromMemory(weekStart);

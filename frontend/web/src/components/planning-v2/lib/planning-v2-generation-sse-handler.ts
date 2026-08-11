@@ -8,6 +8,7 @@ import {
   linkedSitePlansSnapshot,
   normalizeDraftAlternatives,
   alternativeSnapshot,
+  rankUnseenDraftPlans,
   type DraftAlternative,
 } from "./planning-v2-draft-alternatives";
 import {
@@ -128,6 +129,7 @@ export type PlanningV2GenerationSseArgs = {
   setMoreAlternativesAvailable: Dispatch<SetStateAction<boolean>>;
   userPickedAltIndexRef?: MutableRefObject<number | null>;
   selectedAlternativeIndexRef?: MutableRefObject<number>;
+  viewedAlternativeIndicesRef?: MutableRefObject<Set<number>>;
   runtime: PlanningV2GenerationSseRuntimeState;
 };
 
@@ -162,8 +164,8 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     setDraftAlternatives,
     setSelectedAlternativeIndex,
     setIsManual,
-    userPickedAltIndexRef,
     selectedAlternativeIndexRef,
+    viewedAlternativeIndicesRef,
     runtime,
   } = args;
 
@@ -210,27 +212,27 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
           !appendMode &&
           linkedSitesLength <= 1 &&
           !!draftAssignmentsRef.current;
+        const viewedIdx = Math.max(0, selectedAlternativeIndexRef?.current ?? 0);
+        const viewedIndices = viewedAlternativeIndicesRef?.current ?? new Set<number>();
+        viewedIndices.add(viewedIdx);
+        const comparePlans = (a: DraftAlternative, b: DraftAlternative) =>
+          compareHoleScores(
+            planScore(a.assignments, a.pulls),
+            planScore(b.assignments, b.pulls),
+            requestedPullsCount,
+          );
 
         if (canResplitBase) {
           const all: DraftAlternative[] = [
             { assignments: draftAssignmentsRef.current as AssignmentGrid, pulls: draftPullsRef.current },
             ...normalized,
           ];
-          const ranked = [...all].sort((a, b) =>
-            compareHoleScores(
-              planScore(a.assignments, a.pulls),
-              planScore(b.assignments, b.pulls),
-              requestedPullsCount,
-            ),
-          );
+          const ranked = rankUnseenDraftPlans(all, viewedIndices, comparePlans);
           const maxTotal = stopLimit == null ? ranked.length : Math.max(1, stopLimit);
           const sliced = ranked.slice(0, maxTotal);
           const nextBase = sliced[0];
           const nextAlts = sliced.slice(1);
-          const pin = userPickedAltIndexRef?.current != null;
-          const viewedIdx = Math.max(0, selectedAlternativeIndexRef?.current ?? 0);
-          const viewed = pin && viewedIdx < all.length ? all[viewedIdx] : null;
-          const viewedSnap = viewed ? alternativeSnapshot(viewed.assignments, viewed.pulls) : "";
+          if (!nextBase) return;
 
           draftAssignmentsRef.current = nextBase.assignments;
           draftPullsRef.current = nextBase.pulls;
@@ -238,28 +240,16 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
           setDraftAssignments(nextBase.assignments);
           setDraftPulls(nextBase.pulls);
           setDraftAlternatives([...nextAlts]);
-
-          if (viewedSnap) {
-            const newIdx = [nextBase, ...nextAlts].findIndex(
-              (p) => alternativeSnapshot(p.assignments, p.pulls) === viewedSnap,
-            );
-            if (newIdx >= 0) {
-              if (selectedAlternativeIndexRef) selectedAlternativeIndexRef.current = newIdx;
-              if (userPickedAltIndexRef) userPickedAltIndexRef.current = newIdx;
-              setSelectedAlternativeIndex(newIdx);
-            }
-          }
           return;
         }
 
         setDraftAlternatives((prev) => {
+          const hasBase = !!draftAssignmentsRef.current;
           const ordered = preferActive
-            ? [...normalized].sort((a, b) =>
-                compareHoleScores(
-                  planScore(a.assignments, a.pulls),
-                  planScore(b.assignments, b.pulls),
-                  requestedPullsCount,
-                ),
+            ? rankUnseenDraftPlans(
+                normalized,
+                [...viewedIndices].map((idx) => (hasBase ? idx - 1 : idx)),
+                comparePlans,
               )
             : normalized;
           const maxDraftAlternatives =
@@ -359,6 +349,7 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
     setReplaceGenerationUiClear(false);
     setSelectedAlternativeIndex(0);
     if (selectedAlternativeIndexRef) selectedAlternativeIndexRef.current = 0;
+    viewedAlternativeIndicesRef?.current.add(0);
     setIsManual(false);
     if (demote) {
       draftAlternativesRef.current = normalizeDraftAlternatives([
