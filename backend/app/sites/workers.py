@@ -26,6 +26,7 @@ from .ownership import _director_site_or_404, _director_site_ownership_or_404
 from .week_utils import (
     _validate_week_iso, _now_ms, _next_week_iso, _week_start_date,
     _site_worker_visible_for_week, _workers_counts_by_site_for_week, _week_date_set,
+    _answers_payload_for_week,
 )
 from .site_config import validate_site_config, normalize_site_config, _safe_site_config
 
@@ -45,6 +46,7 @@ from .linked_sites import (
     _linked_site_ids_by_worker_key,
     _active_director_site_ids,
     _worker_identity_key,
+    _director_worker_identity_rows,
 )
 
 @router.get("/{site_id}/workers", response_model=list[WorkerOut])
@@ -57,15 +59,12 @@ def list_workers(
     _director_site_ownership_or_404(db, site_id, user.id)
     wk = _validate_week_iso(week) if week else None
     rows = [row for row in db.query(SiteWorker).filter(SiteWorker.site_id == site_id).all() if _site_worker_visible_for_week(row, wk)]
-    director_sites = db.query(Site).filter(Site.director_id == user.id).all()
-    director_site_name_by_id = {int(s.id): s.name for s in director_sites}
-    director_site_ids = [int(s.id) for s in director_sites]
     active_director_site_ids = _active_director_site_ids(db, user.id)
-    director_rows = (
-        [row for row in db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all() if _site_worker_visible_for_week(row, wk)]
-        if director_site_ids
-        else []
-    )
+    director_site_name_by_id = {
+        int(row[0]): row[1]
+        for row in db.query(Site.id, Site.name).filter(Site.director_id == user.id).all()
+    }
+    director_rows = _director_worker_identity_rows(db, user.id)
     linked_site_ids_by_key = _linked_site_ids_by_worker_key(director_rows, wk, active_director_site_ids)
 
     user_ids = sorted({int(r.user_id) for r in rows if getattr(r, "user_id", None)})
@@ -146,7 +145,7 @@ def list_workers(
             max_shifts=r.max_shifts,
             roles=r.roles or [],
             availability=r.availability or {},
-            answers=r.answers or {},
+            answers=_answers_payload_for_week(r.answers, wk),
             phone=phone,
             linked_site_ids=linked_site_ids,
             linked_site_names=linked_site_names,

@@ -7,6 +7,24 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models import Site, SiteWorker
 from app.sites import _next_week_iso, _week_start_date
 from app.sites.site_config import _list_site_public_config
+from app.sites.week_utils import _answers_payload_for_week
+
+
+def test_answers_payload_for_week_keeps_only_requested_week():
+    week = "2026-05-10"
+    other = "2026-05-17"
+    full = {
+        week: {"general": {"q1": "a"}, "_shift_kind_prefs": {"morning": 1, "noon": 0, "night": 0}},
+        other: {"general": {"q1": "b"}},
+    }
+    sliced = _answers_payload_for_week(full, week)
+    assert week in sliced
+    assert other not in sliced
+    assert sliced[week]["general"]["q1"] == "a"
+    assert _answers_payload_for_week(full, "2026-05-24") == {}
+    legacy = {"general": {"q1": "x"}, "perDay": {}}
+    assert _answers_payload_for_week(legacy, week) == legacy
+    assert _answers_payload_for_week(full, None) == full
 
 
 def test_list_site_public_config_keeps_only_last_run():

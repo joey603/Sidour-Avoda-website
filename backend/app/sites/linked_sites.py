@@ -5,7 +5,7 @@ from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 import asyncio
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 import re
 import os
@@ -85,6 +85,31 @@ def _worker_identity_key(row: SiteWorker) -> str:
     name_raw = _norm_name_local(getattr(row, "name", ""))
     name = re.sub(r"\s+", " ", str(name_raw or "").strip()).lower()
     return f"name:{name}"
+
+
+_WORKER_IDENTITY_LOAD = load_only(
+    SiteWorker.id,
+    SiteWorker.site_id,
+    SiteWorker.user_id,
+    SiteWorker.phone,
+    SiteWorker.name,
+    SiteWorker.pending_approval,
+    SiteWorker.removed_from_week_iso,
+    SiteWorker.created_at,
+)
+
+
+def _director_worker_identity_rows(db: Session, director_id: int) -> list[SiteWorker]:
+    """Workers du directeur (sites actifs) sans JSON answers/availability — pour les liens multi-sites."""
+    site_ids = sorted(_active_director_site_ids(db, director_id))
+    if not site_ids:
+        return []
+    return (
+        db.query(SiteWorker)
+        .options(_WORKER_IDENTITY_LOAD)
+        .filter(SiteWorker.site_id.in_(site_ids))
+        .all()
+    )
 
 
 def _active_director_site_ids(db: Session, director_id: int) -> set[int]:
@@ -196,11 +221,10 @@ def _site_role_key(site_id: int, role_name: str | None) -> str:
 
 
 def _linked_site_ids_for_worker(db: Session, director_id: int, row: SiteWorker) -> list[int]:
-    director_site_ids = sorted(_active_director_site_ids(db, director_id))
-    if not director_site_ids:
+    linked_rows = _director_worker_identity_rows(db, director_id)
+    if not linked_rows:
         return [int(row.site_id)]
     key = _worker_identity_key(row)
-    linked_rows = db.query(SiteWorker).filter(SiteWorker.site_id.in_(director_site_ids)).all()
     linked_site_ids = sorted(
         {
             int(r.site_id)

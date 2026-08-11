@@ -38,6 +38,22 @@ def _next_week_iso(dt: datetime) -> str:
     return (_week_start_date(dt) + timedelta(days=7)).date().isoformat()
 
 
+def _answers_payload_for_week(raw_answers: object, week_iso: str | None) -> dict:
+    """Réponses questionnaire pour une semaine : garde la forme lue par le front, sans l’historique."""
+    answers = raw_answers if isinstance(raw_answers, dict) else {}
+    if not week_iso:
+        return dict(answers)
+    week_block = answers.get(week_iso)
+    if isinstance(week_block, dict):
+        return {week_iso: dict(week_block)}
+    wk_field = str(answers.get("week_key") or answers.get("week_iso") or "").strip()
+    if wk_field == week_iso and ("general" in answers or "perDay" in answers):
+        return dict(answers)
+    if "general" in answers or "perDay" in answers:
+        return dict(answers)
+    return {}
+
+
 def _site_worker_visible_for_week(row: SiteWorker, week_iso: str | None) -> bool:
     """Visible pour une semaine donnée (dimanche = clé, aligné sur le front planning)."""
     wk = (week_iso or "").strip()

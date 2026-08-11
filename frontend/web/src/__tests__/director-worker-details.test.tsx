@@ -52,7 +52,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           { id: 11, site_id: 1, name: "Yoeli", phone: "0585060398", max_shifts: 5, roles: ["Guard"], availability: {} },
         ]);
@@ -87,7 +87,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string, options?: any) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           { id: 11, site_id: 1, name: "Yoeli", phone: "0585060398", max_shifts: 5, roles: ["Guard"], availability: {} },
         ]);
@@ -149,7 +149,10 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/director/sites/all-workers") return Promise.resolve([]);
+      if (path === "/director/sites/all-workers/11") {
+        const err = Object.assign(new Error("Worker introuvable"), { status: 404 });
+        return Promise.reject(err);
+      }
       if (path === "/director/sites/") return Promise.resolve([{ id: 1, name: "Alpha Site", workers_count: 1 }]);
       throw new Error(`Unexpected apiFetch path: ${path}`);
     });
@@ -187,7 +190,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string, options?: any) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           { id: 11, site_id: 1, name: "Yoeli", phone: "0585060398", max_shifts: 5, roles: ["Guard"], availability: {} },
         ]);
@@ -231,7 +234,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           { id: 11, site_id: 1, name: "Yoeli", phone: "0585060398", max_shifts: 5, roles: ["Guard"], availability: {} },
         ]);
@@ -293,7 +296,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           {
             id: 11,
@@ -346,7 +349,7 @@ describe("/director/workers/[id]", () => {
 
     fetchMe.mockResolvedValue({ role: "director", full_name: "Boss" });
     apiFetch.mockImplementation((path: string, options?: any) => {
-      if (path === "/director/sites/all-workers") {
+      if (path === "/director/sites/all-workers/11") {
         return Promise.resolve([
           { id: 11, site_id: 1, name: "Yoeli", phone: "0585060398", max_shifts: 5, roles: ["Guard"], availability: {} },
         ]);

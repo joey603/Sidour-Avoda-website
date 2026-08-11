@@ -278,48 +278,45 @@ export default function WorkerDashboard() {
 
         const iso = (d: Date) =>
           `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const currentWeekStart = getCurrentWeekStart();
+        const nextWeekStart = getNextWeekStart();
+        const currentIso = iso(currentWeekStart);
+        const nextIso = iso(nextWeekStart);
+        const emptyPlan = {
+          currentWeek: null,
+          nextWeek: null,
+          config: null,
+          messagesCurrent: [] as SiteMessage[],
+          messagesNext: [] as SiteMessage[],
+        };
 
-        for (const site of activeSites) {
-          try {
-            const siteConfig = await apiFetch<{ id: number; name: string; config: any }>(
-              `/public/sites/${site.id}/config`,
-              {
-              },
-            );
-
-            const currentWeekStart = getCurrentWeekStart();
-            const nextWeekStart = getNextWeekStart();
-            const currentPlan = await loadWeekPlan(site.id, currentWeekStart);
-            const nextPlan = await loadWeekPlan(site.id, nextWeekStart);
-            const messagesCurrent = await apiFetch<SiteMessage[]>(
-              `/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(currentWeekStart))}`,
-              {
-              },
-            );
-            const messagesNext = await apiFetch<SiteMessage[]>(
-              `/public/sites/${site.id}/messages?week=${encodeURIComponent(iso(nextWeekStart))}`,
-              {
-              },
-            );
-
-            plans[site.id] = {
-              currentWeek: currentPlan,
-              nextWeek: nextPlan,
-              config: siteConfig?.config || null,
-              messagesCurrent: Array.isArray(messagesCurrent) ? messagesCurrent : [],
-              messagesNext: Array.isArray(messagesNext) ? messagesNext : [],
-            };
-          } catch (e) {
-            console.error(`Error loading site ${site.id}:`, e);
-            plans[site.id] = {
-              currentWeek: null,
-              nextWeek: null,
-              config: null,
-              messagesCurrent: [],
-              messagesNext: [],
-            };
-          }
-        }
+        await Promise.all(
+          activeSites.map(async (site) => {
+            try {
+              const [siteConfig, currentPlan, nextPlan, messagesCurrent, messagesNext] = await Promise.all([
+                apiFetch<{ id: number; name: string; config: any }>(`/public/sites/${site.id}/config`),
+                loadWeekPlan(site.id, currentWeekStart),
+                loadWeekPlan(site.id, nextWeekStart),
+                apiFetch<SiteMessage[]>(
+                  `/public/sites/${site.id}/messages?week=${encodeURIComponent(currentIso)}`,
+                ),
+                apiFetch<SiteMessage[]>(
+                  `/public/sites/${site.id}/messages?week=${encodeURIComponent(nextIso)}`,
+                ),
+              ]);
+              plans[site.id] = {
+                currentWeek: currentPlan,
+                nextWeek: nextPlan,
+                config: siteConfig?.config || null,
+                messagesCurrent: Array.isArray(messagesCurrent) ? messagesCurrent : [],
+                messagesNext: Array.isArray(messagesNext) ? messagesNext : [],
+              };
+            } catch (e) {
+              console.error(`Error loading site ${site.id}:`, e);
+              plans[site.id] = { ...emptyPlan };
+            }
+          }),
+        );
 
         setSitePlans(plans);
       } catch (e: any) {

@@ -92,7 +92,7 @@ export default function WorkerDetailsPage() {
       if (me.role !== "director") return router.replace("/worker");
       try {
         const [workers, sitesList] = await Promise.all([
-          apiFetch<Worker[]>("/director/sites/all-workers", {
+          apiFetch<Worker[]>(`/director/sites/all-workers/${params.id}`, {
             cache: "no-store" as any,
           }),
           apiFetch<Site[]>("/director/sites/", {
@@ -101,14 +101,10 @@ export default function WorkerDetailsPage() {
         ]);
         setSites(sitesList || []);
         setAllWorkers(workers || []);
-        // eslint-disable-next-line no-console
-        console.log("[WorkerDetails] All workers from API:", workers);
         const found = (workers || []).find((w) => String(w.id) === String(params.id));
         if (!found) {
           setError("עובד לא נמצא");
         }
-        // eslint-disable-next-line no-console
-        console.log("[WorkerDetails] Found worker:", found, "phone field:", found?.phone);
         setWorker(
           found
             ? {
@@ -118,7 +114,8 @@ export default function WorkerDetailsPage() {
             : null,
         );
       } catch (e: any) {
-        setError("שגיאה בטעינת עובד");
+        if (Number(e?.status) === 404) setError("עובד לא נמצא");
+        else setError("שגיאה בטעינת עובד");
       } finally {
         setLoading(false);
       }

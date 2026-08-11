@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime
 import re
@@ -39,7 +39,7 @@ from .week_plans import (
     _build_next_week_saved_plan_status,
     _is_empty_auto_week_plan,
 )
-from .linked_sites import _linked_site_cluster_map_for_director
+from .linked_sites import _linked_site_cluster_map_for_director, _worker_identity_key
 
 logger = logging.getLogger("ai_solver")
 router = APIRouter()
@@ -132,23 +132,27 @@ def create_site(payload: SiteCreate, user: User = Depends(require_role("director
     )
 
 
-@router.get("/all-workers", response_model=list[WorkerOut])
-def list_all_workers(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
-    """Retourne tous les travailleurs de tous les sites du directeur (sites actifs ou archivés)."""
-    def _norm_person_name(value: str | None) -> str:
-        return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+def _norm_person_name(value: str | None) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
-    # Sites du directeur y compris soft-deleted (pour afficher encore le nom du site dans la liste travailleurs)
-    all_dir_sites = db.query(Site).filter(Site.director_id == user.id).all()
-    site_by_id = {int(s.id): s for s in all_dir_sites}
-    site_ids = list(site_by_id.keys())
-    if not site_ids:
-        return []
 
-    rows = list(db.query(SiteWorker).filter(SiteWorker.site_id.in_(site_ids)).all())
+def _director_sites_by_id(db: Session, director_id: int) -> dict[int, Site]:
+    sites = (
+        db.query(Site)
+        .options(load_only(Site.id, Site.name, Site.deleted_at, Site.director_id))
+        .filter(Site.director_id == director_id)
+        .all()
+    )
+    return {int(s.id): s for s in sites}
+
+
+def _worker_outs_for_director_rows(
+    db: Session,
+    rows: list[SiteWorker],
+    site_by_id: dict[int, Site],
+) -> list[WorkerOut]:
     if not rows:
         return []
-
     current_week_iso = _week_start_date(datetime.now()).date().isoformat()
     candidate_user_ids = {int(r.user_id) for r in rows if getattr(r, "user_id", None)}
     candidate_phones = {str(r.phone).strip() for r in rows if str(getattr(r, "phone", "") or "").strip()}
@@ -176,7 +180,7 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
     for u in candidate_users:
         users_by_name.setdefault(_norm_person_name(getattr(u, "full_name", None)), []).append(u)
 
-    result = []
+    result: list[WorkerOut] = []
     for r in rows:
         user_worker = None
         phone = None
@@ -214,7 +218,7 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
                 max_shifts=r.max_shifts,
                 roles=r.roles or [],
                 availability=r.availability or {},
-                answers=r.answers or {},
+                answers={},
                 phone=phone,
                 site_name=(sn.name if sn else None),
                 site_deleted=bool(getattr(sn, "deleted_at", None)) if sn else False,
@@ -222,8 +226,82 @@ def list_all_workers(user: User = Depends(require_role("director")), db: Session
                 removed_by_planning=removed_by_planning,
             )
         )
-    logger.info("[all-workers] director=%s sites=%d workers=%d candidate_users=%d", user.id, len(site_ids), len(result), len(candidate_users))
     return result
+
+
+@router.get("/all-workers", response_model=list[WorkerOut])
+def list_all_workers(user: User = Depends(require_role("director")), db: Session = Depends(get_db)):
+    """Retourne tous les travailleurs de tous les sites du directeur (sites actifs ou archivés)."""
+    site_by_id = _director_sites_by_id(db, user.id)
+    site_ids = list(site_by_id.keys())
+    if not site_ids:
+        return []
+
+    rows = list(
+        db.query(SiteWorker)
+        .options(
+            load_only(
+                SiteWorker.id,
+                SiteWorker.site_id,
+                SiteWorker.user_id,
+                SiteWorker.name,
+                SiteWorker.phone,
+                SiteWorker.max_shifts,
+                SiteWorker.roles,
+                SiteWorker.availability,
+                SiteWorker.created_at,
+                SiteWorker.removed_from_week_iso,
+            )
+        )
+        .filter(SiteWorker.site_id.in_(site_ids))
+        .all()
+    )
+    if not rows:
+        return []
+    result = _worker_outs_for_director_rows(db, rows, site_by_id)
+    logger.info("[all-workers] director=%s sites=%d workers=%d", user.id, len(site_ids), len(result))
+    return result
+
+
+@router.get("/all-workers/{worker_id}", response_model=list[WorkerOut])
+def get_all_worker_cluster(
+    worker_id: int,
+    user: User = Depends(require_role("director")),
+    db: Session = Depends(get_db),
+):
+    """Fiche עובד : le worker demandé + ses occurrences sur les autres sites du directeur."""
+    target = db.get(SiteWorker, worker_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+    site_by_id = _director_sites_by_id(db, user.id)
+    if int(target.site_id) not in site_by_id:
+        raise HTTPException(status_code=404, detail="Worker introuvable")
+
+    site_ids = list(site_by_id.keys())
+    rows = list(
+        db.query(SiteWorker)
+        .options(
+            load_only(
+                SiteWorker.id,
+                SiteWorker.site_id,
+                SiteWorker.user_id,
+                SiteWorker.name,
+                SiteWorker.phone,
+                SiteWorker.max_shifts,
+                SiteWorker.roles,
+                SiteWorker.availability,
+                SiteWorker.created_at,
+                SiteWorker.removed_from_week_iso,
+            )
+        )
+        .filter(SiteWorker.site_id.in_(site_ids))
+        .all()
+    )
+    key = _worker_identity_key(target)
+    cluster = [row for row in rows if _worker_identity_key(row) == key]
+    if not any(int(row.id) == int(worker_id) for row in cluster):
+        cluster = [target] + cluster
+    return _worker_outs_for_director_rows(db, cluster, site_by_id)
 
 
 @router.get("/{site_id}", response_model=SiteOut)
