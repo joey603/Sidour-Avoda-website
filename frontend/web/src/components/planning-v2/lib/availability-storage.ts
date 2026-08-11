@@ -31,12 +31,12 @@ export function readWeeklyAvailabilityForSiteWeek(
   }
 }
 
-/** Écrit localStorage + API (aligné sur le planning director). */
-export async function persistWeeklyAvailabilityForSiteWeek(
+/** Écrit le cache local de זמינות (le PUT worker a déjà persisté en base). */
+export function writeWeeklyAvailabilityLocal(
   siteId: string,
   weekStart: Date,
   next: Record<string, WorkerAvailability>,
-): Promise<void> {
+): void {
   try {
     if (typeof window !== "undefined") {
       localStorage.setItem(availabilityStorageKey(siteId, weekStart), JSON.stringify(next));
@@ -44,6 +44,15 @@ export async function persistWeeklyAvailabilityForSiteWeek(
   } catch {
     /* ignore */
   }
+}
+
+/** Écrit localStorage + API (aligné sur le planning director). */
+export async function persistWeeklyAvailabilityForSiteWeek(
+  siteId: string,
+  weekStart: Date,
+  next: Record<string, WorkerAvailability>,
+): Promise<void> {
+  writeWeeklyAvailabilityLocal(siteId, weekStart, next);
   try {
     const wk = getWeekKeyISO(weekStart);
     await apiFetch(`/director/sites/${siteId}/weekly-availability`, {
@@ -55,12 +64,27 @@ export async function persistWeeklyAvailabilityForSiteWeek(
   }
 }
 
+export function writeWorkerWeeklyAvailabilityLocal(
+  siteId: string,
+  weekStart: Date,
+  workerName: string,
+  availability: WorkerAvailability,
+  previousName?: string,
+): Record<string, WorkerAvailability> {
+  const cur = readWeeklyAvailabilityForSiteWeek(siteId, weekStart);
+  const next: Record<string, WorkerAvailability> = { ...cur, [workerName]: { ...availability } };
+  const prev = String(previousName || "").trim();
+  if (prev && prev !== workerName) delete next[prev];
+  writeWeeklyAvailabilityLocal(siteId, weekStart, next);
+  return next;
+}
+
+/** Cache local uniquement — la base est déjà à jour via PUT /workers/{id}. */
 export async function persistWorkerNameWeeklyOverride(
   siteId: string,
   weekStart: Date,
   workerName: string,
   availability: WorkerAvailability,
 ): Promise<void> {
-  const cur = readWeeklyAvailabilityForSiteWeek(siteId, weekStart);
-  await persistWeeklyAvailabilityForSiteWeek(siteId, weekStart, { ...cur, [workerName]: { ...availability } });
+  writeWorkerWeeklyAvailabilityLocal(siteId, weekStart, workerName, availability);
 }

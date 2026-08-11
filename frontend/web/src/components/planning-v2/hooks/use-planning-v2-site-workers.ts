@@ -7,7 +7,11 @@ import { resolveMaxShifts } from "@/lib/max-shifts";
 import { toast } from "sonner";
 import type { PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
-import { availabilityStorageKey, readWeeklyAvailabilityForSiteWeek } from "../lib/availability-storage";
+import {
+  availabilityStorageKey,
+  readWeeklyAvailabilityForSiteWeek,
+  writeWorkerWeeklyAvailabilityLocal,
+} from "../lib/availability-storage";
 import { mergeWorkerAvailability } from "../lib/merge-availability";
 import {
   getCachedWeekWorkers,
@@ -224,6 +228,59 @@ export function usePlanningV2SiteWorkers(siteId: string) {
     }));
   }, [workers, weeklyAvailability]);
 
+  const applyLocalWorkerSave = useCallback(
+    (patch: {
+      workerId?: number;
+      name: string;
+      previousName?: string;
+      maxShifts: number;
+      roles: string[];
+      availability: WorkerAvailability;
+    }) => {
+      const nextAvail = writeWorkerWeeklyAvailabilityLocal(
+        siteId,
+        weekStart,
+        patch.name,
+        patch.availability,
+        patch.previousName,
+      );
+      setWeeklyAvailability(nextAvail);
+      const wk = getWeekKeyISO(weekStart);
+      const patchedWorkers = (() => {
+        const prev = workersRef.current;
+        if (patch.workerId && prev.some((w) => w.id === patch.workerId)) {
+          return prev.map((w) =>
+            w.id === patch.workerId
+              ? { ...w, name: patch.name, maxShifts: patch.maxShifts, roles: patch.roles }
+              : w,
+          );
+        }
+        if (patch.workerId) {
+          return [
+            ...prev,
+            {
+              id: patch.workerId,
+              name: patch.name,
+              maxShifts: patch.maxShifts,
+              roles: patch.roles,
+              availability: { ...EMPTY_WORKER_AVAILABILITY },
+              answers: {},
+              phone: null,
+              linkedSiteIds: [],
+              linkedSiteNames: [],
+              pendingApproval: false,
+              createdAt: Date.now(),
+            },
+          ];
+        }
+        return prev;
+      })();
+      setWorkers(patchedWorkers);
+      setCachedWeekWorkers(siteId, wk, patchedWorkers, nextAvail);
+    },
+    [siteId, weekStart],
+  );
+
   return {
     site,
     siteLoading,
@@ -232,6 +289,7 @@ export function usePlanningV2SiteWorkers(siteId: string) {
     workersLoading,
     reloadWorkers,
     reloadWeeklyAvailability,
+    applyLocalWorkerSave,
     weekKeyISO: getWeekKeyISO(weekStart),
     weekStart,
     workerRowsForTable,

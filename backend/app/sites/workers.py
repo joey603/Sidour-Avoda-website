@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime
 import re
@@ -34,6 +34,45 @@ logger = logging.getLogger("ai_solver")
 router = APIRouter()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _upsert_named_weekly_availability(
+    db: Session,
+    site_id: int,
+    week_iso: str,
+    worker_name: str,
+    availability: dict,
+) -> None:
+    cleaned: dict[str, list[str]] = {}
+    for day_key, shifts_list in (availability or {}).items():
+        if not isinstance(shifts_list, list):
+            continue
+        key = str(day_key)
+        if key.startswith("_") and key not in ("_stations", "_station_indices"):
+            continue
+        cleaned[key] = [str(shift_name) for shift_name in shifts_list if str(shift_name or "").strip()]
+    now = _now_ms()
+    weekly_row = (
+        db.query(SiteWeeklyAvailability)
+        .filter(SiteWeeklyAvailability.site_id == int(site_id))
+        .filter(SiteWeeklyAvailability.week_iso == week_iso)
+        .first()
+    )
+    if weekly_row:
+        data = dict(weekly_row.availability or {})
+        data[str(worker_name)] = cleaned
+        weekly_row.availability = data
+        weekly_row.updated_at = now
+        flag_modified(weekly_row, "availability")
+        return
+    db.add(
+        SiteWeeklyAvailability(
+            site_id=int(site_id),
+            week_iso=week_iso,
+            availability={str(worker_name): cleaned},
+            updated_at=now,
+        )
+    )
 
 from .solver_bridge import (
     _apply_shift_kind_prefs_to_answers,
@@ -368,6 +407,11 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
                 for linked_row in linked_rows:
                     linked_row.max_shifts = payload.max_shifts
             _copy_weekly_availability_from_linked_sites(existing)
+            weekly_from_form = payload.weekly_availability or payload.availability
+            if target_week_iso and weekly_from_form:
+                _upsert_named_weekly_availability(
+                    db, int(existing.site_id), target_week_iso, str(existing.name), weekly_from_form
+                )
             db.commit()
             db.refresh(existing)
             # Récupérer le téléphone du User lié
@@ -399,6 +443,11 @@ def create_worker(site_id: int, payload: WorkerCreate, user: User = Depends(requ
             for linked_row in linked_rows:
                 linked_row.max_shifts = payload.max_shifts
         _copy_weekly_availability_from_linked_sites(w)
+        weekly_from_form = payload.weekly_availability or payload.availability
+        if target_week_iso and weekly_from_form:
+            _upsert_named_weekly_availability(
+                db, int(w.site_id), target_week_iso, str(w.name), weekly_from_form
+            )
         if payload.week_iso and payload.shift_kind_prefs is not None:
             _apply_shift_kind_prefs_to_answers(
                 w,
@@ -617,6 +666,7 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
             if weekly_row:
                 weekly_row.availability = data
                 weekly_row.updated_at = now
+                flag_modified(weekly_row, "availability")
             else:
                 weekly_row = SiteWeeklyAvailability(site_id=target_site_id, week_iso=wk, availability=data, updated_at=now)
                 db.add(weekly_row)
@@ -667,9 +717,25 @@ def update_worker(site_id: int, worker_id: int, payload: WorkerUpdate, user: Use
         linked_site_ids = _linked_site_ids_for_worker(db, user.id, w)
     linked_site_name_by_id = {
         int(s.id): s.name
-        for s in db.query(Site).filter(Site.director_id == user.id).all()
+        for s in db.query(Site)
+        .options(load_only(Site.id, Site.name))
+        .filter(Site.director_id == user.id)
+        .all()
     }
-    return WorkerOut(id=w.id, site_id=w.site_id, created_at=getattr(w, "created_at", None), name=w.name, max_shifts=w.max_shifts, roles=w.roles or [], availability=w.availability or {}, answers=w.answers or {}, phone=phone, linked_site_ids=linked_site_ids, linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id], pending_approval=bool(getattr(w, "pending_approval", False)))
+    return WorkerOut(
+        id=w.id,
+        site_id=w.site_id,
+        created_at=getattr(w, "created_at", None),
+        name=w.name,
+        max_shifts=w.max_shifts,
+        roles=w.roles or [],
+        availability=w.availability or {},
+        answers=_answers_payload_for_week(w.answers, payload.week_iso),
+        phone=phone,
+        linked_site_ids=linked_site_ids,
+        linked_site_names=[linked_site_name_by_id[sid] for sid in linked_site_ids if sid in linked_site_name_by_id],
+        pending_approval=bool(getattr(w, "pending_approval", False)),
+    )
 
 
 @router.post("/{site_id}/workers/{worker_id}/approve-invite", response_model=WorkerOut)

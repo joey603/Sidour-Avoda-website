@@ -135,6 +135,7 @@ class WorkerBase(BaseModel):
 
 class WorkerCreate(WorkerBase):
     week_iso: str | None = None
+    weekly_availability: dict[str, list[str]] | None = None
     shift_kind_prefs: ShiftKindPrefs | None = None
     shift_slot_prefs: ShiftSlotPrefs | None = None
 

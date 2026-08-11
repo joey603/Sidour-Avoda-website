@@ -10,7 +10,6 @@ import type { PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "../lib/constants";
 import { DAY_DEFS, buildEnabledRoleNameSet } from "../lib/display";
 import { cloneWorkerAvailability } from "../lib/merge-availability";
-import { persistWorkerNameWeeklyOverride } from "../lib/availability-storage";
 import { getWeekKeyISO, isNextWeekDisplayed } from "../lib/week";
 import type { ShiftKindPrefsState, ShiftSlotPrefsState } from "@/components/planning-shared/worker-edit-modal";
 
@@ -65,6 +64,14 @@ export function usePlanningV2WorkerModals(
   reloadWorkers: (opts?: { silent?: boolean }) => void | Promise<void>,
   onWorkerModalSavingChange?: (saving: boolean) => void,
   eventLocksByWorkerId: Record<number, Record<string, string[]>> = {},
+  applyLocalWorkerSave?: (patch: {
+    workerId?: number;
+    name: string;
+    previousName?: string;
+    maxShifts: number;
+    roles: string[];
+    availability: WorkerAvailability;
+  }) => void,
 ) {
   const [filterOpen, setFilterOpen] = useState(false);
   const [questionFilters, setQuestionFilters] = useState<Record<string, string | undefined>>({});
@@ -555,7 +562,7 @@ export function usePlanningV2WorkerModals(
             const cleaned = (prefShifts || []).filter((s) => avail.has(s));
             if (cleaned.length > 0) slotPrefsPayload[dayKey] = cleaned;
           }
-          const updated = await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers/${editingWorkerId}`, {
+          await apiFetch<Record<string, unknown>>(`/director/sites/${siteId}/workers/${editingWorkerId}`, {
             method: "PUT",
             body: JSON.stringify({
               name: trimmed,
@@ -568,12 +575,18 @@ export function usePlanningV2WorkerModals(
               shift_slot_prefs: slotPrefsPayload,
             }),
           });
-          void updated;
-          await persistWorkerNameWeeklyOverride(siteId, weekStart, trimmed, newWorkerAvailability);
-          await reloadWorkers({ silent: true });
+          applyLocalWorkerSave?.({
+            workerId: editingWorkerId,
+            name: trimmed,
+            previousName: String(currentWorker.name || "").trim() || undefined,
+            maxShifts: newWorkerMax,
+            roles: newWorkerRoles,
+            availability: newWorkerAvailability,
+          });
           toast.success("עובד עודכן בהצלחה!");
           setOriginalAvailability(cloneWorkerAvailability(newWorkerAvailability));
           closeWorkerEditor();
+          void reloadWorkers({ silent: true });
         };
 
         if (availabilityChanged && linkedOtherSiteNames.length > 0) {
@@ -609,15 +622,22 @@ export function usePlanningV2WorkerModals(
           roles: newWorkerRoles,
           availability: availabilityForProfile,
           week_iso: getWeekKeyISO(weekStart),
+          weekly_availability: newWorkerAvailability,
           shift_kind_prefs: prefsPayload,
           shift_slot_prefs: slotPrefsPayload,
         }),
       });
-      void result;
-      await persistWorkerNameWeeklyOverride(siteId, weekStart, trimmed, newWorkerAvailability);
-      await reloadWorkers({ silent: true });
+      const createdId = Number(result?.id);
+      applyLocalWorkerSave?.({
+        workerId: Number.isFinite(createdId) && createdId > 0 ? createdId : undefined,
+        name: trimmed,
+        maxShifts: newWorkerMax,
+        roles: newWorkerRoles,
+        availability: newWorkerAvailability,
+      });
       toast.success("עובד נוסף בהצלחה!");
       closeWorkerEditor();
+      void reloadWorkers({ silent: true });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "";
       toast.error("שמירה נכשלה", { description: msg || "נסה שוב מאוחר יותר." });
@@ -637,6 +657,7 @@ export function usePlanningV2WorkerModals(
     onWorkerModalSavingChange,
     originalAvailability,
     prefsEnabled,
+    applyLocalWorkerSave,
     reloadWorkers,
     shiftKindPrefs,
     shiftSlotPrefs,

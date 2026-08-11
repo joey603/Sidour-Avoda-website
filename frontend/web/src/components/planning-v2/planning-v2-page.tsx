@@ -51,6 +51,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workersLoading,
     reloadWorkers,
     reloadWeeklyAvailability,
+    applyLocalWorkerSave,
     weekStart,
     workerRowsForTable,
   } = usePlanningV2SiteWorkers(siteId);
@@ -439,6 +440,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
             workersLoading={workersLoading}
             reloadWorkers={reloadWorkers}
             reloadWeeklyAvailability={reloadWeeklyAvailability}
+            applyLocalWorkerSave={applyLocalWorkerSave}
             onWorkersChanged={refreshWorkersAndGrid}
             onWorkerModalSavingChange={setWorkerModalSaving}
             workersNameDraggable={manualEditable}

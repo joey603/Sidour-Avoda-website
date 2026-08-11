@@ -31,6 +31,14 @@ type PlanningWorkersSectionProps = {
   /** Recharge list עובדים (silent = pas d’overlay plein écran). */
   reloadWorkers: (opts?: { silent?: boolean }) => void | Promise<void>;
   reloadWeeklyAvailability: () => void | Promise<void>;
+  applyLocalWorkerSave?: (patch: {
+    workerId?: number;
+    name: string;
+    previousName?: string;
+    maxShifts: number;
+    roles: string[];
+    availability: PlanningWorker["availability"];
+  }) => void;
   /** Refresh lourd (workers + plan + linked) — invitations / suppressions. */
   onWorkersChanged: () => void;
   /** גרירת שם לגריד במצב ידני */
@@ -57,6 +65,7 @@ export function PlanningWorkersSection({
   workersLoading,
   reloadWorkers,
   reloadWeeklyAvailability,
+  applyLocalWorkerSave,
   onWorkersChanged,
   workersNameDraggable = false,
   onWorkerNameDragPreview,
@@ -85,6 +94,7 @@ export function PlanningWorkersSection({
     },
     onWorkerModalSavingChange,
     eventLocksByWorkerId,
+    applyLocalWorkerSave,
   );
 
   const [workerListSearch, setWorkerListSearch] = useState("");
