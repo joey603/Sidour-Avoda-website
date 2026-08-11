@@ -85,28 +85,21 @@ describe("loadAutoWeekPlanLite", () => {
     apiFetch.mockReset();
   });
 
-  it("charge le plan auto lié sans workers, même חלופות", async () => {
-    apiFetch.mockImplementation((path: string) => {
-      if (String(path).includes("parts=base")) {
-        return Promise.resolve({
-          assignments: { sun: { "06-14": [["A"]] } },
-          pulls: { p: 1 },
-          workers: [{ name: "skip" }],
-          _alts_omitted: true,
-        });
-      }
-      if (String(path).includes("parts=alternatives")) {
-        return Promise.resolve({
-          alternatives: [{ sun: { "06-14": [["B"]] } }],
-          alternative_pulls: [{ q: 2 }],
-        });
-      }
-      throw new Error(`Unexpected path: ${path}`);
+  it("charge le plan auto lié en un GET full, sans workers", async () => {
+    apiFetch.mockResolvedValue({
+      assignments: { sun: { "06-14": [["A"]] } },
+      pulls: { p: 1 },
+      workers: [{ name: "skip" }],
+      alternatives: [{ sun: { "06-14": [["B"]] } }],
+      alternative_pulls: [{ q: 2 }],
     });
     const plan = await loadAutoWeekPlanLite("12", "2026-08-09");
-    const urls = apiFetch.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(urls.every((url: string) => url.includes("scope=auto"))).toBe(true);
-    expect(urls.every((url: string) => url.includes("include_workers=false"))).toBe(true);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    const url = String(apiFetch.mock.calls[0][0]);
+    expect(url).toContain("scope=auto");
+    expect(url).toContain("include_workers=false");
+    expect(url).not.toContain("parts=base");
+    expect(url).not.toContain("parts=alternatives");
     expect(plan?.assignments).toEqual({ sun: { "06-14": [["A"]] } });
     expect(plan?.alternatives).toEqual([{ sun: { "06-14": [["B"]] } }]);
     expect(plan?.alternative_pulls).toEqual([{ q: 2 }]);

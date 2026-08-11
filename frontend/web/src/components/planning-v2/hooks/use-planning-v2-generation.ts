@@ -14,9 +14,10 @@ import {
   type LinkedSitePlan,
 } from "../lib/multi-site-linked-memory";
 import {
-  clearSitesListPlanningBeforePlanningCreat,
   clearSitesListPlanningClientCachesBeforePlanningCreat,
+  deleteAutoScopeWeekPlansForSites,
 } from "@/lib/clear-sites-list-planning-for-week";
+import { discardCachedAutoWeekPlans } from "../lib/week-nav-cache";
 import { clearAllPlanningSessionCaches } from "@/lib/planning-session-cache";
 import { getApiBaseUrl } from "@/lib/api";
 import { readSseStream } from "../lib/planning-v2-sse";
@@ -81,6 +82,7 @@ type UsePlanningV2GenerationArgs = {
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
   reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  discardLocalAutoWeekPlan?: () => void;
   editingSaved: boolean;
   hasOfficialSavedWeekPlan: boolean;
   linkedSitesLength: number;
@@ -118,6 +120,7 @@ export function usePlanningV2Generation({
   workers,
   workerRowsForTable,
   reloadWeekPlan,
+  discardLocalAutoWeekPlan,
   editingSaved,
   hasOfficialSavedWeekPlan,
   linkedSitesLength,
@@ -364,6 +367,8 @@ export function usePlanningV2Generation({
         setDraftPulls(null);
         setDraftAlternatives([]);
       });
+      discardCachedAutoWeekPlans(purgeIds, weekIso);
+      discardLocalAutoWeekPlan?.();
     } else {
       // Sync immédiat : sinon les 1ers events SSE « עוד » flushent encore via startTransition
       // (generationRunningRef encore false) et le compteur חלופות ne monte pas en live.
@@ -452,16 +457,11 @@ export function usePlanningV2Generation({
       }
       alternativesFlushRafRef.current = null;
     }
-    // Session « mémoire » multi-sites (clés multi_site_*) : efface tout état client lié à une ריצה / navigation précédente.
-    if (!appendMode) {
-      if (purgeIds.length > 0) {
-        try {
-          await clearSitesListPlanningBeforePlanningCreat(weekIso, purgeIds);
-          await reloadWeekPlan({ silent: true });
-        } catch {
-          /* ignore */
-        }
-      }
+    // DELETE auto en parallèle du SSE (ne pas attendre RTT avant le solveur).
+    // On attend ce DELETE seulement avant le PUT final, pour ne pas effacer le nouveau plan.
+    let purgeAutoWeekPlansPromise: Promise<void> = Promise.resolve();
+    if (!appendMode && purgeIds.length > 0) {
+      purgeAutoWeekPlansPromise = deleteAutoScopeWeekPlansForSites(weekIso, purgeIds);
     }
     const excludeDays = options?.excludeDays;
     const fixedAssignments = options?.fixedAssignments;
@@ -739,6 +739,11 @@ export function usePlanningV2Generation({
         setMoreAlternativesAvailable(false);
       }
       const stoppedByUser = userStoppedGenerationRef.current && controller.signal.aborted;
+      try {
+        await purgeAutoWeekPlansPromise;
+      } catch {
+        /* ignore */
+      }
       if (runtime.sawPlanToPersist && !stoppedByUser) {
         writeAlternativesUnlockedToSession(weekIso, siteId);
         setAlternativesUnlockNonce((n) => n + 1);
@@ -798,6 +803,7 @@ export function usePlanningV2Generation({
     autoPullsPrefer,
     linkedSitesLength,
     reloadWeekPlan,
+    discardLocalAutoWeekPlan,
     editingSaved,
     hasOfficialSavedWeekPlan,
     site,

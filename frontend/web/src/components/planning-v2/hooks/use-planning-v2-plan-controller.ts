@@ -59,6 +59,7 @@ type PlanControllerArgs = {
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
   reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  discardLocalAutoWeekPlan?: () => void;
   /** Mode ערוך sur un plan director/shared : garder le brouillon généré visible jusqu'à sauvegarde. */
   editingSaved?: boolean;
   linkedSitesLength: number;
@@ -78,6 +79,7 @@ export function usePlanningV2PlanController({
   workers,
   workerRowsForTable,
   reloadWeekPlan,
+  discardLocalAutoWeekPlan,
   editingSaved = false,
   linkedSitesLength,
   weekPurgeSiteIds,
@@ -174,6 +176,7 @@ export function usePlanningV2PlanController({
     workers,
     workerRowsForTable,
     reloadWeekPlan,
+    discardLocalAutoWeekPlan,
     editingSaved,
     hasOfficialSavedWeekPlan,
     linkedSitesLength,

@@ -147,10 +147,9 @@ export function toAutoWeekPlanLite(plan: NonNullable<V2WeekPlanData>): AutoWeekP
 }
 
 export async function loadAutoWeekPlanLite(siteId: string, isoWeek: string): Promise<AutoWeekPlanLite | null> {
-  const plan = await loadWeekPlanForSiteWeek(siteId, isoWeek, "auto", {
-    lightweightNav: true,
-    omitWorkers: true,
-  });
+  // Fond / sync rail : un GET full (pas base+alternatives). Même payload, moins d’allers-retours.
+  const raw = await fetchWeekPlanRaw(siteId, isoWeek, "auto", { omitWorkers: true });
+  const plan = normalizeWeekPlan(raw);
   if (!plan) return null;
   return toAutoWeekPlanLite(plan);
 }

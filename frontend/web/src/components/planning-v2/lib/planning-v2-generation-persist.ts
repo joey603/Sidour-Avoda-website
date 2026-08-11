@@ -81,7 +81,7 @@ export async function persistGeneratedAutoDraftToServer({
         afterAltCounts: linkedPlansAltCounts(persistablePlans),
       });
     }
-    const persistedSiteIds: string[] = [];
+    const persistJobs: Array<{ sid: string; base: Record<string, unknown> }> = [];
     for (const [sid, pl] of Object.entries(persistablePlans)) {
       const assignments = pl.assignments;
       if (!assignments || !assignmentsNonEmpty(assignments)) continue;
@@ -101,18 +101,26 @@ export async function persistGeneratedAutoDraftToServer({
         base.alternatives = altAsg;
         base.alternative_pulls = altPulls.map((x) => (x && typeof x === "object" ? x : {}));
       }
-      await persistAutoWeekPlanDraftToApi(sid, weekStart, base);
-      persistedSiteIds.push(String(sid));
+      persistJobs.push({ sid: String(sid), base });
     }
+    // PUT séquentiels : chaque PUT auto réécrit les autres אתרים (caps liées).
+    for (const job of persistJobs) {
+      await persistAutoWeekPlanDraftToApi(job.sid, weekStart, job.base);
+    }
+    const persistedSiteIds = persistJobs.map((job) => job.sid);
     if (persistedSiteIds.length > 0) {
       try {
         const refreshedEntries = await Promise.all(
-          persistedSiteIds.map(async (sid) => {
-            const payload = await loadAutoWeekPlanLite(sid, weekIso);
-            return [sid, (payload ?? {}) as LinkedSitePlan] as const;
-          }),
+          persistedSiteIds
+            .filter((sid) => sid !== currentSiteKey)
+            .map(async (sid) => {
+              const payload = await loadAutoWeekPlanLite(sid, weekIso);
+              return [sid, payload] as const;
+            }),
         );
-        const refreshedPlans = Object.fromEntries(refreshedEntries);
+        const refreshedPlans = Object.fromEntries(
+          refreshedEntries.filter((entry): entry is [string, NonNullable<typeof entry[1]>] => !!entry[1]),
+        );
         const nextPlans = buildPersistableLinkedPlans({
           ...persistablePlans,
           ...refreshedPlans,

@@ -61,7 +61,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     [site?.next_week_saved_plan_status?.scope],
   );
   const { navigationInApp, initialNavigationWeekPlan } = usePlanningV2NavigationBootstrap(siteId, weekStart);
-  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan } = usePlanningV2WeekPlan(
+  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan, discardLocalAutoWeekPlan } = usePlanningV2WeekPlan(
     siteId,
     weekStart,
     preferredWeekPlanScope,
@@ -128,6 +128,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workers,
     workerRowsForTable,
     reloadWeekPlan,
+    discardLocalAutoWeekPlan,
     editingSaved,
     linkedSitesLength: linkedSites.length,
     weekPurgeSiteIds,

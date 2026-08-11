@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
-import { loadAutoWeekPlanLite } from "../lib/week-plan-fetch";
+import { loadAutoWeekPlanLite, toAutoWeekPlanLite } from "../lib/week-plan-fetch";
 import { computeLinkedSiteHoleEntries } from "../lib/linked-site-holes";
 import {
   clearLinkedPlansFromMemory,
@@ -209,17 +209,25 @@ export function usePlanningV2LinkedMemory({
       );
       if (targetSiteIds.length <= 1) return;
 
+      const currentKey = String(siteId);
+      const currentFromPage =
+        weekPlan && assignmentsNonEmpty(weekPlan.assignments) ? toAutoWeekPlanLite(weekPlan) : null;
       const entries = await Promise.all(
-        targetSiteIds.map(async (id) => {
-          try {
-            const lite = await loadAutoWeekPlanLite(String(id), isoWeek);
-            if (!lite) return [String(id), null] as const;
-            return [String(id), lite satisfies LinkedSitePlan] as const;
-          } catch {
-            return [String(id), null] as const;
-          }
-        }),
+        targetSiteIds
+          .filter((id) => String(id) !== currentKey)
+          .map(async (id) => {
+            try {
+              const lite = await loadAutoWeekPlanLite(String(id), isoWeek);
+              if (!lite) return [String(id), null] as const;
+              return [String(id), lite satisfies LinkedSitePlan] as const;
+            } catch {
+              return [String(id), null] as const;
+            }
+          }),
       );
+      if (currentFromPage) {
+        entries.push([currentKey, currentFromPage]);
+      }
 
       if (cancelled) return;
       const plansBySite = Object.fromEntries(entries.filter(([, planValue]) => !!planValue)) as Record<string, LinkedSitePlan>;
@@ -247,7 +255,7 @@ export function usePlanningV2LinkedMemory({
     return () => {
       cancelled = true;
     };
-  }, [linkedSites, plan.generationRunning, siteId, weekPlan?.sourceScope, weekStart]);
+  }, [linkedSites, plan.generationRunning, siteId, weekPlan, weekStart]);
 
   useEffect(() => {
     if (linkedSites.length <= 1) return;

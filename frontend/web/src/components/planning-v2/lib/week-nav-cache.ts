@@ -29,6 +29,18 @@ export function setCachedWeekPlan(siteId: string, weekIso: string, plan: V2WeekP
   weekPlanCache.set(cacheKey(siteId, weekIso), plan);
 }
 
+/** Oublie les טיוטות auto en cache (garde director/shared) pour ne pas repeindre l’ancien plan. */
+export function discardCachedAutoWeekPlans(siteIds: Array<string | number>, weekIso: string): void {
+  const wk = String(weekIso || "").trim();
+  if (!wk) return;
+  for (const sid of siteIds) {
+    const id = String(sid);
+    const cached = getCachedWeekPlan(id, wk);
+    if (cached?.sourceScope === "director" || cached?.sourceScope === "shared") continue;
+    weekPlanCache.delete(cacheKey(id, wk));
+  }
+}
+
 export function getCachedWeekWorkers(siteId: string, weekIso: string): WeekNavWorkersCacheEntry | undefined {
   return weekWorkersCache.get(cacheKey(siteId, weekIso));
 }

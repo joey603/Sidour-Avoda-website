@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getWeekKeyISO } from "../lib/week";
 import {
+  discardCachedAutoWeekPlans,
   getCachedWeekPlan,
   prefetchAdjacentWeeks,
   setCachedWeekPlan,
@@ -88,6 +89,15 @@ export function usePlanningV2WeekPlan(
     [siteId, weekStart, lightweightNav],
   );
 
+  const discardLocalAutoWeekPlan = useCallback(() => {
+    const isoWeek = getWeekKeyISO(weekStart);
+    setPlan((prev) => {
+      if (prev?.sourceScope === "director" || prev?.sourceScope === "shared") return prev;
+      discardCachedAutoWeekPlans([siteId], isoWeek);
+      return null;
+    });
+  }, [siteId, weekStart]);
+
   useEffect(() => {
     if (options?.skipInitialReload) {
       setPlan(options.initialPlan ?? null);
@@ -105,5 +115,5 @@ export function usePlanningV2WeekPlan(
     void reload({ silent });
   }, [reload, options?.skipInitialReload, options?.initialPlan, weekStart]);
 
-  return { plan, loading, reloadWeekPlan: reload };
+  return { plan, loading, reloadWeekPlan: reload, discardLocalAutoWeekPlan };
 }
