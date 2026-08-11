@@ -396,8 +396,8 @@ export function PlanningV2PlanExportButtons({
 
   return (
     <>
-      <div className="mt-4 flex w-full flex-col items-start gap-2 md:flex-row md:items-center md:justify-between" dir="ltr">
-        <div className="flex flex-wrap items-center justify-start gap-2">
+      <div className="mt-4 flex w-full flex-col items-center gap-2 md:flex-row md:items-center md:justify-between" dir="ltr">
+        <div className="flex w-full flex-wrap items-center justify-center gap-2 md:w-auto md:justify-start">
           <button
             type="button"
             onClick={onOpenVisualization}
@@ -435,7 +435,7 @@ export function PlanningV2PlanExportButtons({
             {excelExporting ? "מייצא…" : "ייצוא Excel"}
           </button>
         </div>
-        <div className="flex flex-wrap items-center justify-start gap-2 md:ms-auto">
+        <div className="flex w-full flex-wrap items-center justify-center gap-2 md:ms-auto md:w-auto md:justify-start">
           <button
             type="button"
             onClick={() => void handleExportScreenshot()}
@@ -465,38 +465,45 @@ export function PlanningV2PlanExportButtons({
             </svg>
             צילום חודש
           </button>
-          {salaryFeatureEnabled ? (
-            <>
-              <button
-                type="button"
-                onClick={() => handleSalaryWeek()}
-                disabled={!canVisualize}
-                className={btnClass}
-                title="חישוב משכורת ברוטו לשבוע לפי הגדרות האתר (שעות נוספות / שבת / חג)"
-                aria-label="משכורת"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-                  <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c2.03-.39 3.7-1.61 3.7-3.7 0-2.58-2.23-3.56-4.8-4.25z" />
-                </svg>
-                משכורת
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  clearPhotoPreview();
-                  setSalaryMonthOpen(true);
-                }}
-                className={btnClass}
-                title="חישוב משכורת ברוטו לחודש לפי כל השבועות השמורים"
-                aria-label="משכורת חודש"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
-                  <path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z" />
-                </svg>
-                משכורת חודש
-              </button>
-            </>
-          ) : null}
+          <div className="flex w-full flex-wrap items-center justify-center gap-2 md:w-auto md:justify-start">
+          <button
+            type="button"
+            onClick={() => handleSalaryWeek()}
+            disabled={!salaryFeatureEnabled || !canVisualize}
+            className={btnClass}
+            title={
+              salaryFeatureEnabled
+                ? "חישוב משכורת ברוטו לשבוע לפי הגדרות האתר (שעות נוספות / שבת / חג)"
+                : "יש להפעיל חישוב משכורת בהגדרות האתר"
+            }
+            aria-label="משכורת"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c2.03-.39 3.7-1.61 3.7-3.7 0-2.58-2.23-3.56-4.8-4.25z" />
+            </svg>
+            משכורת
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              clearPhotoPreview();
+              setSalaryMonthOpen(true);
+            }}
+            disabled={!salaryFeatureEnabled}
+            className={btnClass}
+            title={
+              salaryFeatureEnabled
+                ? "חישוב משכורת ברוטו לחודש לפי כל השבועות השמורים"
+                : "יש להפעיל חישוב משכורת בהגדרות האתר"
+            }
+            aria-label="משכורת חודש"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" className="shrink-0 text-sky-700 dark:text-sky-300" fill="currentColor" aria-hidden>
+              <path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7v-5z" />
+            </svg>
+            משכורת חודש
+          </button>
+          </div>
         </div>
       </div>
 

@@ -1140,8 +1140,8 @@ export default function EditSitePage() {
               <div className="min-w-0 flex-1">
                 <h2 className="text-lg font-semibold">חישוב משכורת (ברוטו)</h2>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  כשמופעל — מופיעים בתכנון הכפתורים «משכורת» / «משכורת חודש». כבוי — הכפתורים מוסתרים
-                  וההגדרות למטה לא בשימוש.
+                  כשמופעל — הכפתורים «משכורת» / «משכורת חודש» פעילים בתכנון. כבוי — הכפתורים מוצגים
+                  אך מנוטרלים, וההגדרות למטה לא בשימוש.
                 </p>
               </div>
               <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
@@ -1706,7 +1706,7 @@ export default function EditSitePage() {
             </>
             ) : (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                הפעילו את חישוב המשכורת כדי להגדיר תעריפים ולהציג את כפתורי «משכורת» בתכנון.
+                הפעילו את חישוב המשכורת כדי להגדיר תעריפים ולהפעיל את כפתורי «משכורת» בתכנון.
               </p>
             )}
           </section>
