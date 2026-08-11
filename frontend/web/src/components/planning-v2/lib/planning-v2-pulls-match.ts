@@ -1,5 +1,30 @@
 /** Helpers de matching / comptage des משיכות pour le filtrage SSE. */
 
+export type PullsShiftKind = "morning" | "noon" | "night";
+
+export type PullsShiftPrefs = {
+  morning: boolean;
+  noon: boolean;
+  night: boolean;
+};
+
+export const EMPTY_PULLS_SHIFT_PREFS: PullsShiftPrefs = {
+  morning: false,
+  noon: false,
+  night: false,
+};
+
+/** Liste envoyée au backend. Vide / les 3 = mix. */
+export function pullsPreferPayload(prefs: PullsShiftPrefs | null | undefined): PullsShiftKind[] | undefined {
+  if (!prefs) return undefined;
+  const kinds: PullsShiftKind[] = [];
+  if (prefs.morning) kinds.push("morning");
+  if (prefs.noon) kinds.push("noon");
+  if (prefs.night) kinds.push("night");
+  if (kinds.length === 0 || kinds.length === 3) return undefined;
+  return kinds;
+}
+
 export function pullsLimitPayload(autoPullsEnabled: boolean, autoPullsLimit: string): number | null | undefined {
   if (!autoPullsEnabled) return undefined;
   if (autoPullsLimit === "unlimited") return null;

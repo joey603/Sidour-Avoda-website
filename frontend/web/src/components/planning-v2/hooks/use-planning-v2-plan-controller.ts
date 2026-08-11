@@ -20,8 +20,24 @@ import {
 import { type DraftAlternative, draftAlternativesForMode } from "../lib/planning-v2-draft-alternatives";
 import { usePlanningV2Generation } from "./use-planning-v2-generation";
 import { usePlanningV2DisplayVariants } from "./use-planning-v2-display-variants";
+import { EMPTY_PULLS_SHIFT_PREFS, type PullsShiftPrefs } from "../lib/planning-v2-pulls-match";
 
 const AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_limit_week_";
+const AUTO_PULLS_PREFER_BY_WEEK_KEY_PREFIX = "planning_v2_auto_pulls_prefer_week_";
+
+function parsePullsShiftPrefs(raw: string | null): PullsShiftPrefs {
+  if (!raw) return { ...EMPTY_PULLS_SHIFT_PREFS };
+  try {
+    const obj = JSON.parse(raw) as Partial<PullsShiftPrefs>;
+    return {
+      morning: obj?.morning === true,
+      noon: obj?.noon === true,
+      night: obj?.night === true,
+    };
+  } catch {
+    return { ...EMPTY_PULLS_SHIFT_PREFS };
+  }
+}
 
 type PlanControllerArgs = {
   siteId: string;
@@ -68,18 +84,21 @@ export function usePlanningV2PlanController({
   const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0);
   // Par défaut: משיכות ללא (empty string).
   const [autoPullsLimit, setAutoPullsLimit] = useState("");
+  const [autoPullsPrefer, setAutoPullsPrefer] = useState<PullsShiftPrefs>({ ...EMPTY_PULLS_SHIFT_PREFS });
   const [isManual, setIsManual] = useState(false);
   const draftAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | null>(null);
   const draftPullsRef = useRef<PlanningV2PullsMap>({});
   const draftAlternativesRef = useRef<DraftAlternative[]>([]);
   /** Index choisi manuellement pendant le streaming — ne pas le faire écraser par la mémoire. */
   const userPickedAltIndexRef = useRef<number | null>(null);
+  const selectedAlternativeIndexRef = useRef(0);
   const weekPlanAssignmentsRef = useRef<Record<string, Record<string, string[][]>> | undefined>(undefined);
   const assignmentVariantsRef = useRef<Array<Record<string, Record<string, string[][]>>>>([]);
   const pullVariantsRef = useRef<PlanningV2PullsMap[]>([]);
 
   const weekIso = getWeekKeyISO(weekStart);
   const autoPullsStorageKey = `${AUTO_PULLS_LIMIT_BY_WEEK_KEY_PREFIX}${weekIso}`;
+  const autoPullsPreferStorageKey = `${AUTO_PULLS_PREFER_BY_WEEK_KEY_PREFIX}${weekIso}`;
   const [alternativesUnlockNonce, setAlternativesUnlockNonce] = useState(0);
   const [clientStorageReady, setClientStorageReady] = useState(false);
   const [moreAlternativesAvailable, setMoreAlternativesAvailable] = useState(true);
@@ -115,6 +134,15 @@ export function usePlanningV2PlanController({
     }
   }, [autoPullsStorageKey]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      setAutoPullsPrefer(parsePullsShiftPrefs(localStorage.getItem(autoPullsPreferStorageKey)));
+    } catch {
+      setAutoPullsPrefer({ ...EMPTY_PULLS_SHIFT_PREFS });
+    }
+  }, [autoPullsPreferStorageKey]);
+
   const autoPullsEnabled = autoPullsLimit !== "";
   const hasOfficialSavedWeekPlan =
     assignmentsNonEmpty(weekPlan?.assignments ?? null) &&
@@ -137,6 +165,7 @@ export function usePlanningV2PlanController({
     eventLocksByWorkerId,
     autoPullsEnabled,
     autoPullsLimit,
+    autoPullsPrefer,
     dedupeAlternatives,
     assignmentVariantsRef,
     pullVariantsRef,
@@ -149,6 +178,8 @@ export function usePlanningV2PlanController({
     setDraftAlternatives,
     setDraftFixedAssignmentsSnapshot,
     setSelectedAlternativeIndex,
+    userPickedAltIndexRef,
+    selectedAlternativeIndexRef,
     setIsManual,
     setMoreAlternativesAvailable,
     setAlternativesUnlockNonce,
@@ -174,6 +205,9 @@ export function usePlanningV2PlanController({
     }
   }, [generationRunning]);
 
+  useEffect(() => {
+    selectedAlternativeIndexRef.current = selectedAlternativeIndex;
+  }, [selectedAlternativeIndex]);
   useEffect(() => {
     draftAssignmentsRef.current = draftAssignments;
   }, [draftAssignments]);
@@ -465,6 +499,24 @@ export function usePlanningV2PlanController({
     [autoPullsStorageKey],
   );
 
+  const setAutoPullsPreferPersisted = useCallback(
+    (next: PullsShiftPrefs) => {
+      const normalized: PullsShiftPrefs = {
+        morning: next?.morning === true,
+        noon: next?.noon === true,
+        night: next?.night === true,
+      };
+      setAutoPullsPrefer(normalized);
+      if (typeof window === "undefined") return;
+      try {
+        localStorage.setItem(autoPullsPreferStorageKey, JSON.stringify(normalized));
+      } catch {
+        /* ignore */
+      }
+    },
+    [autoPullsPreferStorageKey],
+  );
+
   const flushPendingAlternativesNow = useCallback(() => {
     if (typeof window !== "undefined" && alternativesFlushRafRef.current != null) {
       try {
@@ -503,6 +555,7 @@ export function usePlanningV2PlanController({
       }
       const next = Math.min(Math.max(0, Number(index || 0)), maxIdx);
       userPickedAltIndexRef.current = next;
+      selectedAlternativeIndexRef.current = next;
       setSelectedAlternativeIndex((prev) => (prev === next ? prev : next));
       if (linkedSitesLength > 1) {
         const mem = readLinkedPlansFromMemory(weekStart);
@@ -530,6 +583,8 @@ export function usePlanningV2PlanController({
     savePlan,
     autoPullsLimit,
     setAutoPullsLimit: setAutoPullsLimitPersisted,
+    autoPullsPrefer,
+    setAutoPullsPrefer: setAutoPullsPreferPersisted,
     autoPullsEnabled,
     isManual,
     setIsManual: setIsManualPreservingCurrentGrid,

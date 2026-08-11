@@ -33,7 +33,10 @@ import {
   adjustedAppendGenerationBudget,
 } from "../lib/planning-v2-generation-budget";
 import {
+  EMPTY_PULLS_SHIFT_PREFS,
   pullsLimitPayload,
+  pullsPreferPayload,
+  type PullsShiftPrefs,
 } from "../lib/planning-v2-pulls-match";
 import {
   type DraftAlternative,
@@ -86,6 +89,7 @@ type UsePlanningV2GenerationArgs = {
   eventLocksByWorkerId: Record<number, Record<string, string[]>>;
   autoPullsEnabled: boolean;
   autoPullsLimit: string;
+  autoPullsPrefer?: PullsShiftPrefs;
   dedupeAlternatives: boolean;
   assignmentVariantsRef: MutableRefObject<AssignmentGrid[]>;
   pullVariantsRef: MutableRefObject<PlanningV2PullsMap[]>;
@@ -98,6 +102,8 @@ type UsePlanningV2GenerationArgs = {
   setDraftAlternatives: Dispatch<SetStateAction<DraftAlternative[]>>;
   setDraftFixedAssignmentsSnapshot: Dispatch<SetStateAction<AssignmentGrid | null>>;
   setSelectedAlternativeIndex: Dispatch<SetStateAction<number>>;
+  userPickedAltIndexRef: MutableRefObject<number | null>;
+  selectedAlternativeIndexRef: MutableRefObject<number>;
   setIsManual: Dispatch<SetStateAction<boolean>>;
   setMoreAlternativesAvailable: Dispatch<SetStateAction<boolean>>;
   setAlternativesUnlockNonce: Dispatch<SetStateAction<number>>;
@@ -119,6 +125,7 @@ export function usePlanningV2Generation({
   eventLocksByWorkerId,
   autoPullsEnabled,
   autoPullsLimit,
+  autoPullsPrefer = EMPTY_PULLS_SHIFT_PREFS,
   dedupeAlternatives,
   assignmentVariantsRef,
   pullVariantsRef,
@@ -131,6 +138,8 @@ export function usePlanningV2Generation({
   setDraftAlternatives,
   setDraftFixedAssignmentsSnapshot,
   setSelectedAlternativeIndex,
+  userPickedAltIndexRef,
+  selectedAlternativeIndexRef,
   setIsManual,
   setMoreAlternativesAvailable,
   setAlternativesUnlockNonce,
@@ -332,6 +341,8 @@ export function usePlanningV2Generation({
           /* ignore */
         }
       }
+      userPickedAltIndexRef.current = null;
+      selectedAlternativeIndexRef.current = 0;
       draftAssignmentsRef.current = null;
       draftPullsRef.current = {};
       draftAlternativesRef.current = [];
@@ -422,7 +433,7 @@ export function usePlanningV2Generation({
           ? buildSeenLinkedAlternativeSnapshots(readLinkedPlansFromMemory(weekStart)?.plansBySite || {})
           : new Set();
       bestGeneratedHoleScoreRef.current = baseAssignments
-        ? singlePlanHoleScore(site, baseAssignments, basePulls)
+        ? singlePlanHoleScore(site, baseAssignments, basePulls, pullsPreferPayload(autoPullsPrefer))
         : null;
       appendUniqueCountRef.current = 0;
       lastAlternativeSnapshotRef.current = "";
@@ -462,6 +473,7 @@ export function usePlanningV2Generation({
     );
     const pulls_limit = pullsLimitPayload(autoPullsEnabled, autoPullsLimit);
     const requestedPullsCount = typeof pulls_limit === "number" ? pulls_limit : null;
+    const pulls_prefer = autoPullsEnabled ? pullsPreferPayload(autoPullsPrefer) : undefined;
     const pulls_limits_by_site =
       linkedSitesLength > 1 && autoPullsEnabled && options?.pullsScope === "current_only"
         ? Object.fromEntries(
@@ -489,6 +501,7 @@ export function usePlanningV2Generation({
           time_limit_seconds: budget.timeLimitSeconds,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
+          pulls_prefer,
           pulls_limits_by_site,
           fixed_assignments: fixedAssignments,
           exclude_days: excludeDays && excludeDays.length ? excludeDays : undefined,
@@ -500,6 +513,7 @@ export function usePlanningV2Generation({
           time_limit_seconds: budget.timeLimitSeconds,
           auto_pulls_enabled: autoPullsEnabled,
           pulls_limit,
+          pulls_prefer,
           fixed_assignments: fixedAssignments,
           exclude_days: excludeDays && excludeDays.length ? excludeDays : undefined,
           weekly_availability,
@@ -531,6 +545,7 @@ export function usePlanningV2Generation({
       site,
       pullsScope: options?.pullsScope,
       requestedPullsCount,
+      pullsPreferKinds: pulls_prefer ?? null,
       appendExistingAlternativesCount,
       visibleAlternativeCountAtStart,
       autoPullsEnabled,
@@ -563,6 +578,8 @@ export function usePlanningV2Generation({
       setSelectedAlternativeIndex,
       setIsManual,
       setMoreAlternativesAvailable,
+      userPickedAltIndexRef,
+      selectedAlternativeIndexRef,
       runtime,
     };
     const generationSseHelpers = createGenerationSseHelpers(sseArgs);
@@ -774,6 +791,7 @@ export function usePlanningV2Generation({
     workerRowsForTable,
     autoPullsEnabled,
     autoPullsLimit,
+    autoPullsPrefer,
     linkedSitesLength,
     reloadWeekPlan,
     editingSaved,
@@ -782,6 +800,8 @@ export function usePlanningV2Generation({
     weekPurgeSiteIds,
     alternativesFlushRafRef,
     getVisibleAlternativeCount,
+    userPickedAltIndexRef,
+    selectedAlternativeIndexRef,
   ]);
 
   const startGeneration = useCallback(

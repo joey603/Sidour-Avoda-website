@@ -4,6 +4,7 @@ import { ModalOverlay } from "@/components/ui/modal-scroll-lock";
 
 import { useCallback, useMemo, useState } from "react";
 import PullsLimitPicker from "@/components/pulls-limit-picker";
+import type { PullsShiftPrefs } from "./lib/planning-v2-pulls-match";
 import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import type { V2WeekPlanData } from "./hooks/use-planning-v2-week-plan";
@@ -35,6 +36,8 @@ type PlanningV2ActionBarProps = {
   onStopGeneration: () => void;
   autoPullsLimit: string;
   onAutoPullsLimitChange: (v: string) => void;
+  autoPullsPrefer: PullsShiftPrefs;
+  onAutoPullsPreferChange: (v: PullsShiftPrefs) => void;
   autoPullsEnabled: boolean;
   isManual: boolean;
   onIsManualChange: (v: boolean) => void;
@@ -82,6 +85,8 @@ export function PlanningV2ActionBar({
   onStopGeneration,
   autoPullsLimit,
   onAutoPullsLimitChange,
+  autoPullsPrefer,
+  onAutoPullsPreferChange,
   autoPullsEnabled,
   isManual,
   onIsManualChange,
@@ -750,6 +755,8 @@ export function PlanningV2ActionBar({
                   <PullsLimitPicker
                     value={autoPullsLimit}
                     onChange={onAutoPullsLimitChange}
+                    prefer={autoPullsPrefer}
+                    onPreferChange={onAutoPullsPreferChange}
                     disabled={generationBlocked}
                     className={
                       "!shadow-none w-full max-w-[3.25rem] bg-transparent py-0 text-center text-[12px] font-semibold leading-none outline-none [@media(orientation:landscape)_and_(max-width:1024px)]:max-w-[3rem] [@media(orientation:landscape)_and_(max-width:1024px)]:text-[11px] " +

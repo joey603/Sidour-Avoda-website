@@ -546,6 +546,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
           onStopGeneration={plan.stopGeneration}
           autoPullsLimit={plan.autoPullsLimit}
           onAutoPullsLimitChange={plan.setAutoPullsLimit}
+          autoPullsPrefer={plan.autoPullsPrefer}
+          onAutoPullsPreferChange={plan.setAutoPullsPrefer}
           autoPullsEnabled={plan.autoPullsEnabled}
           isManual={plan.isManual}
           onIsManualChange={(next) => {

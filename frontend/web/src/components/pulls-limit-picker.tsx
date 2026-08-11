@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import {
+  EMPTY_PULLS_SHIFT_PREFS,
+  type PullsShiftKind,
+  type PullsShiftPrefs,
+} from "@/components/planning-v2/lib/planning-v2-pulls-match";
 
 const PULLS_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "ללא" },
@@ -16,9 +21,17 @@ function labelForValue(v: string): string {
   return PULLS_OPTIONS.find((o) => o.value === v)?.label ?? "ללא";
 }
 
+const PREFER_OPTIONS: { kind: PullsShiftKind; label: string }[] = [
+  { kind: "morning", label: "בוקר" },
+  { kind: "noon", label: "צהריים" },
+  { kind: "night", label: "לילה" },
+];
+
 interface PullsLimitPickerProps {
   value: string;
   onChange: (value: string) => void;
+  prefer?: PullsShiftPrefs;
+  onPreferChange?: (prefer: PullsShiftPrefs) => void;
   disabled?: boolean;
   className?: string;
   title?: string;
@@ -28,12 +41,15 @@ interface PullsLimitPickerProps {
 export default function PullsLimitPicker({
   value,
   onChange,
+  prefer = EMPTY_PULLS_SHIFT_PREFS,
+  onPreferChange,
   disabled = false,
   className = "",
   title = "מגבלת משיכות",
 }: PullsLimitPickerProps) {
   const [showPopup, setShowPopup] = useState(false);
   const [selectedValue, setSelectedValue] = useState(value);
+  const [selectedPrefer, setSelectedPrefer] = useState<PullsShiftPrefs>(prefer);
   const popupRef = useRef<HTMLDivElement>(null);
   const openedAtRef = useRef<number>(0);
   const [portalEl, setPortalEl] = useState<HTMLElement | null>(null);
@@ -45,6 +61,10 @@ export default function PullsLimitPicker({
   useEffect(() => {
     setSelectedValue(value);
   }, [value]);
+
+  useEffect(() => {
+    setSelectedPrefer(prefer);
+  }, [prefer]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -61,6 +81,7 @@ export default function PullsLimitPicker({
 
   const handleSave = () => {
     onChange(selectedValue);
+    onPreferChange?.(selectedPrefer);
     setShowPopup(false);
   };
 
@@ -69,6 +90,11 @@ export default function PullsLimitPicker({
     openedAtRef.current = Date.now();
     setShowPopup(true);
     setSelectedValue(value);
+    setSelectedPrefer(prefer);
+  };
+
+  const togglePrefer = (kind: PullsShiftKind) => {
+    setSelectedPrefer((prev) => ({ ...prev, [kind]: !prev[kind] }));
   };
 
   return (
@@ -114,6 +140,38 @@ export default function PullsLimitPicker({
                 <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">משיכות</h3>
               </div>
               <div className="px-4 pb-3 pt-2">
+                <div className="mb-3">
+                  <div className="mb-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">העדפת משיכות</div>
+                  <div className="mb-2 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400">
+                    רק מיקום המשיכות — לא שיבוץ המשמרות. אם לא נבחר כלום: שילוב.
+                  </div>
+                  <div className="flex gap-1">
+                    {PREFER_OPTIONS.map((o) => {
+                      const isOn = selectedPrefer[o.kind];
+                      return (
+                        <button
+                          key={o.kind}
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            togglePrefer(o.kind);
+                          }}
+                          className={
+                            "flex-1 touch-manipulation rounded-md border px-2 py-2 text-center text-sm font-medium transition-colors " +
+                            (isOn
+                              ? "border-orange-500 bg-orange-50 text-orange-800 dark:border-orange-400 dark:bg-orange-950/40 dark:text-orange-200"
+                              : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700")
+                          }
+                          aria-pressed={isOn}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="mb-1 text-sm font-medium text-zinc-800 dark:text-zinc-200">כמות</div>
                 <div className="mx-auto flex w-full max-w-[11rem] flex-col gap-1">
                   {PULLS_OPTIONS.map((o) => {
                     const isSelected = selectedValue === o.value;
