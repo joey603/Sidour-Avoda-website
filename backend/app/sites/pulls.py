@@ -74,15 +74,78 @@ def _split_range_for_pulls(start: str, end: str, max_each_minutes: int = 4 * 60)
     )
 
 
-def _pull_target_shift_priority(shift_name: str) -> tuple[int, str]:
-    # Priorité métier: essayer d'abord de combler les trous d'après-midi.
-    if _is_noon_shift_name(shift_name):
-        return (0, str(shift_name or ""))
+_PULLS_PREFER_KINDS = ("morning", "noon", "night")
+_PULLS_KIND_ORDER = {"morning": 0, "noon": 1, "night": 2}
+
+
+def _shift_pull_kind(shift_name: str) -> str | None:
     if _is_morning_shift_name(shift_name):
-        return (1, str(shift_name or ""))
+        return "morning"
+    if _is_noon_shift_name(shift_name):
+        return "noon"
     if _is_night_shift_name(shift_name):
-        return (2, str(shift_name or ""))
-    return (3, str(shift_name or ""))
+        return "night"
+    return None
+
+
+def _normalize_pulls_prefer(raw: object | None) -> tuple[str, ...] | None:
+    """None = mix (aucune préférence de משיכות). 1–2 kinds = priorité ciblée."""
+    if raw is None:
+        return None
+    values = [raw] if isinstance(raw, str) else list(raw) if isinstance(raw, (list, tuple, set)) else []
+    out: list[str] = []
+    aliases = {
+        "morning": "morning",
+        "noon": "noon",
+        "night": "night",
+        "בוקר": "morning",
+        "צהריים": "noon",
+        "צהרים": "noon",
+        "לילה": "night",
+    }
+    for item in values:
+        raw_s = str(item or "").strip()
+        kind = aliases.get(raw_s.lower()) or aliases.get(raw_s)
+        if kind in _PULLS_PREFER_KINDS and kind not in out:
+            out.append(kind)
+    if not out or len(out) >= 3:
+        return None
+    return tuple(out)
+
+
+def _pull_target_shift_priority(
+    shift_name: str,
+    pulls_prefer: tuple[str, ...] | None = None,
+) -> tuple[int, int, str]:
+    kind = _shift_pull_kind(shift_name)
+    kind_idx = _PULLS_KIND_ORDER.get(kind, 3) if kind else 3
+    name = str(shift_name or "")
+    if not pulls_prefer:
+        # Mix : aucune priorité de kind (pas un ordre de gardes).
+        return (0, 0, "")
+    if kind and kind in pulls_prefer:
+        return (0, kind_idx, name)
+    return (1, kind_idx, name)
+
+
+def _preferred_pulls_count(pulls: dict | None, pulls_prefer: object | None = None) -> int:
+    prefer = _normalize_pulls_prefer(pulls_prefer)
+    if not prefer:
+        return 0
+    total = 0
+    for key in _sanitize_pulls_map(pulls):
+        parts = str(key or "").split("|")
+        if len(parts) < 2:
+            continue
+        kind = _shift_pull_kind(parts[1])
+        if kind and kind in prefer:
+            total += 1
+    return total
+
+
+def _noon_pulls_count(pulls: dict | None) -> int:
+    """Nombre de משיכות dont la cellule cible est un shift צהריים."""
+    return _preferred_pulls_count(pulls, ("noon",))
 
 
 def _count_split_day_same_worker_patterns(site_config: dict | None, assignments: dict | None) -> int:
@@ -136,7 +199,13 @@ def _count_split_day_same_worker_patterns(site_config: dict | None, assignments:
     return total
 
 
-def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: dict, pulls_limit: int | None = None) -> dict:
+def _apply_auto_pulls_to_payload(
+    site: Site,
+    rows: list[SiteWorker],
+    payload: dict,
+    pulls_limit: int | None = None,
+    pulls_prefer: object | None = None,
+) -> dict:
     from ..ai_solver import build_capacities_from_config
 
     assignments = payload.get("assignments")
@@ -152,6 +221,7 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
     }
     pulls: dict[str, dict] = {}
     normalized_pulls_limit = int(pulls_limit) if pulls_limit is not None else None
+    prefer_kinds = _normalize_pulls_prefer(pulls_prefer)
 
     def worker_has_role(worker_name: str, role_name: str) -> bool:
         return _norm_role_local(role_name) in name_to_roles.get(_norm_name_local(worker_name), set())
@@ -241,7 +311,7 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
         next_names = set(get_cell_names(days[next_coord[0]], shifts[next_coord[1]], station_idx))
         return bool(prev_names.intersection(next_names))
 
-    target_cells: list[tuple[int, tuple[int, str], int, int, str]] = []
+    target_cells: list[tuple[int, tuple[int, int, str], int, int, str]] = []
     for station_idx, station in enumerate(stations):
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}
@@ -252,17 +322,47 @@ def _apply_auto_pulls_to_payload(site: Site, rows: list[SiteWorker], payload: di
                 next_coord = next_of(day_idx, shift_idx)
                 if required <= 0 or not prev_coord or not next_coord:
                     continue
-                pull_priority = _pull_target_shift_priority(shift_name)
+                pull_priority = _pull_target_shift_priority(shift_name, prefer_kinds)
                 if _has_same_worker_around_middle(day_idx, shift_idx, station_idx):
-                    pull_priority = (-1, pull_priority[1])
+                    pull_priority = (-1, *pull_priority[1:])
                 crosses_day_boundary = int(prev_coord[0] != day_idx or next_coord[0] != day_idx)
                 target_cells.append((crosses_day_boundary, pull_priority, station_idx, day_idx, shift_name))
 
     target_cells.sort(key=lambda item: (item[0], item[1], item[3], item[2]))
 
+    def _shift_is_preferred_pull_target(shift_name: str) -> bool:
+        if not prefer_kinds:
+            return True
+        kind = _shift_pull_kind(shift_name)
+        return bool(kind and kind in prefer_kinds)
+
+    def _preferred_requirement_holes_remain() -> bool:
+        """True s'il reste un besoin non couvert sur les משמרות de משיכות préférées."""
+        if not prefer_kinds:
+            return False
+        for st_idx, st in enumerate(stations):
+            st_cap = st.get("capacity") or {}
+            for dk in days:
+                for sn in shifts:
+                    if not _shift_is_preferred_pull_target(sn):
+                        continue
+                    req = int((st_cap.get(dk, {}) or {}).get(sn, 0) or 0)
+                    if req <= 0:
+                        continue
+                    prefix = f"{dk}|{sn}|{st_idx}|"
+                    existing = [k for k in pulls if str(k).startswith(prefix)]
+                    names = get_cell_names(dk, sn, st_idx)
+                    assigned_places = max(0, len(names) - len(existing))
+                    if req - assigned_places >= 1:
+                        return True
+        return False
+
     for _, _, station_idx, day_idx, shift_name in target_cells:
         if normalized_pulls_limit is not None and len(pulls) >= normalized_pulls_limit:
             break
+        # Tant qu'il reste des trous sur les משיכות préférées, ne pas en créer ailleurs.
+        if not _shift_is_preferred_pull_target(shift_name) and _preferred_requirement_holes_remain():
+            continue
         station = stations[station_idx]
         station_cfg = station_cfgs[station_idx] if station_idx < len(station_cfgs) and isinstance(station_cfgs[station_idx], dict) else {}
         cap_map = station.get("capacity") or {}
@@ -498,6 +598,7 @@ def _apply_auto_pulls_to_site_plans(
     site_plans: dict[str, dict],
     pulls_limit: int | None = None,
     pulls_limits_by_site: dict[int, int | None] | None = None,
+    pulls_prefer: object | None = None,
 ) -> dict[str, dict]:
     if not site_plans:
         return site_plans
@@ -525,6 +626,7 @@ def _apply_auto_pulls_to_site_plans(
             site_rows,
             {"assignments": deepcopy(site_plan.get("assignments") or {}), "pulls": {}},
             pulls_limit=effective_site_limit,
+            pulls_prefer=pulls_prefer,
         )
         site_plan["assignments"] = base_payload.get("assignments") or {}
         site_plan["pulls"] = base_payload.get("pulls") or {}
@@ -541,6 +643,7 @@ def _apply_auto_pulls_to_site_plans(
                 site_rows,
                 {"assignments": deepcopy(alt_assignments or {}), "pulls": {}},
                 pulls_limit=effective_site_limit,
+                pulls_prefer=pulls_prefer,
             )
             next_alternatives.append(alt_payload.get("assignments") or {})
             alternative_pulls.append(alt_payload.get("pulls") or {})

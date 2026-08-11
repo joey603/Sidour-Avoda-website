@@ -37,7 +37,11 @@ from .linked_sites import (
     _enforce_linked_global_caps_on_site_plans,
     _split_multi_site_assignments,
 )
-from .auto_planning import _clamp_generation_budget
+from .auto_planning import (
+    _clamp_generation_budget,
+    _single_site_candidate_sort_key,
+    _should_hold_plan_until_pull_target,
+)
 
 logger = logging.getLogger("ai_solver")
 
@@ -78,6 +82,9 @@ async def apply_linked_stream_body_overrides(request, payload: AIPlanningRequest
                 payload.pulls_limits_by_site = (
                     body.get("pulls_limits_by_site") if isinstance(body.get("pulls_limits_by_site"), dict) else None
                 )
+                if "pulls_prefer" in body:
+                    raw_prefer = body.get("pulls_prefer")
+                    payload.pulls_prefer = raw_prefer if isinstance(raw_prefer, list) and raw_prefer else None
                 if "weekly_availability" in body:
                     payload.weekly_availability = clean_weekly_availability_from_body(body.get("weekly_availability"))
         except Exception:
@@ -314,6 +321,7 @@ def _run_linked_stream_producer(params: LinkedGenerationStreamParams, q: "queue.
                             split_site_plans,
                             pulls_limit=eff_pulls_limit,
                             pulls_limits_by_site=eff_pulls_limits_by_site or None,
+                            pulls_prefer=payload.pulls_prefer if payload else None,
                         )
                         split_site_plans = _enforce_linked_global_caps_on_site_plans(
                             db,
@@ -418,7 +426,8 @@ def _run_linked_stream_producer(params: LinkedGenerationStreamParams, q: "queue.
                                 "site_plans": split_site_plans,
                             })
                             base_sent = True
-                        continue
+                            continue
+                        item_type = "alternative"
 
                     try:
                         sig = json.dumps(split_site_plans, ensure_ascii=False, sort_keys=True)
@@ -546,6 +555,66 @@ def _run_single_stream_producer(params: SingleGenerationStreamParams, q: "queue.
         deadline_monotonic = time.monotonic() + max(1, int(eff_time))
         attempts = 0
         base_sent = False
+        week_iso = str(getattr(payload, "week_iso", None) or "").strip() or "1970-01-01"
+        held_base_candidates: list[tuple[tuple, dict]] = []
+
+        def _held_item_key(item: dict) -> tuple:
+            asg = item.get("assignments") if isinstance(item.get("assignments"), dict) else {}
+            pulls_map = item.get("pulls") if isinstance(item.get("pulls"), dict) else {}
+            return _single_site_candidate_sort_key(site, asg, week_iso, pulls_map, payload.pulls_prefer)
+
+        def _item_should_hold(item: dict) -> bool:
+            if not payload.auto_pulls_enabled:
+                return False
+            asg = item.get("assignments") if isinstance(item.get("assignments"), dict) else {}
+            pulls_map = item.get("pulls") if isinstance(item.get("pulls"), dict) else {}
+            return _should_hold_plan_until_pull_target(
+                site, asg, week_iso, pulls_map, eff_pulls_limit, payload.pulls_prefer,
+            )
+
+        def _enqueue_alternative(item: dict) -> None:
+            nonlocal kept_alternatives_count
+            try:
+                sig = json.dumps(
+                    {
+                        "assignments": item.get("assignments") or {},
+                        "pulls": item.get("pulls") or {},
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            except Exception:
+                sig = ""
+            if sig and sig in kept_alternative_signatures:
+                return
+            if sig:
+                kept_alternative_signatures.add(sig)
+            kept_alternatives_count += 1
+            next_alternative = dict(item)
+            next_alternative["type"] = "alternative"
+            next_alternative["index"] = kept_alternatives_count
+            _enqueue(next_alternative, drop_if_full=False)
+
+        def _flush_held_base(*, force: bool = False) -> None:
+            nonlocal base_sent, held_base_candidates
+            if base_sent or not held_base_candidates:
+                return
+            held_base_candidates.sort(key=lambda pair: pair[0])
+            best_item = held_base_candidates[0][1]
+            if not force and _item_should_hold(best_item):
+                # Un plan à N משיכות (ou 0 trou) existe déjà : le meilleur a moins
+                # de trous avec 0/1 משיכה — on peut afficher.
+                has_ready = any(not _item_should_hold(item) for _, item in held_base_candidates)
+                if not has_ready:
+                    return
+            base_event = dict(best_item)
+            base_event["type"] = "base"
+            _enqueue(base_event)
+            base_sent = True
+            for _, item in held_base_candidates[1:]:
+                _enqueue_alternative(item)
+            held_base_candidates = []
+
         logger.warning(
             "[PULLS][SINGLE_STREAM][PRODUCER_START] generation=%s site=%s target_alternatives=%s "
             "search_num_alts=%s requested=%s auto_pulls=%s",
@@ -593,6 +662,7 @@ def _run_single_stream_producer(params: SingleGenerationStreamParams, q: "queue.
                         rows,
                         {"assignments": deepcopy(cleaned_assignments), "pulls": {}},
                         pulls_limit=eff_pulls_limit,
+                        pulls_prefer=payload.pulls_prefer,
                     )
                     transformed_pulls = transformed.get("pulls") if isinstance(transformed.get("pulls"), dict) else {}
                     transformed_pulls_count = _pulls_count(transformed_pulls)
@@ -678,31 +748,29 @@ def _run_single_stream_producer(params: SingleGenerationStreamParams, q: "queue.
                     enriched = dict(item)
 
                 item_type = enriched.get("type")
+                if item_type in {"base", "alternative"} and payload.auto_pulls_enabled and (
+                    eff_pulls_limit is not None or bool(payload.pulls_prefer)
+                ):
+                    if not base_sent:
+                        held_base_candidates.append((_held_item_key(enriched), dict(enriched)))
+                        if len(held_base_candidates) > 40:
+                            held_base_candidates.sort(key=lambda pair: pair[0])
+                            held_base_candidates = held_base_candidates[:40]
+                        _flush_held_base()
+                        continue
+                    _enqueue_alternative(enriched)
+                    continue
                 if item_type == "base":
                     if not base_sent:
                         _enqueue(enriched)
                         base_sent = True
-                    continue
-                if item_type == "alternative":
-                    try:
-                        sig = json.dumps(
-                            {
-                                "assignments": enriched.get("assignments") or {},
-                                "pulls": enriched.get("pulls") or {},
-                            },
-                            ensure_ascii=False,
-                            sort_keys=True,
-                        )
-                    except Exception:
-                        sig = ""
-                    if sig and sig in kept_alternative_signatures:
                         continue
-                    if sig:
-                        kept_alternative_signatures.add(sig)
-                    kept_alternatives_count += 1
-                    next_alternative = dict(enriched)
-                    next_alternative["index"] = kept_alternatives_count
-                    _enqueue(next_alternative, drop_if_full=False)
+                    # Relances suivantes : ne pas jeter le « base », le traiter comme חלופה.
+                    enriched = dict(enriched)
+                    enriched["type"] = "alternative"
+                    item_type = "alternative"
+                if item_type == "alternative":
+                    _enqueue_alternative(enriched)
                     continue
                 if item_type == "done":
                     if payload.auto_pulls_enabled and matched_candidates == 0:
@@ -715,6 +783,7 @@ def _run_single_stream_producer(params: SingleGenerationStreamParams, q: "queue.
             if kept_alternatives_count >= target_kept_alternatives:
                 break
 
+        _flush_held_base(force=True)
         kept_final_count = min(kept_alternatives_count, target_kept_alternatives)
         timeout_reached = kept_final_count < target_kept_alternatives
         _enqueue({"type": "done"})

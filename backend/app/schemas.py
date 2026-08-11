@@ -264,6 +264,15 @@ class AIPlanningRequest(BaseModel):
     auto_pulls_enabled: bool = False
     pulls_limit: int | None = Field(default=None, ge=1)
     pulls_limits_by_site: dict[str, int | None] | None = None
+    # Préférence de משיכות seulement (pas le שיבוץ): morning / noon / night. Vide = mix.
+    pulls_prefer: list[Literal["morning", "noon", "night"]] | None = None
+
+    @field_validator("pulls_prefer", mode="before")
+    @classmethod
+    def empty_pulls_prefer_is_mix(cls, v: object) -> object:
+        if v is None or v == [] or v == ():
+            return None
+        return v
     # Optional map of fixed assignments: assignments[day][shift][station_index] -> list[str]
     fixed_assignments: dict[str, dict[str, list[list[str]]]] | None = None
     # Optional: exclude specific day keys from planning (e.g., past days of the current week)

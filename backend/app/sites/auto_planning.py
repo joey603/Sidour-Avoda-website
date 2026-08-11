@@ -59,7 +59,7 @@ from .pulls import (
     _apply_auto_pulls_to_payload, _enforce_role_requirements_on_assignments,
     _normalize_pulls_limits_by_site, _apply_auto_pulls_to_site_plans,
     _effective_auto_pulls_limit_for_site, _count_split_day_same_worker_patterns,
-    _pulls_count, _matches_pulls_limit, _sanitize_pulls_map,
+    _pulls_count, _preferred_pulls_count, _normalize_pulls_prefer, _matches_pulls_limit, _sanitize_pulls_map,
 )
 from .linked_sites import (
     _enforce_linked_global_caps_on_site_plans, _generate_multi_site_memory_plans,
@@ -189,7 +189,8 @@ def _single_site_candidate_sort_key(
     assignments: dict | None,
     week_iso: str,
     pulls: dict | None = None,
-) -> tuple[int, int, int, int]:
+    pulls_prefer: object | None = None,
+) -> tuple[int, int, int, int, int]:
     summary = _summarize_auto_planning_result(
         site,
         assignments if isinstance(assignments, dict) else {},
@@ -201,7 +202,42 @@ def _single_site_candidate_sort_key(
     required = int(summary.get("required_count") or 0)
     holes = max(0, required - assigned)
     split_count = _count_split_day_same_worker_patterns(site.config or {}, assignments)
-    return (holes, -assigned, split_count, _pulls_count(pulls))
+    pulls_map = pulls if isinstance(pulls, dict) else None
+    # Moins de trous, puis plus de משיכות préférées, puis plus de משיכות.
+    return (
+        holes,
+        -_preferred_pulls_count(pulls_map, pulls_prefer),
+        -_pulls_count(pulls_map),
+        -assigned,
+        split_count,
+    )
+
+
+def _should_hold_plan_until_pull_target(
+    site: Site,
+    assignments: dict | None,
+    week_iso: str,
+    pulls: dict | None,
+    pulls_limit: int | None,
+    pulls_prefer: object | None = None,
+) -> bool:
+    """True = ne pas émettre encore comme base (trous restants et < N / sans משיכה préférée)."""
+    summary = _summarize_auto_planning_result(
+        site,
+        assignments if isinstance(assignments, dict) else {},
+        week_iso,
+        "hold-base",
+        pulls=pulls if isinstance(pulls, dict) else None,
+    )
+    holes = max(0, int(summary.get("required_count") or 0) - int(summary.get("assigned_count") or 0))
+    if holes <= 0:
+        return False
+    pulls_map = pulls if isinstance(pulls, dict) else None
+    if pulls_limit is not None and _pulls_count(pulls_map) < int(pulls_limit):
+        return True
+    if _normalize_pulls_prefer(pulls_prefer) and _preferred_pulls_count(pulls_map, pulls_prefer) <= 0:
+        return True
+    return False
 
 
 def _boost_generation_budget_for_pulls(
@@ -504,7 +540,7 @@ def _generate_director_week_plan_payload(
             )
 
     best_payload: dict | None = None
-    best_key: tuple[int, int, int] | None = None
+    best_key: tuple[int, ...] | None = None
     best_idx = 0
 
     for idx, candidate in enumerate(candidate_assignments):

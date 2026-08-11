@@ -146,6 +146,7 @@ def ai_generate_linked_planning(
             result.get("site_plans") or {},
             pulls_limit=payload.pulls_limit if payload else None,
             pulls_limits_by_site=pulls_limits_by_site or None,
+            pulls_prefer=payload.pulls_prefer if payload else None,
         )
         result["site_plans"] = _enforce_linked_global_caps_on_site_plans(
             db,
@@ -416,6 +417,7 @@ def ai_generate_planning(
             rows,
             {"assignments": deepcopy(base_candidate_assignments), "pulls": {}},
             pulls_limit=payload.pulls_limit,
+            pulls_prefer=payload.pulls_prefer,
         )
         candidate_pairs: list[tuple[dict, dict]] = []
         base_assignments = base_payload.get("assignments") or {}
@@ -431,6 +433,7 @@ def ai_generate_planning(
                 rows,
                 {"assignments": deepcopy(alt_cleaned), "pulls": {}},
                 pulls_limit=payload.pulls_limit,
+                pulls_prefer=payload.pulls_prefer,
             )
             current_alt_assignments = alt_payload.get("assignments") or {}
             current_alt_pulls = alt_payload.get("pulls") or {}
@@ -440,7 +443,9 @@ def ai_generate_planning(
             raise HTTPException(status_code=422, detail=_planning_limit_error_detail_for_request(pulls_limit=payload.pulls_limit))
         if candidate_pairs:
             candidate_pairs.sort(
-                key=lambda pair: _single_site_candidate_sort_key(site, pair[0], week_for_rows, pair[1]),
+                key=lambda pair: _single_site_candidate_sort_key(
+                    site, pair[0], week_for_rows, pair[1], payload.pulls_prefer,
+                ),
             )
             assignments_out = candidate_pairs[0][0]
             base_pulls = candidate_pairs[0][1]
@@ -449,7 +454,9 @@ def ai_generate_planning(
     else:
         ordered_candidates = [(assignments_out, {})] + [(alt, {}) for alt in alternatives_out]
         ordered_candidates.sort(
-            key=lambda pair: _single_site_candidate_sort_key(site, pair[0], week_for_rows, pair[1]),
+            key=lambda pair: _single_site_candidate_sort_key(
+                site, pair[0], week_for_rows, pair[1], payload.pulls_prefer,
+            ),
         )
         assignments_out = ordered_candidates[0][0]
         alternatives_out = [assignments for assignments, _ in ordered_candidates[1:]]
