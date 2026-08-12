@@ -15,9 +15,7 @@ import {
   shiftNamesFromSite,
 } from "./station-grid-helpers";
 import {
-  buildPullHighlightKindByNormName,
-  pullExtendedHoursForAdjacentRole,
-  slotTimeMetaFromPulls,
+  resolveSlotExportHours,
 } from "./planning-v2-pull-slot-display";
 import { buildEventExportOccurrences, EVENT_BORDEAUX } from "./event-export-tables";
 import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
@@ -41,14 +39,6 @@ const DAY_FULL_HE: Record<string, string> = {
   fri: "שישי",
   sat: "שבת",
 };
-
-function normName(s: string): string {
-  return String(s || "")
-    .normalize("NFKC")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
 
 function isRealPullEntry(entry: unknown): boolean {
   const e = entry as { before?: { name?: string }; after?: { name?: string } } | undefined;
@@ -84,67 +74,6 @@ function isPullHoleCell(
     if (isRealPullEntry(entry)) return true;
   }
   return false;
-}
-
-function parseTimeLabel(label: string | null | undefined): { from: string; to: string } | null {
-  if (!label) return null;
-  const m = String(label).match(/(\d{1,2})(?::(\d{2}))?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?/);
-  if (!m) return null;
-  const fmt = (h: string, min?: string) =>
-    `${String(Number(h)).padStart(2, "0")}:${(min || "00").padStart(2, "0")}`;
-  return { from: fmt(m[1], m[2]), to: fmt(m[3], m[4]) };
-}
-
-/** Jaune + gras : שינוי שעות (guard) ou משיכה (pull / before / after). */
-function slotHighlightMeta(
-  pulls: PlanningV2PullsMap | null | undefined,
-  shiftNamesAll: string[],
-  dayIdx: number,
-  dayKey: string,
-  shiftName: string,
-  stationIdx: number,
-  slotIdx: number,
-  workerName: string,
-  homeShiftFrom: string,
-  homeShiftTo: string,
-): { highlight: boolean; from: string; to: string } {
-  const meta = slotTimeMetaFromPulls(pulls, dayKey, shiftName, stationIdx, slotIdx, workerName);
-  const pullRel = buildPullHighlightKindByNormName(
-    pulls,
-    shiftNamesAll,
-    dayIdx,
-    dayKey,
-    shiftName,
-    stationIdx,
-  ).get(normName(workerName));
-  const highlight =
-    meta?.highlight === "guard" ||
-    meta?.highlight === "pull" ||
-    pullRel === "before" ||
-    pullRel === "after" ||
-    pullRel === "cell";
-
-  // שינוי שעות : horaires indiqués tels quels
-  let custom = meta?.highlight === "guard" ? parseTimeLabel(meta?.label) : null;
-
-  // משיכה sur la garde adjacente : début garde d'origine → fin משיכה (before),
-  // ou début משיכה → fin garde d'origine (after)
-  if (!custom && (pullRel === "before" || pullRel === "after")) {
-    custom = pullExtendedHoursForAdjacentRole(
-      pulls,
-      stationIdx,
-      workerName,
-      pullRel,
-      homeShiftFrom,
-      homeShiftTo,
-    );
-  }
-
-  return {
-    highlight: !!highlight,
-    from: custom?.from || "",
-    to: custom?.to || "",
-  };
 }
 
 function formatDateDdMmYy(d: Date): string {
@@ -421,8 +350,9 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         const allBlack = inactive || pullHole;
         const names = allBlack ? [] : baseCellNames(assignments, d.key, sn, stationIdx);
         const highlights = names.map((name, slotIdx) =>
-          slotHighlightMeta(
+          resolveSlotExportHours(
             pulls ?? null,
+            assignments,
             shiftNamesAll,
             dayIdx,
             d.key,

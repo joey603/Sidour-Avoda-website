@@ -338,6 +338,16 @@ export function buildPlanningGridStyledHtml(params: {
           const shiftHoursHtml = shiftHours
             ? `<div style="margin-top:2px;font-size:10px;color:#71717a;">${escapeHtml(shiftHours)}</div>`
             : "";
+          const parsedHome = (() => {
+            if (!shiftHours) return { from: "", to: "" };
+            const m = String(shiftHours).match(
+              /(\d{1,2})(?::(\d{2}))?\s*[-–:]\s*(\d{1,2})(?::(\d{2}))?/,
+            );
+            if (!m) return { from: "", to: "" };
+            const fmt = (h: string, min?: string) =>
+              `${String(Number(h)).padStart(2, "0")}:${(min || "00").padStart(2, "0")}`;
+            return { from: fmt(m[1], m[2]), to: fmt(m[3], m[4]) };
+          })();
           return `<tr>
   <td style="padding:8px;border:1px solid #e4e4e7;background:#fafafa;font-size:12px;vertical-align:top;">
     <div style="font-weight:600;">${escapeHtml(sn)}</div>
@@ -371,7 +381,13 @@ export function buildPlanningGridStyledHtml(params: {
         const col = workerNameChipColor(nm, nameColorMap);
         const nmKey = normName(nm);
         const pullRel = pullHighlightByNormName.get(nmKey);
-        const slotTime = slotTimeMetaFromPulls(pulls ?? null, d.key, sn, idx, slotIdx, nm);
+        const slotTime = slotTimeMetaFromPulls(pulls ?? null, d.key, sn, idx, slotIdx, nm, {
+          assignments,
+          shiftNamesAll,
+          dayIdx,
+          homeFrom: parsedHome.from,
+          homeTo: parsedHome.to,
+        });
         const highlightKind =
           slotTime?.highlight === "guard" ? "guard" : slotTime?.highlight === "pull" || pullRel ? "pull" : null;
         const slotBg =
