@@ -15,6 +15,7 @@ import {
   shiftNamesFromSite,
 } from "./station-grid-helpers";
 import {
+  guardAdjacentBoundaryHours,
   resolveSlotExportHours,
 } from "./planning-v2-pull-slot-display";
 import { buildEventExportOccurrences, EVENT_BORDEAUX } from "./event-export-tables";
@@ -366,13 +367,27 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         );
         const anyHighlight = highlights.some((h) => h.highlight);
         const customHours = highlights.find((h) => h.highlight && h.from && h.to);
+        const adjacentHours =
+          !allBlack && !customHours
+            ? guardAdjacentBoundaryHours(
+                pulls ?? null,
+                assignments,
+                shiftNamesAll,
+                dayIdx,
+                d.key,
+                sn,
+                stationIdx,
+                defaultFrom,
+                defaultTo,
+              )
+            : null;
         return {
           allBlack,
           names,
           highlights,
-          anyHighlight,
-          from: customHours?.from || defaultFrom,
-          to: customHours?.to || defaultTo,
+          anyHighlight: anyHighlight || !!adjacentHours,
+          from: customHours?.from || adjacentHours?.from || defaultFrom,
+          to: customHours?.to || adjacentHours?.to || defaultTo,
         };
       });
 

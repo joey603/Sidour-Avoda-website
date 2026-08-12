@@ -73,6 +73,29 @@ describe("guardAdjacentBoundaryHours", () => {
     ).toBeNull();
   });
 
+  it("après-midi vide : nuit 18–06 → après-midi affiché 14–18", () => {
+    // Lundi : matin 06–14, après-midi vide, nuit changée en 18–06
+    const assignments = {
+      mon: {
+        בוקר: [["Alice"]],
+        צהריים: [[]],
+        לילה: [["Carol"]],
+      },
+    };
+    const pulls = {
+      "mon|לילה|0|0": { guardDisplay: { start: "18:00", end: "06:00" } },
+    };
+
+    expect(
+      guardAdjacentBoundaryHours(pulls, assignments, shifts, 1, "mon", "צהריים", 0, "14:00", "22:00"),
+    ).toEqual({ from: "14:00", to: "18:00" });
+
+    // Le matin reste inchangé (voisin suivant = après-midi sans שינוי שעות)
+    expect(
+      guardAdjacentBoundaryHours(pulls, assignments, shifts, 1, "mon", "בוקר", 0, "06:00", "14:00"),
+    ).toBeNull();
+  });
+
   it("enchaîne nuit → matin du jour suivant", () => {
     const assignments = {
       sun: {

@@ -107,10 +107,14 @@ function neighborShiftCoord(
 }
 
 /**
- * Ajuste les horaires d'une garde (1 personne) selon le שינוי שעות
- * de la garde précédente / suivante (également 1 personne) :
+ * Ajuste les horaires d'une garde selon le שינוי שעות
+ * de la garde précédente / suivante (1 personne sur cette source) :
  * - début ← fin de la garde d'avant
  * - fin ← début de la garde d'après
+ *
+ * La cellule cible peut être vide (0) ou avoir 1 personne ; si elle en a
+ * plusieurs, on n'ajuste pas. Ex. matin 06–14, après-midi vide, nuit
+ * changée en 18–06 → après-midi affiché 14–18.
  *
  * Retourne null si la cellule a déjà son propre guardDisplay, ou si
  * aucune frontière voisine ne force un changement.
@@ -131,7 +135,8 @@ export function guardAdjacentBoundaryHours(
   const homeT = formatHourDisplay(homeTo);
   if (!homeF || !homeT) return null;
 
-  if (assignedNamesInCell(assignments, dayKey, shiftName, stationIdx).length !== 1) return null;
+  // Plusieurs personnes sur la cible → frontière ambiguë
+  if (assignedNamesInCell(assignments, dayKey, shiftName, stationIdx).length > 1) return null;
   // Priorité au שינוי שעות de la cellule elle-même
   if (findCellGuardDisplay(pulls, dayKey, shiftName, stationIdx, assignments)) return null;
 
