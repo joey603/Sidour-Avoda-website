@@ -61,7 +61,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     [site?.next_week_saved_plan_status?.scope],
   );
   const { navigationInApp, initialNavigationWeekPlan } = usePlanningV2NavigationBootstrap(siteId, weekStart);
-  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan, discardLocalAutoWeekPlan } = usePlanningV2WeekPlan(
+  const { plan: weekPlan, loading: weekPlanLoading, reloadWeekPlan, applyLocalWeekPlan, discardLocalAutoWeekPlan } = usePlanningV2WeekPlan(
     siteId,
     weekStart,
     preferredWeekPlanScope,
@@ -128,6 +128,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     workers,
     workerRowsForTable,
     reloadWeekPlan,
+    applyLocalWeekPlan,
     discardLocalAutoWeekPlan,
     editingSaved,
     linkedSitesLength: linkedSites.length,
@@ -360,7 +361,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden px-3 py-6 pb-[calc(var(--planning-v2-action-bar-px,14rem)+2rem)] sm:px-4 lg:px-4 [&_button]:touch-manipulation [&_button]:select-none"
+      className="min-h-screen overflow-x-hidden bg-white px-3 py-6 pb-[calc(var(--planning-v2-action-bar-px,14rem)+2rem)] sm:px-4 lg:px-4 [&_button]:touch-manipulation [&_button]:select-none dark:bg-zinc-950"
       dir="rtl"
     >
       <PlanningV2LayoutShell>

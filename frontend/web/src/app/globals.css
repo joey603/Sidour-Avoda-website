@@ -120,27 +120,31 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+/* Hors @layer : le fond blanc gagne sur `bg-background` (sinon un token teinté laisse un halo bleu). */
+html {
+  min-height: 100%;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  background: #ffffff;
+}
+body {
+  min-height: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+  background: #ffffff;
+}
+.dark html,
+.dark body {
+  background: #09090b;
+}
+
 @layer base {
-  html {
-    min-height: 100%;
-    min-height: 100dvh;
-    min-height: -webkit-fill-available;
-    background: #ffffff;
-  }
   * {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
-    min-height: 100%;
-    min-height: 100vh;
-    min-height: 100dvh;
-    min-height: -webkit-fill-available;
-    background: #ffffff;
-  }
-  .dark html,
-  .dark body {
-    background: #09090b;
+    @apply text-foreground;
   }
 }
 

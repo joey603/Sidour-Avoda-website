@@ -443,7 +443,7 @@ export default function WorkerDashboard() {
 
   return (
     <div
-      className="min-h-screen overflow-x-hidden px-3 py-6 pb-40 sm:px-4 lg:px-4 md:pb-40 [&_button]:touch-manipulation"
+      className="min-h-screen overflow-x-hidden bg-white px-3 py-6 pb-40 sm:px-4 lg:px-4 md:pb-40 [&_button]:touch-manipulation dark:bg-zinc-950"
       dir="rtl"
     >
       <PlanningV2LayoutShell>
