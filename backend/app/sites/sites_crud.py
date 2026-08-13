@@ -38,6 +38,7 @@ from .week_plans import (
     _week_plan_debug_meta,
     _build_next_week_saved_plan_status,
     _is_empty_auto_week_plan,
+    _load_week_plan_lites,
 )
 from .linked_sites import _linked_site_cluster_map_for_director, _worker_identity_key
 
@@ -52,14 +53,8 @@ def list_sites(user: User = Depends(require_role("director")), db: Session = Dep
     next_week_iso = _next_week_iso(datetime.now())
     counts, pending_counts = _workers_counts_by_site_for_week(db, user.id, next_week_iso)
     site_ids = [int(s.id) for s in sites]
-    plan_rows = (
-        db.query(SiteWeekPlan)
-        .filter(SiteWeekPlan.site_id.in_(site_ids) if site_ids else False)
-        .filter(SiteWeekPlan.week_iso == next_week_iso)
-        .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
-        .all()
-    )
-    preferred_plan_by_site: dict[int, SiteWeekPlan] = {}
+    plan_rows = _load_week_plan_lites(db, site_ids, next_week_iso)
+    preferred_plan_by_site: dict[int, object] = {}
     sites_by_id_for_plans = {int(s.id): s for s in sites}
     for row in plan_rows:
         row_site = sites_by_id_for_plans.get(int(row.site_id))

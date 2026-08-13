@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime
 from copy import deepcopy
+import json
 import re
 import logging
 
@@ -57,7 +58,76 @@ def _save_site_week_plan(db: Session, site_id: int, week_iso: str, scope: str, d
         db.add(row)
 
 
-def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, week_iso: str) -> NextWeekSavedPlanStatus:
+def _as_json_object(value: object) -> dict | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8", errors="ignore")
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+class _WeekPlanLite:
+    """Plan semaine sans blob חלופות — suffisant pour les badges liste אתרים."""
+
+    __slots__ = ("site_id", "week_iso", "scope", "updated_at", "data")
+
+    def __init__(
+        self,
+        site_id: int,
+        week_iso: str,
+        scope: str,
+        updated_at: int | None,
+        assignments: object,
+        pulls: object,
+    ) -> None:
+        self.site_id = int(site_id)
+        self.week_iso = str(week_iso or "")
+        self.scope = str(scope or "")
+        self.updated_at = int(updated_at or 0)
+        self.data = {
+            "assignments": _as_json_object(assignments),
+            "pulls": _as_json_object(pulls) or {},
+        }
+
+
+def _load_week_plan_lites(db: Session, site_ids: list[int], week_iso: str) -> list[_WeekPlanLite]:
+    """Charge assignments + pulls seulement (pas alternatives / workers snapshot)."""
+    if not site_ids:
+        return []
+    rows = (
+        db.query(
+            SiteWeekPlan.site_id,
+            SiteWeekPlan.week_iso,
+            SiteWeekPlan.scope,
+            SiteWeekPlan.updated_at,
+            SiteWeekPlan.data["assignments"].label("assignments"),
+            SiteWeekPlan.data["pulls"].label("pulls"),
+        )
+        .filter(SiteWeekPlan.site_id.in_(site_ids))
+        .filter(SiteWeekPlan.week_iso == week_iso)
+        .filter(SiteWeekPlan.scope.in_(["auto", "director", "shared"]))
+        .all()
+    )
+    return [
+        _WeekPlanLite(
+            row.site_id,
+            row.week_iso,
+            row.scope,
+            row.updated_at,
+            row.assignments,
+            row.pulls,
+        )
+        for row in rows
+    ]
+
+
+def _build_next_week_saved_plan_status(site: Site, row: object | None, week_iso: str) -> NextWeekSavedPlanStatus:
     from .auto_planning import _summarize_auto_planning_result
     site_config = _safe_site_config(getattr(site, "config", None), site_id=getattr(site, "id", None))
     assignments = None
@@ -102,7 +172,7 @@ def _build_next_week_saved_plan_status(site: Site, row: SiteWeekPlan | None, wee
     )
 
 
-def _is_empty_auto_week_plan(site: Site | None, row: SiteWeekPlan | None, week_iso: str) -> bool:
+def _is_empty_auto_week_plan(site: Site | None, row: object | None, week_iso: str) -> bool:
     from .auto_planning import _summarize_auto_planning_result
     if site is None or row is None or str(getattr(row, "scope", "") or "") != "auto":
         return False
@@ -120,7 +190,7 @@ def _is_empty_auto_week_plan(site: Site | None, row: SiteWeekPlan | None, week_i
     return int(summary.get("required_count") or 0) > 0 and int(summary.get("assigned_count") or 0) <= 0
 
 
-def _week_plan_rank(row: SiteWeekPlan) -> int:
+def _week_plan_rank(row: object) -> int:
     data = row.data if isinstance(row.data, dict) else {}
     has_assignments = isinstance(data.get("assignments"), dict)
     # Important: si un plan déjà sauvegardé existe (director/shared) pour cette semaine,
@@ -167,7 +237,7 @@ def _pick_week_plan_row_for_resolve(
     return None
 
 
-def _preferred_week_plan(site_rows: list[SiteWeekPlan]) -> SiteWeekPlan | None:
+def _preferred_week_plan(site_rows: list[object]) -> object | None:
     best_row: SiteWeekPlan | None = None
     best_key: tuple[int, int] = (-1, -1)
     for row in site_rows:
@@ -219,7 +289,7 @@ def _shape_week_plan_get_payload(
     return payload
 
 
-def _week_plan_debug_meta(row: SiteWeekPlan | None) -> dict | None:
+def _week_plan_debug_meta(row: object | None) -> dict | None:
     if row is None:
         return None
     data = row.data if isinstance(row.data, dict) else {}

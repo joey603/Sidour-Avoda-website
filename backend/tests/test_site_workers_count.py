@@ -137,3 +137,67 @@ def test_list_sites_returns_lite_config_without_stations(client, db_session, cre
     detail_cfg = detail_resp.json().get("config") or {}
     assert "stations" in detail_cfg
     assert detail_cfg.get("autoPlanningLastRun", {}).get("week_iso") == "2026-05-10"
+
+
+def test_list_sites_plan_status_does_not_need_alternatives_blob(client, db_session, create_director):
+    from app.models import SiteWeekPlan
+    from app.sites.week_utils import _now_ms
+
+    create_director(email="director.plans@example.com", full_name="Director Plans")
+    login_resp = login_director(client, email="director.plans@example.com", password="password123")
+    token = login_resp.json()["access_token"]
+
+    site_resp = create_site(client, token, "Plan Site")
+    assert site_resp.status_code == 201, site_resp.text
+    site_id = site_resp.json()["id"]
+
+    site = db_session.query(Site).filter(Site.id == site_id).first()
+    assert site is not None
+    days = {dk: True for dk in ("sun", "mon", "tue", "wed", "thu", "fri", "sat")}
+    site.config = {
+        "stations": [
+            {
+                "name": "A",
+                "workers": 1,
+                "uniformRoles": True,
+                "perDayCustom": False,
+                "days": days,
+                "shifts": [
+                    {"name": "בוקר", "enabled": True, "hours": "06:00-14:00"},
+                    {"name": "צהריים", "enabled": True, "hours": "14:00-22:00"},
+                    {"name": "לילה", "enabled": True, "hours": "22:00-06:00"},
+                ],
+                "roles": [],
+            }
+        ]
+    }
+    flag_modified(site, "config")
+    next_week = _next_week_iso(datetime.now())
+    db_session.add(
+        SiteWeekPlan(
+            site_id=site_id,
+            week_iso=next_week,
+            scope="director",
+            updated_at=_now_ms(),
+            data={
+                "assignments": {
+                    "sun": {"בוקר": [["A"]], "צהריים": [["B"]], "לילה": [["C"]]},
+                },
+                "pulls": {"sun|צהריים|0|1": {"before": {"name": "A"}, "after": {"name": "C"}}},
+                "alternatives": [{"pad": "x" * 1000} for _ in range(80)],
+                "workers": [{"name": "A", "answers": {"q": "y" * 500}}],
+            },
+        )
+    )
+    db_session.commit()
+
+    list_resp = client.get("/director/sites/", headers=auth_headers(token))
+    assert list_resp.status_code == 200, list_resp.text
+    site_row = next(row for row in list_resp.json() if row["id"] == site_id)
+    status = site_row.get("next_week_saved_plan_status") or {}
+    assert status.get("exists") is True
+    assert status.get("scope") == "director"
+    assert status.get("week_iso") == next_week
+    assert int(status.get("assigned_count") or 0) == 2
+    assert int(status.get("required_count") or 0) == 21
+    assert int(status.get("pulls_count") or 0) == 1
