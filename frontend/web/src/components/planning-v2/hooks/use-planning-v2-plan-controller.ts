@@ -59,6 +59,7 @@ type PlanControllerArgs = {
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
   reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  applyLocalWeekPlan?: (next: V2WeekPlanData) => void;
   discardLocalAutoWeekPlan?: () => void;
   /** Mode ערוך sur un plan director/shared : garder le brouillon généré visible jusqu'à sauvegarde. */
   editingSaved?: boolean;
@@ -79,6 +80,7 @@ export function usePlanningV2PlanController({
   workers,
   workerRowsForTable,
   reloadWeekPlan,
+  applyLocalWeekPlan,
   discardLocalAutoWeekPlan,
   editingSaved = false,
   linkedSitesLength,
@@ -420,16 +422,27 @@ export function usePlanningV2PlanController({
       );
       try {
         await persistWeekPlanToApi(siteId, weekStart, publishToWorkers, payload as unknown as Record<string, unknown>);
+        const savedScope = publishToWorkers ? "shared" : "director";
+        applyLocalWeekPlan?.({
+          assignments: assignmentsSnapshot,
+          pulls,
+          alternatives: [],
+          alternativePulls: [],
+          isManual,
+          workers: payload.workers,
+          sourceScope: savedScope,
+        });
         setDraftAssignments(null);
         setDraftPulls(null);
+        setDraftAlternatives([]);
         setDraftFixedAssignmentsSnapshot(null);
-        await reloadWeekPlan();
         toast.success(publishToWorkers ? "התכנון נשמר ונשלח" : "התכנון נשמר (למנהל בלבד)");
+        void reloadWeekPlan({ silent: true, preferredScope: savedScope });
       } catch (e: unknown) {
         toast.error("שמירה נכשלה", { description: String((e as Error)?.message || "נסה שוב מאוחר יותר.") });
       }
     },
-    [displayAssignments, displayPulls, siteId, weekStart, workers, isManual, reloadWeekPlan],
+    [applyLocalWeekPlan, displayAssignments, displayPulls, siteId, weekStart, workers, isManual, reloadWeekPlan],
   );
 
   const clearDraft = useCallback(() => {

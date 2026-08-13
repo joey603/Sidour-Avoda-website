@@ -89,6 +89,15 @@ export function usePlanningV2WeekPlan(
     [siteId, weekStart, lightweightNav],
   );
 
+  const applyLocalWeekPlan = useCallback(
+    (next: V2WeekPlanData) => {
+      setPlan(next);
+      setLoading(false);
+      if (next) setCachedWeekPlan(siteId, getWeekKeyISO(weekStart), next);
+    },
+    [siteId, weekStart],
+  );
+
   const discardLocalAutoWeekPlan = useCallback(() => {
     const isoWeek = getWeekKeyISO(weekStart);
     setPlan((prev) => {
@@ -115,5 +124,5 @@ export function usePlanningV2WeekPlan(
     void reload({ silent });
   }, [reload, options?.skipInitialReload, options?.initialPlan, weekStart]);
 
-  return { plan, loading, reloadWeekPlan: reload, discardLocalAutoWeekPlan };
+  return { plan, loading, reloadWeekPlan: reload, applyLocalWeekPlan, discardLocalAutoWeekPlan };
 }
