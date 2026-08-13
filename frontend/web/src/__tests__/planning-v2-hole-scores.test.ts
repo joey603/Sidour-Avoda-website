@@ -3,6 +3,7 @@ import {
   noonPullsCount,
   preferredPullsCount,
   shouldHoldPlanUntilPullTarget,
+  shouldHoldFirstPlanForPreference,
   type HoleScore,
 } from "@/components/planning-v2/lib/planning-v2-hole-scores";
 
@@ -59,6 +60,18 @@ describe("shouldHoldPlanUntilPullTarget", () => {
   it("préférence souple : n’attend pas un kind s’il n’y en a pas", () => {
     expect(shouldHoldPlanUntilPullTarget(score({ pulls: 2, noonPulls: 0, holes: 2 }), 2, ["night"])).toBe(false);
     expect(shouldHoldPlanUntilPullTarget(score({ pulls: 1, noonPulls: 0, holes: 2 }), 2, ["night"])).toBe(true);
+  });
+});
+
+describe("shouldHoldFirstPlanForPreference", () => {
+  it("attend tant qu’il n’y a pas de משיכה du kind demandé", () => {
+    expect(shouldHoldFirstPlanForPreference(score({ pulls: 2, noonPulls: 0, holes: 0 }), ["noon"])).toBe(true);
+    expect(shouldHoldFirstPlanForPreference(score({ pulls: 2, noonPulls: 1, holes: 0 }), ["noon"])).toBe(false);
+  });
+
+  it("n’attend pas sans préférence", () => {
+    expect(shouldHoldFirstPlanForPreference(score({ pulls: 2, noonPulls: 0 }), null)).toBe(false);
+    expect(shouldHoldFirstPlanForPreference(score({ pulls: 2, noonPulls: 0 }), [])).toBe(false);
   });
 });
 

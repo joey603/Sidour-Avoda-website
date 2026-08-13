@@ -62,6 +62,19 @@ export function shouldHoldPlanUntilPullTarget(
 }
 
 /**
+ * Avec préférence בוקר/צהריים/לילה : ne pas peindre la 1re vue tant qu’il n’y a
+ * aucune משיכה du kind demandé (évite le flash « sans préférence » puis le saut).
+ * Si aucun plan préféré n’arrive, le flush de fin affiche le fallback.
+ */
+export function shouldHoldFirstPlanForPreference(
+  score: HoleScore,
+  preferKinds?: PullsShiftKind[] | null,
+): boolean {
+  if (!preferKinds || preferKinds.length === 0) return false;
+  return score.noonPulls <= 0;
+}
+
+/**
  * <0 si a est meilleur que b.
  * 1) moins de trous
  * 2) plus de משיכות sur les kinds préférés (vide = mix, no-op)

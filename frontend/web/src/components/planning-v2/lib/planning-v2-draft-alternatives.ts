@@ -35,6 +35,28 @@ export function alternativeSnapshot(
 }
 
 /**
+ * Pendant une préférence משיכות, la 1re vue (index 0) n’est pas figée
+ * tant que l’utilisateur n’a pas choisi une autre חלופה.
+ */
+export function viewedIndicesForPreferResplit(
+  viewed: Iterable<number> | null | undefined,
+  selectedIndex: number,
+  userPickedIndex: number | null | undefined,
+): Set<number> {
+  const next = new Set<number>();
+  for (const raw of viewed || []) {
+    const idx = Math.trunc(Number(raw));
+    if (Number.isFinite(idx) && idx >= 0) next.add(idx);
+  }
+  const selected = Math.trunc(Number(selectedIndex));
+  if (Number.isFinite(selected) && selected >= 0) next.add(selected);
+  const pickedRaw = userPickedIndex == null ? null : Math.trunc(Number(userPickedIndex));
+  const picked = pickedRaw != null && Number.isFinite(pickedRaw) ? pickedRaw : null;
+  if (picked == null && selected === 0) next.delete(0);
+  return next;
+}
+
+/**
  * Reclasse uniquement les חלופות pas encore vues.
  * Chaque index déjà consulté reste occupé par le même plan.
  */

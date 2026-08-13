@@ -15,6 +15,7 @@ import {
   compareHoleScores,
   type HoleScore,
   linkedPlansHoleScore,
+  shouldHoldFirstPlanForPreference,
   shouldHoldPlanUntilPullTarget,
   singlePlanHoleScore,
 } from "./planning-v2-hole-scores";
@@ -369,13 +370,23 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
   ): "painted" | "held" | "skipped" => {
     if (appendMode || linkedSitesLength > 1) return "skipped";
     if (draftAssignmentsRef.current) return "skipped";
-    if (autoPullsEnabled && shouldHoldPlanUntilPullTarget(score, requestedPullsCount, pullsPreferKinds)) {
+    const holdForCount =
+      autoPullsEnabled && shouldHoldPlanUntilPullTarget(score, requestedPullsCount, pullsPreferKinds);
+    const holdForPrefer =
+      autoPullsEnabled && shouldHoldFirstPlanForPreference(score, pullsPreferKinds);
+    if (holdForCount || holdForPrefer) {
       if (
         !pendingHeldBase ||
         compareHoleScores(score, pendingHeldBase.score, requestedPullsCount) < 0
       ) {
         pendingHeldBase = { assignments, pulls, score };
       }
+      return "held";
+    }
+    if (
+      pendingHeldBase &&
+      compareHoleScores(score, pendingHeldBase.score, requestedPullsCount) > 0
+    ) {
       return "held";
     }
     paintFirstPlan(assignments, pulls, score);

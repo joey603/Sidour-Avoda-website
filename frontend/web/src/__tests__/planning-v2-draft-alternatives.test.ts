@@ -1,5 +1,6 @@
 import {
   rankUnseenDraftPlans,
+  viewedIndicesForPreferResplit,
   type DraftAlternative,
 } from "@/components/planning-v2/lib/planning-v2-draft-alternatives";
 
@@ -48,5 +49,43 @@ describe("rankUnseenDraftPlans", () => {
 
   it("laisse inchangé un seul plan", () => {
     expect(rankUnseenDraftPlans([a], [0], byNoonFirst)).toEqual([a]);
+  });
+});
+
+describe("viewedIndicesForPreferResplit", () => {
+  it("laisse la 1re vue se reclasse tant qu’on n’a pas navigué", () => {
+    const morning = plan("morning", 0);
+    const noon = plan("noon", 1);
+    const next = rankUnseenDraftPlans(
+      [morning, noon],
+      viewedIndicesForPreferResplit([0], 0, null),
+      byNoonFirst,
+    );
+    expect(next[0]).toBe(noon);
+    expect(next[1]).toBe(morning);
+  });
+
+  it("fige la 1re vue dès qu’une autre חלופה a été choisie", () => {
+    const morning = plan("morning", 0);
+    const noon = plan("noon", 1);
+    const next = rankUnseenDraftPlans(
+      [morning, noon],
+      viewedIndicesForPreferResplit([0, 1], 1, 1),
+      byNoonFirst,
+    );
+    expect(next[0]).toBe(morning);
+    expect(next[1]).toBe(noon);
+  });
+
+  it("fige aussi la 1re vue si on y revient après navigation", () => {
+    const morning = plan("morning", 0);
+    const noon = plan("noon", 1);
+    const next = rankUnseenDraftPlans(
+      [morning, noon],
+      viewedIndicesForPreferResplit([0], 0, 0),
+      byNoonFirst,
+    );
+    expect(next[0]).toBe(morning);
+    expect(next[1]).toBe(noon);
   });
 });
