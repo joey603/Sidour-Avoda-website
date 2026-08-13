@@ -217,38 +217,6 @@ export default function WorkerDashboard() {
     return nextWeekStart;
   }
 
-  async function loadWeekPlan(siteId: number, weekStart: Date): Promise<any | null> {
-    const iso = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const key = `plan_${siteId}_${iso(weekStart)}`;
-    try {
-      const wk = iso(weekStart);
-      const fromApi = await apiFetch<any>(`/public/sites/${siteId}/week-plan?week=${encodeURIComponent(wk)}`, {
-        cache: "no-store" as any,
-      });
-      if (fromApi && typeof fromApi === "object" && fromApi.assignments) {
-        try {
-          localStorage.setItem(key, JSON.stringify(fromApi));
-        } catch {
-          /* ignore */
-        }
-        return fromApi;
-      }
-    } catch {
-      /* ignore */
-    }
-    try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem(key) : null;
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.assignments) return parsed;
-      }
-    } catch {
-      /* ignore */
-    }
-    return null;
-  }
-
   useEffect(() => {
     (async () => {
       const me = await fetchMe();
@@ -257,13 +225,27 @@ export default function WorkerDashboard() {
       setName(me.full_name || "");
 
       try {
-        const sitesList = await apiFetch<Array<{ id: number; name: string; site_deleted?: boolean }>>(
-          "/public/sites/worker-sites",
-          {
-          },
+        const iso = (d: Date) =>
+          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const currentWeekStart = getCurrentWeekStart();
+        const nextWeekStart = getNextWeekStart();
+        const currentIso = iso(currentWeekStart);
+        const nextIso = iso(nextWeekStart);
+        type WorkerHomeSite = {
+          id: number;
+          name: string;
+          site_deleted?: boolean;
+          config?: any | null;
+          current_week_plan?: any | null;
+          next_week_plan?: any | null;
+          messages_current?: SiteMessage[];
+          messages_next?: SiteMessage[];
+        };
+        const home = await apiFetch<{ sites?: WorkerHomeSite[] }>(
+          `/public/sites/worker-home?current_week=${encodeURIComponent(currentIso)}&next_week=${encodeURIComponent(nextIso)}`,
         );
-        const activeSites = (sitesList || []).filter((s) => !s.site_deleted);
-        setSites(activeSites);
+        const activeSites = (home.sites || []).filter((s) => !s.site_deleted);
+        setSites(activeSites.map((s) => ({ id: s.id, name: s.name, site_deleted: s.site_deleted })));
 
         const plans: Record<
           number,
@@ -275,49 +257,24 @@ export default function WorkerDashboard() {
             messagesNext: SiteMessage[];
           }
         > = {};
-
-        const iso = (d: Date) =>
-          `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        const currentWeekStart = getCurrentWeekStart();
-        const nextWeekStart = getNextWeekStart();
-        const currentIso = iso(currentWeekStart);
-        const nextIso = iso(nextWeekStart);
-        const emptyPlan = {
-          currentWeek: null,
-          nextWeek: null,
-          config: null,
-          messagesCurrent: [] as SiteMessage[],
-          messagesNext: [] as SiteMessage[],
+        const cachePlan = (siteId: number, weekStart: Date, plan: any | null) => {
+          if (!plan?.assignments) return null;
+          try {
+            localStorage.setItem(`plan_${siteId}_${iso(weekStart)}`, JSON.stringify(plan));
+          } catch {
+            /* ignore */
+          }
+          return plan;
         };
-
-        await Promise.all(
-          activeSites.map(async (site) => {
-            try {
-              const [siteConfig, currentPlan, nextPlan, messagesCurrent, messagesNext] = await Promise.all([
-                apiFetch<{ id: number; name: string; config: any }>(`/public/sites/${site.id}/config`),
-                loadWeekPlan(site.id, currentWeekStart),
-                loadWeekPlan(site.id, nextWeekStart),
-                apiFetch<SiteMessage[]>(
-                  `/public/sites/${site.id}/messages?week=${encodeURIComponent(currentIso)}`,
-                ),
-                apiFetch<SiteMessage[]>(
-                  `/public/sites/${site.id}/messages?week=${encodeURIComponent(nextIso)}`,
-                ),
-              ]);
-              plans[site.id] = {
-                currentWeek: currentPlan,
-                nextWeek: nextPlan,
-                config: siteConfig?.config || null,
-                messagesCurrent: Array.isArray(messagesCurrent) ? messagesCurrent : [],
-                messagesNext: Array.isArray(messagesNext) ? messagesNext : [],
-              };
-            } catch (e) {
-              console.error(`Error loading site ${site.id}:`, e);
-              plans[site.id] = { ...emptyPlan };
-            }
-          }),
-        );
-
+        for (const site of activeSites) {
+          plans[site.id] = {
+            currentWeek: cachePlan(site.id, currentWeekStart, site.current_week_plan || null),
+            nextWeek: cachePlan(site.id, nextWeekStart, site.next_week_plan || null),
+            config: site.config || null,
+            messagesCurrent: Array.isArray(site.messages_current) ? site.messages_current : [],
+            messagesNext: Array.isArray(site.messages_next) ? site.messages_next : [],
+          };
+        }
         setSitePlans(plans);
       } catch (e: any) {
         console.error("Error loading sites:", e);

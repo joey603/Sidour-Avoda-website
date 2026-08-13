@@ -82,10 +82,21 @@ describe("/worker dashboard planning table chips", () => {
     };
 
     apiFetch.mockImplementation((path: string) => {
-      if (path === "/public/sites/worker-sites") return Promise.resolve([{ id: 7, name: "Site A" }]);
-      if (path === "/public/sites/7/config") return Promise.resolve({ id: 7, name: "Site A", config });
-      if (String(path).startsWith("/public/sites/7/week-plan?week=")) return Promise.resolve(weekPlan);
-      if (String(path).startsWith("/public/sites/7/messages?week=")) return Promise.resolve([]);
+      if (String(path).startsWith("/public/sites/worker-home")) {
+        return Promise.resolve({
+          sites: [
+            {
+              id: 7,
+              name: "Site A",
+              config,
+              current_week_plan: weekPlan,
+              next_week_plan: weekPlan,
+              messages_current: [],
+              messages_next: [],
+            },
+          ],
+        });
+      }
       throw new Error(`Unexpected apiFetch path: ${path}`);
     });
 

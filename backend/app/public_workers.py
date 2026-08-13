@@ -9,6 +9,8 @@ from .schemas import (
     SiteMessageOut,
     WorkerContextOut,
     WorkerContextUpdatePayload,
+    WorkerHomeOut,
+    WorkerHomeSiteOut,
     ShiftKindPrefs,
     WorkerInviteValidationOut,
     WorkerInviteRegistrationPayload,
@@ -278,6 +280,112 @@ def get_worker_sites(user: User = Depends(get_current_user), db: Session = Depen
             }
         )
     return out
+
+
+def _message_visible_for_week(msg: SiteMessage, week_iso: str) -> bool:
+    scope = str(getattr(msg, "scope", "") or "")
+    created = str(getattr(msg, "created_week_iso", "") or "")
+    stopped = str(getattr(msg, "stopped_week_iso", "") or "").strip() or None
+    if scope == "week":
+        return created == week_iso
+    if scope == "global":
+        if not created or created > week_iso:
+            return False
+        if stopped and not (week_iso < stopped):
+            return False
+        return True
+    return False
+
+
+def _published_week_plan_payload(data: object) -> dict | None:
+    if not isinstance(data, dict) or not isinstance(data.get("assignments"), dict):
+        return None
+    from .sites.week_plans import _shape_week_plan_get_payload
+
+    return _shape_week_plan_get_payload(data, parts="base", include_workers=True)
+
+
+@router.get("/worker-home", response_model=WorkerHomeOut)
+def get_worker_home(
+    current_week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    next_week: str = Query(..., description="YYYY-MM-DD (week start)"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Un aller-retour : sites + config + plans publiés + messages (semaine courante et suivante)."""
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
+    current_wk = _validate_week_iso(current_week)
+    next_wk = _validate_week_iso(next_week)
+    site_rows = get_worker_sites(user, db)
+    site_ids = [int(s["id"]) for s in site_rows if isinstance(s, dict) and s.get("id") is not None]
+    sites_by_id = {
+        int(s.id): s
+        for s in (db.query(Site).filter(Site.id.in_(site_ids)).all() if site_ids else [])
+    }
+    plan_by_key: dict[tuple[int, str], dict | None] = {}
+    if site_ids:
+        plan_rows = (
+            db.query(SiteWeekPlan)
+            .filter(SiteWeekPlan.site_id.in_(site_ids))
+            .filter(SiteWeekPlan.week_iso.in_([current_wk, next_wk]))
+            .filter(SiteWeekPlan.scope == "shared")
+            .all()
+        )
+        for row in plan_rows:
+            plan_by_key[(int(row.site_id), str(row.week_iso))] = _published_week_plan_payload(row.data)
+        msg_rows = (
+            db.query(SiteMessage)
+            .filter(SiteMessage.site_id.in_(site_ids))
+            .filter(
+                or_(
+                    (SiteMessage.scope == "week") & (SiteMessage.created_week_iso.in_([current_wk, next_wk])),
+                    (SiteMessage.scope == "global") & (SiteMessage.created_week_iso <= next_wk),
+                )
+            )
+            .order_by(SiteMessage.created_at.asc(), SiteMessage.id.asc())
+            .all()
+        )
+    else:
+        msg_rows = []
+
+    msgs_by_site: dict[int, list[SiteMessage]] = {}
+    for msg in msg_rows:
+        msgs_by_site.setdefault(int(msg.site_id), []).append(msg)
+
+    out_sites: list[WorkerHomeSiteOut] = []
+    for raw in site_rows:
+        sid = int(raw["id"])
+        site = sites_by_id.get(sid)
+        deleted = bool(raw.get("site_deleted") or (site and getattr(site, "deleted_at", None)))
+        site_msgs = msgs_by_site.get(sid, [])
+        out_sites.append(
+            WorkerHomeSiteOut(
+                id=sid,
+                name=str(raw.get("name") or (site.name if site else "")),
+                site_deleted=deleted,
+                removed_from_week_iso=raw.get("removed_from_week_iso"),
+                removed_by_planning=bool(raw.get("removed_by_planning")),
+                config=(site.config or {}) if site and not deleted else None,
+                current_week_plan=None if deleted else plan_by_key.get((sid, current_wk)),
+                next_week_plan=None if deleted else plan_by_key.get((sid, next_wk)),
+                messages_current=[]
+                if deleted
+                else [
+                    SiteMessageOut.model_validate(m)
+                    for m in site_msgs
+                    if _message_visible_for_week(m, current_wk)
+                ],
+                messages_next=[]
+                if deleted
+                else [
+                    SiteMessageOut.model_validate(m)
+                    for m in site_msgs
+                    if _message_visible_for_week(m, next_wk)
+                ],
+            )
+        )
+    return WorkerHomeOut(sites=out_sites)
 
 
 @router.get("/worker-context", response_model=WorkerContextOut)

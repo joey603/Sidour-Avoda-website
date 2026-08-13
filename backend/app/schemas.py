@@ -331,6 +331,23 @@ class SiteMessageOut(BaseModel):
         from_attributes = True
 
 
+class WorkerHomeSiteOut(BaseModel):
+    id: int
+    name: str
+    site_deleted: bool = False
+    removed_from_week_iso: str | None = None
+    removed_by_planning: bool = False
+    config: dict[str, Any] | None = None
+    current_week_plan: dict[str, Any] | None = None
+    next_week_plan: dict[str, Any] | None = None
+    messages_current: list[SiteMessageOut] = []
+    messages_next: list[SiteMessageOut] = []
+
+
+class WorkerHomeOut(BaseModel):
+    sites: list[WorkerHomeSiteOut] = []
+
+
 class SiteEventBase(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     start_time: str | None = Field(default=None, max_length=5, description="HH:MM optional")
