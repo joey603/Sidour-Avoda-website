@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchMe } from "@/lib/auth";
 import { LoadingOverlay } from "@/components/loading-animation";
@@ -27,10 +27,12 @@ import { PlanningWorkersSection } from "./workers/planning-workers-section";
 import { usePlanningV2LinkedSites } from "./hooks/use-planning-v2-linked-sites";
 import { usePlanningV2PlanController } from "./hooks/use-planning-v2-plan-controller";
 import { assignmentsNonEmpty } from "./lib/assignments-empty";
+import { shouldShowPlanningLoadingOverlay } from "./lib/planning-v2-loading-overlay";
 import { buildDistinctWorkerColorMap } from "./lib/worker-name-chip-color";
 import { PlanningV2ManualConfirmDialog } from "./planning-v2-manual-confirm-dialog";
 import { PlanningV2LinkedSitesRail } from "./planning-v2-linked-sites-rail";
-import { getWeekKeyISO } from "./lib/week";
+import { defaultPlanningWeekStart, getWeekKeyISO, parseWeekQueryParam } from "./lib/week";
+import { MULTI_SITE_NAV_FLAG } from "./lib/multi-site-linked-memory";
 import { normWorkerName } from "./lib/planning-v2-worker-name";
 import { usePlanningV2FullscreenViz } from "./hooks/use-planning-v2-fullscreen-viz";
 import { usePlanningV2SessionLifecycle } from "./hooks/use-planning-v2-session-lifecycle";
@@ -42,8 +44,20 @@ import { usePlanningV2LinkedMemory } from "./hooks/use-planning-v2-linked-memory
 import { usePlanningV2AvailabilityOverlays } from "./hooks/use-planning-v2-availability-overlays";
 import { usePlanningV2NavigationBootstrap } from "./hooks/use-planning-v2-navigation-bootstrap";
 import { PlanningV2VisualizationContent } from "./planning-v2-visualization-content";
+import {
+  PLANNING_V2_LINKED_GENERATION_UPDATED_EVENT,
+  readLinkedGenerationOriginFromSession,
+  readLinkedGenerationRunningFromSession,
+  writeLinkedGenerationOriginToSession,
+} from "./lib/planning-v2-generation-session";
 
-function PlanningV2PageInner({ siteId }: { siteId: string }) {
+function PlanningV2PageInner({
+  siteId,
+  onViewSite,
+}: {
+  siteId: string;
+  onViewSite: (nextSiteId: string) => void;
+}) {
   const {
     site,
     siteLoading,
@@ -82,7 +96,7 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     }
     return Array.from(s).sort((a, b) => a - b);
   }, [siteId, linkedSites]);
-  const router = useRouter();
+  const isoWeek = getWeekKeyISO(weekStart);
   usePlanningV2SessionLifecycle();
   const { visualizationOpen, setVisualizationOpen, fullscreenReveal } = usePlanningV2FullscreenViz();
   const {
@@ -208,9 +222,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     setLinkedPlansMemoryTick,
     hasLinkedSitesRail,
     siteLoading,
-    workersLoading,
     weekPlanLoading,
-    router,
+    onViewSite,
     plan,
   });
 
@@ -310,15 +323,15 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
     await plan.savePlan(publishToWorkers);
     setEditingSaved(false);
   };
-  const showPlanningLoadingOverlay =
-    !workerModalSaving &&
-    !plan.generationRunning &&
-    // Ne pas bloquer sur siteLoading si le site est déjà connu (changement de semaine soft).
-    ((siteLoading && !site) ||
-      workersLoading ||
-      (weekPlanLoading && !navigationMemorySnapshot.hasCurrentPlan) ||
-      // Garder l’overlay jusqu’à la חלופה partagée (évite un flash sur חלופה 1).
-      multiSiteNavigationLoading);
+  const showPlanningLoadingOverlay = shouldShowPlanningLoadingOverlay({
+    workerModalSaving,
+    generationRunning: plan.generationRunning,
+    siteLoading,
+    hasSite: Boolean(site) && String(site.id) === String(siteId),
+    weekPlanLoading,
+    hasCurrentPlan: navigationMemorySnapshot.hasCurrentPlan,
+    multiSiteNavigationLoading,
+  });
 
   const handleSummaryHighlightToggle = useCallback((name: string) => {
     setSummaryHighlightWorkerName((prev) => {
@@ -740,7 +753,8 @@ function PlanningV2PageInner({ siteId }: { siteId: string }) {
 export function PlanningV2Page() {
   const router = useRouter();
   const params = useParams();
-  const siteId = params?.id != null ? String(params.id) : "";
+  const routeSiteId = params?.id != null ? String(params.id) : "";
+  const [viewedSiteId, setViewedSiteId] = useState(routeSiteId);
 
   useEffect(() => {
     fetchMe().then((me) => {
@@ -748,6 +762,21 @@ export function PlanningV2Page() {
       if (me.role !== "director") return router.replace("/worker");
     });
   }, [router]);
+
+  useEffect(() => {
+    if (routeSiteId) setViewedSiteId(routeSiteId);
+  }, [routeSiteId]);
+
+  useEffect(() => {
+    const onPop = () => {
+      const match = window.location.pathname.match(/\/director\/planning\/([^/?#]+)/);
+      if (match?.[1]) setViewedSiteId(String(match[1]));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const siteId = viewedSiteId || routeSiteId;
 
   if (!siteId) {
     return (
@@ -765,10 +794,45 @@ export function PlanningV2Page() {
     );
   }
 
-  return <PlanningWeekShell siteId={siteId} />;
+  return <PlanningWeekShell siteId={siteId} onViewSite={setViewedSiteId} />;
 }
 
-/** Remount seulement au changement d’אתר — la semaine soft-reload sans cold start. */
-function PlanningWeekShell({ siteId }: { siteId: string }) {
-  return <PlanningV2PageInner key={siteId} siteId={siteId} />;
+/** Remount au changement d’אתר, sauf pendant יצירת תכנון multi-sites (le SSE doit rester vivant). */
+function PlanningWeekShell({
+  siteId,
+  onViewSite,
+}: {
+  siteId: string;
+  onViewSite: (nextSiteId: string) => void;
+}) {
+  const searchParams = useSearchParams();
+  const weekIso = getWeekKeyISO(parseWeekQueryParam(searchParams.get("week")) ?? defaultPlanningWeekStart());
+  const [hostKey, setHostKey] = useState(siteId);
+
+  const releaseFrozenHost = useCallback(() => {
+    if (readLinkedGenerationRunningFromSession(weekIso)) return;
+    setHostKey((prev) => {
+      if (prev !== siteId && readLinkedGenerationOriginFromSession(weekIso)) {
+        try {
+          sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
+        } catch {
+          /* ignore */
+        }
+      }
+      return siteId;
+    });
+    writeLinkedGenerationOriginToSession(weekIso, null);
+  }, [siteId, weekIso]);
+
+  useEffect(() => {
+    releaseFrozenHost();
+  }, [releaseFrozenHost]);
+
+  useEffect(() => {
+    const sync = () => releaseFrozenHost();
+    window.addEventListener(PLANNING_V2_LINKED_GENERATION_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(PLANNING_V2_LINKED_GENERATION_UPDATED_EVENT, sync);
+  }, [releaseFrozenHost]);
+
+  return <PlanningV2PageInner key={hostKey} siteId={siteId} onViewSite={onViewSite} />;
 }

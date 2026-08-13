@@ -9,6 +9,7 @@ import {
   normalizeDraftAlternatives,
   alternativeSnapshot,
   rankUnseenDraftPlans,
+  rankMorningNightPairsLast,
   type DraftAlternative,
 } from "./planning-v2-draft-alternatives";
 import {
@@ -228,7 +229,7 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
             { assignments: draftAssignmentsRef.current as AssignmentGrid, pulls: draftPullsRef.current },
             ...normalized,
           ];
-          const ranked = rankUnseenDraftPlans(all, viewedIndices, comparePlans);
+          const ranked = rankMorningNightPairsLast(rankUnseenDraftPlans(all, viewedIndices, comparePlans));
           const maxTotal = stopLimit == null ? ranked.length : Math.max(1, stopLimit);
           const sliced = ranked.slice(0, maxTotal);
           const nextBase = sliced[0];
@@ -246,13 +247,13 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
 
         setDraftAlternatives((prev) => {
           const hasBase = !!draftAssignmentsRef.current;
-          const ordered = preferActive
-            ? rankUnseenDraftPlans(
-                normalized,
-                [...viewedIndices].map((idx) => (hasBase ? idx - 1 : idx)),
-                comparePlans,
-              )
-            : normalized;
+          const ordered = rankMorningNightPairsLast(
+            rankUnseenDraftPlans(
+              normalized,
+              [...viewedIndices].map((idx) => (hasBase ? idx - 1 : idx)),
+              comparePlans,
+            ),
+          );
           const maxDraftAlternatives =
             stopLimit == null
               ? ordered.length
@@ -260,9 +261,7 @@ export function createGenerationSseHelpers(args: PlanningV2GenerationSseArgs): P
                 ? Math.max(0, stopLimit - 1)
                 : stopLimit;
           const next = ordered.slice(0, maxDraftAlternatives);
-          if (stopLimit != null && next.length !== draftAlternativesRef.current.length) {
-            draftAlternativesRef.current = next;
-          }
+          draftAlternativesRef.current = next;
           if (prev.length === next.length) {
             if (linkedSitesLength <= 1) return prev;
             if (prev === next) return prev;
@@ -487,7 +486,12 @@ export function createPlanningV2GenerationSseHandler(
       if (linkedSitesLength > 1 && readLinkedGenerationStopRequestFromSession(weekIso)) {
         userStoppedGenerationRef.current = true;
         if (stopVisibleAlternativeCountRef.current == null) {
-          const visibleCountAtStop = Math.max(0, assignmentVariantsRef.current.length);
+          const visibleCountAtStop = Math.max(
+            0,
+            draftAssignmentsRef.current
+              ? 1 + draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives).length
+              : assignmentVariantsRef.current.length,
+          );
           stopVisibleAlternativeCountRef.current = visibleCountAtStop;
           writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
           pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, visibleCountAtStop);

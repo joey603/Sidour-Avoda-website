@@ -38,6 +38,33 @@ export function clearMultiSiteNavigationInApp(): void {
   }
 }
 
+export function markMultiSiteNavigationInApp(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Change l’URL planning sans navigation App Router (évite le « rendering… » bloqué). */
+export function softNavigateToPlanningSite(siteId: string, weekIso: string): string {
+  const id = String(siteId || "").trim();
+  const week = String(weekIso || "").trim();
+  const href = week
+    ? `/director/planning/${id}?week=${encodeURIComponent(week)}`
+    : `/director/planning/${id}`;
+  markMultiSiteNavigationInApp();
+  if (typeof window !== "undefined") {
+    try {
+      window.history.pushState(window.history.state ?? {}, "", href);
+    } catch {
+      /* ignore */
+    }
+  }
+  return href;
+}
+
 /** Nombre total d’alternatives visibles stockées en mémoire pour un site (base incluse). */
 export function countLinkedPlanVisibleAlternatives(
   plan: LinkedSitePlan | null | undefined,
@@ -55,6 +82,34 @@ export function countLinkedPlanVisibleAlternatives(
   const rawTotal = (hasBase ? 1 : 0) + altCount;
   if (stopVisibleCount == null) return rawTotal;
   return Math.min(rawTotal, Math.max(1, stopVisibleCount));
+}
+
+/** Plus grand nombre de חלופות parmi tous les אתרים en mémoire (index partagé 4/55). */
+export function maxLinkedMemoryAlternativeCount(
+  mem: LinkedPlansMemory | null | undefined,
+  stopVisibleCount: number | null = null,
+): number {
+  const plans = mem?.plansBySite;
+  if (!plans || typeof plans !== "object") return 0;
+  let max = 0;
+  for (const plan of Object.values(plans)) {
+    max = Math.max(max, countLinkedPlanVisibleAlternatives(plan, stopVisibleCount));
+  }
+  return max;
+}
+
+/** Ne pas recaler l’index partagé vers חלופה 1 tant que la session multi-sites est active. */
+export function shouldHoldSharedAlternativeIndex(
+  mem: LinkedPlansMemory | null | undefined,
+  requestedIndex: number,
+): boolean {
+  if (readMultiSiteNavigationInApp()) return true;
+  const requested = Math.max(0, Number(requestedIndex || 0));
+  if (requested <= 0) return false;
+  const memIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
+  if (memIdx === requested) return true;
+  const plans = mem?.plansBySite;
+  return !!plans && typeof plans === "object" && Object.keys(plans).length > 1;
 }
 
 function isoPlanKey(d: Date): string {
@@ -232,6 +287,34 @@ export function readLinkedPlansFromMemory(start: Date): LinkedPlansMemory | null
   } catch {
     return null;
   }
+}
+
+/** Oublie les חלופות session hors `keepWeekIsos` ; liste vide = tout supprimer. */
+export function clearLinkedPlansMemoryExcept(keepWeekIsos: string[]): void {
+  if (typeof window === "undefined") return;
+  const keepKeys = new Set(
+    keepWeekIsos.map((iso) => String(iso || "").trim()).filter(Boolean).map((iso) => `${multiSiteMemoryPrefix}${iso}`),
+  );
+  const removed: string[] = [];
+  try {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const key = sessionStorage.key(i);
+      if (!key || !key.startsWith(multiSiteMemoryPrefix)) continue;
+      if (keepKeys.size > 0 && keepKeys.has(key)) continue;
+      removed.push(key);
+    }
+    for (const key of removed) sessionStorage.removeItem(key);
+  } catch {
+    return;
+  }
+  if (removed.length === 0) return;
+  queueMicrotask(() => {
+    try {
+      window.dispatchEvent(new CustomEvent("linked-plans-memory-updated", { detail: { removedKeys: removed } }));
+    } catch {
+      /* ignore */
+    }
+  });
 }
 
 /** Efface le cache session des plannings multi-sites pour cette semaine (avant une nouvelle יצירת תכנון). */

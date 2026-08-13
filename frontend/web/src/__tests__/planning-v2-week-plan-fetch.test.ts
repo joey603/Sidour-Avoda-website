@@ -41,6 +41,30 @@ describe("loadWeekPlanForSiteWeek", () => {
     expect(urls.every((url: string) => url.includes("prefer=director"))).toBe(true);
   });
 
+  it("savedOnly : director/shared seulement, jamais auto", async () => {
+    apiFetch.mockImplementation((path: string) => {
+      const url = String(path);
+      if (url.includes("scope=shared")) return Promise.resolve(null);
+      if (url.includes("scope=director") && url.includes("parts=base")) {
+        return Promise.resolve({
+          assignments: { sun: { "06-14": [["Saved"]] } },
+          _source_scope: "director",
+          _alts_omitted: true,
+        });
+      }
+      if (url.includes("scope=director") && url.includes("parts=alternatives")) {
+        return Promise.resolve({ alternatives: [], alternative_pulls: [] });
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    });
+    const plan = await loadWeekPlanForSiteWeek("12", "2026-08-02", null, { savedOnly: true });
+    const urls = apiFetch.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(urls.every((url: string) => url.includes("scope=director") || url.includes("scope=shared"))).toBe(true);
+    expect(urls.some((url: string) => url.includes("scope=auto") || url.includes("scope=resolve"))).toBe(false);
+    expect(plan?.sourceScope).toBe("director");
+    expect(plan?.assignments).toEqual({ sun: { "06-14": [["Saved"]] } });
+  });
+
   it("nav légère : GET auto base + alternatives", async () => {
     apiFetch.mockResolvedValue({ assignments: { sun: {} } });
     const plan = await loadWeekPlanForSiteWeek("12", "2026-08-09", null, { lightweightNav: true });

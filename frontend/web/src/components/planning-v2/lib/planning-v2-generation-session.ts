@@ -25,13 +25,56 @@ export function writeAlternativesUnlockedToSession(weekIso: string, siteId: stri
   if (typeof window === "undefined") return;
   try {
     sessionStorage.setItem(alternativesUnlockSessionKey(weekIso, siteId), "1");
+    sessionStorage.setItem(alternativesUnlockSessionKey(weekIso, "*"), "1");
   } catch {
     /* ignore */
   }
 }
 
+export function readAlternativesUnlockedForWeek(weekIso: string): boolean {
+  return readAlternativesUnlockedFromSession(weekIso, "*");
+}
+
 function linkedGenerationSessionKey(weekIso: string) {
   return `${PLANNING_V2_LINKED_GENERATION_PREFIX}${weekIso}`;
+}
+
+const PLANNING_V2_LINKED_GENERATION_ORIGIN_PREFIX = "planning_v2_linked_generation_origin_";
+
+function linkedGenerationOriginSessionKey(weekIso: string) {
+  return `${PLANNING_V2_LINKED_GENERATION_ORIGIN_PREFIX}${weekIso}`;
+}
+
+export function readLinkedGenerationOriginFromSession(weekIso: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(linkedGenerationOriginSessionKey(weekIso));
+    const id = String(raw || "").trim();
+    return id || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLinkedGenerationOriginToSession(weekIso: string, siteId: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    const key = linkedGenerationOriginSessionKey(weekIso);
+    if (!siteId) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, String(siteId));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function isViewingLinkedSiteDuringGeneration(
+  originSiteId: string | null | undefined,
+  currentSiteId: string,
+  _generationActive?: boolean,
+): boolean {
+  const origin = String(originSiteId || "").trim();
+  if (!origin) return false;
+  return origin !== String(currentSiteId);
 }
 
 function linkedGenerationStopSessionKey(weekIso: string) {

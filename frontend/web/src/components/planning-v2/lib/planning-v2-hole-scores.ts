@@ -37,7 +37,66 @@ export type HoleScore = {
   required: number;
   pulls: number;
   noonPulls: number;
+  /** Travailleurs affectés בוקר + לילה le même jour (moins = mieux, en fin de חלופות). */
+  morningNightPairs: number;
 };
+
+/** Combien de travailleurs sont à la fois בוקר et לילה le même jour (שיבוץ + משיכות). */
+export function countMorningNightSameDayPairs(
+  assignments: Record<string, Record<string, string[][]>> | null | undefined,
+  pulls?: PlanningV2PullsMap | Record<string, unknown> | null,
+): number {
+  const morningByDay = new Map<string, Set<string>>();
+  const nightByDay = new Map<string, Set<string>>();
+  const add = (dayKey: string, kind: PullsShiftKind, name: string) => {
+    const n = String(name || "").trim();
+    if (!n || (kind !== "morning" && kind !== "night")) return;
+    const bucket = kind === "morning" ? morningByDay : nightByDay;
+    let set = bucket.get(dayKey);
+    if (!set) {
+      set = new Set<string>();
+      bucket.set(dayKey, set);
+    }
+    set.add(n);
+  };
+  if (assignments && typeof assignments === "object") {
+    for (const [dayKey, shiftsMap] of Object.entries(assignments)) {
+      if (!shiftsMap || typeof shiftsMap !== "object") continue;
+      for (const [shiftName, perStation] of Object.entries(shiftsMap)) {
+        const kind = shiftKindFromName(shiftName);
+        if (kind !== "morning" && kind !== "night") continue;
+        for (const cell of perStation || []) {
+          if (!Array.isArray(cell)) continue;
+          for (const name of cell) add(dayKey, kind, String(name || ""));
+        }
+      }
+    }
+  }
+  if (pulls && typeof pulls === "object") {
+    for (const [key, entry] of Object.entries(pulls)) {
+      const parts = String(key || "").split("|");
+      if (parts.length < 2) continue;
+      const kind = shiftKindFromName(parts[1] || "");
+      if (kind !== "morning" && kind !== "night") continue;
+      const rec = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+      const before = rec?.before && typeof rec.before === "object" ? (rec.before as Record<string, unknown>) : null;
+      const after = rec?.after && typeof rec.after === "object" ? (rec.after as Record<string, unknown>) : null;
+      add(parts[0], kind, String(before?.name || ""));
+      add(parts[0], kind, String(after?.name || ""));
+    }
+  }
+  const days = new Set([...morningByDay.keys(), ...nightByDay.keys()]);
+  let count = 0;
+  for (const dayKey of days) {
+    const morning = morningByDay.get(dayKey);
+    const night = nightByDay.get(dayKey);
+    if (!morning || !night) continue;
+    for (const name of morning) {
+      if (night.has(name)) count += 1;
+    }
+  }
+  return count;
+}
 
 function pullsTargetGap(score: HoleScore, requestedPullsCount: number | null | undefined): number {
   if (requestedPullsCount == null || requestedPullsCount <= 0) return 0;
@@ -79,7 +138,8 @@ export function shouldHoldFirstPlanForPreference(
  * 1) moins de trous
  * 2) plus de משיכות sur les kinds préférés (vide = mix, no-op)
  * 3) si une limite N est demandée : se rapprocher de N משיכות
- * 4) plus de créneaux couverts
+ * 4) moins de בוקר+לילה le même jour (ces plans vont en fin de חלופות)
+ * 5) plus de créneaux couverts
  */
 export function compareHoleScores(
   a: HoleScore,
@@ -92,6 +152,9 @@ export function compareHoleScores(
   const gapB = pullsTargetGap(b, requestedPullsCount);
   if (gapA !== gapB) return gapA - gapB;
   if (requestedPullsCount == null && a.pulls !== b.pulls) return a.pulls - b.pulls;
+  const mnA = a.morningNightPairs || 0;
+  const mnB = b.morningNightPairs || 0;
+  if (mnA !== mnB) return mnA - mnB;
   if (a.assigned !== b.assigned) return b.assigned - a.assigned;
   return 0;
 }
@@ -110,6 +173,7 @@ export function singlePlanHoleScore(
     holes: Math.max(0, required - assigned),
     pulls: pullsCount(pulls),
     noonPulls: preferredPullsCount(pulls, preferKinds),
+    morningNightPairs: countMorningNightSameDayPairs(assignments, pulls),
   };
 }
 
@@ -123,6 +187,7 @@ export function linkedPlansHoleScore(
   let required = 0;
   let totalPulls = 0;
   let totalNoonPulls = 0;
+  let totalMorningNightPairs = 0;
   for (const [siteKey, plan] of Object.entries(plans || {})) {
     const assignments =
       plan?.assignments && typeof plan.assignments === "object"
@@ -132,6 +197,7 @@ export function linkedPlansHoleScore(
       plan?.pulls && typeof plan.pulls === "object" ? (plan.pulls as PlanningV2PullsMap) : {};
     totalPulls += pullsCount(pulls);
     totalNoonPulls += preferredPullsCount(pulls, preferKinds);
+    totalMorningNightPairs += countMorningNightSameDayPairs(assignments, pulls);
     assigned += countAssignedCellsForLinkedHoles(assignments, pulls);
     const rawRequired = Number(plan?.required_count);
     required +=
@@ -147,5 +213,6 @@ export function linkedPlansHoleScore(
     holes: Math.max(0, required - assigned),
     pulls: totalPulls,
     noonPulls: totalNoonPulls,
+    morningNightPairs: totalMorningNightPairs,
   };
 }

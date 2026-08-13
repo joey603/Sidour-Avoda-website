@@ -20,6 +20,7 @@ import {
   resolveAssignmentsForSharedAlternative,
   resolvePullsForSharedAlternative,
 } from "./lib/multi-site-linked-memory";
+import { assignmentsNonEmpty } from "./lib/assignments-empty";
 
 function isRtlName(s: string): boolean {
   return /[\u0590-\u05FF]/.test(String(s || ""));
@@ -682,7 +683,7 @@ export function PlanningV2AssignmentsSummary({
     );
   }
 
-  if (workers.length === 0) {
+  if (!assignmentsNonEmpty(assignments) && workers.length === 0) {
     return (
       <div className="mt-4 rounded-xl border p-3 dark:border-zinc-800">
         <div className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">סיכום שיבוצים לעמדה (כל העמדות)</div>

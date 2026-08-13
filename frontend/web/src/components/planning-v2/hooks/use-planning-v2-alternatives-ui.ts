@@ -6,6 +6,7 @@ import {
   readLinkedPlansFromMemory,
   readMultiSiteNavigationInApp,
   resolveAssignmentsForAlternative,
+  shouldHoldSharedAlternativeIndex,
   type LinkedSitePlan,
 } from "../lib/multi-site-linked-memory";
 import type { LinkedSiteRow } from "./use-planning-v2-linked-sites";
@@ -190,10 +191,19 @@ export function usePlanningV2AlternativesUi({
     // sur cet état transitoire, sinon la navigation "saute" au début.
     if (readMultiSiteNavigationInApp()) return;
     if (linkedSites.length > 1) return;
+    if (shouldHoldSharedAlternativeIndex(readLinkedPlansFromMemory(weekStart), plan.selectedAlternativeIndex)) {
+      return;
+    }
     if (alternativesUiEnabled) return;
     if (plan.selectedAlternativeIndex === 0) return;
     plan.setSelectedAlternativeIndex(0);
-  }, [alternativesUiEnabled, linkedSites.length, plan.selectedAlternativeIndex, plan.setSelectedAlternativeIndex]);
+  }, [
+    alternativesUiEnabled,
+    linkedSites.length,
+    plan.selectedAlternativeIndex,
+    plan.setSelectedAlternativeIndex,
+    weekStart,
+  ]);
 
   return {
     summaryFilterState,

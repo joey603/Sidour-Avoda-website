@@ -1,5 +1,6 @@
 import type { PlanningV2PullsMap } from "../types";
 import type { LinkedSitePlan } from "./multi-site-linked-memory";
+import { countMorningNightSameDayPairs } from "./planning-v2-hole-scores";
 
 export type DraftAlternative = {
   assignments: Record<string, Record<string, string[][]>>;
@@ -201,4 +202,16 @@ export function draftAlternativesForMode(
   dedupe: boolean,
 ): DraftAlternative[] {
   return dedupe ? uniqueDraftAlternatives(value) : normalizeDraftAlternatives(value);
+}
+
+/** Pousse en fin de liste les חלופות où quelqu’un a בוקר+לילה le même jour — freeze ignoré. */
+export function rankMorningNightPairsLast(plans: DraftAlternative[]): DraftAlternative[] {
+  if (plans.length <= 1) return plans;
+  const clean: DraftAlternative[] = [];
+  const sameDay: DraftAlternative[] = [];
+  for (const plan of plans) {
+    if (countMorningNightSameDayPairs(plan.assignments, plan.pulls) > 0) sameDay.push(plan);
+    else clean.push(plan);
+  }
+  return [...clean, ...sameDay];
 }

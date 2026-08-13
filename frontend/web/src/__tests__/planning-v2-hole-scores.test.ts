@@ -1,5 +1,6 @@
 import {
   compareHoleScores,
+  countMorningNightSameDayPairs,
   noonPullsCount,
   preferredPullsCount,
   shouldHoldPlanUntilPullTarget,
@@ -14,6 +15,7 @@ function score(partial: Partial<HoleScore>): HoleScore {
     required: 10,
     pulls: 0,
     noonPulls: 0,
+    morningNightPairs: 0,
     ...partial,
   };
 }
@@ -42,6 +44,19 @@ describe("compareHoleScores", () => {
     const morning = score({ pulls: 1, noonPulls: 1, holes: 2 });
     const nightOnly = score({ pulls: 2, noonPulls: 0, holes: 2 });
     expect(compareHoleScores(morning, nightOnly, 2)).toBeLessThan(0);
+  });
+
+  it("à qualité égale, un plan avec בוקר+לילה le même jour passe après", () => {
+    const clean = score({ assigned: 10, morningNightPairs: 0 });
+    const sameDay = score({ assigned: 10, morningNightPairs: 1 });
+    expect(compareHoleScores(clean, sameDay, 2)).toBeLessThan(0);
+    expect(compareHoleScores(sameDay, clean, 2)).toBeGreaterThan(0);
+  });
+
+  it("בוקר+לילה pèse plus que quelques créneaux en plus", () => {
+    const clean = score({ assigned: 18, morningNightPairs: 0 });
+    const sameDay = score({ assigned: 19, morningNightPairs: 1 });
+    expect(compareHoleScores(clean, sameDay, 2)).toBeLessThan(0);
   });
 });
 
@@ -102,5 +117,25 @@ describe("preferredPullsCount", () => {
   it("compte seulement les משיכות du kind demandé", () => {
     expect(preferredPullsCount(pulls, ["night"])).toBe(1);
     expect(preferredPullsCount(pulls, ["morning", "noon"])).toBe(2);
+  });
+});
+
+describe("countMorningNightSameDayPairs", () => {
+  it("compte un travailleur בוקר + לילה le même jour", () => {
+    expect(
+      countMorningNightSameDayPairs({
+        sun: { בוקר: [["A"]], צהריים: [["B"]], לילה: [["A"]] },
+        mon: { בוקר: [["C"]], צהריים: [["A"]], לילה: [["B"]] },
+      }),
+    ).toBe(1);
+  });
+
+  it("ignore midi seul ou matin/nuit sur des jours différents", () => {
+    expect(
+      countMorningNightSameDayPairs({
+        sun: { בוקר: [["A"]], לילה: [["B"]] },
+        mon: { בוקר: [["B"]], לילה: [["A"]] },
+      }),
+    ).toBe(0);
   });
 });

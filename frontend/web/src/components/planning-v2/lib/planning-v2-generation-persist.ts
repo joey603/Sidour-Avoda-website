@@ -5,6 +5,7 @@ import {
   type DraftAlternative,
   buildSeenLinkedAlternativeSnapshots,
   uniqueDraftAlternatives,
+  rankMorningNightPairsLast,
 } from "./planning-v2-draft-alternatives";
 import { linkedPlansAltCounts } from "./planning-v2-max-shifts-prune";
 import {
@@ -146,7 +147,7 @@ export async function persistGeneratedAutoDraftToServer({
   const asg = draftAssignmentsRef.current;
   if (!asg || !assignmentsNonEmpty(asg)) return;
   const pulls = draftPullsRef.current || {};
-  const alts = uniqueDraftAlternatives(draftAlternativesRef.current || []);
+  const alts = rankMorningNightPairsLast(uniqueDraftAlternatives(draftAlternativesRef.current || []));
   const base = buildWeekPlanDataPayload(
     Number(siteId),
     weekStart,

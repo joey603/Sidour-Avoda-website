@@ -11,6 +11,24 @@ export function parseWeekQueryParam(raw: string | null): Date | null {
   return parsed;
 }
 
+/** Dimanche de la semaine calendaire en cours (semaine actuelle). */
+export function currentWeekStart(ref: Date = new Date()): Date {
+  const d = new Date(ref);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - d.getDay());
+  return d;
+}
+
+/** Semaines où les brouillons יצירת תכנון / חלופות peuvent rester : actuelle + suivante. */
+export function unsavedPlanKeepWeekIsos(ref: Date = new Date()): string[] {
+  const current = currentWeekStart(ref);
+  return [getWeekKeyISO(current), getWeekKeyISO(addDays(current, 7))];
+}
+
+export function isUnsavedPlanKeepWeek(weekIso: string, ref: Date = new Date()): boolean {
+  return unsavedPlanKeepWeekIsos(ref).includes(String(weekIso || "").trim());
+}
+
 /** Semaine « affichage travailleur » : dimanche suivant (identique au planning). */
 export function defaultPlanningWeekStart(): Date {
   const today = new Date();

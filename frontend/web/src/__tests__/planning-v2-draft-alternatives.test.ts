@@ -1,6 +1,7 @@
 import {
   rankUnseenDraftPlans,
   viewedIndicesForPreferResplit,
+  rankMorningNightPairsLast,
   type DraftAlternative,
 } from "@/components/planning-v2/lib/planning-v2-draft-alternatives";
 
@@ -87,5 +88,36 @@ describe("viewedIndicesForPreferResplit", () => {
     );
     expect(next[0]).toBe(morning);
     expect(next[1]).toBe(noon);
+  });
+});
+
+describe("rankMorningNightPairsLast", () => {
+  it("met à la fin les plans où quelqu’un a בוקר et לילה le même jour", () => {
+    const clean: DraftAlternative = {
+      assignments: { sun: { בוקר: [["A"]], לילה: [["B"]] } },
+      pulls: {},
+    };
+    const sameDay: DraftAlternative = {
+      assignments: { thu: { בוקר: [["Hanna"]], לילה: [["Hanna"]] } },
+      pulls: {},
+    };
+    const next = rankMorningNightPairsLast([sameDay, clean, sameDay]);
+    expect(next[0]).toBe(clean);
+    expect(next[1]).toBe(sameDay);
+    expect(next[2]).toBe(sameDay);
+  });
+
+  it("compte aussi une משיכה matin + שיבוץ nuit", () => {
+    const clean: DraftAlternative = {
+      assignments: { sun: { בוקר: [["A"]], לילה: [["B"]] } },
+      pulls: {},
+    };
+    const viaPull: DraftAlternative = {
+      assignments: { thu: { בוקר: [[]], לילה: [["Hanna"]] } },
+      pulls: { "thu|בוקר|0|1": { before: { name: "Hanna" }, after: { name: "X" } } },
+    };
+    const next = rankMorningNightPairsLast([viaPull, clean]);
+    expect(next[0]).toBe(clean);
+    expect(next[1]).toBe(viaPull);
   });
 });

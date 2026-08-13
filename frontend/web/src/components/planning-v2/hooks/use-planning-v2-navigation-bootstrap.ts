@@ -9,7 +9,7 @@ import {
 import type { V2WeekPlanData } from "./use-planning-v2-week-plan";
 
 export function usePlanningV2NavigationBootstrap(siteId: string, weekStart: Date) {
-  const navigationInApp = useMemo(() => readMultiSiteNavigationInApp(), []);
+  const navigationInApp = useMemo(() => readMultiSiteNavigationInApp(), [siteId]);
   const initialNavigationWeekPlan = useMemo<V2WeekPlanData>(() => {
     if (!navigationInApp) return null;
     const mem = readLinkedPlansFromMemory(weekStart);

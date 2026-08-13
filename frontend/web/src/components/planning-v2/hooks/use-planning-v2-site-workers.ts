@@ -87,6 +87,8 @@ export function usePlanningV2SiteWorkers(siteId: string) {
   const hasLoadedAvailOnceRef = useRef(!!initialWorkersCache);
   const prevWorkersWeekIsoRef = useRef<string | null>(initialWeekIso);
   const prevAvailWeekIsoRef = useRef<string | null>(initialWeekIso);
+  const prevWorkersSiteIdRef = useRef<string | null>(siteId);
+  const prevAvailSiteIdRef = useRef<string | null>(siteId);
   const weeklyAvailabilityRef = useRef(weeklyAvailability);
   const workersRef = useRef(workers);
   weeklyAvailabilityRef.current = weeklyAvailability;
@@ -205,21 +207,36 @@ export function usePlanningV2SiteWorkers(siteId: string) {
   useEffect(() => {
     const wk = getWeekKeyISO(weekStart);
     const weekChanged = prevWorkersWeekIsoRef.current != null && prevWorkersWeekIsoRef.current !== wk;
+    const siteChanged = prevWorkersSiteIdRef.current != null && prevWorkersSiteIdRef.current !== siteId;
     prevWorkersWeekIsoRef.current = wk;
-    // Animation au changement de semaine ; silent seulement pour un refresh même semaine.
-    const silent = hasLoadedWorkersOnceRef.current && !weekChanged;
+    prevWorkersSiteIdRef.current = siteId;
+    if (siteChanged) {
+      const cached = getCachedWeekWorkers(siteId, wk);
+      if (cached) {
+        setWorkers(cached.workers.filter((w) => isWorkerVisibleForSelectedWeek(w, weekStart)));
+        if (Object.keys(cached.weeklyAvailability).length > 0) {
+          setWeeklyAvailability(cached.weeklyAvailability);
+        }
+      } else {
+        setWorkers([]);
+      }
+    }
+    // Animation au changement de semaine / site ; silent seulement pour un refresh même contexte.
+    const silent = hasLoadedWorkersOnceRef.current && !weekChanged && !siteChanged;
     hasLoadedWorkersOnceRef.current = true;
     void reloadWorkers({ silent });
-  }, [reloadWorkers, weekStart]);
+  }, [reloadWorkers, siteId, weekStart]);
 
   useEffect(() => {
     const wk = getWeekKeyISO(weekStart);
     const weekChanged = prevAvailWeekIsoRef.current != null && prevAvailWeekIsoRef.current !== wk;
+    const siteChanged = prevAvailSiteIdRef.current != null && prevAvailSiteIdRef.current !== siteId;
     prevAvailWeekIsoRef.current = wk;
-    const silent = hasLoadedAvailOnceRef.current && !weekChanged;
+    prevAvailSiteIdRef.current = siteId;
+    const silent = hasLoadedAvailOnceRef.current && !weekChanged && !siteChanged;
     hasLoadedAvailOnceRef.current = true;
     void reloadWeeklyAvailability({ silent });
-  }, [reloadWeeklyAvailability, weekStart]);
+  }, [reloadWeeklyAvailability, siteId, weekStart]);
 
   const workerRowsForTable = useMemo(() => {
     return workers.map((worker) => ({

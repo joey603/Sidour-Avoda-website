@@ -4,7 +4,8 @@ import { apiFetch } from "@/lib/api";
 import { resolveMaxShifts } from "@/lib/max-shifts";
 import type { PlanningWorker, WorkerAvailability } from "../types";
 import { EMPTY_WORKER_AVAILABILITY } from "./constants";
-import { addDays, getWeekKeyISO } from "./week";
+import { addDays, currentWeekStart, getWeekKeyISO } from "./week";
+import { clearLinkedPlansMemoryExcept } from "./multi-site-linked-memory";
 import { loadWeekPlanForSiteWeek, type V2WeekPlanData } from "./week-plan-fetch";
 
 type WeekNavWorkersCacheEntry = {
@@ -15,9 +16,25 @@ type WeekNavWorkersCacheEntry = {
 const weekPlanCache = new Map<string, V2WeekPlanData>();
 const weekWorkersCache = new Map<string, WeekNavWorkersCacheEntry>();
 const prefetchInFlight = new Set<string>();
+/** Semaines dont les טיוטות auto / חלופות restent en cache (actuelle + suivante). */
+const retainedUnsavedWeekIsos = new Set<string>();
 
 function cacheKey(siteId: string, weekIso: string) {
   return `${siteId}|${weekIso}`;
+}
+
+function parseCacheKey(key: string): { siteId: string; weekIso: string } | null {
+  const sep = key.indexOf("|");
+  if (sep <= 0) return null;
+  return { siteId: key.slice(0, sep), weekIso: key.slice(sep + 1) };
+}
+
+function isSavedWeekPlan(plan: V2WeekPlanData): boolean {
+  return plan?.sourceScope === "director" || plan?.sourceScope === "shared";
+}
+
+function normalizeKeepWeekIsos(weekIsos: string[]): string[] {
+  return Array.from(new Set(weekIsos.map((w) => String(w || "").trim()).filter(Boolean)));
 }
 
 export function getCachedWeekPlan(siteId: string, weekIso: string): V2WeekPlanData | undefined {
@@ -26,6 +43,10 @@ export function getCachedWeekPlan(siteId: string, weekIso: string): V2WeekPlanDa
 }
 
 export function setCachedWeekPlan(siteId: string, weekIso: string, plan: V2WeekPlanData) {
+  if (retainedUnsavedWeekIsos.size > 0 && !retainedUnsavedWeekIsos.has(weekIso) && !isSavedWeekPlan(plan)) {
+    weekPlanCache.delete(cacheKey(siteId, weekIso));
+    return;
+  }
   weekPlanCache.set(cacheKey(siteId, weekIso), plan);
 }
 
@@ -36,9 +57,89 @@ export function discardCachedAutoWeekPlans(siteIds: Array<string | number>, week
   for (const sid of siteIds) {
     const id = String(sid);
     const cached = getCachedWeekPlan(id, wk);
-    if (cached?.sourceScope === "director" || cached?.sourceScope === "shared") continue;
+    if (isSavedWeekPlan(cached)) continue;
     weekPlanCache.delete(cacheKey(id, wk));
   }
+}
+
+function weekIsoFromStorageKey(key: string): string | null {
+  const match = String(key || "").match(/(\d{4}-\d{2}-\d{2})$/);
+  return match ? match[1] : null;
+}
+
+function isSavedPlanStorageKey(key: string): boolean {
+  return key.startsWith("plan_director_") || key.startsWith("plan_shared_");
+}
+
+function isUnsavedPlanStorageKey(key: string): boolean {
+  if (!key || isSavedPlanStorageKey(key)) return false;
+  return (
+    key.startsWith("plan_") ||
+    key.startsWith("multi_site_generated_") ||
+    key.startsWith("planning_v2_page_generated_auto_draft_")
+  );
+}
+
+function discardUnsavedBrowserPlanKeysExcept(keepWeekIsos: string[]): void {
+  if (typeof window === "undefined") return;
+  const keep = new Set(normalizeKeepWeekIsos(keepWeekIsos));
+  const stores: Storage[] = [];
+  try {
+    stores.push(localStorage, sessionStorage);
+  } catch {
+    return;
+  }
+  for (const store of stores) {
+    const removed: string[] = [];
+    try {
+      for (let i = 0; i < store.length; i++) {
+        const key = store.key(i);
+        if (!key || !isUnsavedPlanStorageKey(key)) continue;
+        const weekIso = weekIsoFromStorageKey(key);
+        if (keep.size > 0 && weekIso && keep.has(weekIso)) continue;
+        removed.push(key);
+      }
+      for (const key of removed) store.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** `keepWeekIsos` vide = aucune טיוטה auto conservée. */
+export function retainUnsavedCachedWeekPlans(keepWeekIsos: string[]): void {
+  const keep = normalizeKeepWeekIsos(keepWeekIsos);
+  retainedUnsavedWeekIsos.clear();
+  for (const wk of keep) retainedUnsavedWeekIsos.add(wk);
+  for (const key of Array.from(weekPlanCache.keys())) {
+    const parsed = parseCacheKey(key);
+    if (!parsed) continue;
+    if (keep.length > 0 && retainedUnsavedWeekIsos.has(parsed.weekIso)) continue;
+    if (isSavedWeekPlan(weekPlanCache.get(key))) continue;
+    weekPlanCache.delete(key);
+  }
+}
+
+/** Cache mémoire + session/local : brouillons יצירת תכנון non sauvegardés. Liste vide = tout effacer. */
+export function discardUnsavedWeekArtifactsExcept(keepWeekIsos: string[] = []): void {
+  retainUnsavedCachedWeekPlans(keepWeekIsos);
+  clearLinkedPlansMemoryExcept(keepWeekIsos);
+  discardUnsavedBrowserPlanKeysExcept(keepWeekIsos);
+}
+
+/**
+ * Vider les unsaved au changement de semaine, ou à l’ouverture depuis la liste אתרים.
+ * Ne pas vider pendant « פתח אתר » (même session multi-sites).
+ */
+export function shouldDiscardUnsavedOnPlanningNav(opts: {
+  firstLoad: boolean;
+  weekChanged: boolean;
+  siteChanged: boolean;
+  inAppMultiSiteNav: boolean;
+}): boolean {
+  if (opts.weekChanged) return true;
+  if (opts.inAppMultiSiteNav) return false;
+  return opts.firstLoad || opts.siteChanged;
 }
 
 export function getCachedWeekWorkers(siteId: string, weekIso: string): WeekNavWorkersCacheEntry | undefined {
@@ -87,7 +188,7 @@ async function prefetchOneWeek(
     const [plan, workersRaw, availRaw] = await Promise.all([
       hasPlan
         ? Promise.resolve(weekPlanCache.get(key) ?? null)
-        : loadWeekPlanForSiteWeek(siteId, weekIso, preferredScope, { omitWorkers: true }),
+        : loadWeekPlanForSiteWeek(siteId, weekIso, preferredScope, { omitWorkers: true, savedOnly: true }),
       hasWorkers
         ? Promise.resolve(null)
         : apiFetch<Record<string, unknown>[]>(
@@ -117,14 +218,13 @@ async function prefetchOneWeek(
   }
 }
 
-/** Prefetch prev/next week workers + week-plan pour un clic quasi immédiat. */
+/** Prefetch uniquement la semaine d’après calendaire (plan + workers). */
 export function prefetchAdjacentWeeks(
   siteId: string,
-  weekStart: Date,
+  _weekStart: Date,
   preferredScope?: "director" | "shared" | "auto" | null,
 ) {
   const id = Number(siteId);
   if (!Number.isFinite(id) || id <= 0) return;
-  void prefetchOneWeek(siteId, addDays(weekStart, -7), preferredScope);
-  void prefetchOneWeek(siteId, addDays(weekStart, 7), preferredScope);
+  void prefetchOneWeek(siteId, addDays(currentWeekStart(), 7), preferredScope);
 }

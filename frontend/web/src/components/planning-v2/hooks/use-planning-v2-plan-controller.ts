@@ -15,6 +15,7 @@ import { getWeekKeyISO } from "../lib/week";
 import {
   clearLinkedPlansFromMemory,
   readLinkedPlansFromMemory,
+  readMultiSiteNavigationInApp,
   saveLinkedPlansToMemory,
 } from "../lib/multi-site-linked-memory";
 import { type DraftAlternative, draftAlternativesForMode } from "../lib/planning-v2-draft-alternatives";
@@ -58,7 +59,11 @@ type PlanControllerArgs = {
   weekPlanLoading: boolean;
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
-  reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  reloadWeekPlan: (opts?: {
+    silent?: boolean;
+    preferredScope?: "director" | "shared" | "auto" | null;
+    savedOnly?: boolean;
+  }) => void | Promise<void>;
   applyLocalWeekPlan?: (next: V2WeekPlanData) => void;
   discardLocalAutoWeekPlan?: () => void;
   /** Mode ערוך sur un plan director/shared : garder le brouillon généré visible jusqu'à sauvegarde. */
@@ -96,7 +101,9 @@ export function usePlanningV2PlanController({
   const [draftFixedAssignmentsSnapshot, setDraftFixedAssignmentsSnapshot] = useState<
     Record<string, Record<string, string[][]>> | null
   >(null);
-  const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(0);
+  const [selectedAlternativeIndex, setSelectedAlternativeIndex] = useState(() =>
+    Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0)),
+  );
   // Par défaut: משיכות ללא (empty string).
   const [autoPullsLimit, setAutoPullsLimit] = useState("");
   const [autoPullsPrefer, setAutoPullsPrefer] = useState<PullsShiftPrefs>({ ...EMPTY_PULLS_SHIFT_PREFS });
@@ -178,6 +185,7 @@ export function usePlanningV2PlanController({
     workers,
     workerRowsForTable,
     reloadWeekPlan,
+    applyLocalWeekPlan,
     discardLocalAutoWeekPlan,
     editingSaved,
     hasOfficialSavedWeekPlan,
@@ -218,6 +226,7 @@ export function usePlanningV2PlanController({
     stopVisibleAlternativeCountRef,
     alternativesFlushRafRef,
     generationRunningRef,
+    generationOriginSiteIdRef,
     resetGenerationForScopeChange,
     cancelGenerationForSavedEditing,
   } = generation;
@@ -256,6 +265,15 @@ export function usePlanningV2PlanController({
   // Reset drafts seulement au changement de site / semaine — pas quand linkedSitesLength
   // passe de 0→N (sinon on efface une réhydratation mémoire déjà faite au retour multi-sites).
   useEffect(() => {
+    // Soft-switch אתר pendant יצירת תכנון : ne pas abort le SSE ni vider les drafts d’origine.
+    if (genBusyRef.current || generationRunningRef.current) {
+      const preservedAltIndex = !protectOfficialSavedPlan
+        ? Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0))
+        : 0;
+      setSelectedAlternativeIndex(preservedAltIndex);
+      userPickedAltIndexRef.current = preservedAltIndex;
+      return;
+    }
     resetGenerationForScopeChange();
     setDraftAssignments(null);
     setDraftPulls(null);
@@ -290,7 +308,7 @@ export function usePlanningV2PlanController({
     setDraftAlternatives([]);
     setDraftFixedAssignmentsSnapshot(null);
     setSelectedAlternativeIndex(0);
-    if (linkedSitesLength > 1) {
+    if (linkedSitesLength > 1 && !readMultiSiteNavigationInApp()) {
       clearLinkedPlansFromMemory(weekStart);
     }
   }, [linkedSitesLength, protectOfficialSavedPlan, weekPlan?.assignments, weekPlan?.sourceScope, weekStart]);
@@ -334,6 +352,7 @@ export function usePlanningV2PlanController({
       stopVisibleAlternativeCountRef,
       generationRunningRef,
       genBusyRef,
+      generationOriginSiteIdRef,
     },
     selectedAlternativeIndex,
     setSelectedAlternativeIndex,

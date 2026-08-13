@@ -2,22 +2,27 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
-import { loadAutoWeekPlanLite, toAutoWeekPlanLite } from "../lib/week-plan-fetch";
 import { computeLinkedSiteHoleEntries } from "../lib/linked-site-holes";
 import {
   clearLinkedPlansFromMemory,
   clearMultiSiteNavigationInApp,
   countLinkedPlanVisibleAlternatives,
-  MULTI_SITE_NAV_FLAG,
+  maxLinkedMemoryAlternativeCount,
   readLinkedPlansFromMemory,
   readMultiSiteNavigationInApp,
   resolveAssignmentsForAlternative,
   resolvePullsForAlternative,
   saveLinkedPlansToMemory,
+  softNavigateToPlanningSite,
   type LinkedSitePlan,
 } from "../lib/multi-site-linked-memory";
-import { readLinkedGenerationStopVisibleCountFromSession } from "../lib/planning-v2-generation-session";
+import {
+  isViewingLinkedSiteDuringGeneration,
+  readLinkedGenerationOriginFromSession,
+  readLinkedGenerationStopVisibleCountFromSession,
+} from "../lib/planning-v2-generation-session";
 import { getWeekKeyISO } from "../lib/week";
+import { loadAutoWeekPlanLite, toAutoWeekPlanLite } from "../lib/week-plan-fetch";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary } from "../types";
 import type { V2WeekPlanData } from "./use-planning-v2-week-plan";
 import type { LinkedSiteRow } from "./use-planning-v2-linked-sites";
@@ -38,10 +43,6 @@ type NavigationMemorySnapshot = {
   hasCurrentPlan: boolean;
 };
 
-type RouterLike = {
-  push: (href: string) => void;
-};
-
 type UsePlanningV2LinkedMemoryArgs = {
   siteId: string;
   weekStart: Date;
@@ -60,9 +61,8 @@ type UsePlanningV2LinkedMemoryArgs = {
   setLinkedPlansMemoryTick: Dispatch<SetStateAction<number>>;
   hasLinkedSitesRail: boolean;
   siteLoading: boolean;
-  workersLoading: boolean;
   weekPlanLoading: boolean;
-  router: RouterLike;
+  onViewSite: (siteId: string) => void;
   plan: LinkedMemoryPlanSlice;
 };
 
@@ -84,9 +84,8 @@ export function usePlanningV2LinkedMemory({
   setLinkedPlansMemoryTick,
   hasLinkedSitesRail,
   siteLoading,
-  workersLoading,
   weekPlanLoading,
-  router,
+  onViewSite,
   plan,
 }: UsePlanningV2LinkedMemoryArgs) {
   const [showLinkedSitesRail, setShowLinkedSitesRail] = useState(false);
@@ -97,14 +96,17 @@ export function usePlanningV2LinkedMemory({
   useEffect(() => {
     if (linkedSites.length <= 1) return;
     const bump = () => {
-      // Pendant le streaming SSE, ne pas re-render toute la page à chaque alternative
-      // (sinon les clics חלופות se mettent en file et « rattrapent » ensuite).
-      if (plan.generationRunning) return;
+      // Pendant le streaming SSE sur le site d’origine, ne pas re-render toute la page
+      // à chaque alternative. Sur un autre אתר, suivre la mémoire en live.
+      if (plan.generationRunning) {
+        const origin = readLinkedGenerationOriginFromSession(isoWeek);
+        if (!isViewingLinkedSiteDuringGeneration(origin, siteId, true)) return;
+      }
       setLinkedPlansMemoryTick((n) => n + 1);
     };
     window.addEventListener("linked-plans-memory-updated", bump as EventListener);
     return () => window.removeEventListener("linked-plans-memory-updated", bump as EventListener);
-  }, [linkedSites.length, plan.generationRunning]);
+  }, [isoWeek, linkedSites.length, plan.generationRunning, siteId]);
 
   useEffect(() => {
     const prev = prevLinkedSitesLengthRef.current;
@@ -124,12 +126,10 @@ export function usePlanningV2LinkedMemory({
 
   const navigateToLinkedSiteFromRail = useCallback(
     (targetId: number) => {
-      try {
-        sessionStorage.setItem(MULTI_SITE_NAV_FLAG, "1");
-      } catch {
-        /* ignore */
-      }
-      // Persister l’index חלופה avant le remount (comme legacy navigate-before-push).
+      const target = Number(targetId);
+      if (!Number.isFinite(target) || target <= 0) return;
+      if (String(target) === String(siteId)) return;
+      // Persister l’index חלופה avant le switch (comme legacy navigate-before-push).
       const mem = readLinkedPlansFromMemory(weekStart);
       if (mem?.plansBySite && Object.keys(mem.plansBySite).length > 0) {
         const uiIdx = Math.max(0, Number(plan.selectedAlternativeIndex || 0));
@@ -139,9 +139,18 @@ export function usePlanningV2LinkedMemory({
         saveLinkedPlansToMemory(weekStart, mem.plansBySite, nextIdx);
       }
       setMultiSiteNavigationLoading(true);
-      router.push(`/director/planning/${targetId}?week=${encodeURIComponent(isoWeek)}`);
+      softNavigateToPlanningSite(String(target), isoWeek);
+      onViewSite(String(target));
     },
-    [router, isoWeek, weekStart, plan.alternativeCount, plan.selectedAlternativeIndex],
+    [
+      isoWeek,
+      onViewSite,
+      siteId,
+      weekStart,
+      plan.alternativeCount,
+      plan.selectedAlternativeIndex,
+      setMultiSiteNavigationLoading,
+    ],
   );
 
   const navigationMemorySnapshot = useMemo<NavigationMemorySnapshot>(() => {
@@ -154,15 +163,19 @@ export function usePlanningV2LinkedMemory({
       return { activeIdx: 0, currentPlanAlternativeCount: 0, hasCurrentPlan: false };
     }
     const stopVisibleCount = readLinkedGenerationStopVisibleCountFromSession(getWeekKeyISO(weekStart));
-    const visibleAlternativeCount = countLinkedPlanVisibleAlternatives(currentPlan, stopVisibleCount);
-    const maxVisibleIndex = Math.max(0, visibleAlternativeCount - 1);
+    const currentCount = countLinkedPlanVisibleAlternatives(currentPlan, stopVisibleCount);
+    const sharedCount = Math.max(currentCount, maxLinkedMemoryAlternativeCount(mem, stopVisibleCount));
+    const maxVisibleIndex = Math.max(0, currentCount - 1);
     const rawActiveIdx = Math.max(0, Number(mem?.activeAltIndex || 0));
     // Pendant « פתח אתר », garder l’index partagé mémoire même si le plan cible
     // n’a pas encore toutes ses alternatives chargées (sinon clamp → חלופה 1).
-    const activeIdx = multiSiteNavigationLoading ? rawActiveIdx : Math.min(rawActiveIdx, maxVisibleIndex);
+    const activeIdx =
+      multiSiteNavigationLoading || readMultiSiteNavigationInApp()
+        ? rawActiveIdx
+        : Math.min(rawActiveIdx, maxVisibleIndex);
     return {
       activeIdx,
-      currentPlanAlternativeCount: visibleAlternativeCount,
+      currentPlanAlternativeCount: sharedCount,
       hasCurrentPlan: !!currentPlan,
     };
   }, [protectOfficialSavedPlan, linkedSites.length, multiSiteNavigationLoading, linkedPlansMemoryTick, siteId, weekStart]);
@@ -230,7 +243,10 @@ export function usePlanningV2LinkedMemory({
       }
 
       if (cancelled) return;
-      const plansBySite = Object.fromEntries(entries.filter(([, planValue]) => !!planValue)) as Record<string, LinkedSitePlan>;
+      const plansBySite = Object.fromEntries(entries.filter(([, planValue]) => !!planValue)) as Record<
+        string,
+        LinkedSitePlan
+      >;
       if (Object.keys(plansBySite).length <= 1) return;
 
       const mem = readLinkedPlansFromMemory(weekStart);
@@ -261,6 +277,7 @@ export function usePlanningV2LinkedMemory({
     if (linkedSites.length <= 1) return;
     if (plan.generationRunning) return;
     if (protectOfficialSavedPlan) {
+      if (readMultiSiteNavigationInApp() || multiSiteNavigationLoading) return;
       if (lastCurrentSiteMemorySyncRef.current !== "official-saved-memory-cleared") {
         lastCurrentSiteMemorySyncRef.current = "official-saved-memory-cleared";
         clearLinkedPlansFromMemory(weekStart);
@@ -576,12 +593,23 @@ export function usePlanningV2LinkedMemory({
 
   useEffect(() => {
     if (!multiSiteNavigationLoading) return;
-    if (siteLoading || workersLoading) return;
+    if (siteLoading) return;
     if (!navigationMemorySnapshot.hasCurrentPlan) {
-      if (!weekPlanLoading) {
+      if (siteLoading || weekPlanLoading) return;
+      const target = navigationMemorySnapshot.activeIdx;
+      const loaded = Array.isArray(plan.assignmentVariants) ? plan.assignmentVariants.length : 0;
+      const paintedTarget =
+        assignmentsNonEmpty(plan.displayAssignments) &&
+        plan.selectedAlternativeIndex === target &&
+        loaded > target;
+      if (paintedTarget) {
         setMultiSiteNavigationLoading(false);
         clearMultiSiteNavigationInApp();
+        return;
       }
+      if (readMultiSiteNavigationInApp()) return;
+      setMultiSiteNavigationLoading(false);
+      clearMultiSiteNavigationInApp();
       return;
     }
     const targetAlternativeIndex = navigationMemorySnapshot.activeIdx;
@@ -607,7 +635,6 @@ export function usePlanningV2LinkedMemory({
   }, [
     multiSiteNavigationLoading,
     siteLoading,
-    workersLoading,
     weekPlanLoading,
     navigationMemorySnapshot,
     plan.assignmentVariants,

@@ -45,7 +45,10 @@ import {
   buildSeenLinkedAlternativeSnapshots,
   draftAlternativesForMode,
   normalizeDraftAlternatives,
+  rankMorningNightPairsLast,
+  uniqueDraftAlternatives,
 } from "../lib/planning-v2-draft-alternatives";
+import type { V2WeekPlanData } from "../lib/week-plan-fetch";
 import { type HoleScore, singlePlanHoleScore } from "../lib/planning-v2-hole-scores";
 import {
   PLANNING_V2_LINKED_GENERATION_STOP_UPDATED_EVENT,
@@ -54,6 +57,7 @@ import {
   readLinkedGenerationStopRequestFromSession,
   readLinkedGenerationStopVisibleCountFromSession,
   writeAlternativesUnlockedToSession,
+  writeLinkedGenerationOriginToSession,
   writeLinkedGenerationRunningToSession,
   writeLinkedGenerationStopRequestToSession,
   writeLinkedGenerationStopVisibleCountToSession,
@@ -81,7 +85,12 @@ type UsePlanningV2GenerationArgs = {
   site: SiteSummary | null;
   workers: PlanningWorker[];
   workerRowsForTable: Array<PlanningWorker & { availability: WorkerAvailability }>;
-  reloadWeekPlan: (opts?: { silent?: boolean; preferredScope?: "director" | "shared" | "auto" | null }) => void | Promise<void>;
+  reloadWeekPlan: (opts?: {
+    silent?: boolean;
+    preferredScope?: "director" | "shared" | "auto" | null;
+    savedOnly?: boolean;
+  }) => void | Promise<void>;
+  applyLocalWeekPlan?: (next: V2WeekPlanData) => void;
   discardLocalAutoWeekPlan?: () => void;
   editingSaved: boolean;
   hasOfficialSavedWeekPlan: boolean;
@@ -120,6 +129,7 @@ export function usePlanningV2Generation({
   workers,
   workerRowsForTable,
   reloadWeekPlan,
+  applyLocalWeekPlan,
   discardLocalAutoWeekPlan,
   editingSaved,
   hasOfficialSavedWeekPlan,
@@ -165,11 +175,13 @@ export function usePlanningV2Generation({
   const appendUniqueCountRef = useRef(0);
   const alternativesFlushRafRef = useRef<number | null>(null);
   const generationRunningRef = useRef(false);
+  const generationOriginSiteIdRef = useRef<string | null>(null);
   const workersRef = useRef(workers);
 
   useEffect(() => {
+    if (generationOriginSiteIdRef.current && generationOriginSiteIdRef.current !== String(siteId)) return;
     workersRef.current = workers;
-  }, [workers]);
+  }, [workers, siteId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -200,12 +212,14 @@ export function usePlanningV2Generation({
     setGenerationRunning(false);
     setSharedLinkedGenerationRunning(false);
     setReplaceGenerationUiClear(false);
+    generationOriginSiteIdRef.current = null;
+    writeLinkedGenerationOriginToSession(weekIso, null);
     seenAlternativeSnapshotsRef.current = new Set();
     seenLinkedAlternativeSnapshotsRef.current = new Set();
     bestGeneratedHoleScoreRef.current = null;
     appendUniqueCountRef.current = 0;
     lastAlternativeSnapshotRef.current = "";
-  }, []);
+  }, [weekIso]);
 
   const cancelGenerationForSavedEditing = useCallback(() => {
     userStoppedGenerationRef.current = true;
@@ -232,8 +246,10 @@ export function usePlanningV2Generation({
     if (linkedSitesLength > 1) {
       writeLinkedGenerationRunningToSession(weekIso, false);
       writeLinkedGenerationStopRequestToSession(weekIso, false);
+      writeLinkedGenerationOriginToSession(weekIso, null);
       clearLinkedPlansFromMemory(weekStart);
     }
+    generationOriginSiteIdRef.current = null;
   }, [linkedSitesLength, weekIso, weekStart]);
 
   const stopGeneration = useCallback(() => {
@@ -241,7 +257,12 @@ export function usePlanningV2Generation({
     if (linkedSitesLength > 1 && !readLinkedGenerationStopRequestFromSession(weekIso)) {
       writeLinkedGenerationStopRequestToSession(weekIso, true);
     }
-    const visibleCountAtStop = Math.max(0, assignmentVariantsRef.current.length);
+    const visibleCountAtStop = Math.max(
+      0,
+      draftAssignmentsRef.current
+        ? 1 + draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives).length
+        : assignmentVariantsRef.current.length,
+    );
     stopVisibleAlternativeCountRef.current = visibleCountAtStop;
     if (linkedSitesLength > 1) {
       writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
@@ -309,6 +330,10 @@ export function usePlanningV2Generation({
     abortRef.current = controller;
     generationIdRef.current = null;
     genBusyRef.current = true;
+    generationOriginSiteIdRef.current = String(siteId);
+    if (linkedSitesLength > 1) {
+      writeLinkedGenerationOriginToSession(weekIso, String(siteId));
+    }
     const resumeFromStoppedVisibleCount =
       appendMode
         ? (stopVisibleAlternativeCountRef.current ??
@@ -448,6 +473,7 @@ export function usePlanningV2Generation({
     }
     if (linkedSitesLength > 1) {
       writeLinkedGenerationRunningToSession(weekIso, true);
+      writeLinkedGenerationOriginToSession(weekIso, String(siteId));
     }
     if (alternativesFlushRafRef.current != null) {
       try {
@@ -621,7 +647,12 @@ export function usePlanningV2Generation({
           if (runtime.stopped) return;
           if (!readLinkedGenerationStopRequestFromSession(weekIso)) return;
           userStoppedGenerationRef.current = true;
-          const visibleCountAtStop = Math.max(0, assignmentVariantsRef.current.length);
+          const visibleCountAtStop = Math.max(
+            0,
+            draftAssignmentsRef.current
+              ? 1 + draftAlternativesForMode(draftAlternativesRef.current || [], dedupeAlternatives).length
+              : assignmentVariantsRef.current.length,
+          );
           stopVisibleAlternativeCountRef.current = visibleCountAtStop;
           writeLinkedGenerationStopVisibleCountToSession(weekIso, visibleCountAtStop);
           pruneLinkedPlansMemoryAfterStop(weekStart, linkedSitesLength, visibleCountAtStop);
@@ -762,6 +793,20 @@ export function usePlanningV2Generation({
             seenLinkedAlternativeSnapshotsRef,
           });
           if (!(editingSaved && hasOfficialSavedWeekPlan)) {
+            const asg = draftAssignmentsRef.current;
+            const rankedAlts = rankMorningNightPairsLast(
+              uniqueDraftAlternatives(draftAlternativesRef.current || []),
+            );
+            if (asg) {
+              applyLocalWeekPlan?.({
+                assignments: asg,
+                pulls: draftPullsRef.current || {},
+                alternatives: rankedAlts.map((x) => x.assignments),
+                alternativePulls: rankedAlts.map((x) => x.pulls || {}),
+                isManual: false,
+                sourceScope: "auto",
+              });
+            }
             await reloadWeekPlan({ silent: true, preferredScope: "auto" });
             // Après persistance/reload, ne pas garder un brouillon local potentiellement divergent
             // du plan auto réellement stocké (source de désynchronisation multi-site / סה"כ).
@@ -803,6 +848,7 @@ export function usePlanningV2Generation({
     autoPullsPrefer,
     linkedSitesLength,
     reloadWeekPlan,
+    applyLocalWeekPlan,
     discardLocalAutoWeekPlan,
     editingSaved,
     hasOfficialSavedWeekPlan,
@@ -840,6 +886,7 @@ export function usePlanningV2Generation({
     stopVisibleAlternativeCountRef,
     alternativesFlushRafRef,
     generationRunningRef,
+    generationOriginSiteIdRef,
     resetGenerationForScopeChange,
     cancelGenerationForSavedEditing,
   };

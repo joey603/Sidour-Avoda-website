@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import type { PlanningV2PullsMap, SiteSummary } from "../types";
 import { assignmentsNonEmpty } from "../lib/assignments-empty";
 import { buildEmptyAssignmentsForSite } from "../lib/station-grid-helpers";
 import {
+  isViewingLinkedSiteDuringGeneration,
+  readAlternativesUnlockedForWeek,
   readAlternativesUnlockedFromSession,
+  readLinkedGenerationOriginFromSession,
   readLinkedGenerationStopVisibleCountFromSession,
 } from "../lib/planning-v2-generation-session";
-import { type DraftAlternative, draftAlternativesForMode } from "../lib/planning-v2-draft-alternatives";
+import { type DraftAlternative, draftAlternativesForMode, rankMorningNightPairsLast } from "../lib/planning-v2-draft-alternatives";
 import {
+  maxLinkedMemoryAlternativeCount,
   readLinkedPlansFromMemory,
   readMultiSiteNavigationInApp,
+  shouldHoldSharedAlternativeIndex,
 } from "../lib/multi-site-linked-memory";
 import type { V2WeekPlanData } from "./use-planning-v2-week-plan";
 
@@ -23,6 +28,7 @@ type DisplayVariantsGenerationSlice = {
   stopVisibleAlternativeCountRef: MutableRefObject<number | null>;
   generationRunningRef: MutableRefObject<boolean>;
   genBusyRef: MutableRefObject<boolean>;
+  generationOriginSiteIdRef?: MutableRefObject<string | null>;
 };
 
 type UsePlanningV2DisplayVariantsArgs = {
@@ -86,7 +92,16 @@ export function usePlanningV2DisplayVariants({
     stopVisibleAlternativeCountRef,
     generationRunningRef,
     genBusyRef,
+    generationOriginSiteIdRef,
   } = generation;
+  const [liveLinkedMemoryTick, setLiveLinkedMemoryTick] = useState(0);
+  const generationOrigin =
+    generationOriginSiteIdRef?.current || readLinkedGenerationOriginFromSession(weekIso);
+  const viewingLinkedSiteDuringGeneration = isViewingLinkedSiteDuringGeneration(
+    generationOrigin,
+    siteId,
+    generationRunning || genBusyRef.current,
+  );
 
   // Multi-sites: כשעוברים בין אתרים, לשמור אלטרנטיבה פעילה זהה לכל האתרים דרך sessionStorage.
   useEffect(() => {
@@ -94,12 +109,17 @@ export function usePlanningV2DisplayVariants({
     if (linkedSitesLength <= 1 && !mem?.plansBySite?.[String(siteId)]) return;
     let lastAppliedSnap = "";
     const refreshFromMemory = () => {
-      // Pendant יצירת תכנון (SSE), le flux met déjà à jour l’état React — ne pas réappliquer
-      // la mémoire ici : sinon `linked-plans-memory-updated` (microtâche) rivalise avec
-      // `setDraftAlternatives` et peut provoquer « Maximum update depth exceeded ».
-      // Aussi: sur les sites liés (genBusyRef false), éviter d’écraser la navigation חלופות.
-      if (genBusyRef.current || generationRunningRef.current) return;
-      if (protectOfficialSavedPlan) {
+      // Pendant יצירת תכנון sur le site d’origine, le SSE met déjà à jour les drafts.
+      // Sur un autre אתר du groupe, il faut lire la mémoire (sans écraser les drafts d’origine).
+      const origin =
+        generationOriginSiteIdRef?.current || readLinkedGenerationOriginFromSession(weekIso);
+      const viewingOther = isViewingLinkedSiteDuringGeneration(
+        origin,
+        siteId,
+        genBusyRef.current || generationRunningRef.current,
+      );
+      if ((genBusyRef.current || generationRunningRef.current) && !viewingOther) return;
+      if (protectOfficialSavedPlan && !viewingOther) {
         setSelectedAlternativeIndex(0);
         return;
       }
@@ -113,7 +133,10 @@ export function usePlanningV2DisplayVariants({
         stopVisibleAlternativeCountRef.current ??
         (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
       const maxVisibleIndex = stopLimit == null ? null : Math.max(0, stopLimit - 1);
-      const appliedActiveIdx = maxVisibleIndex == null ? activeIdx : Math.min(activeIdx, maxVisibleIndex);
+      const appliedActiveIdx =
+        readMultiSiteNavigationInApp() || maxVisibleIndex == null
+          ? activeIdx
+          : Math.min(activeIdx, maxVisibleIndex);
       const snap = JSON.stringify({ activeIdx: appliedActiveIdx, plan, stopLimit });
       if (snap === lastAppliedSnap) return;
       lastAppliedSnap = snap;
@@ -141,7 +164,9 @@ export function usePlanningV2DisplayVariants({
         (memoryHasBase ? 1 : 0) +
         visibleMemoryAlternatives.filter((asg) =>
           assignmentsNonEmpty((asg as AssignmentGrid | null | undefined) ?? null)).length;
+      const inAppMultiSiteNav = readMultiSiteNavigationInApp();
       const shouldHydrateFromMemory =
+        inAppMultiSiteNav ||
         !hasAuthoritativeLocalPlan ||
         memoryAlternativeCount > localAlternativeCount ||
         appliedActiveIdx >= Math.max(1, localAlternativeCount) ||
@@ -150,6 +175,11 @@ export function usePlanningV2DisplayVariants({
       // En multi-site, la mémoire session sert à partager l’index d’alternative et les autres sites.
       // Si la mémoire est plus riche (plus d’alternatives, ou index actif hors portée locale),
       // il faut quand même la réhydrater pour préserver exactement la même חלופה après navigation.
+      if (viewingOther) {
+        setLiveLinkedMemoryTick((n) => n + 1);
+        setSelectedAlternativeIndex(appliedActiveIdx);
+        return;
+      }
       if (shouldHydrateFromMemory) {
         const baseAssignments = plan.assignments as AssignmentGrid | undefined;
         if (baseAssignments && typeof baseAssignments === "object") {
@@ -195,14 +225,32 @@ export function usePlanningV2DisplayVariants({
     setSelectedAlternativeIndex,
     stopVisibleAlternativeCountRef,
     weekPlanAssignmentsRef,
+    generationOriginSiteIdRef,
   ]);
+
+  const keepSharedAlternativeOrder =
+    linkedSitesLength > 1 ||
+    readMultiSiteNavigationInApp() ||
+    Object.keys(readLinkedPlansFromMemory(weekStart)?.plansBySite || {}).length > 1;
 
   const assignmentVariants = useMemo<AssignmentGrid[]>(() => {
     if (replaceGenerationUiClear && generationRunning && !draftAssignments) {
       return [buildEmptyAssignmentsForSite(site)];
     }
+    if (viewingLinkedSiteDuringGeneration) {
+      void liveLinkedMemoryTick;
+      const memPlan = readLinkedPlansFromMemory(weekStart)?.plansBySite?.[String(siteId)];
+      const base =
+        memPlan?.assignments && typeof memPlan.assignments === "object"
+          ? (memPlan.assignments as AssignmentGrid)
+          : null;
+      if (!base) return [];
+      const alts = Array.isArray(memPlan?.alternatives) ? memPlan.alternatives : [];
+      return [base, ...alts.filter((asg) => asg && typeof asg === "object")];
+    }
     if (draftAssignments) {
-      const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
+      const prepared = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
+      const normalized = keepSharedAlternativeOrder ? prepared : rankMorningNightPairsLast(prepared);
       const stopLimit =
         stopVisibleAlternativeCountRef.current ??
         (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
@@ -212,13 +260,14 @@ export function usePlanningV2DisplayVariants({
     const base = weekPlan?.assignments ? [weekPlan.assignments] : [];
     const altsAssignments = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
     const altsPulls = Array.isArray(weekPlan?.alternativePulls) ? weekPlan.alternativePulls : [];
-    const alts = draftAlternativesForMode(
+    const prepared = draftAlternativesForMode(
       altsAssignments.map((assignments, idx) => ({
         assignments,
         pulls: (altsPulls[idx] || {}) as PlanningV2PullsMap,
       })),
       dedupeAlternatives,
     );
+    const alts = keepSharedAlternativeOrder ? prepared : rankMorningNightPairsLast(prepared);
     const stopLimit =
       stopVisibleAlternativeCountRef.current ??
       (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
@@ -237,11 +286,30 @@ export function usePlanningV2DisplayVariants({
     weekPlan?.alternativePulls,
     site,
     stopVisibleAlternativeCountRef,
+    keepSharedAlternativeOrder,
+    weekStart,
+    viewingLinkedSiteDuringGeneration,
+    liveLinkedMemoryTick,
+    siteId,
   ]);
 
   const pullVariants = useMemo<PlanningV2PullsMap[]>(() => {
     if (replaceGenerationUiClear && generationRunning && !draftAssignments) {
       return [{}];
+    }
+    if (viewingLinkedSiteDuringGeneration) {
+      void liveLinkedMemoryTick;
+      const memPlan = readLinkedPlansFromMemory(weekStart)?.plansBySite?.[String(siteId)];
+      const basePulls =
+        memPlan?.pulls && typeof memPlan.pulls === "object" ? (memPlan.pulls as PlanningV2PullsMap) : {};
+      const altPulls = Array.isArray(memPlan?.alternative_pulls) ? memPlan.alternative_pulls : [];
+      const alts = Array.isArray(memPlan?.alternatives) ? memPlan.alternatives : [];
+      return [
+        basePulls,
+        ...alts.map((_, idx) =>
+          (altPulls[idx] && typeof altPulls[idx] === "object" ? altPulls[idx] : {}) as PlanningV2PullsMap,
+        ),
+      ];
     }
     if (draftAssignments) {
       // draftPulls null = aucune édition explicite des pulls dans ce brouillon.
@@ -251,7 +319,8 @@ export function usePlanningV2DisplayVariants({
         ? (weekPlan.pulls as PlanningV2PullsMap)
         : {};
       const basePulls = draftPulls !== null ? draftPulls : savedPulls;
-      const normalized = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
+      const prepared = draftAlternativesForMode(draftAlternatives, dedupeAlternatives);
+      const normalized = keepSharedAlternativeOrder ? prepared : rankMorningNightPairsLast(prepared);
       const stopLimit =
         stopVisibleAlternativeCountRef.current ??
         (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
@@ -262,13 +331,14 @@ export function usePlanningV2DisplayVariants({
       weekPlan?.pulls && typeof weekPlan.pulls === "object" ? (weekPlan.pulls as PlanningV2PullsMap) : {};
     const altAssignments = Array.isArray(weekPlan?.alternatives) ? weekPlan.alternatives : [];
     const altPulls = Array.isArray(weekPlan?.alternativePulls) ? weekPlan.alternativePulls : [];
-    const normalized = draftAlternativesForMode(
+    const prepared = draftAlternativesForMode(
       altAssignments.map((assignments, idx) => ({
         assignments,
         pulls: (altPulls[idx] && typeof altPulls[idx] === "object" ? altPulls[idx] : {}) as PlanningV2PullsMap,
       })),
       dedupeAlternatives,
     );
+    const normalized = keepSharedAlternativeOrder ? prepared : rankMorningNightPairsLast(prepared);
     const stopLimit =
       stopVisibleAlternativeCountRef.current ??
       (linkedSitesLength > 1 ? readLinkedGenerationStopVisibleCountFromSession(weekIso) : null);
@@ -287,34 +357,29 @@ export function usePlanningV2DisplayVariants({
     weekPlan?.pulls,
     weekPlan?.alternativePulls,
     stopVisibleAlternativeCountRef,
+    keepSharedAlternativeOrder,
+    weekStart,
+    viewingLinkedSiteDuringGeneration,
+    liveLinkedMemoryTick,
+    siteId,
   ]);
 
-  assignmentVariantsRef.current = assignmentVariants;
-  pullVariantsRef.current = pullVariants;
+  if (!viewingLinkedSiteDuringGeneration) {
+    assignmentVariantsRef.current = assignmentVariants;
+    pullVariantsRef.current = pullVariants;
+  }
 
   const alternativeCount = useMemo(() => {
     if (replaceGenerationUiClear && generationRunning && !draftAssignments) return 0;
     const localCount = assignmentVariants.length;
-    if (linkedSitesLength <= 1) return localCount;
     // Pendant la réhydratation multi-sites, garder le total mémoire pour que
     // « 12/30 » ne redevienne pas « 1/1 » puis « 1/30 » au retour sur un site.
     const mem = readLinkedPlansFromMemory(weekStart);
-    const sitePlan = mem?.plansBySite?.[String(siteId)];
-    if (!sitePlan) return localCount;
+    if (linkedSitesLength <= 1 && maxLinkedMemoryAlternativeCount(mem) <= 1) return localCount;
     const stopLimit =
       stopVisibleAlternativeCountRef.current ??
       readLinkedGenerationStopVisibleCountFromSession(weekIso);
-    const hasBase = assignmentsNonEmpty(
-      (sitePlan.assignments as AssignmentGrid | null | undefined) ?? null,
-    );
-    const memAlts = Array.isArray(sitePlan.alternatives) ? sitePlan.alternatives : [];
-    const visibleMemAlts =
-      stopLimit == null ? memAlts : memAlts.slice(0, Math.max(0, stopLimit - 1));
-    const memoryCount =
-      (hasBase ? 1 : 0) +
-      visibleMemAlts.filter((asg) =>
-        assignmentsNonEmpty((asg as AssignmentGrid | null | undefined) ?? null),
-      ).length;
+    const memoryCount = maxLinkedMemoryAlternativeCount(mem, stopLimit);
     return Math.max(localCount, memoryCount);
   }, [
     replaceGenerationUiClear,
@@ -333,6 +398,7 @@ export function usePlanningV2DisplayVariants({
     void alternativesUnlockNonce;
     if (generationRunning) return true;
     if (clientStorageReady && readAlternativesUnlockedFromSession(weekIso, siteId)) return true;
+    if (clientStorageReady && readAlternativesUnlockedForWeek(weekIso)) return true;
     if (weekPlan?.sourceScope === "auto") {
       const hasWeekPlanBase = assignmentsNonEmpty(weekPlan.assignments ?? null);
       const hasWeekPlanAlt = Array.isArray(weekPlan.alternatives)
@@ -340,7 +406,7 @@ export function usePlanningV2DisplayVariants({
           assignmentsNonEmpty((alt as AssignmentGrid | null | undefined) ?? null));
       if (hasWeekPlanBase || hasWeekPlanAlt) return true;
     }
-    if (clientStorageReady && linkedSitesLength > 1) {
+    if (clientStorageReady) {
       const mem = readLinkedPlansFromMemory(weekStart);
       const currentPlan = mem?.plansBySite?.[String(siteId)];
       if (currentPlan) {
@@ -352,6 +418,7 @@ export function usePlanningV2DisplayVariants({
             assignmentsNonEmpty((alt as AssignmentGrid | null | undefined) ?? null));
         if (hasBase || hasAlt) return true;
       }
+      if (maxLinkedMemoryAlternativeCount(mem) > 0) return true;
     }
     return false;
   }, [
@@ -377,15 +444,15 @@ export function usePlanningV2DisplayVariants({
     const len = assignmentVariants.length;
     if (len <= 0) return requested;
     if (requested < len) return requested;
-    if (linkedSitesLength > 1) {
-      if (readMultiSiteNavigationInApp()) return requested;
-      const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
-      if (memIdx === requested || (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === requested)) {
-        return requested;
-      }
+    const mem = readLinkedPlansFromMemory(weekStart);
+    if (
+      shouldHoldSharedAlternativeIndex(mem, requested) ||
+      (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === requested)
+    ) {
+      return requested;
     }
     return Math.max(0, len - 1);
-  }, [assignmentVariants.length, linkedSitesLength, selectedAlternativeIndex, userPickedAltIndexRef, weekStart]);
+  }, [assignmentVariants.length, selectedAlternativeIndex, userPickedAltIndexRef, weekStart]);
 
   /** Index réellement adressable dans assignmentVariants (pour la grille). */
   const displayAlternativeIndex = useMemo(() => {
@@ -403,13 +470,10 @@ export function usePlanningV2DisplayVariants({
     // (plan pas entièrement réhydraté), ne pas écraser vers 0 — sinon la navigation
     // « פתח אתר » se fige sur חלופה 1.
     if (selectedAlternativeIndex > displayAlternativeIndex) {
-      if (readMultiSiteNavigationInApp()) return;
-      if (linkedSitesLength > 1) {
-        const memIdx = Math.max(0, Number(readLinkedPlansFromMemory(weekStart)?.activeAltIndex || 0));
-        if (memIdx === selectedAlternativeIndex) return;
-        if (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === selectedAlternativeIndex) {
-          return;
-        }
+      const mem = readLinkedPlansFromMemory(weekStart);
+      if (shouldHoldSharedAlternativeIndex(mem, selectedAlternativeIndex)) return;
+      if (userPickedAltIndexRef.current != null && userPickedAltIndexRef.current === selectedAlternativeIndex) {
+        return;
       }
     }
     setSelectedAlternativeIndex(safeAlternativeIndex);

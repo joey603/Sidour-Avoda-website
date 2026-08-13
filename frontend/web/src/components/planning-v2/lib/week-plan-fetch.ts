@@ -14,6 +14,8 @@ export type V2WeekPlanData = {
 export type LoadWeekPlanOptions = {
   lightweightNav?: boolean;
   omitWorkers?: boolean;
+  /** Hors semaine actuelle / suivante : uniquement director/shared, pas les brouillons auto. */
+  savedOnly?: boolean;
   /** Appelé dès que la grille (חלופה 0) est là — les חלופות suivent sans reclasse. */
   onBase?: (plan: NonNullable<V2WeekPlanData>) => void;
 };
@@ -76,20 +78,47 @@ export function normalizeWeekPlan(raw: Record<string, unknown> | null | undefine
   };
 }
 
+function savedScopeOrder(
+  preferredScope?: "director" | "shared" | "auto" | null,
+): Array<"director" | "shared"> {
+  if (preferredScope === "director" || preferredScope === "shared") {
+    return [preferredScope, preferredScope === "director" ? "shared" : "director"];
+  }
+  return ["shared", "director"];
+}
+
 async function loadWeekPlanWaterfall(
   siteId: string,
   isoWeek: string,
   preferredScope?: "director" | "shared" | "auto" | null,
+  savedOnly = false,
 ): Promise<V2WeekPlanData> {
   const saved = ["director", "shared"] as const;
-  const ordered: Array<"director" | "shared" | "auto"> =
-    preferredScope === "director" || preferredScope === "shared"
+  const ordered: Array<"director" | "shared" | "auto"> = savedOnly
+    ? [...savedScopeOrder(preferredScope)]
+    : preferredScope === "director" || preferredScope === "shared"
       ? [preferredScope, ...saved.filter((scope) => scope !== preferredScope), "auto"]
       : ["shared", "director", "auto"];
   for (const scope of ordered) {
     const raw = await fetchWeekPlanScope(siteId, isoWeek, scope);
     const normalized = normalizeWeekPlan(raw as Record<string, unknown>);
     if (normalized) return { ...normalized, sourceScope: scope };
+  }
+  return null;
+}
+
+async function loadSavedWeekPlanOnly(
+  siteId: string,
+  isoWeek: string,
+  preferredScope?: "director" | "shared" | "auto" | null,
+  options?: LoadWeekPlanOptions,
+): Promise<V2WeekPlanData> {
+  const omitWorkers = options?.omitWorkers === true;
+  for (const scope of savedScopeOrder(preferredScope)) {
+    const altsP = fetchWeekPlanRaw(siteId, isoWeek, scope, { parts: "alternatives", omitWorkers });
+    const raw = await fetchWeekPlanRaw(siteId, isoWeek, scope, { parts: "base", omitWorkers });
+    const finished = await finishWeekPlanLoad(raw, altsP, scope, options);
+    if (finished) return { ...finished, sourceScope: finished.sourceScope ?? scope };
   }
   return null;
 }
@@ -162,6 +191,9 @@ export async function loadWeekPlanForSiteWeek(
   options?: LoadWeekPlanOptions,
 ): Promise<V2WeekPlanData> {
   const omitWorkers = options?.omitWorkers === true;
+  if (options?.savedOnly) {
+    return loadSavedWeekPlanOnly(siteId, isoWeek, preferredScope, options);
+  }
   if (options?.lightweightNav) {
     const altsP = fetchWeekPlanRaw(siteId, isoWeek, "auto", { parts: "alternatives", omitWorkers });
     const raw = await fetchWeekPlanRaw(siteId, isoWeek, "auto", { parts: "base", omitWorkers });
