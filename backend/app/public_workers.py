@@ -651,9 +651,32 @@ def save_worker_context(
     return {"ok": True}
 
 
+def _site_worker_for_user(db: Session, site_id: int, user: User) -> SiteWorker | None:
+    q = db.query(SiteWorker).filter(SiteWorker.site_id == site_id)
+    phone = _norm_phone(user.phone)
+    filters = [SiteWorker.user_id == user.id]
+    if phone:
+        filters.append(SiteWorker.phone == phone)
+    row = q.filter(or_(*filters)).first()
+    if row:
+        return row
+    name = _norm_worker_name(user.full_name)
+    if not name:
+        return None
+    return (
+        db.query(SiteWorker)
+        .filter(SiteWorker.site_id == site_id, func.lower(SiteWorker.name) == name)
+        .first()
+    )
+
+
 @router.get("/{site_id}/info")
-def get_site_info(site_id: int, db: Session = Depends(get_db)):
-    """Endpoint public pour obtenir les informations d'un site (nom, shifts, etc.)"""
+def get_site_info(
+    site_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Infos site (shifts / questions) — réservé aux comptes connectés."""
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
@@ -868,22 +891,24 @@ def get_site_messages_for_worker(
 
 
 @router.post("/{site_id}/register", response_model=WorkerOut, status_code=201)
-def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = Query(None), db: Session = Depends(get_db)):
-    """Endpoint public pour permettre aux travailleurs de s'enregistrer et mettre à jour leur זמינות"""
+def register_worker(
+    site_id: int,
+    payload: WorkerCreate,
+    week_key: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mettre à jour la זמינות du travailleur connecté (plus d’inscription anonyme)."""
+    if user.role.value != "worker":
+        raise HTTPException(status_code=403, detail="Accès réservé aux travailleurs")
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(status_code=404, detail="Site introuvable")
     _ensure_site_active(site)
 
-    # Vérifier si un worker avec ce nom existe déjà pour ce site
-    existing = (
-        db.query(SiteWorker)
-        .filter(
-            SiteWorker.site_id == site_id,
-            func.lower(SiteWorker.name) == func.lower(payload.name),
-        )
-        .first()
-    )
+    existing = _site_worker_for_user(db, site_id, user)
+    if not existing:
+        raise HTTPException(status_code=403, detail="אין הרשאה לאתר זה")
     
     # Extraire week_key via query param (prioritaire) ou via payload.answers.week_key
     wk = (week_key or "").strip() or None
@@ -913,75 +938,39 @@ def register_worker(site_id: int, payload: WorkerCreate, week_key: str | None = 
         else:
             # fallback: stocker tel quel (évite de perdre des formats inattendus)
             answers_data = {k: v for k, v in answers_payload.items() if k != "week_key"}
-    
-    if existing:
-        # Si le worker existe déjà, mettre à jour sa זמינות et max_shifts
-        existing.availability = payload.availability or {}
-        
-        # Stocker les réponses par semaine si week_key est fourni (query ou body)
-        if wk:
-            # IMPORTANT (SQLAlchemy JSON): ne pas muter le dict en place (changements non détectés sans MutableDict)
-            base = existing.answers if isinstance(existing.answers, dict) else {}
-            current_answers = dict(base)
-            current_answers[str(wk)] = answers_data
-            existing.answers = current_answers
-        elif answers_data:
-            # Compatibilité ascendante : si pas de week_key, stocker directement
-            existing.answers = dict(answers_data) if isinstance(answers_data, dict) else answers_data
-        
-        if payload.max_shifts is not None:
-            existing.max_shifts = payload.max_shifts
-        db.commit()
-        db.refresh(existing)
-        
-        # Retourner les réponses de la semaine si week_key est fourni
-        return_answers = existing.answers or {}
-        if wk and isinstance(return_answers, dict) and str(wk) in return_answers:
-            return_answers = return_answers[str(wk)]
-        
-        return WorkerOut(
-            id=existing.id,
-            site_id=existing.site_id,
-            name=existing.name,
-            max_shifts=existing.max_shifts,
-            roles=existing.roles or [],
-            availability=existing.availability or {},
-            answers=return_answers,
-            pending_approval=bool(getattr(existing, "pending_approval", False)),
-        )
-    
-    # Créer un nouveau worker
-    initial_answers = {}
+
+    if existing.user_id is None:
+        existing.user_id = user.id
+    existing.availability = payload.availability or {}
+
+    # Stocker les réponses par semaine si week_key est fourni (query ou body)
     if wk:
-        initial_answers[str(wk)] = answers_data
+        # IMPORTANT (SQLAlchemy JSON): ne pas muter le dict en place (changements non détectés sans MutableDict)
+        base = existing.answers if isinstance(existing.answers, dict) else {}
+        current_answers = dict(base)
+        current_answers[str(wk)] = answers_data
+        existing.answers = current_answers
     elif answers_data:
-        initial_answers = answers_data
-    
-    w = SiteWorker(
-        site_id=site_id,
-        name=payload.name,
-        max_shifts=payload.max_shifts or 5,
-        roles=payload.roles or [],
-        availability=payload.availability or {},
-        answers=initial_answers,
-        pending_approval=False,
-    )
-    db.add(w)
+        # Compatibilité ascendante : si pas de week_key, stocker directement
+        existing.answers = dict(answers_data) if isinstance(answers_data, dict) else answers_data
+
+    if payload.max_shifts is not None:
+        existing.max_shifts = payload.max_shifts
     db.commit()
-    db.refresh(w)
-    
-    return_answers = w.answers or {}
+    db.refresh(existing)
+
+    return_answers = existing.answers or {}
     if wk and isinstance(return_answers, dict) and str(wk) in return_answers:
         return_answers = return_answers[str(wk)]
-    
+
     return WorkerOut(
-        id=w.id,
-        site_id=w.site_id,
-        name=w.name,
-        max_shifts=w.max_shifts,
-        roles=w.roles or [],
-        availability=w.availability or {},
+        id=existing.id,
+        site_id=existing.site_id,
+        name=existing.name,
+        max_shifts=existing.max_shifts,
+        roles=existing.roles or [],
+        availability=existing.availability or {},
         answers=return_answers,
-        pending_approval=bool(getattr(w, "pending_approval", False)),
+        pending_approval=bool(getattr(existing, "pending_approval", False)),
     )
 

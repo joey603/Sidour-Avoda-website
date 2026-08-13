@@ -48,6 +48,8 @@ export default function PublicWorkerRegistrationPage() {
         return;
       }
 
+      setWorkerName(String(me.full_name || "").trim());
+
       // Charger les informations du site
       try {
         const info = await apiFetch<{ id: number; name: string; shifts: string[] }>(`/public/sites/${siteId}/info`);
@@ -146,7 +148,7 @@ export default function PublicWorkerRegistrationPage() {
               רישום זמינות - {siteName}
             </h1>
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              הזן את שמך ובחר את זמינותך השבועית
+              בחר את זמינותך השבועית
             </p>
           </div>
 
@@ -165,7 +167,7 @@ export default function PublicWorkerRegistrationPage() {
                 id="worker-name"
                 type="text"
                 value={workerName}
-                onChange={(e) => setWorkerName(e.target.value)}
+                readOnly
                 required
                 disabled={submitting || success}
                 className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 disabled:opacity-60"

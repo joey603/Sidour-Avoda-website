@@ -93,6 +93,48 @@ def test_auth_login_is_rate_limited_after_repeated_failures(client):
     assert limited.status_code == 429
 
 
+def test_public_site_info_and_register_require_auth(client, db_session, create_director):
+    from tests.test_worker_invites import auth_headers, clear_auth_cookies, create_site, login_director
+
+    create_director(email="sec.public@example.com", full_name="Sec Public")
+    director_tok = login_director(client, email="sec.public@example.com", password="password123").json()["access_token"]
+    site_id = create_site(client, director_tok, "Private Site").json()["id"]
+    clear_auth_cookies(client)
+
+    info = client.get(f"/public/sites/{site_id}/info")
+    assert info.status_code == 401, info.text
+    anon_reg = client.post(
+        f"/public/sites/{site_id}/register",
+        json={"name": "Intrus", "max_shifts": 5, "roles": [], "availability": {}},
+    )
+    assert anon_reg.status_code == 401, anon_reg.text
+
+    invite_token = client.get(
+        f"/director/sites/{site_id}/worker-invite",
+        headers=auth_headers(director_tok),
+    ).json()["token"]
+    assert (
+        client.post(
+            "/public/sites/invitations/register",
+            json={
+                "token": invite_token,
+                "full_name": "Sec Site Worker",
+                "phone": "0501112222",
+                "password": "workerpass123",
+            },
+        ).status_code
+        == 201
+    )
+    clear_auth_cookies(client)
+    worker_tok = client.post(
+        "/auth/worker-login",
+        json={"phone": "0501112222", "password": "workerpass123"},
+    ).json()["access_token"]
+    ok_info = client.get(f"/public/sites/{site_id}/info", headers=auth_headers(worker_tok))
+    assert ok_info.status_code == 200, ok_info.text
+    assert ok_info.json()["name"] == "Private Site"
+
+
 def test_health_public_no_auth(client):
     """Sonde /health pour chargeurs et tests de charge — sans auth."""
     r = client.get("/health")
