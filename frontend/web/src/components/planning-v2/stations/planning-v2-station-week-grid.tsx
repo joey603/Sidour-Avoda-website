@@ -246,6 +246,9 @@ export function PlanningV2StationWeekGrid({
   useEffect(() => {
     if (shiftHoursModeStationIdx == null) setShiftHoursEditor(null);
   }, [shiftHoursModeStationIdx]);
+  useEffect(() => {
+    if (isSavedMode && !editingSaved) setShiftHoursEditor(null);
+  }, [isSavedMode, editingSaved]);
   const stations = (Array.isArray(site?.config?.stations) ? site?.config?.stations : []) as Record<
     string,
     unknown
@@ -1205,6 +1208,7 @@ export function PlanningV2StationWeekGrid({
                                             (summaryPickActive ? "" : pullHighlightRing) +
                                             ((hasPullOnSlot || hasGuardDisplayOnSlot || shiftHoursActiveHere) &&
                                             !blockPullBubble
+                                            && (!hasGuardDisplayOnSlot || !isSavedMode || editingSaved)
                                               ? " cursor-pointer"
                                               : "") +
                                             (isManualSlotHere && !summaryPickActive ? " ring-1 ring-teal-500" : "") +
@@ -1270,6 +1274,7 @@ export function PlanningV2StationWeekGrid({
                                               nmTrim &&
                                               onUpsertGuardDisplay &&
                                               !isManualSlotHere &&
+                                              (!isSavedMode || editingSaved) &&
                                               (shiftHoursActiveHere || hasGuardDisplayOnSlot)
                                             ) {
                                               const hours = hoursFromConfig(st, sn) || hoursOf(sn);
