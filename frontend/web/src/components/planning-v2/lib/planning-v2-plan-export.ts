@@ -1,4 +1,10 @@
-import type { PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "../types";
+import type { PlanningV2PullEntry, PlanningV2PullsMap, PlanningWorker, SiteEvent, SiteSummary } from "../types";
+import {
+  isManualSlotPullEntry,
+  manualSlotKey,
+  manualSlotRoleName,
+  manualSlotSpanInCell,
+} from "./planning-v2-manual-slot";
 import {
   countAssignmentsPerWorkerName,
   subtractPullExtrasFromWorkerCounts,
@@ -361,7 +367,8 @@ export function buildPlanningGridStyledHtml(params: {
       return `<td style="padding:6px;border:1px solid #e4e4e7;background:#f4f4f5;font-size:11px;color:#a1a1aa;text-align:center;">—</td>`;
     }
     const merged = mergeCellRawWithPulls(assignments, pulls ?? null, d.key, sn, idx);
-    const slotCount = Math.max(required, merged.length, 1);
+    const manualSpan = manualSlotSpanInCell(pulls ?? null, d.key, sn, idx);
+    const slotCount = Math.max(required, merged.length, manualSpan, 1);
     const slots = Array.from({ length: slotCount }, (_, slotIdx) => String(merged[slotIdx] || "").trim());
     const pullHighlightByNormName = buildPullHighlightKindByNormName(
       pulls ?? null,
@@ -373,7 +380,22 @@ export function buildPlanningGridStyledHtml(params: {
     );
     const slotBoxes = slots
       .map((nm, slotIdx) => {
+        const manualEntry = ((pulls ?? {}) as Record<string, PlanningV2PullEntry>)[
+          manualSlotKey(d.key, sn, idx, slotIdx)
+        ];
+        const isManualSlot = isManualSlotPullEntry(manualEntry);
         if (!nm) {
+          if (isManualSlot) {
+            const manualRole = manualSlotRoleName(manualEntry) || "";
+            const mStart = String(manualEntry?.guardDisplay?.start || "").trim();
+            const mEnd = String(manualEntry?.guardDisplay?.end || "").trim();
+            const manualHours = mStart && mEnd ? `${mStart}–${mEnd}` : "";
+            return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:2px solid #14b8a6;background:#f0fdfa;text-align:center;">
+  <span style="display:inline-block;max-width:100%;padding:4px 8px;border-radius:9999px;border:1px dashed #99f6e4;background:#fff;color:#0f766e;font-size:11px;">ללא עובד</span>
+  ${manualRole ? `<div style="margin-top:2px;font-size:10px;font-weight:600;color:#0f766e;">${escapeHtml(manualRole)}</div>` : ""}
+  ${manualHours ? `<div style="margin-top:2px;font-size:10px;font-weight:700;color:#dc2626;">${escapeHtml(manualHours)}</div>` : ""}
+</div>`;
+          }
           return `<div style="margin:3px 0;padding:8px 6px;border-radius:10px;border:1px dashed #d4d4d8;background:${
             emptyCellsGray ? "#e4e4e7" : "#f4f4f5"
           };color:#a1a1aa;font-size:11px;text-align:center;">—</div>`;
@@ -388,17 +410,34 @@ export function buildPlanningGridStyledHtml(params: {
           homeFrom: parsedHome.from,
           homeTo: parsedHome.to,
         });
-        const highlightKind =
-          slotTime?.highlight === "guard" ? "guard" : slotTime?.highlight === "pull" || pullRel ? "pull" : null;
+        const highlightKind = isManualSlot
+          ? "manual"
+          : slotTime?.highlight === "guard"
+            ? "guard"
+            : slotTime?.highlight === "pull" || pullRel
+              ? "pull"
+              : null;
         const slotBg =
-          highlightKind === "guard" ? "#fef9c3" : highlightKind === "pull" ? "#ffedd5" : "#fff";
+          highlightKind === "manual"
+            ? "#f0fdfa"
+            : highlightKind === "guard"
+              ? "#fef9c3"
+              : highlightKind === "pull"
+                ? "#ffedd5"
+                : "#fff";
         const slotBorder =
-          highlightKind === "guard" ? "#eab308" : highlightKind === "pull" ? "#fb923c" : "#e4e4e7";
+          highlightKind === "manual"
+            ? "#14b8a6"
+            : highlightKind === "guard"
+              ? "#eab308"
+              : highlightKind === "pull"
+                ? "#fb923c"
+                : "#e4e4e7";
         const slotBorderWidth = highlightKind ? "2px" : "1px";
         const roleHtml = slotTime?.roleName
           ? `<div style="margin-top:2px;font-size:10px;font-weight:600;color:#334155;">${escapeHtml(slotTime.roleName)}</div>`
           : "";
-        const timeHtml = slotTime
+        const timeHtml = slotTime?.label
           ? `<div style="margin-top:2px;font-size:10px;font-weight:700;color:${slotTime.red ? "#dc2626" : "#52525b"};">${escapeHtml(slotTime.label)}</div>`
           : "";
         return `<div style="margin:3px 0;padding:4px 6px;border-radius:10px;border:${slotBorderWidth} solid ${slotBorder};background:${slotBg};text-align:center;">

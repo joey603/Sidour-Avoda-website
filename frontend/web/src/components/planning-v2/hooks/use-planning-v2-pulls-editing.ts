@@ -356,7 +356,7 @@ export function usePlanningV2PullsEditing({
 
       const nextEntry: PlanningV2PullEntry = { ...existing };
       delete nextEntry.guardDisplay;
-      if (planningV2PullEntryIsReal(nextEntry)) {
+      if (planningV2PullEntryIsReal(nextEntry) || nextEntry.manualSlot) {
         nextPulls[key] = nextEntry;
       } else {
         delete nextPulls[key];
@@ -394,7 +394,7 @@ export function usePlanningV2PullsEditing({
             if (!exIn?.guardDisplay) continue;
             const ne: PlanningV2PullEntry = { ...exIn };
             delete ne.guardDisplay;
-            if (planningV2PullEntryIsReal(ne)) pls[key] = ne;
+            if (planningV2PullEntryIsReal(ne) || ne.manualSlot) pls[key] = ne;
             else delete pls[key];
             if (activeIdx <= 0) {
               planForSite.pulls = pls;

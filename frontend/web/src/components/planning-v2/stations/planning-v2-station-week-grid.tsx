@@ -70,6 +70,19 @@ import {
   PlanningV2StationShiftHoursEditorModal,
   type PlanningV2StationShiftHoursEditorState,
 } from "./planning-v2-station-shift-hours-editor-modal";
+import {
+  PlanningV2StationManualSlotEditorModal,
+  type PlanningV2ManualSlotSavePayload,
+  type PlanningV2StationManualSlotEditorState,
+} from "./planning-v2-station-manual-slot-editor-modal";
+import {
+  isManualExtraSlot,
+  isManualSlotPullEntry,
+  listRolesForStationShift,
+  manualSlotKey,
+  manualSlotRoleName,
+  manualSlotSpanInCell,
+} from "../lib/planning-v2-manual-slot";
 
 type PlanningV2StationWeekGridProps = {
   site: SiteSummary | null;
@@ -95,6 +108,18 @@ type PlanningV2StationWeekGridProps = {
   onToggleShiftHoursModeStation?: (stationIdx: number) => void;
   onUpsertGuardDisplay?: (key: string, start: string, end: string) => boolean | void | Promise<boolean | void>;
   onRemoveGuardDisplay?: (key: string) => boolean | void | Promise<boolean | void>;
+  /** Mode שיבוץ — clic sur une garde pour ajouter / éditer un poste parallèle. */
+  manualAssignmentModeStationIdx?: number | null;
+  onToggleManualAssignmentModeStation?: (stationIdx: number) => void;
+  onUpsertManualAssignmentSlot?: (
+    payload: PlanningV2ManualSlotSavePayload,
+  ) => boolean | void | Promise<boolean | void>;
+  onRemoveManualAssignmentSlot?: (payload: {
+    dayKey: string;
+    shiftName: string;
+    stationIndex: number;
+    slotIndex: number;
+  }) => boolean | void | Promise<boolean | void>;
   onResetStation?: (stationIdx: number) => void;
   draggingWorkerName?: string | null;
   selectedWorkerSource?: ManualDragSource | null;
@@ -140,6 +165,7 @@ export function PlanningV2StationWeekGrid({
   manualEditable = false,
   pullsModeStationIdx = null,
   shiftHoursModeStationIdx = null,
+  manualAssignmentModeStationIdx = null,
   draggingWorkerName = null,
   selectedWorkerSource = null,
   onDraggingWorkerChange,
@@ -151,8 +177,11 @@ export function PlanningV2StationWeekGrid({
   onRemovePull,
   onUpsertGuardDisplay,
   onRemoveGuardDisplay,
+  onUpsertManualAssignmentSlot,
+  onRemoveManualAssignmentSlot,
   onTogglePullsModeStation,
   onToggleShiftHoursModeStation,
+  onToggleManualAssignmentModeStation,
   onResetStation,
   onManualSlotDrop,
   summaryHighlightWorkerName = null,
@@ -162,6 +191,8 @@ export function PlanningV2StationWeekGrid({
   const [pullsEditor, setPullsEditor] = useState<PlanningV2StationPullsEditorState | null>(null);
   const [shiftHoursEditor, setShiftHoursEditor] = useState<PlanningV2StationShiftHoursEditorState | null>(null);
   const [shiftHoursOorConfirm, setShiftHoursOorConfirm] = useState(false);
+  const [manualSlotEditor, setManualSlotEditor] = useState<PlanningV2StationManualSlotEditorState | null>(null);
+  const [manualSlotOorConfirm, setManualSlotOorConfirm] = useState(false);
   const {
     MIN_STATION_GRID_ZOOM,
     MAX_STATION_GRID_ZOOM,
@@ -193,6 +224,14 @@ export function PlanningV2StationWeekGrid({
   useEffect(() => {
     if (!shiftHoursEditor) setShiftHoursOorConfirm(false);
   }, [shiftHoursEditor]);
+
+  useEffect(() => {
+    if (!manualSlotEditor) setManualSlotOorConfirm(false);
+  }, [manualSlotEditor]);
+
+  useEffect(() => {
+    if (manualAssignmentModeStationIdx == null) setManualSlotEditor(null);
+  }, [manualAssignmentModeStationIdx]);
 
   // Quitter le mode משיכה → fermer la modale (mais autoriser l'ouverture hors mode, en manuel).
   const prevPullsModeStationIdxRef = useRef(pullsModeStationIdx);
@@ -285,7 +324,9 @@ export function PlanningV2StationWeekGrid({
                 ? "ring-1 ring-orange-400 ring-offset-1 ring-offset-white dark:ring-offset-zinc-950"
                 : shiftHoursModeStationIdx === idx
                   ? "ring-1 ring-yellow-500 ring-offset-1 ring-offset-white dark:ring-offset-zinc-950"
-                  : "")
+                  : manualAssignmentModeStationIdx === idx
+                    ? "ring-1 ring-teal-500 ring-offset-1 ring-offset-white dark:ring-offset-zinc-950"
+                    : "")
             }
           >
             <div className="mb-2 flex items-center justify-between">
@@ -295,6 +336,24 @@ export function PlanningV2StationWeekGrid({
               <div className="flex items-center gap-1">
                 {isManual && manualEditable && (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isSavedMode && !editingSaved) return;
+                        onToggleManualAssignmentModeStation?.(idx);
+                      }}
+                      disabled={isSavedMode && !editingSaved}
+                      className={
+                        "inline-flex items-center rounded-md border px-2 py-1 text-xs " +
+                        (isSavedMode && !editingSaved
+                          ? "cursor-not-allowed border-zinc-200 text-zinc-400 opacity-60 dark:border-zinc-700 dark:text-zinc-600"
+                          : manualAssignmentModeStationIdx === idx
+                            ? "border-teal-600 bg-teal-600 text-white hover:bg-teal-700 dark:border-teal-600 dark:bg-teal-600 dark:hover:bg-teal-700"
+                            : "border-teal-400 text-teal-600 hover:bg-teal-50 dark:border-teal-700 dark:text-teal-400 dark:hover:bg-teal-900/20")
+                      }
+                    >
+                      שיבוץ
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -481,6 +540,7 @@ export function PlanningV2StationWeekGrid({
                           const isPastDay = dateCell < today0;
                           const pullsActiveHere = pullsModeStationIdx === idx;
                           const shiftHoursActiveHere = shiftHoursModeStationIdx === idx;
+                          const manualSlotActiveHere = manualAssignmentModeStationIdx === idx;
                           const cellRaw = mergeCellRawWithPulls(
                             assignmentsSafe,
                             pulls || null,
@@ -522,6 +582,48 @@ export function PlanningV2StationWeekGrid({
                           const roleHintsExtended = alignedRoleDisplay?.roleHintsExtended ?? baseRoleDisplay.roleHintsExtended;
                           const roleForSlot = alignedRoleDisplay?.roleForSlot ?? baseRoleDisplay.roleForSlot;
                           const roleForName = alignedRoleDisplay?.roleForName ?? baseRoleDisplay.roleForName;
+                          const openManualSlotEditor = (slotIdx: number | null) => {
+                            const hoursStr = hoursFromConfig(st, sn) || hoursOf(sn);
+                            const parsedHours = parseHoursRange(hoursStr);
+                            const shiftStart = parsedHours?.start || "00:00";
+                            const shiftEnd = parsedHours?.end || "23:59";
+                            const roleOptions = listRolesForStationShift(
+                              st as Record<string, unknown>,
+                              sn,
+                              d.key,
+                            );
+                            const workerOptions = workers
+                              .map((w) => String(w?.name || "").trim())
+                              .filter(Boolean);
+                            const editing = slotIdx != null;
+                            const createSlotIdx = Math.max(
+                              required + pullsInCell,
+                              cellRaw.length,
+                              manualSlotSpanInCell(pulls || null, d.key, sn, idx),
+                            );
+                            const entry = editing
+                              ? ((pulls || {}) as Record<string, PlanningV2PullEntry>)[
+                                  manualSlotKey(d.key, sn, idx, slotIdx)
+                                ]
+                              : undefined;
+                            const existingRole = editing ? manualSlotRoleName(entry) : null;
+                            setManualSlotEditor({
+                              mode: editing ? "edit" : "create",
+                              key: manualSlotKey(d.key, sn, idx, editing ? slotIdx : createSlotIdx),
+                              dayKey: d.key,
+                              shiftName: sn,
+                              stationIdx: idx,
+                              slotIdx: editing ? slotIdx : createSlotIdx,
+                              workerName: editing ? String(cellRaw[slotIdx] || "").trim() : "",
+                              roleName: existingRole || "",
+                              start: String(entry?.guardDisplay?.start || shiftStart),
+                              end: String(entry?.guardDisplay?.end || shiftEnd),
+                              shiftStart,
+                              shiftEnd,
+                              roleOptions,
+                              workerOptions,
+                            });
+                          };
                           const slotCount = Math.max(
                             required + pullsInCell,
                             assignedNamesNonEmpty.length,
@@ -625,11 +727,34 @@ export function PlanningV2StationWeekGrid({
                               }
                             >
                               {shiftRowEnabled ? (
-                                <div className="flex flex-col items-center rounded-md">
+                                <div
+                                  className={
+                                    "flex flex-col items-center rounded-md " +
+                                    (manualSlotActiveHere && showCell ? "cursor-pointer ring-1 ring-teal-400" : "")
+                                  }
+                                  onClick={() => {
+                                    if (!manualSlotActiveHere || !showCell) return;
+                                    openManualSlotEditor(null);
+                                  }}
+                                >
                                   {showCell ? (
                                 <div className="mb-1 flex min-w-full flex-col items-center gap-1">
                                   {Array.from({ length: slotCount }).map((_, slotIdx) => {
                                     const nm = String(displayCellRaw[slotIdx] || "").trim();
+                                    const isManualSlotHere = isManualExtraSlot(
+                                      pulls || null,
+                                      d.key,
+                                      sn,
+                                      idx,
+                                      slotIdx,
+                                      required + pullsInCell,
+                                    );
+                                    const manualSlotClick = (e: { stopPropagation: () => void }) => {
+                                      if (!manualSlotActiveHere) return false;
+                                      e.stopPropagation();
+                                      openManualSlotEditor(isManualSlotHere ? slotIdx : null);
+                                      return true;
+                                    };
                                     if (!nm) {
                                       const slotHoverKey = `${d.key}|${sn}|${idx}|${slotIdx}`;
                                       const isSlotHovered = hoverSlotKey === slotHoverKey;
@@ -638,6 +763,19 @@ export function PlanningV2StationWeekGrid({
                                       const erc = emptyHintStr
                                         ? planningColorForRoleChip(emptyHintStr, roleColorMapPlanning)
                                         : null;
+                                      const manualEmptyEntry = isManualSlotHere
+                                        ? ((pulls || {}) as Record<string, PlanningV2PullEntry>)[
+                                            manualSlotKey(d.key, sn, idx, slotIdx)
+                                          ]
+                                        : undefined;
+                                      const manualEmptyIsTagged = isManualSlotPullEntry(manualEmptyEntry);
+                                      const manualEmptyRole = manualSlotRoleName(manualEmptyEntry);
+                                      const manualEmptyStart = String(manualEmptyEntry?.guardDisplay?.start || "").trim();
+                                      const manualEmptyEnd = String(manualEmptyEntry?.guardDisplay?.end || "").trim();
+                                      const manualEmptyHours =
+                                        manualEmptyStart && manualEmptyEnd
+                                          ? `${manualEmptyStart}–${manualEmptyEnd}`
+                                          : "";
                                       return (
                                         <div
                                           key={`empty-${d.key}-${sn}-${idx}-${slotIdx}`}
@@ -650,7 +788,8 @@ export function PlanningV2StationWeekGrid({
                                               ? " cursor-pointer"
                                               : "")
                                           }
-                                          onClick={() => {
+                                          onClick={(e) => {
+                                            if (manualSlotClick(e)) return;
                                             if (pullsActiveHere || shiftHoursActiveHere) return;
                                             if (cellLockedByPull) {
                                               toast.error("לא ניתן לשבץ", {
@@ -714,6 +853,7 @@ export function PlanningV2StationWeekGrid({
                                                   ? " border-red-300 bg-red-50 text-red-700 dark:border-red-600 dark:bg-red-950/40 dark:text-red-300 "
                                                   : " border-zinc-200 bg-zinc-100 text-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 ") +
                                               (pullsActiveHere && isPullable ? " ring-1 ring-orange-400 cursor-pointer" : "") +
+                                              (manualEmptyIsTagged ? " ring-1 ring-teal-500 " : "") +
                                               (!dragNm && isSlotHovered ? "scale-110 ring-2 ring-[#00A8E0]" : "") +
                                               (dragNm && emptyOk && !isSlotHovered ? " ring-2 ring-green-500" : "") +
                                               (dragNm && hasDropConflict && !isSlotHovered ? " ring-2 ring-red-500" : "") +
@@ -786,7 +926,21 @@ export function PlanningV2StationWeekGrid({
                                               });
                                             }}
                                           >
-                                            {emptyHintStr ? (
+                                            {manualEmptyIsTagged ? (
+                                              <>
+                                                {manualEmptyRole ? (
+                                                  <span className="max-w-full truncate px-0.5 text-center text-[6px] font-semibold leading-tight text-teal-700 md:text-[9px] dark:text-teal-300">
+                                                    {manualEmptyRole}
+                                                  </span>
+                                                ) : null}
+                                                <span
+                                                  className="text-[7px] font-semibold leading-none text-red-600 md:text-[10px] dark:text-red-400"
+                                                  dir="ltr"
+                                                >
+                                                  {manualEmptyHours || "—"}
+                                                </span>
+                                              </>
+                                            ) : emptyHintStr ? (
                                               <>
                                                 <span
                                                   className="max-w-full truncate px-0.5 text-center text-[6px] font-semibold leading-tight md:text-[9px]"
@@ -838,7 +992,15 @@ export function PlanningV2StationWeekGrid({
                                       idx,
                                       nm,
                                     );
-                                    const roleToShow = slotExpectedRole || rn || pullRoleName || null;
+                                    const manualSlotRoleHere = isManualSlotHere
+                                      ? manualSlotRoleName(
+                                          ((pulls || {}) as Record<string, PlanningV2PullEntry>)[
+                                            manualSlotKey(d.key, sn, idx, slotIdx)
+                                          ],
+                                        )
+                                      : null;
+                                    const roleToShow =
+                                      manualSlotRoleHere || slotExpectedRole || rn || pullRoleName || null;
                                     const rcRole = roleToShow
                                       ? planningColorForRoleChip(roleToShow, roleColorMapPlanning)
                                       : null;
@@ -1045,7 +1207,10 @@ export function PlanningV2StationWeekGrid({
                                             !blockPullBubble
                                               ? " cursor-pointer"
                                               : "") +
-                                            ((hasGuardDisplayOnSlot || shiftHoursActiveHere) && !summaryPickActive
+                                            (isManualSlotHere && !summaryPickActive ? " ring-1 ring-teal-500" : "") +
+                                            ((hasGuardDisplayOnSlot || shiftHoursActiveHere) &&
+                                            !summaryPickActive &&
+                                            !isManualSlotHere
                                               ? " ring-1 ring-yellow-500"
                                               : "") +
                                             ((!dragNm && isSlotHovered && !summaryPickActive
@@ -1099,10 +1264,12 @@ export function PlanningV2StationWeekGrid({
                                             setExpandedSlotKey((k) => (k === expKey ? null : k))
                                           }
                                           onClick={(e) => {
+                                            if (manualSlotClick(e)) return;
                                             if (blockPullBubble) return;
                                             if (
                                               nmTrim &&
                                               onUpsertGuardDisplay &&
+                                              !isManualSlotHere &&
                                               (shiftHoursActiveHere || hasGuardDisplayOnSlot)
                                             ) {
                                               const hours = hoursFromConfig(st, sn) || hoursOf(sn);
@@ -1372,6 +1539,17 @@ export function PlanningV2StationWeekGrid({
           setOorConfirm={setShiftHoursOorConfirm}
           onRemoveGuardDisplay={onRemoveGuardDisplay}
           onUpsertGuardDisplay={onUpsertGuardDisplay}
+        />
+      ) : null}
+      {manualSlotEditor ? (
+        <PlanningV2StationManualSlotEditorModal
+          editor={manualSlotEditor}
+          oorConfirm={manualSlotOorConfirm}
+          onClose={() => setManualSlotEditor(null)}
+          setEditor={setManualSlotEditor}
+          setOorConfirm={setManualSlotOorConfirm}
+          onSave={onUpsertManualAssignmentSlot}
+          onRemove={onRemoveManualAssignmentSlot}
         />
       ) : null}
     </section>

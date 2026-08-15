@@ -18,6 +18,7 @@ import {
   guardAdjacentBoundaryHours,
   resolveSlotExportHours,
 } from "./planning-v2-pull-slot-display";
+import { buildExportCellSlots } from "./planning-v2-manual-slot";
 import { buildEventExportOccurrences, EVENT_BORDEAUX } from "./event-export-tables";
 import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
 
@@ -306,15 +307,15 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
       const hoursStr = hoursFromConfig(st, sn) || hoursOf(sn);
       const { from: defaultFrom, to: defaultTo } = parseHours(hoursStr);
 
-      // Lignes noms = max slots d'affectations réelles (pas les noms injectés par משיכה)
+      // Lignes noms = max slots d'affectations réelles + postes שיבוץ (pas les noms injectés par משיכה)
       let maxSlots = 1;
       for (const d of DAY_COLS) {
         const required = getRequiredFor(st as object, sn, d.key);
         const activeDay = isDayActive(st, d.key);
         if (!activeDay || required <= 0) continue;
         if (isPullHoleCell(pulls ?? null, d.key, sn, stationIdx)) continue;
-        const names = baseCellNames(assignments, d.key, sn, stationIdx);
-        maxSlots = Math.max(maxSlots, required, names.length, 1);
+        const slots = buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
+        maxSlots = Math.max(maxSlots, required, slots.length, 1);
       }
 
       // Par garde : ligne cases מ|עד, ligne horaires, lignes noms
@@ -349,24 +350,38 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         const inactive = !activeDay || required <= 0;
         const pullHole = !inactive && isPullHoleCell(pulls ?? null, d.key, sn, stationIdx);
         const allBlack = inactive || pullHole;
-        const names = allBlack ? [] : baseCellNames(assignments, d.key, sn, stationIdx);
-        const highlights = names.map((name, slotIdx) =>
-          resolveSlotExportHours(
-            pulls ?? null,
-            assignments,
-            shiftNamesAll,
-            dayIdx,
-            d.key,
-            sn,
-            stationIdx,
-            slotIdx,
-            name,
-            defaultFrom,
-            defaultTo,
-          ),
+        const slots = allBlack ? [] : buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
+        const names = slots.map((s) => s.name);
+        const highlights = slots.map((s) =>
+          s.manual && s.start && s.end
+            ? { highlight: true, from: s.start, to: s.end }
+            : resolveSlotExportHours(
+                pulls ?? null,
+                assignments,
+                shiftNamesAll,
+                dayIdx,
+                d.key,
+                sn,
+                stationIdx,
+                s.slotIndex,
+                s.name,
+                defaultFrom,
+                defaultTo,
+              ),
         );
         const anyHighlight = highlights.some((h) => h.highlight);
         const customHours = highlights.find((h) => h.highlight && h.from && h.to);
+        // Plusieurs personnes sur la garde avec des horaires custom qui ne couvrent pas
+        // tout le monde : la ligne מ/עד garde les horaires normaux, chaque horaire
+        // modifié est écrit sous le nom concerné.
+        const occupiedCount = slots.filter((s) => s.name || s.manual).length;
+        const customRanges = highlights
+          .filter((h) => h.highlight && h.from && h.to)
+          .map((h) => `${h.from}|${h.to}`);
+        const coversWholeCell =
+          customRanges.length === occupiedCount && new Set(customRanges).size === 1;
+        const perSlotHours = customRanges.length > 0 && occupiedCount >= 2 && !coversWholeCell;
+        const rowCustomHours = perSlotHours ? undefined : customHours;
         const adjacentHours =
           !allBlack && !customHours
             ? guardAdjacentBoundaryHours(
@@ -384,10 +399,11 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         return {
           allBlack,
           names,
+          slots,
           highlights,
-          anyHighlight: anyHighlight || !!adjacentHours,
-          from: customHours?.from || adjacentHours?.from || defaultFrom,
-          to: customHours?.to || adjacentHours?.to || defaultTo,
+          anyHighlight: perSlotHours ? !!adjacentHours : anyHighlight || !!adjacentHours,
+          from: rowCustomHours?.from || adjacentHours?.from || defaultFrom,
+          to: rowCustomHours?.to || adjacentHours?.to || defaultTo,
         };
       });
 
@@ -453,20 +469,48 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
       });
 
       // Lignes noms (une par slot) — hauteur fixe même si toute la ligne est vide
+      const nameRowExtraHeight = new Map<number, number>();
       for (let slot = 0; slot < maxSlots; slot++) {
         const nameRowIdx = nameStartRow + slot;
         const nameRow = ws.getRow(nameRowIdx);
         nameRow.height = NAME_ROW_HEIGHT;
         dayMeta.forEach((meta, dayIdx) => {
           const col = dayStartCol + dayIdx * 2;
+          const slotMeta = meta.slots[slot];
           const name = meta.names[slot] || "";
           const hl = meta.highlights[slot];
-          const isYellow = !!name && !!hl?.highlight;
+          const manualLabel =
+            !name && slotMeta?.manual ? slotMeta.roleName || "ללא עובד" : "";
+          const label = name || manualLabel;
+          const isYellow = !!label && !!hl?.highlight;
+          // Horaire propre au travailleur (non repris dans la ligne מ/עד de la garde).
+          const ownHours =
+            !meta.allBlack &&
+            !!label &&
+            hl?.highlight &&
+            hl.from &&
+            hl.to &&
+            (hl.from !== meta.from || hl.to !== meta.to)
+              ? `${hl.from}-${hl.to}`
+              : "";
 
           ws.mergeCells(nameRowIdx, col, nameRowIdx, col + 1);
           const cell = ws.getCell(nameRowIdx, col);
           // Espace insécable pour empêcher Excel de compresser une ligne vide
-          cell.value = meta.allBlack ? " " : name || " ";
+          if (ownHours) {
+            cell.value = {
+              richText: [
+                { text: label, font: { name: "Arial", size: 11, bold: true } },
+                {
+                  text: `\n${ownHours}`,
+                  font: { name: "Arial", size: 10, bold: true, color: { argb: "FFDC2626" } },
+                },
+              ],
+            };
+            nameRowExtraHeight.set(nameRowIdx, NAME_ROW_HEIGHT);
+          } else {
+            cell.value = meta.allBlack ? " " : label || " ";
+          }
           if (meta.allBlack) {
             applyFill(cell, BLACK);
             applyFill(ws.getCell(nameRowIdx, col + 1), BLACK);
@@ -490,8 +534,11 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
       ws.getRow(meAdRowIdx).height = ME_AD_ROW_HEIGHT;
       ws.getRow(timeRowIdx).height = TIME_ROW_HEIGHT;
       for (let slot = 0; slot < maxSlots; slot++) {
-        scheduleRowMinHeight.set(nameStartRow + slot, NAME_ROW_HEIGHT);
-        ws.getRow(nameStartRow + slot).height = NAME_ROW_HEIGHT;
+        const nameRowIdx = nameStartRow + slot;
+        // Deux lignes (nom + horaire propre) : la ligne doit être plus haute.
+        const height = NAME_ROW_HEIGHT + (nameRowExtraHeight.get(nameRowIdx) || 0);
+        scheduleRowMinHeight.set(nameRowIdx, height);
+        ws.getRow(nameRowIdx).height = height;
       }
 
       row = blockEndRow + 1;

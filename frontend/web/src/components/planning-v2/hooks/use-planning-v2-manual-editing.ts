@@ -13,6 +13,11 @@ import {
   type ManualDropFlags,
 } from "../lib/planning-v2-manual-full-drop";
 import type { ManualDragSource } from "../lib/planning-v2-manual-drop";
+import {
+  appendManualSlot,
+  removeManualSlot,
+  updateManualSlot,
+} from "../lib/planning-v2-manual-slot";
 import { normWorkerName } from "../lib/planning-v2-worker-name";
 import type { PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "../types";
 
@@ -23,6 +28,8 @@ type ManualEditingPlanSlice = {
   displayPulls: PlanningV2PullsMap | null | undefined;
   getLatestAssignmentBase: () => AssignmentsMap;
   commitDraftAssignments: (assignments: AssignmentsMap) => void;
+  commitDraftPulls: (pulls: PlanningV2PullsMap) => void;
+  draftActive: boolean;
 };
 
 type ManualConfirmState = {
@@ -45,6 +52,7 @@ type UsePlanningV2ManualEditingArgs = {
   setAvailabilityOverlays: Dispatch<SetStateAction<AvailabilityOverlays>>;
   setPullsModeStationIdx: Dispatch<SetStateAction<number | null>>;
   setShiftHoursModeStationIdx: Dispatch<SetStateAction<number | null>>;
+  setManualAssignmentModeStationIdx: Dispatch<SetStateAction<number | null>>;
 };
 
 export function usePlanningV2ManualEditing({
@@ -61,6 +69,7 @@ export function usePlanningV2ManualEditing({
   setAvailabilityOverlays,
   setPullsModeStationIdx,
   setShiftHoursModeStationIdx,
+  setManualAssignmentModeStationIdx,
 }: UsePlanningV2ManualEditingArgs) {
   const [manualConfirm, setManualConfirm] = useState<ManualConfirmState>(null);
   const [manualDragWorkerName, setManualDragWorkerName] = useState<string | null>(null);
@@ -75,15 +84,16 @@ export function usePlanningV2ManualEditing({
     resetManualSelection();
   }, [weekStart, resetManualSelection]);
 
-  /** Début de drag / sélection עובד → quitter משיכה / שינוי שעות. */
+  /** Début de drag / sélection עובד → quitter משיכה / שינוי שעות / שיבוץ. */
   const handleDraggingWorkerChange = useCallback((workerName: string | null) => {
     if (workerName) {
       setPullsModeStationIdx(null);
       setShiftHoursModeStationIdx(null);
+      setManualAssignmentModeStationIdx(null);
     }
     setManualDragWorkerName(workerName);
     if (!workerName) setManualSelectSource(null);
-  }, [setPullsModeStationIdx, setShiftHoursModeStationIdx]);
+  }, [setPullsModeStationIdx, setShiftHoursModeStationIdx, setManualAssignmentModeStationIdx]);
 
   const handleWorkerSelectToggle = useCallback(
     (workerName: string, source: ManualDragSource | null = null) => {
@@ -106,6 +116,7 @@ export function usePlanningV2ManualEditing({
       }
       setPullsModeStationIdx(null);
       setShiftHoursModeStationIdx(null);
+      setManualAssignmentModeStationIdx(null);
       setManualDragWorkerName(nm);
       setManualSelectSource(source);
     },
@@ -115,6 +126,7 @@ export function usePlanningV2ManualEditing({
       resetManualSelection,
       setPullsModeStationIdx,
       setShiftHoursModeStationIdx,
+      setManualAssignmentModeStationIdx,
     ],
   );
 
@@ -337,6 +349,191 @@ export function usePlanningV2ManualEditing({
     [plan],
   );
 
+  const ensureDraftActive = useCallback(() => {
+    if (!plan.draftActive) {
+      plan.commitDraftAssignments(plan.getLatestAssignmentBase());
+    }
+  }, [plan]);
+
+  const handleUpsertManualAssignmentSlot = useCallback(
+    async (payload: {
+      mode: "create" | "edit";
+      dayKey: string;
+      shiftName: string;
+      stationIndex: number;
+      slotIndex: number;
+      workerName: string;
+      roleName: string;
+      start: string;
+      end: string;
+    }) => {
+      const workerName = String(payload.workerName || "").trim();
+      const roleName = String(payload.roleName || "").trim();
+      const start = String(payload.start || "").trim();
+      const end = String(payload.end || "").trim();
+
+      if (workerName) {
+        if (
+          isShiftLockedByEvent(
+            locksForWorkerName(eventLocksByWorkerId, workers, workerName),
+            payload.dayKey,
+            payload.shiftName,
+          )
+        ) {
+          toast.error("לא ניתן לשבץ", { description: "העובד משובץ לאירוע בזמן זה (לא ניתן לשינוי)." });
+          return false;
+        }
+
+        let flags: ManualDropFlags = { forceRole: true };
+        // forceRole: le rôle est choisi explicitement dans la popup שיבוץ.
+        for (let guard = 0; guard < 12; guard++) {
+          const base = plan.getLatestAssignmentBase();
+          const r = analyzeManualSlotDrop({
+            site,
+            siteId,
+            weekStart,
+            workers,
+            availabilityByWorkerName,
+            base,
+            dayKey: payload.dayKey,
+            shiftName: payload.shiftName,
+            stationIndex: payload.stationIndex,
+            slotIndex: payload.slotIndex,
+            workerName,
+            dragSource: null,
+            flags,
+            pulls: plan.displayPulls ?? null,
+            eventAssignmentCount: eventAssignmentCountsByName.get(workerName) || 0,
+          });
+          if (r.action === "block") {
+            toast.error("לא ניתן לשבץ", { description: r.message });
+            return false;
+          }
+          if (r.action === "apply") {
+            if (flags.forceAvailability) {
+              const canonicalName =
+                workerRowsForTable.find((row) => normWorkerName(row.name) === normWorkerName(workerName))
+                  ?.name || workerName;
+              setAvailabilityOverlays((prev) => {
+                const next = { ...prev };
+                const byDay = { ...(next[canonicalName] || {}) } as Record<string, string[]>;
+                const cur = new Set<string>([...(byDay[payload.dayKey] || [])]);
+                cur.add(payload.shiftName);
+                byDay[payload.dayKey] = Array.from(cur);
+                next[canonicalName] = byDay;
+                return next;
+              });
+            }
+            break;
+          }
+          if (r.action === "confirm_availability") {
+            const ok = await waitManualConfirm(
+              "זמינות",
+              `לעובד "${r.workerName}" אין זמינות למשמרת זו. להקצות בכל זאת?`,
+            );
+            if (!ok) return false;
+            flags = { ...flags, forceAvailability: true };
+            continue;
+          }
+          if (r.action === "confirm_role") {
+            const ok = await waitManualConfirm(
+              "תפקיד",
+              `לעובד "${r.workerName}" אין את התפקיד "${r.roleName}" בתא זה. להקצות בכל זאת?`,
+            );
+            if (!ok) return false;
+            flags = { ...flags, forceRole: true };
+            continue;
+          }
+          if (r.action === "confirm_rules") {
+            const ok = await waitManualConfirm(
+              "שיבוץ חורג מהכללים",
+              `שיבוץ עלול להפר חוקים:\n- ${r.lines.join("\n- ")}\n\nלהקצות בכל זאת?`,
+            );
+            if (!ok) return false;
+            flags = { ...flags, forceRules: true };
+            continue;
+          }
+          if (r.action === "confirm_max_shifts") {
+            const ok = await waitManualConfirm(
+              "מקסימום משמרות",
+              `השיבוץ יגיע ל-${r.total} משמרות השבוע, מעל המקסימום המוגדר לעובד (${r.maxShifts}). להקצות בכל זאת?`,
+            );
+            if (!ok) return false;
+            flags = { ...flags, forceMaxShifts: true };
+            continue;
+          }
+          if (r.action === "confirm_replace_pull") {
+            toast.error("לא ניתן לשבץ", { description: pullEditOnlyViaPopupMessage() });
+            return false;
+          }
+          toast.error("שגיאה", { description: "יותר מדי שלבי אישור — נסה שוב." });
+          return false;
+        }
+      }
+
+      const baseAssignments = plan.getLatestAssignmentBase();
+      const basePulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
+      const mutated =
+        payload.mode === "create"
+          ? appendManualSlot(baseAssignments, basePulls, {
+              dayKey: payload.dayKey,
+              shiftName: payload.shiftName,
+              stationIndex: payload.stationIndex,
+              slotIndex: payload.slotIndex,
+              workerName,
+              roleName,
+              start,
+              end,
+            })
+          : updateManualSlot(baseAssignments, basePulls, {
+              dayKey: payload.dayKey,
+              shiftName: payload.shiftName,
+              stationIndex: payload.stationIndex,
+              slotIndex: payload.slotIndex,
+              workerName,
+              roleName,
+              start,
+              end,
+            });
+      ensureDraftActive();
+      plan.commitDraftAssignments(mutated.assignments);
+      plan.commitDraftPulls(mutated.pulls);
+      return true;
+    },
+    [
+      site,
+      siteId,
+      weekStart,
+      workers,
+      availabilityByWorkerName,
+      plan,
+      waitManualConfirm,
+      workerRowsForTable,
+      eventLocksByWorkerId,
+      eventAssignmentCountsByName,
+      setAvailabilityOverlays,
+      ensureDraftActive,
+    ],
+  );
+
+  const handleRemoveManualAssignmentSlot = useCallback(
+    async (payload: {
+      dayKey: string;
+      shiftName: string;
+      stationIndex: number;
+      slotIndex: number;
+    }) => {
+      const baseAssignments = plan.getLatestAssignmentBase();
+      const basePulls = (plan.displayPulls || {}) as PlanningV2PullsMap;
+      const mutated = removeManualSlot(baseAssignments, basePulls, payload);
+      ensureDraftActive();
+      plan.commitDraftAssignments(mutated.assignments);
+      plan.commitDraftPulls(mutated.pulls);
+      return true;
+    },
+    [plan, ensureDraftActive],
+  );
+
   return {
     manualConfirm,
     setManualConfirm,
@@ -348,5 +545,7 @@ export function usePlanningV2ManualEditing({
     waitManualConfirm,
     handleManualSlotDrop,
     handleManualSlotDragOutside,
+    handleUpsertManualAssignmentSlot,
+    handleRemoveManualAssignmentSlot,
   };
 }

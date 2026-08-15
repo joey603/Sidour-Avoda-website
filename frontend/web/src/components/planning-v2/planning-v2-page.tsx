@@ -111,6 +111,7 @@ function PlanningV2PageInner({
   const [workerModalSaving, setWorkerModalSaving] = useState(false);
   const [pullsModeStationIdx, setPullsModeStationIdx] = useState<number | null>(null);
   const [shiftHoursModeStationIdx, setShiftHoursModeStationIdx] = useState<number | null>(null);
+  const [manualAssignmentModeStationIdx, setManualAssignmentModeStationIdx] = useState<number | null>(null);
   const [availabilityOverlays, setAvailabilityOverlays] = useState<Record<string, Record<string, string[]>>>({});
   const [weekSiteEvents, setWeekSiteEvents] = useState<SiteEvent[]>([]);
   const visibleAlternativeCountRef = useRef(0);
@@ -160,6 +161,7 @@ function PlanningV2PageInner({
   useEffect(() => {
     setPullsModeStationIdx(null);
     setShiftHoursModeStationIdx(null);
+    setManualAssignmentModeStationIdx(null);
     setSummaryHighlightWorkerName(null);
     setWeekSiteEvents([]);
   }, [weekStart]);
@@ -257,6 +259,8 @@ function PlanningV2PageInner({
     handleWorkerSelectToggle,
     handleManualSlotDrop,
     handleManualSlotDragOutside,
+    handleUpsertManualAssignmentSlot,
+    handleRemoveManualAssignmentSlot,
   } = usePlanningV2ManualEditing({
     site,
     siteId,
@@ -271,6 +275,7 @@ function PlanningV2PageInner({
     setAvailabilityOverlays,
     setPullsModeStationIdx,
     setShiftHoursModeStationIdx,
+    setManualAssignmentModeStationIdx,
   });
 
   const {
@@ -316,6 +321,7 @@ function PlanningV2PageInner({
   const handleSavePlan = async (publishToWorkers: boolean) => {
     setPullsModeStationIdx(null);
     setShiftHoursModeStationIdx(null);
+    setManualAssignmentModeStationIdx(null);
     // Arrêter le stream חלופות : après שמור le plan est verrouillé, stop/יוצר n’ont plus de sens.
     if (plan.generationRunning) {
       plan.stopGeneration();
@@ -350,12 +356,20 @@ function PlanningV2PageInner({
 
   const handleTogglePullsModeStation = useCallback((idx: number) => {
     setShiftHoursModeStationIdx(null);
+    setManualAssignmentModeStationIdx(null);
     setPullsModeStationIdx((prev) => (prev === idx ? null : idx));
   }, []);
 
   const handleToggleShiftHoursModeStation = useCallback((idx: number) => {
     setPullsModeStationIdx(null);
+    setManualAssignmentModeStationIdx(null);
     setShiftHoursModeStationIdx((prev) => (prev === idx ? null : idx));
+  }, []);
+
+  const handleToggleManualAssignmentModeStation = useCallback((idx: number) => {
+    setPullsModeStationIdx(null);
+    setShiftHoursModeStationIdx(null);
+    setManualAssignmentModeStationIdx((prev) => (prev === idx ? null : idx));
   }, []);
 
   const linkedSitesRail = (
@@ -484,6 +498,7 @@ function PlanningV2PageInner({
               manualEditable={manualEditable}
               pullsModeStationIdx={pullsModeStationIdx}
               shiftHoursModeStationIdx={shiftHoursModeStationIdx}
+              manualAssignmentModeStationIdx={manualAssignmentModeStationIdx}
               draggingWorkerName={manualDragWorkerName}
               selectedWorkerSource={manualSelectSource}
               onDraggingWorkerChange={handleDraggingWorkerChange}
@@ -492,8 +507,11 @@ function PlanningV2PageInner({
               availabilityOverlays={displayedAvailabilityOverlays}
               onTogglePullsModeStation={handleTogglePullsModeStation}
               onToggleShiftHoursModeStation={handleToggleShiftHoursModeStation}
+              onToggleManualAssignmentModeStation={handleToggleManualAssignmentModeStation}
               onUpsertGuardDisplay={handleUpsertGuardDisplay}
               onRemoveGuardDisplay={handleRemoveGuardDisplay}
+              onUpsertManualAssignmentSlot={handleUpsertManualAssignmentSlot}
+              onRemoveManualAssignmentSlot={handleRemoveManualAssignmentSlot}
               onResetStation={handleResetStation}
               onManualSlotDragOutside={handleManualSlotDragOutside}
               onManualSlotDrop={handleManualSlotDrop}
@@ -549,6 +567,7 @@ function PlanningV2PageInner({
           onCancelSavedEdit={() => {
             setPullsModeStationIdx(null);
             setShiftHoursModeStationIdx(null);
+            setManualAssignmentModeStationIdx(null);
             plan.cancelSavedEditing();
           }}
           reloadWeekPlan={reloadWeekPlan}

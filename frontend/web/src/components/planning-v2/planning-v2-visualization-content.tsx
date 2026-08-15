@@ -2,6 +2,7 @@
 
 import { PlanningV2AssignmentsSummary } from "./planning-v2-assignments-summary";
 import { PlanningV2StationWeekGrid } from "./stations/planning-v2-station-week-grid";
+import type { PlanningV2ManualSlotSavePayload } from "./stations/planning-v2-station-manual-slot-editor-modal";
 import type { ManualDragSource } from "./lib/planning-v2-manual-drop";
 import type { PlanningV2PullEntry, PlanningV2PullsMap, PlanningWorker, SiteSummary, WorkerAvailability } from "./types";
 
@@ -25,6 +26,7 @@ type PlanningV2VisualizationContentProps = {
   manualEditable: boolean;
   pullsModeStationIdx: number | null;
   shiftHoursModeStationIdx: number | null;
+  manualAssignmentModeStationIdx: number | null;
   draggingWorkerName: string | null;
   selectedWorkerSource: ManualDragSource | null;
   onDraggingWorkerChange: (workerName: string | null) => void;
@@ -33,8 +35,16 @@ type PlanningV2VisualizationContentProps = {
   availabilityOverlays: AvailabilityOverlays;
   onTogglePullsModeStation: (stationIdx: number) => void;
   onToggleShiftHoursModeStation: (stationIdx: number) => void;
+  onToggleManualAssignmentModeStation: (stationIdx: number) => void;
   onUpsertGuardDisplay: (key: string, start: string, end: string) => boolean | void | Promise<boolean | void>;
   onRemoveGuardDisplay: (key: string) => boolean | void | Promise<boolean | void>;
+  onUpsertManualAssignmentSlot: (payload: PlanningV2ManualSlotSavePayload) => boolean | void | Promise<boolean | void>;
+  onRemoveManualAssignmentSlot: (payload: {
+    dayKey: string;
+    shiftName: string;
+    stationIndex: number;
+    slotIndex: number;
+  }) => boolean | void | Promise<boolean | void>;
   onResetStation: (stationIdx: number) => void;
   onManualSlotDragOutside: (dragSource: ManualDragSource) => void | Promise<void>;
   onManualSlotDrop: (p: {
@@ -75,6 +85,7 @@ export function PlanningV2VisualizationContent({
   manualEditable,
   pullsModeStationIdx,
   shiftHoursModeStationIdx,
+  manualAssignmentModeStationIdx,
   draggingWorkerName,
   selectedWorkerSource,
   onDraggingWorkerChange,
@@ -83,8 +94,11 @@ export function PlanningV2VisualizationContent({
   availabilityOverlays,
   onTogglePullsModeStation,
   onToggleShiftHoursModeStation,
+  onToggleManualAssignmentModeStation,
   onUpsertGuardDisplay,
   onRemoveGuardDisplay,
+  onUpsertManualAssignmentSlot,
+  onRemoveManualAssignmentSlot,
   onResetStation,
   onManualSlotDragOutside,
   onManualSlotDrop,
@@ -119,6 +133,7 @@ export function PlanningV2VisualizationContent({
         manualEditable={manualEditable}
         pullsModeStationIdx={pullsModeStationIdx}
         shiftHoursModeStationIdx={shiftHoursModeStationIdx}
+        manualAssignmentModeStationIdx={manualAssignmentModeStationIdx}
         draggingWorkerName={draggingWorkerName}
         selectedWorkerSource={selectedWorkerSource}
         onDraggingWorkerChange={onDraggingWorkerChange}
@@ -127,8 +142,11 @@ export function PlanningV2VisualizationContent({
         availabilityOverlays={availabilityOverlays}
         onTogglePullsModeStation={onTogglePullsModeStation}
         onToggleShiftHoursModeStation={onToggleShiftHoursModeStation}
+        onToggleManualAssignmentModeStation={onToggleManualAssignmentModeStation}
         onUpsertGuardDisplay={onUpsertGuardDisplay}
         onRemoveGuardDisplay={onRemoveGuardDisplay}
+        onUpsertManualAssignmentSlot={onUpsertManualAssignmentSlot}
+        onRemoveManualAssignmentSlot={onRemoveManualAssignmentSlot}
         onResetStation={onResetStation}
         onManualSlotDragOutside={onManualSlotDragOutside}
         onManualSlotDrop={onManualSlotDrop}

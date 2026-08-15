@@ -1,5 +1,6 @@
 import type { PlanningV2PullEntry, PlanningV2PullsMap } from "../types";
 import { DAY_COLS, normPullWorkerName } from "./station-grid-helpers";
+import { manualSlotRoleName } from "./planning-v2-manual-slot";
 
 function normName(s: string): string {
   return normPullWorkerName(s);
@@ -269,10 +270,19 @@ export function slotTimeMetaFromPulls(
   const slotKey = `${dayKey}|${shiftName}|${stationIdx}|${slotIdx}`;
   const slotEntry = pulls[slotKey] as PlanningV2PullEntry | undefined;
 
+  const manualRoleName = manualSlotRoleName(slotEntry) || undefined;
   const gdStart = String(slotEntry?.guardDisplay?.start || "").trim();
   const gdEnd = String(slotEntry?.guardDisplay?.end || "").trim();
   if (gdStart && gdEnd) {
-    return { label: `${gdStart}–${gdEnd}`, red: true, highlight: "guard" };
+    return {
+      label: `${gdStart}–${gdEnd}`,
+      red: true,
+      highlight: "guard",
+      ...(manualRoleName ? { roleName: manualRoleName } : {}),
+    };
+  }
+  if (manualRoleName) {
+    return { label: "", red: false, roleName: manualRoleName };
   }
 
   const pullEntry = pullEntryForWorkerInCell(pulls, dayKey, shiftName, stationIdx, workerName);

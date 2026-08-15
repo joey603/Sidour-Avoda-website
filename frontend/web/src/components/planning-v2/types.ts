@@ -38,12 +38,22 @@ export type SiteSummary = {
   deletedAt?: number | null;
 };
 
+/** Métadonnée d’un poste שיבוץ ajouté manuellement (hors capacité config). */
+export type PlanningV2ManualSlotMeta = {
+  /** Rôle optionnel ; absent / vide = ללא תפקיד. */
+  roleName?: string | null;
+};
+
 /** משיכה — structure minimale alignée sur le planning principal / backend. */
 export type PlanningV2PullEntry = {
   before?: { name?: string; start?: string; end?: string };
   after?: { name?: string; start?: string; end?: string };
   /** שינוי שעות — affichage (arrivée / fin de garde), sans être une משיכה à deux noms. */
   guardDisplay?: { start?: string; end?: string };
+  /** Rôle lié à une משיכה (runtime / legacy). */
+  roleName?: string | null;
+  /** Poste parallèle ajouté via le mode שיבוץ. */
+  manualSlot?: PlanningV2ManualSlotMeta | true;
 };
 
 export type PlanningV2PullsMap = Record<string, PlanningV2PullEntry>;

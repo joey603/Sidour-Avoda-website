@@ -19,6 +19,7 @@ import {
   guardAdjacentBoundaryHours,
   resolveSlotExportHours,
 } from "./planning-v2-pull-slot-display";
+import { buildExportCellSlots } from "./planning-v2-manual-slot";
 import { buildEventExportOccurrences, buildEventTablesHtml } from "./event-export-tables";
 import { addEventCountsToAssignmentCounts, countEventAssignmentsPerWorkerName } from "./event-availability-locks";
 
@@ -191,8 +192,8 @@ function buildStationScheduleHtml(
         const activeDay = isDayActive(st, d.key);
         if (!activeDay || required <= 0) continue;
         if (isPullHoleCell(pulls ?? null, d.key, sn, stationIdx)) continue;
-        const names = baseCellNames(assignments, d.key, sn, stationIdx);
-        maxSlots = Math.max(maxSlots, required, names.length, 1);
+        const slots = buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
+        maxSlots = Math.max(maxSlots, required, slots.length, 1);
       }
       const blockRows = 2 + maxSlots;
 
@@ -202,24 +203,38 @@ function buildStationScheduleHtml(
         const inactive = !activeDay || required <= 0;
         const pullHole = !inactive && isPullHoleCell(pulls ?? null, d.key, sn, stationIdx);
         const allBlack = inactive || pullHole;
-        const names = allBlack ? [] : baseCellNames(assignments, d.key, sn, stationIdx);
-        const highlights = names.map((name, slotIdx) =>
-          resolveSlotExportHours(
-            pulls ?? null,
-            assignments,
-            shiftNamesAll,
-            dayIdx,
-            d.key,
-            sn,
-            stationIdx,
-            slotIdx,
-            name,
-            defaultFrom,
-            defaultTo,
-          ),
+        const slots = allBlack ? [] : buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
+        const names = slots.map((s) => s.name);
+        const highlights = slots.map((s) =>
+          s.manual && s.start && s.end
+            ? { highlight: true, from: s.start, to: s.end }
+            : resolveSlotExportHours(
+                pulls ?? null,
+                assignments,
+                shiftNamesAll,
+                dayIdx,
+                d.key,
+                sn,
+                stationIdx,
+                s.slotIndex,
+                s.name,
+                defaultFrom,
+                defaultTo,
+              ),
         );
         const anyHighlight = highlights.some((h) => h.highlight);
         const customHours = highlights.find((h) => h.highlight && h.from && h.to);
+        // Plusieurs personnes sur la garde avec des horaires custom qui ne couvrent pas
+        // tout le monde : la ligne מ/עד garde les horaires normaux, chaque horaire
+        // modifié est rendu sous le nom concerné.
+        const occupiedCount = slots.filter((s) => s.name || s.manual).length;
+        const customRanges = highlights
+          .filter((h) => h.highlight && h.from && h.to)
+          .map((h) => `${h.from}|${h.to}`);
+        const coversWholeCell =
+          customRanges.length === occupiedCount && new Set(customRanges).size === 1;
+        const perSlotHours = customRanges.length > 0 && occupiedCount >= 2 && !coversWholeCell;
+        const rowCustomHours = perSlotHours ? undefined : customHours;
         const adjacentHours =
           !allBlack && !customHours
             ? guardAdjacentBoundaryHours(
@@ -237,10 +252,11 @@ function buildStationScheduleHtml(
         return {
           allBlack,
           names,
+          slots,
           highlights,
-          anyHighlight: anyHighlight || !!adjacentHours,
-          from: customHours?.from || adjacentHours?.from || defaultFrom,
-          to: customHours?.to || adjacentHours?.to || defaultTo,
+          anyHighlight: perSlotHours ? !!adjacentHours : anyHighlight || !!adjacentHours,
+          from: rowCustomHours?.from || adjacentHours?.from || defaultFrom,
+          to: rowCustomHours?.to || adjacentHours?.to || defaultTo,
         };
       });
 
@@ -276,17 +292,28 @@ function buildStationScheduleHtml(
       const nameRows = Array.from({ length: maxSlots }, (_, slot) => {
         const cells = dayMeta
           .map((meta) => {
+            const slotMeta = meta.slots[slot];
             const name = meta.names[slot] || "";
+            const manualLabel = !name && slotMeta?.manual ? slotMeta.roleName || "ללא עובד" : "";
+            const label = name || manualLabel;
             const hl = meta.highlights[slot];
-            const isYellow = !!name && !!hl?.highlight;
+            const isYellow = !!label && !!hl?.highlight;
+            // Horaire propre au travailleur (non repris dans la ligne מ/עד de la garde).
+            const ownHours =
+              hl?.highlight && hl.from && hl.to && (hl.from !== meta.from || hl.to !== meta.to)
+                ? `${hl.from}-${hl.to}`
+                : "";
+            const ownHoursHtml = ownHours
+              ? `<div style="margin-top:1px;font-size:10px;font-weight:bold;color:#dc2626;direction:ltr;">${escapeHtml(ownHours)}</div>`
+              : "";
             // &nbsp; empêche la compression d'une ligne de garde entièrement vide
             if (meta.allBlack) {
               return `<td colspan="2" style="${CELL}${ROW_NAME}background:${BLACK};color:${WHITE};">&nbsp;</td>`;
             }
             if (isYellow) {
-              return `<td colspan="2" style="${CELL}${ROW_NAME}background:${YELLOW};font-weight:bold;">${escapeHtml(name) || "&nbsp;"}</td>`;
+              return `<td colspan="2" style="${CELL}${ROW_NAME}background:${YELLOW};font-weight:bold;">${escapeHtml(label) || "&nbsp;"}${ownHoursHtml}</td>`;
             }
-            return `<td colspan="2" style="${CELL}${ROW_NAME}background:${WHITE};font-weight:normal;">${escapeHtml(name) || "&nbsp;"}</td>`;
+            return `<td colspan="2" style="${CELL}${ROW_NAME}background:${WHITE};font-weight:normal;">${escapeHtml(label) || "&nbsp;"}${ownHoursHtml}</td>`;
           })
           .join("");
         return `<tr style="${ROW_NAME}">${cells}</tr>`;
