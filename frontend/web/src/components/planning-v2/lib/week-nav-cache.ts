@@ -29,7 +29,7 @@ function parseCacheKey(key: string): { siteId: string; weekIso: string } | null 
   return { siteId: key.slice(0, sep), weekIso: key.slice(sep + 1) };
 }
 
-function isSavedWeekPlan(plan: V2WeekPlanData): boolean {
+function isSavedWeekPlan(plan: V2WeekPlanData | undefined): boolean {
   return plan?.sourceScope === "director" || plan?.sourceScope === "shared";
 }
 

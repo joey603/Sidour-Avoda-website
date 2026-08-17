@@ -333,7 +333,7 @@ function PlanningV2PageInner({
     workerModalSaving,
     generationRunning: plan.generationRunning,
     siteLoading,
-    hasSite: Boolean(site) && String(site.id) === String(siteId),
+    hasSite: !!site && String(site.id) === String(siteId),
     weekPlanLoading,
     hasCurrentPlan: navigationMemorySnapshot.hasCurrentPlan,
     multiSiteNavigationLoading,
