@@ -512,8 +512,8 @@ export function PlanningV2SiteEvents({
                   <div className="text-sm font-semibold text-sky-950 dark:text-sky-100">נחשב כמשמרת</div>
                   <div className="mt-0.5 text-xs text-sky-900/70 dark:text-sky-200/70">
                     {draft.counts_as_shift
-                      ? "פעיל — יוצג כטבלת משמרת וייספר בסיכום"
-                      : "כבוי — לא יוצג כמשמרת ולא ייספר בסיכום"}
+                      ? "פעיל — ייספר בסיכום השיבוצים"
+                      : "כבוי — לא ייספר בסיכום (עדיין יוצג בצילום)"}
                   </div>
                 </div>
                 <button

@@ -1,5 +1,4 @@
 import type { PlanningWorker, SiteEvent } from "../types";
-import { eventCountsAsShift } from "./event-availability-locks";
 import { addDays, formatHebDate, getWeekKeyISO } from "./week";
 import { DAY_COLS } from "./station-grid-helpers";
 
@@ -38,8 +37,8 @@ export function buildEventExportOccurrences(params: {
   const weekDates = new Set(Array.from({ length: 7 }, (_, i) => getWeekKeyISO(addDays(weekStart, i))));
   const out: EventExportOccurrence[] = [];
   for (const ev of events || []) {
-    // Désactivé « נחשב כמשמרת » → ne pas afficher comme tableau de garde
-    if (!eventCountsAsShift(ev)) continue;
+    // Toujours afficher les sous-tableaux אירוע dans צילום / צילום חודש,
+    // même si counts_as_shift=false (seul le comptage סיכום est affecté).
     for (const dateIso of ev.dates || []) {
       if (!weekDates.has(dateIso)) continue;
       const ids = ev.assignments?.[dateIso] || [];
