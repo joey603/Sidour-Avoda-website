@@ -357,6 +357,10 @@ class SiteEventBase(BaseModel):
         default_factory=dict,
         description='{ "YYYY-MM-DD": [worker_id, ...] }',
     )
+    counts_as_shift: bool = Field(
+        default=True,
+        description="Si False, l'événement n'est pas compté ni affiché comme une משמרת",
+    )
 
 
 class SiteEventCreate(SiteEventBase):
@@ -369,6 +373,7 @@ class SiteEventUpdate(BaseModel):
     end_time: str | None = None
     dates: list[str] | None = None
     assignments: dict[str, list[int]] | None = None
+    counts_as_shift: bool | None = None
 
 
 class SiteEventOut(BaseModel):
@@ -379,6 +384,7 @@ class SiteEventOut(BaseModel):
     end_time: str | None = None
     dates: list[str] = Field(default_factory=list)
     assignments: dict[str, list[int]] = Field(default_factory=dict)
+    counts_as_shift: bool = True
     created_at: int
     updated_at: int
 

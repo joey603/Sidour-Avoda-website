@@ -24,6 +24,7 @@ type EventDraft = {
   end_time: string;
   dates: string[];
   assignments: Record<string, number[]>;
+  counts_as_shift: boolean;
 };
 
 const EMPTY_DRAFT: EventDraft = {
@@ -32,6 +33,7 @@ const EMPTY_DRAFT: EventDraft = {
   end_time: "",
   dates: [],
   assignments: {},
+  counts_as_shift: true,
 };
 
 function weekIsoDates(weekStart: Date): string[] {
@@ -139,6 +141,7 @@ export function PlanningV2SiteEvents({
       end_time: ev.end_time || "",
       dates: [...(ev.dates || [])],
       assignments: { ...(ev.assignments || {}) },
+      counts_as_shift: ev.counts_as_shift !== false,
     });
     setIsListOpen(false);
     setIsEditorOpen(true);
@@ -272,6 +275,7 @@ export function PlanningV2SiteEvents({
       end_time: draft.end_time.trim() || null,
       dates: draft.dates,
       assignments: draft.assignments,
+      counts_as_shift: draft.counts_as_shift !== false,
     };
     setSaving(true);
     try {
@@ -374,9 +378,17 @@ export function PlanningV2SiteEvents({
             {weekEvents.map((ev) => {
               const timeLabel = formatEventTime(ev);
               const weekDatesOfEv = (ev.dates || []).filter((d) => weekDates.includes(d));
+              const countsAsShift = ev.counts_as_shift !== false;
               return (
                 <div key={ev.id} className="rounded-md border p-3 dark:border-zinc-700">
-                  <div className="font-semibold text-zinc-900 dark:text-zinc-100">{ev.title}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-semibold text-zinc-900 dark:text-zinc-100">{ev.title}</div>
+                    {!countsAsShift ? (
+                      <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                        לא נחשב כמשמרת
+                      </span>
+                    ) : null}
+                  </div>
                   {timeLabel ? (
                     <div className="mt-0.5 text-xs text-zinc-500">שעות: {timeLabel}</div>
                   ) : null}
@@ -434,7 +446,14 @@ export function PlanningV2SiteEvents({
                       className="flex items-start justify-between gap-2 rounded-md border p-3 dark:border-zinc-700"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium">{ev.title}</div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="font-medium">{ev.title}</div>
+                          {ev.counts_as_shift === false ? (
+                            <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                              לא נחשב כמשמרת
+                            </span>
+                          ) : null}
+                        </div>
                         <div className="mt-1 text-xs text-zinc-500">
                           {(ev.dates || []).map((d) => formatHebDate(new Date(`${d}T00:00:00`))).join(", ")}
                           {formatEventTime(ev) ? ` · ${formatEventTime(ev)}` : ""}
@@ -486,6 +505,37 @@ export function PlanningV2SiteEvents({
                 placeholder="שם האירוע"
               />
             </label>
+
+            <div className="mb-3 rounded-lg border border-[#00A8E0]/40 bg-sky-50/70 px-3 py-3 dark:border-sky-700 dark:bg-sky-950/30">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-sky-950 dark:text-sky-100">נחשב כמשמרת</div>
+                  <div className="mt-0.5 text-xs text-sky-900/70 dark:text-sky-200/70">
+                    {draft.counts_as_shift
+                      ? "פעיל — יוצג כטבלת משמרת וייספר בסיכום"
+                      : "כבוי — לא יוצג כמשמרת ולא ייספר בסיכום"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.counts_as_shift}
+                  aria-label="נחשב כמשמרת"
+                  onClick={() => setDraft((p) => ({ ...p, counts_as_shift: !p.counts_as_shift }))}
+                  className={
+                    "relative h-8 w-14 shrink-0 rounded-full transition-colors " +
+                    (draft.counts_as_shift ? "bg-[#00A8E0]" : "bg-zinc-300 dark:bg-zinc-600")
+                  }
+                >
+                  <span
+                    className={
+                      "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-transform " +
+                      (draft.counts_as_shift ? "right-1" : "right-7")
+                    }
+                  />
+                </button>
+              </div>
+            </div>
 
             <div className="mb-3 grid grid-cols-2 gap-3">
               <label className="block text-sm">
