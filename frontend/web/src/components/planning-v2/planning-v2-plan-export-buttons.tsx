@@ -19,6 +19,7 @@ import {
   safePlanningExportFilePart,
   triggerDownloadBlob,
 } from "./lib/planning-v2-plan-export";
+import { sharePlanningPhoto } from "./lib/share-planning-photo";
 import type { MonthWeekScreenshotInput } from "./lib/planning-v2-schedule-screenshot";
 import {
   computeSalaryReportForWeek,
@@ -113,6 +114,7 @@ export function PlanningV2PlanExportButtons({
     title: string;
     subtitle?: string;
   } | null>(null);
+  const [photoSharing, setPhotoSharing] = useState(false);
   const photoPreviewUrlRef = useRef<string | null>(null);
 
   const clearPhotoPreview = useCallback(() => {
@@ -325,6 +327,42 @@ export function PlanningV2PlanExportButtons({
     clearPhotoPreview();
     toast.success("הצילום נשמר");
   }, [photoPreview, clearPhotoPreview]);
+
+  const handleSharePhotoPreview = useCallback(async () => {
+    if (!photoPreview || photoSharing) return;
+    setPhotoSharing(true);
+    try {
+      const result = await sharePlanningPhoto({
+        blob: photoPreview.blob,
+        filename: photoPreview.filename,
+        title: photoPreview.title,
+        text: photoPreview.subtitle || photoPreview.title,
+        deps: {
+          share:
+            typeof navigator !== "undefined" && typeof navigator.share === "function"
+              ? (data) => navigator.share(data)
+              : undefined,
+          canShare:
+            typeof navigator !== "undefined" && typeof navigator.canShare === "function"
+              ? (data) => navigator.canShare(data)
+              : undefined,
+          download: triggerDownloadBlob,
+        },
+      });
+      if (result.status === "shared") {
+        toast.success("הצילום שותף");
+      } else if (result.status === "downloaded_fallback") {
+        toast.message("השיתוף אינו זמין במכשיר זה — הקובץ הורד במקום");
+      } else if (result.status === "error") {
+        toast.error("שיתוף הצילום נכשל", { description: result.message });
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "נסה שוב.";
+      toast.error("שיתוף הצילום נכשל", { description: msg });
+    } finally {
+      setPhotoSharing(false);
+    }
+  }, [photoPreview, photoSharing]);
 
   const selectedMonthLabel = `${HEBREW_MONTH_NAMES[selectedMonthIndex] || ""} ${selectedYear}`;
 
@@ -657,13 +695,26 @@ export function PlanningV2PlanExportButtons({
                 className="mx-auto block h-auto max-w-full rounded border border-zinc-200 bg-white shadow-sm dark:border-zinc-700"
               />
             </div>
-            <div className="flex shrink-0 justify-end gap-2 border-t px-4 py-3 dark:border-zinc-800">
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t px-4 py-3 dark:border-zinc-800">
               <button
                 type="button"
                 className="rounded-md border px-3 py-2 text-sm dark:border-zinc-700"
                 onClick={clearPhotoPreview}
               >
                 ביטול
+              </button>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 rounded-md border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-900 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-700 dark:bg-sky-950/40 dark:text-sky-100 dark:hover:bg-sky-900/50"
+                disabled={photoSharing}
+                onClick={() => void handleSharePhotoPreview()}
+                title="שיתוף הצילום ישירות (וואטסאפ, מייל וכו׳)"
+                aria-label="שתף"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0" fill="currentColor" aria-hidden>
+                  <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z" />
+                </svg>
+                {photoSharing ? "משתף…" : "שתף"}
               </button>
               <button
                 type="button"
