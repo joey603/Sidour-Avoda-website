@@ -62,26 +62,26 @@ describe("counts_as_shift sur אירועים", () => {
     expect(counts.get("דני")).toBe(1);
   });
 
-  it("n'exporte pas les événements désactivés comme tableaux de garde", () => {
+  it("affiche toujours les sous-tableaux dans צילום même si counts_as_shift=false", () => {
     const events = [
       makeEvent({
         id: 1,
-        title: "מוצג",
+        title: "נספר",
         dates: ["2026-10-12"],
         assignments: { "2026-10-12": [1] },
         counts_as_shift: true,
       }),
       makeEvent({
         id: 2,
-        title: "מוסתר",
+        title: "לא נספר אבל מוצג",
         dates: ["2026-10-13"],
         assignments: { "2026-10-13": [2] },
         counts_as_shift: false,
       }),
     ];
     const occs = buildEventExportOccurrences({ events, weekStart, workers });
-    expect(occs).toHaveLength(1);
-    expect(occs[0].title).toBe("מוצג");
-    expect(occs[0].workerNames).toEqual(["דני"]);
+    expect(occs).toHaveLength(2);
+    expect(occs.map((o) => o.title)).toEqual(["נספר", "לא נספר אבל מוצג"]);
+    expect(occs[1].workerNames).toEqual(["יוסי"]);
   });
 });
