@@ -153,6 +153,8 @@ class SiteEvent(Base):
     dates_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     # { "YYYY-MM-DD": [worker_id, ...] }
     assignments_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Si False : n'est pas compté / affiché comme une משמרת (garde)
+    counts_as_shift: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     updated_at: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 

@@ -94,6 +94,11 @@ def _normalize_event_assignments(
     return out
 
 
+def _event_counts_as_shift(row: SiteEvent) -> bool:
+    """True par défaut (rétrocompat) si la colonne est absente / None."""
+    return bool(getattr(row, "counts_as_shift", True) is not False)
+
+
 def _site_event_to_out(row: SiteEvent) -> SiteEventOut:
     dates = row.dates_json if isinstance(row.dates_json, list) else []
     assignments = row.assignments_json if isinstance(row.assignments_json, dict) else {}
@@ -108,6 +113,7 @@ def _site_event_to_out(row: SiteEvent) -> SiteEventOut:
             str(k): [int(x) for x in (v or []) if x is not None]
             for k, v in assignments.items()
         },
+        counts_as_shift=_event_counts_as_shift(row),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -251,6 +257,8 @@ def _count_site_event_assignments_by_worker_id(
     )
     counts: dict[int, int] = {}
     for ev in rows:
+        if not _event_counts_as_shift(ev):
+            continue
         dates = ev.dates_json if isinstance(ev.dates_json, list) else []
         assignments = ev.assignments_json if isinstance(ev.assignments_json, dict) else {}
         for date_iso in dates:
@@ -374,6 +382,7 @@ def create_site_event(
     start_time = _normalize_hhmm(payload.start_time)
     end_time = _normalize_hhmm(payload.end_time)
     assignments = _normalize_event_assignments(payload.assignments, dates, site_id, db)
+    counts_as_shift = True if payload.counts_as_shift is None else bool(payload.counts_as_shift)
     now = _now_ms()
     row = SiteEvent(
         site_id=site_id,
@@ -382,6 +391,7 @@ def create_site_event(
         end_time=end_time,
         dates_json=dates,
         assignments_json=assignments,
+        counts_as_shift=counts_as_shift,
         created_at=now,
         updated_at=now,
     )
@@ -428,6 +438,9 @@ def update_site_event(
         row.assignments_json = _normalize_event_assignments(
             next_assignments, dates, site_id, db
         )
+
+    if "counts_as_shift" in payload.model_fields_set and payload.counts_as_shift is not None:
+        row.counts_as_shift = bool(payload.counts_as_shift)
 
     row.updated_at = _now_ms()
     db.commit()

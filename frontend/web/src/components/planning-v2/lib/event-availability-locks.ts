@@ -12,7 +12,14 @@ export type SiteEventLike = {
   end_time?: string | null;
   dates: string[];
   assignments: SiteEventAssignmentMap;
+  /** Si false : n'est pas compté comme une משמרת. Défaut true. */
+  counts_as_shift?: boolean;
 };
+
+/** True par défaut (rétrocompat si le champ est absent). */
+export function eventCountsAsShift(ev: { counts_as_shift?: boolean | null } | null | undefined): boolean {
+  return ev?.counts_as_shift !== false;
+}
 
 /** workerId → dayKey → shift names locked (bordeaux, non cliquable). */
 export type EventAvailabilityLocksByWorkerId = Record<number, Record<string, string[]>>;
@@ -218,6 +225,7 @@ export function countEventAssignmentsPerWorkerName(
   }
   const counts = new Map<string, number>();
   for (const ev of events || []) {
+    if (!eventCountsAsShift(ev)) continue;
     for (const dateIso of ev.dates || []) {
       if (!weekDates.has(dateIso)) continue;
       for (const widRaw of ev.assignments?.[dateIso] || []) {

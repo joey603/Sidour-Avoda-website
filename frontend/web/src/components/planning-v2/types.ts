@@ -67,6 +67,8 @@ export type SiteEvent = {
   end_time?: string | null;
   dates: string[];
   assignments: Record<string, number[]>;
+  /** Si false : n'est pas compté / affiché comme une משמרת. Défaut true. */
+  counts_as_shift?: boolean;
   created_at: number;
   updated_at: number;
 };
