@@ -506,6 +506,37 @@ export function PlanningV2SiteEvents({
               />
             </label>
 
+            <div className="mb-3 rounded-lg border border-[#00A8E0]/40 bg-sky-50/70 px-3 py-3 dark:border-sky-700 dark:bg-sky-950/30">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-sky-950 dark:text-sky-100">נחשב כמשמרת</div>
+                  <div className="mt-0.5 text-xs text-sky-900/70 dark:text-sky-200/70">
+                    {draft.counts_as_shift
+                      ? "פעיל — יוצג כטבלת משמרת וייספר בסיכום"
+                      : "כבוי — לא יוצג כמשמרת ולא ייספר בסיכום"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.counts_as_shift}
+                  aria-label="נחשב כמשמרת"
+                  onClick={() => setDraft((p) => ({ ...p, counts_as_shift: !p.counts_as_shift }))}
+                  className={
+                    "relative h-8 w-14 shrink-0 rounded-full transition-colors " +
+                    (draft.counts_as_shift ? "bg-[#00A8E0]" : "bg-zinc-300 dark:bg-zinc-600")
+                  }
+                >
+                  <span
+                    className={
+                      "absolute top-1 h-6 w-6 rounded-full bg-white shadow transition-transform " +
+                      (draft.counts_as_shift ? "right-1" : "right-7")
+                    }
+                  />
+                </button>
+              </div>
+            </div>
+
             <div className="mb-3 grid grid-cols-2 gap-3">
               <label className="block text-sm">
                 <span className="mb-1 block font-medium">שעת התחלה (אופציונלי)</span>
@@ -526,21 +557,6 @@ export function PlanningV2SiteEvents({
                 />
               </label>
             </div>
-
-            <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-md border border-zinc-200 px-3 py-2.5 dark:border-zinc-700">
-              <input
-                type="checkbox"
-                checked={draft.counts_as_shift}
-                onChange={(e) => setDraft((p) => ({ ...p, counts_as_shift: e.target.checked }))}
-                className="mt-0.5 h-4 w-4 shrink-0 accent-[#00A8E0]"
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">נחשב כמשמרת</span>
-                <span className="mt-0.5 block text-xs text-zinc-500">
-                  אם כבוי — האירוע לא יוצג כטבלת משמרת בצילום/ייצוא ולא ייספר בסיכום השיבוצים
-                </span>
-              </span>
-            </label>
 
             <div className="mb-3">
               <div className="mb-1 text-sm font-medium">תאריכים</div>
