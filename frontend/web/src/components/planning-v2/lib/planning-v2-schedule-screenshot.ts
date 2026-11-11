@@ -186,14 +186,15 @@ function buildStationScheduleHtml(
     .map((sn, shiftBlockIdx) => {
       const hoursStr = hoursFromConfig(st, sn) || hoursOf(sn);
       const { from: defaultFrom, to: defaultTo } = parseHours(hoursStr);
+      // Lignes noms = capacité config uniquement. Les שיבוץ au-delà s'empilent
+      // dans la cellule du jour (pas de case vide les autres jours).
       let maxSlots = 1;
       for (const d of DAY_COLS) {
         const required = getRequiredFor(st as object, sn, d.key);
         const activeDay = isDayActive(st, d.key);
         if (!activeDay || required <= 0) continue;
         if (isPullHoleCell(pulls ?? null, d.key, sn, stationIdx)) continue;
-        const slots = buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
-        maxSlots = Math.max(maxSlots, required, slots.length, 1);
+        maxSlots = Math.max(maxSlots, required, 1);
       }
       const blockRows = 2 + maxSlots;
 
@@ -292,28 +293,46 @@ function buildStationScheduleHtml(
       const nameRows = Array.from({ length: maxSlots }, (_, slot) => {
         const cells = dayMeta
           .map((meta) => {
-            const slotMeta = meta.slots[slot];
-            const name = meta.names[slot] || "";
-            const manualLabel = !name && slotMeta?.manual ? slotMeta.roleName || "ללא עובד" : "";
-            const label = name || manualLabel;
-            const hl = meta.highlights[slot];
-            const isYellow = !!label && !!hl?.highlight;
-            // Horaire propre au travailleur (non repris dans la ligne מ/עד de la garde).
-            const ownHours =
-              hl?.highlight && hl.from && hl.to && (hl.from !== meta.from || hl.to !== meta.to)
-                ? `${hl.from}-${hl.to}`
-                : "";
-            const ownHoursHtml = ownHours
-              ? `<div style="margin-top:1px;font-size:10px;font-weight:bold;color:#dc2626;direction:ltr;">${escapeHtml(ownHours)}</div>`
-              : "";
-            // &nbsp; empêche la compression d'une ligne de garde entièrement vide
             if (meta.allBlack) {
               return `<td colspan="2" style="${CELL}${ROW_NAME}background:${BLACK};color:${WHITE};">&nbsp;</td>`;
             }
-            if (isYellow) {
-              return `<td colspan="2" style="${CELL}${ROW_NAME}background:${YELLOW};font-weight:bold;">${escapeHtml(label) || "&nbsp;"}${ownHoursHtml}</td>`;
-            }
-            return `<td colspan="2" style="${CELL}${ROW_NAME}background:${WHITE};font-weight:normal;">${escapeHtml(label) || "&nbsp;"}${ownHoursHtml}</td>`;
+            // Dernière ligne de capacité : y empiler les שיבוץ supplémentaires du jour.
+            const isLastCapacityRow = slot === maxSlots - 1;
+            const entries = isLastCapacityRow
+              ? meta.slots.slice(slot)
+              : meta.slots[slot]
+                ? [meta.slots[slot]]
+                : [];
+            const parts = entries.map((slotMeta, entryIdx) => {
+              const absIdx = slot + entryIdx;
+              const name = slotMeta.name || "";
+              const manualLabel = !name && slotMeta.manual ? slotMeta.roleName || "ללא עובד" : "";
+              const label = name || manualLabel;
+              const hl = meta.highlights[absIdx];
+              const isYellow = !!label && !!hl?.highlight;
+              const ownHours =
+                hl?.highlight && hl.from && hl.to && (hl.from !== meta.from || hl.to !== meta.to)
+                  ? `${hl.from}-${hl.to}`
+                  : "";
+              const ownHoursHtml = ownHours
+                ? `<div style="margin-top:1px;font-size:10px;font-weight:bold;color:#dc2626;direction:ltr;">${escapeHtml(ownHours)}</div>`
+                : "";
+              if (!label) return "";
+              const pad = entryIdx > 0 ? "margin-top:2px;" : "";
+              if (isYellow) {
+                return `<div style="${pad}background:${YELLOW};font-weight:bold;">${escapeHtml(label)}${ownHoursHtml}</div>`;
+              }
+              return `<div style="${pad}font-weight:normal;">${escapeHtml(label)}${ownHoursHtml}</div>`;
+            }).filter(Boolean);
+            const anyYellow = entries.some((slotMeta, entryIdx) => {
+              const label = slotMeta.name || (!slotMeta.name && slotMeta.manual ? slotMeta.roleName || "ללא עובד" : "");
+              return !!label && !!meta.highlights[slot + entryIdx]?.highlight;
+            });
+            // Une seule entrée jaune → fond de cellule entier ; sinon fond blanc + pastilles.
+            const cellBg = parts.length === 1 && anyYellow ? YELLOW : WHITE;
+            const cellWeight = parts.length === 1 && anyYellow ? "bold" : "normal";
+            const inner = parts.length > 0 ? parts.join("") : "&nbsp;";
+            return `<td colspan="2" style="${CELL}${ROW_NAME}background:${cellBg};font-weight:${cellWeight};">${inner}</td>`;
           })
           .join("");
         return `<tr style="${ROW_NAME}">${cells}</tr>`;

@@ -307,15 +307,15 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
       const hoursStr = hoursFromConfig(st, sn) || hoursOf(sn);
       const { from: defaultFrom, to: defaultTo } = parseHours(hoursStr);
 
-      // Lignes noms = max slots d'affectations réelles + postes שיבוץ (pas les noms injectés par משיכה)
+      // Lignes noms = capacité config uniquement. Les שיבוץ au-delà s'empilent
+      // dans la cellule du jour (pas de case vide les autres jours).
       let maxSlots = 1;
       for (const d of DAY_COLS) {
         const required = getRequiredFor(st as object, sn, d.key);
         const activeDay = isDayActive(st, d.key);
         if (!activeDay || required <= 0) continue;
         if (isPullHoleCell(pulls ?? null, d.key, sn, stationIdx)) continue;
-        const slots = buildExportCellSlots(assignments, pulls ?? null, d.key, sn, stationIdx);
-        maxSlots = Math.max(maxSlots, required, slots.length, 1);
+        maxSlots = Math.max(maxSlots, required, 1);
       }
 
       // Par garde : ligne cases מ|עד, ligne horaires, lignes noms
@@ -468,7 +468,7 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         }
       });
 
-      // Lignes noms (une par slot) — hauteur fixe même si toute la ligne est vide
+      // Lignes noms (une par capacité) — שיבוץ extra empilés dans la dernière ligne du jour
       const nameRowExtraHeight = new Map<number, number>();
       for (let slot = 0; slot < maxSlots; slot++) {
         const nameRowIdx = nameStartRow + slot;
@@ -476,53 +476,79 @@ export async function generatePlanningExcelBlob(params: ExportParams): Promise<B
         nameRow.height = NAME_ROW_HEIGHT;
         dayMeta.forEach((meta, dayIdx) => {
           const col = dayStartCol + dayIdx * 2;
-          const slotMeta = meta.slots[slot];
-          const name = meta.names[slot] || "";
-          const hl = meta.highlights[slot];
-          const manualLabel =
-            !name && slotMeta?.manual ? slotMeta.roleName || "ללא עובד" : "";
-          const label = name || manualLabel;
-          const isYellow = !!label && !!hl?.highlight;
-          // Horaire propre au travailleur (non repris dans la ligne מ/עד de la garde).
-          const ownHours =
-            !meta.allBlack &&
-            !!label &&
-            hl?.highlight &&
-            hl.from &&
-            hl.to &&
-            (hl.from !== meta.from || hl.to !== meta.to)
-              ? `${hl.from}-${hl.to}`
-              : "";
+          const isLastCapacityRow = slot === maxSlots - 1;
+          const entries = meta.allBlack
+            ? []
+            : isLastCapacityRow
+              ? meta.slots.slice(slot)
+              : meta.slots[slot]
+                ? [meta.slots[slot]]
+                : [];
+
+          type RichPart = { text: string; font: { name: string; size: number; bold: boolean; color?: { argb: string } } };
+          const richParts: RichPart[] = [];
+          let anyYellow = false;
+          let lineCount = 0;
+          entries.forEach((slotMeta, entryIdx) => {
+            const absIdx = slot + entryIdx;
+            const name = slotMeta.name || "";
+            const manualLabel = !name && slotMeta.manual ? slotMeta.roleName || "ללא עובד" : "";
+            const label = name || manualLabel;
+            if (!label) return;
+            const hl = meta.highlights[absIdx];
+            const isYellow = !!hl?.highlight;
+            if (isYellow) anyYellow = true;
+            const ownHours =
+              hl?.highlight && hl.from && hl.to && (hl.from !== meta.from || hl.to !== meta.to)
+                ? `${hl.from}-${hl.to}`
+                : "";
+            if (richParts.length > 0) {
+              richParts.push({ text: "\n", font: { name: "Arial", size: 11, bold: false } });
+            }
+            richParts.push({
+              text: label,
+              font: { name: "Arial", size: 11, bold: isYellow },
+            });
+            lineCount += 1;
+            if (ownHours) {
+              richParts.push({
+                text: `\n${ownHours}`,
+                font: { name: "Arial", size: 10, bold: true, color: { argb: "FFDC2626" } },
+              });
+              lineCount += 1;
+            }
+          });
 
           ws.mergeCells(nameRowIdx, col, nameRowIdx, col + 1);
           const cell = ws.getCell(nameRowIdx, col);
-          // Espace insécable pour empêcher Excel de compresser une ligne vide
-          if (ownHours) {
-            cell.value = {
-              richText: [
-                { text: label, font: { name: "Arial", size: 11, bold: true } },
-                {
-                  text: `\n${ownHours}`,
-                  font: { name: "Arial", size: 10, bold: true, color: { argb: "FFDC2626" } },
-                },
-              ],
-            };
-            nameRowExtraHeight.set(nameRowIdx, NAME_ROW_HEIGHT);
-          } else {
-            cell.value = meta.allBlack ? " " : label || " ";
-          }
           if (meta.allBlack) {
+            cell.value = " ";
             applyFill(cell, BLACK);
             applyFill(ws.getCell(nameRowIdx, col + 1), BLACK);
             styleCenter(cell, { bold: false, size: 11, color: WHITE });
-          } else if (isYellow) {
-            applyFill(cell, YELLOW);
-            applyFill(ws.getCell(nameRowIdx, col + 1), YELLOW);
-            styleCenter(cell, { bold: true, size: 11 });
-          } else {
+          } else if (richParts.length === 0) {
+            cell.value = " ";
             applyFill(cell, WHITE);
             applyFill(ws.getCell(nameRowIdx, col + 1), WHITE);
             styleCenter(cell, { bold: false, size: 11 });
+          } else if (richParts.length === 1 && !anyYellow) {
+            cell.value = richParts[0].text;
+            applyFill(cell, WHITE);
+            applyFill(ws.getCell(nameRowIdx, col + 1), WHITE);
+            styleCenter(cell, { bold: false, size: 11 });
+          } else {
+            cell.value = { richText: richParts };
+            // Une seule personne jaune → cellule entière jaune ; sinon blanc (empilement mixte).
+            const cellYellow = entries.length === 1 && anyYellow;
+            applyFill(cell, cellYellow ? YELLOW : WHITE);
+            applyFill(ws.getCell(nameRowIdx, col + 1), cellYellow ? YELLOW : WHITE);
+            styleCenter(cell, { bold: cellYellow, size: 11 });
+            if (lineCount > 1) {
+              nameRowExtraHeight.set(
+                nameRowIdx,
+                Math.max(nameRowExtraHeight.get(nameRowIdx) || 0, NAME_ROW_HEIGHT * (lineCount - 1)),
+              );
+            }
           }
           applyBorder(ws.getCell(nameRowIdx, col + 1));
         });

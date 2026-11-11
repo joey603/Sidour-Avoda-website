@@ -106,4 +106,52 @@ describe("צילום — horaires par travailleur sur une garde à deux personne
     expect(html).toContain("07:00-11:00");
     expect(html).toContain("11:00-15:00");
   });
+
+  it("empile le שיבוץ dans la cellule du jour sans créer de case vide les autres jours", () => {
+    const siteOne = {
+      id: 1,
+      name: "אתר",
+      config: {
+        stations: [
+          {
+            name: "עמדה 1",
+            shifts: [{ name: "בוקר", start: "07:00", end: "15:00", workers: 1, enabled: true }],
+            days: {
+              sun: true,
+              mon: true,
+              tue: false,
+              wed: false,
+              thu: false,
+              fri: false,
+              sat: false,
+            },
+          },
+        ],
+      },
+    } as unknown as SiteSummary;
+
+    const html = buildPlanningScheduleWeekSectionsHtml({
+      siteLabel: "אתר",
+      weekStart,
+      workers,
+      assignments: {
+        sun: { בוקר: [["Alice", "Bob"]] },
+        mon: { בוקר: [["Alice"]] },
+      },
+      pulls: {
+        "sun|בוקר|0|1": {
+          manualSlot: {},
+          guardDisplay: { start: "09:00", end: "15:00" },
+        },
+      },
+      site: siteOne,
+      events: [],
+    });
+
+    expect(html).toContain("Alice");
+    expect(html).toContain("Bob");
+    // Une seule ligne de noms (capacité 1) : pas de 2e rangée vide le lundi.
+    const nameRowMatches = html.match(/<tr style="height:26px;">/g) || [];
+    expect(nameRowMatches.length).toBe(1);
+  });
 });
