@@ -49,7 +49,14 @@ export function useLockBodyScroll(locked: boolean) {
   }, [locked]);
 }
 
+/** <select size> / multiple : scroll géré par le navigateur, souvent sans scrollHeight fiable. */
+function isNativeListboxSelect(el: Element | null | undefined): el is HTMLSelectElement {
+  return el instanceof HTMLSelectElement && (el.multiple || el.size > 1);
+}
+
 function canScrollElement(el: HTMLElement, deltaY: number) {
+  // Ne pas preventDefault sur une listbox native — sinon la molette ne défile plus.
+  if (isNativeListboxSelect(el)) return true;
   const style = window.getComputedStyle(el);
   const overflowY = style.overflowY;
   const scrollableY = overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay";
@@ -61,8 +68,20 @@ function canScrollElement(el: HTMLElement, deltaY: number) {
 }
 
 function findScrollableAncestor(start: EventTarget | null, boundary: HTMLElement): HTMLElement | null {
-  let node: HTMLElement | null = start instanceof HTMLElement ? start : null;
+  let node: HTMLElement | null =
+    start instanceof HTMLElement
+      ? start
+      : start instanceof Node && start.parentElement
+        ? start.parentElement
+        : null;
+
+  if (node instanceof HTMLOptionElement) {
+    const select = node.closest("select");
+    if (isNativeListboxSelect(select)) return select;
+  }
+
   while (node) {
+    if (isNativeListboxSelect(node)) return node;
     const style = window.getComputedStyle(node);
     const overflowY = style.overflowY;
     if (
